@@ -3,39 +3,6 @@
 (() => {
   'use strict';
 
-  // —— 登录 token 帮助函数（2026-09-29）——
-  // 服务端 _login_gate 按 Authorization 头判登录。request() 封装会自动带 token，
-  // 但散落的裸 XHR/fetch（分片上传/finish、reconvert、share、matting、commentary/preview）
-  // 必须手动带——否则**已登录用户**也会被自家门禁误拦 401。
-  function authBearerToken() {
-    try { return localStorage.getItem('vdl_auth_token') || sessionStorage.getItem('vdl_auth_token') || ''; } catch (_) { return ''; }
-  }
-  function authBearerHeaders() {
-    const t = authBearerToken();
-    return t ? { 'Authorization': 'Bearer ' + t } : {};
-  }
-
-  // —— 原生 alert 全局降级为轻提示条（2026-09-27）——
-  // WKWebView 把 JS alert 渲染成带「警告」标题的打断式弹窗，成功类消息（如「已保存到」）
-  // 观感像出错，用户明确反馈不适。统一改为底部轻提示条；错误类文案自带「失败/错误」
-  // 字样，同样式呈现。confirm() 是刻意的交互确认，保持原生不动。
-  window.alert = (m) => {
-    try {
-      let t = document.getElementById('vdl-toast-global');
-      if (!t) {
-        t = document.createElement('div');
-        t.id = 'vdl-toast-global';
-        t.style.cssText =
-          'position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:#222a38;color:#eaeaea;padding:10px 16px;border-radius:8px;font-size:13px;z-index:2147483647;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:80vw;display:none;white-space:pre-wrap;';
-        document.body.appendChild(t);
-      }
-      t.textContent = String(m == null ? '' : m);
-      t.style.display = 'block';
-      clearTimeout(window.__vdlToastTimer);
-      window.__vdlToastTimer = setTimeout(() => { t.style.display = 'none'; }, 3200);
-    } catch (e) { /* DOM 未就绪等极端情况静默降级 */ }
-  };
-
   // 启动诊断：捕获任何未处理的脚本错误并显示在页面顶部红条，便于定位初始化失败
   // （之前默认视图兜底没生效，很可能是 IIFE 中途同步抛错导致末尾 switchView 未执行）。
   window.addEventListener('error', (e) => {
@@ -64,31 +31,6 @@
       }
     } catch (_) {}
   });
-  // App 可观测性：前端 JS 运行期错误上报到本机 server（/api/client-error → .ops_events.log）。
-  // 与上方 boot 红条并存：红条给用户看，这里给运维留痕（闭环「用户报问题我们看不到记录」）。
-  try {
-    const _vdlReport = (level, e) => {
-      try {
-        const msg = (e && (e.message || (e.error && e.error.message))) || String(e);
-        const stack = (e && e.error && e.error.stack) ? String(e.error.stack) : (e && e.stack ? String(e.stack) : '');
-        const payload = { level: level, message: msg, stack: stack,
-          url: location.href, line: e && e.lineno, col: e && e.colno };
-        if (navigator.sendBeacon) {
-          navigator.sendBeacon('/api/client-error', new Blob([JSON.stringify(payload)], { type: 'application/json' }));
-        } else {
-          fetch('/api/client-error', { method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload), keepalive: true }).catch(() => {});
-        }
-      } catch (_) {}
-    };
-    window.addEventListener('error', (e) => _vdlReport('error', e));
-    window.addEventListener('unhandledrejection', (e) => _vdlReport('error', e.reason || e));
-  } catch (_) {}
-
-  // 运维/后台入口（2026-09-26 定版）：连点版本号隐藏入口已按用户要求移除，
-  // 后台管理面板只从设置里的「后台管理」按钮进入；异常告警红横幅点击仍
-  // 直达「运维监控」tab（那是提醒动作，不是常规入口）。
   // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
   // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
   let bootViewSet = false;
@@ -113,13 +55,9 @@
   const POLL_FALLBACK_MS = 1500;
 
   /** 时间格式化 (mm:ss.s) —— 提前到 IIFE 顶部，避免 Safari TDZ 误报 */
-  /** 秒 → m:ss.s。
-   *  🔴 必须先按 0.1 秒取整再分解：2099.96s 直接 `Math.floor(t/60)` + `(t%60).toFixed(1)`
-   *  会得到「34:60.0」（2026-09-18 用户截图报的秒数不进位）。 */
   const fmtTs = (t) => {
-    const v = Math.max(0, Math.round((Number(t) || 0) * 10) / 10);
-    const m = Math.floor(v / 60);
-    const s = (v - m * 60).toFixed(1);
+    const m = Math.floor(t / 60);
+    const s = (t % 60).toFixed(1);
     return `${m}:${s.padStart(4, '0')}`;
   };
   /** HTML 转义 —— 提前到 IIFE 顶部，避免 Safari TDZ 误报 */
@@ -304,13 +242,6 @@
     psInput: $('psInput'),
     psSend: $('psSend'),
     psRefresh: $('psRefresh'),
-    psSearch: $('psSearch'),
-    psSearchResults: $('psSearchResults'),
-    psImgBtn: $('psImgBtn'),
-    psImgInput: $('psImgInput'),
-    psAttachBar: $('psAttachBar'),
-    psAttachImg: $('psAttachImg'),
-    psAttachClear: $('psAttachClear'),
     profAboutVersion: $('profAboutVersion'),
     profAboutBuild: $('profAboutBuild'),
     profUpdateBanner: $('profUpdateBanner'),
@@ -318,10 +249,6 @@
     profUpdateNotes: $('profUpdateNotes'),
     profUpdateSize: $('profUpdateSize'),
     profUpdateNowBtn: $('profUpdateNowBtn'),
-    profChangelog: $('profChangelog'),
-    profChangelogTitle: $('profChangelogTitle'),
-    profChangelogDate: $('profChangelogDate'),
-    profChangelogList: $('profChangelogList'),
     profCheckUpdateBtn: $('profCheckUpdateBtn'),
     profErrorReportBtn: $('profErrorReportBtn'),
     profAboutMsg: $('profAboutMsg'),
@@ -331,9 +258,6 @@
     profReportIncludeLog: $('profReportIncludeLog'),
     profReportCancel: $('profReportCancel'),
     profReportSubmit: $('profReportSubmit'),
-    profReportImgBtn: $('profReportImgBtn'),
-    profReportImgInput: $('profReportImgInput'),
-    profReportImgName: $('profReportImgName'),
     profReportMsg: $('profReportMsg'),
     profName: $('profileTitle'),
     profTag: $('profileTag'),
@@ -353,8 +277,6 @@
     profCreditsTotal: $('profCreditsTotal'),
     profCreditsAi: $('profCreditsAi'),
     profCreditsPerm: $('profCreditsPerm'),
-    profCreditsAiNote: $('profCreditsAiNote'),
-    profCreditsPermNote: $('profCreditsPermNote'),
     profUsage: $('profUsage'),
     profUsageTable: $('profUsageTable'),
     profUsageQuotaHeader: $('profUsageQuotaHeader'),
@@ -373,27 +295,15 @@
     profCancelChangePwBtn: $('profCancelChangePwBtn'),
     profChangePwForm: $('profChangePwForm'),
     profDeactivateBtn: $('profDeactivateBtn'),
-    // AI 引擎空闲自动释放开关（2026-09-30）
-    profIdleToggle: $('profIdleToggle'),
-    profIdleLabel: $('profIdleLabel'),
-    profIdleState: $('profIdleState'),
-    profIdleReleaseNow: $('profIdleReleaseNow'),
     memberTabDl: $('memberTabDl'),
     memberTabAi: $('memberTabAi'),
     memberTabPacks: $('memberTabPacks'),
     memberPaneDl: $('memberPaneDl'),
     memberPaneAi: $('memberPaneAi'),
     memberPanePacks: $('memberPanePacks'),
-    memberCode: null,          // 卡密通道已下线（2026-09-26），元素已从 index.html 移除
-    memberActivateBtn: null,
+    memberCode: $('memberCode'),
+    memberActivateBtn: $('memberActivateBtn'),
     memberActMsg: $('memberActMsg'),
-    cloudAccountBox: $('cloudAccountBox'),
-    cloudLoginBox: $('cloudLoginBox'),
-    cloudEmail: $('cloudEmail'),
-    cloudDevices: $('cloudDevices'),
-    cloudNotice: $('cloudNotice'),
-    cloudLoginBtn: $('cloudLoginBtn'),
-    cloudLogoutBtn: $('cloudLogoutBtn'),
     // 账号区（A1 本地账号）元素已上移，保持统一定义
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
@@ -532,8 +442,11 @@
     comEmpty: $('comEmpty'),
     comGrid: $('comGrid'),
     comHistory: $('comHistory'),
+    comHistoryCount: $('comHistoryCount'),
     comHistoryToolbar: $('comHistoryToolbar'),
     comSortBtn: $('comSortBtn'),
+    comSortMenu: $('comSortMenu'),
+    comSortLabel: $('comSortLabel'),
     comSource: $('comSource'),
     // 解说类型自定义下拉
     comTypeDropdown: $('comTypeDropdown'),
@@ -582,9 +495,7 @@
     comCorrectTranscript: $('comCorrectTranscript'),
     comVision: $('comVision'),
     comStepsPanel: $('comStepsPanel'),
-    comStepsNow: $('comStepsNow'),
     comStepsList: $('comStepsList'),
-    comArtifact: $('comArtifact'),
     comLogs: $('comLogs'),
     comRefresh: $('comRefresh'),
     comEnvStatus: $('comEnvStatus'),
@@ -596,64 +507,13 @@
     comTtsStatusDot: $('comTtsStatusDot'),
     comTtsStatusText: $('comTtsStatusText'),
     comTtsProvider: $('comTtsProvider'),
-    // 「我的音色」（本地克隆源）元素：2026-09-18 新增
-    comOptsFold: $('comOptsFold'),
-    comMyVoiceRow: $('comMyVoiceRow'),
-    comMyVoiceBadge: $('comMyVoiceBadge'),
-    comMyVoicePick: $('comMyVoicePick'),
-    comMyVoicePath: $('comMyVoicePath'),
-    comMyVoiceText: $('comMyVoiceText'),
-    comMyVoiceSave: $('comMyVoiceSave'),
-    comMyVoiceStatus: $('comMyVoiceStatus'),
-    // 页面内直接录制（2026-09-19）：主按钮在「直接录制 / 停止并保存」间切换，录制条只报状态
-    comMyVoiceRec: $('comMyVoiceRec'),
-    comMyVoiceRecBar: $('comMyVoiceRecBar'),
-    comMyVoiceRecTime: $('comMyVoiceRecTime'),
-    comMyVoiceRecLevel: $('comMyVoiceRecLevel'),
-    comMyVoiceRecCancel: $('comMyVoiceRecCancel'),
-    // 录完的试听条（2026-09-20）：确认后才落盘 + 存音色
-    comMyVoiceAudit: $('comMyVoiceAudit'),
-    comMyVoiceAuditPlay: $('comMyVoiceAuditPlay'),
-    comMyVoiceAuditInfo: $('comMyVoiceAuditInfo'),
-    comMyVoiceAuditRedo: $('comMyVoiceAuditRedo'),
-    comMyVoiceAuditOk: $('comMyVoiceAuditOk'),
-    // 2026-09-20：录制/试听条搬到居中弹窗里，另加「全部音色」入口
-    comMyVoiceAll: $('comMyVoiceAll'),
-    comVoiceRecModal: $('comVoiceRecModal'),
-    comVoiceRecModalClose: $('comVoiceRecModalClose'),
-    comRecModalRead: $('comRecModalRead'),
-    comRecModalRecActions: $('comRecModalRecActions'),
-    comRecModalStop: $('comRecModalStop'),
-    comVoiceModalStatus: $('comVoiceModalStatus'),
-    comVoiceName: $('comVoiceName'),
-    // 「🎧 全部音色」弹窗
-    comVoiceLibModal: $('comVoiceLibModal'),
-    comVoiceLibClose: $('comVoiceLibClose'),
-    comVoiceLibList: $('comVoiceLibList'),
-    comVoiceLibHint: $('comVoiceLibHint'),
-    comVoiceLibDone: $('comVoiceLibDone'),
-    // 「🎬 渲染完成」弹窗
-    comDoneModal: $('comDoneModal'),
-    comDoneClose: $('comDoneClose'),
-    comDoneLead: $('comDoneLead'),
-    comDoneName: $('comDoneName'),
-    comDonePath: $('comDonePath'),
-    comDoneNote: $('comDoneNote'),
-    comDoneLater: $('comDoneLater'),
-    comDoneOpenHist: $('comDoneOpenHist'),
-    // 「起点/终点」模式门控（2026-09-20）
-    comDramaRow: $('comDramaRow'),
-    comDramaNote: $('comDramaNote'),
-    // 本地克隆「运行环境」按需下载入口（2026-09-18）
-    comCloneEnvBox: $('comCloneEnvBox'),
-    comCloneEnvText: $('comCloneEnvText'),
-    comCloneEnvBar: $('comCloneEnvBar'),
-    comCloneEnvFill: $('comCloneEnvFill'),
-    comCloneEnvBtn: $('comCloneEnvBtn'),
-    comCloneEnvCancel: $('comCloneEnvCancel'),
-    comMyVoiceGrid: $('comMyVoiceGrid'),
-    // BGM 的 7 个元素引用（comBgm*）2026-09-18 删除：DOM 早在 2026-09-15 随「成片增强 ·
-    // 自动配乐」块移除，引用恒为 null；配乐改由时间轴「音乐」轨的 comMusic 状态承载。
+    comBgm: $('comBgm'),
+    comBgmVolume: $('comBgmVolume'),
+    comBgmVolumeVal: $('comBgmVolumeVal'),
+    comBgmVolWrap: $('comBgmVolWrap'),
+    comBgmFileWrap: $('comBgmFileWrap'),
+    comBgmFile: $('comBgmFile'),
+    comBgmFilePick: $('comBgmFilePick'),
     comSubSize: $('comSubSize'),
     comSubSizeSel: $('comSubSizeSel'),
     comSubSizeCaret: $('comSubSizeCaret'),
@@ -670,8 +530,6 @@
     // 原字幕羽化（预览层 + 卡片控件）
     comFeatherCanvas: $('comFeatherCanvas'),
     comFeatherBand: $('comFeatherBand'),
-    comFeatherBandTag: $('comFeatherBandTag'),
-    comFeatherSim: $('comFeatherSim'),
     comFeatherState: $('comFeatherState'),
     comFeatherMode: $('comFeatherMode'),
     comFeatherStrength: $('comFeatherStrength'),
@@ -699,9 +557,6 @@
     comDramaEndRange: $('comDramaEndRange'),
     comTrimReset: $('comTrimReset'),
     comRegenScript: $('comRegenScript'),
-    comScriptClose: $('comScriptClose'),
-    comScriptMin: $('comScriptMin'),
-    comScriptReopen: $('comScriptReopen'),
     comGenerateRow: $('comGenerateRow'),
     comEta: $('comEta'),
     tabCommentary: $('tabCommentary'),
@@ -786,50 +641,6 @@
     cpStartAllBtn: $('cpStartAllBtn'),
     cpStatus: $('cpStatus'),
 
-    // 生成二维码（share* 前缀，独立 tab；2026-09-20 新增：本机文件 → 短链 + 二维码）
-    tabShare: $('tabShare'),
-    shareView: $('shareView'),
-    sTabShare: $('sTabShare'),
-    shareAddBtn: $('shareAddBtn'),
-    shareFileInput: $('shareFileInput'),
-    shareClearBtn: $('shareClearBtn'),
-    shareCount: $('shareCount'),
-    shareQueue: $('shareQueue'),
-    shareResult: $('shareResult'),
-    shareQrImg: $('shareQrImg'),
-    shareUrlInput: $('shareUrlInput'),
-    shareCopyBtn: $('shareCopyBtn'),
-    shareOpenBtn: $('shareOpenBtn'),
-    shareSaveQrBtn: $('shareSaveQrBtn'),
-    shareHint: $('shareHint'),
-    shareExpireSel: $('shareExpireSel'),
-    shareHistCount: $('shareHistCount'),
-    shareHistRefreshBtn: $('shareHistRefreshBtn'),
-    shareHistList: $('shareHistList'),
-    // 生成网页（page* 前缀，独立 tab；2026-09-30 新增：本机文件 → 自包含 HTML 页面）
-    tabPage: $('tabPage'),
-    pageView: $('pageView'),
-    sTabPage: $('sTabPage'),
-    pageAddBtn: $('pageAddBtn'),
-    pageTitleInput: $('pageTitleInput'),
-    pageFileInput: $('pageFileInput'),
-    pageClearBtn: $('pageClearBtn'),
-    pageCount: $('pageCount'),
-    pageQueue: $('pageQueue'),
-    pageBuildBtn: $('pageBuildBtn'),
-    pageHint: $('pageHint'),
-    pageResult: $('pageResult'),
-    pagePathInput: $('pagePathInput'),
-    pageCopyPathBtn: $('pageCopyPathBtn'),
-    pageOpenBtn: $('pageOpenBtn'),
-    pageLinkInput: $('pageLinkInput'),
-    pageCopyLinkBtn: $('pageCopyLinkBtn'),
-    pageOpenLinkBtn: $('pageOpenLinkBtn'),
-    pageQrWrap: $('pageQrWrap'),
-    pageQrImg: $('pageQrImg'),
-    pageLocalTag: $('pageLocalTag'),
-    pageResultHint: $('pageResultHint'),
-
     // 高清修复（sr* 前缀，独立 tab；2026-09-12 新增：快速档 + AI 档，全程本地）
     tabSr: $('tabSr'),
     srView: $('srView'),
@@ -873,13 +684,6 @@
     sbDlTxt: $('sbDlTxt'),
     sbHelpBtn: $('sbHelpBtn'),
     sbHelpText: $('sbHelpText'),
-    // 识别结果预览（2026-09-22）
-    sbPreview: $('sbPreview'),
-    sbTabSrt: $('sbTabSrt'),
-    sbTabTxt: $('sbTabTxt'),
-    sbPreviewNote: $('sbPreviewNote'),
-    sbCopyBtn: $('sbCopyBtn'),
-    sbLines: $('sbLines'),
 
     // 去水印（需求文档模块二）
     tabDw: $('tabDw'),
@@ -893,7 +697,6 @@
     appIntroView: $('appIntroView'),
     dwModeImg: $('dwModeImg'),
     dwModePdf: $('dwModePdf'),
-    dwTitle: $('dwTitle'),
     dwImgPane: $('dwImgPane'),
     dwImgFile: $('dwImgFile'),
     dwPreviewWrap: $('dwPreviewWrap'),
@@ -933,13 +736,6 @@
     dwModalZoomLabel: $('dwModalZoomLabel'),
     dwModalSelInfo: $('dwModalSelInfo'),
     dwModalPreviewWrap: $('dwModalPreviewWrap'),
-    dwModalTitle: $('dwModalTitle'),
-    dwModalVid: $('dwModalVid'),
-    dwModalViewHint: $('dwModalViewHint'),
-    dwModalViewClose: $('dwModalViewClose'),
-    dwModalFloatClose: $('dwModalFloatClose'),
-    dwImgOutZoom: $('dwImgOutZoom'),
-    dwVidOutZoom: $('dwVidOutZoom'),
     dwImgRadius: $('dwImgRadius'),
     dwImgBtn: $('dwImgBtn'),
     dwImgStatus: $('dwImgStatus'),
@@ -1146,7 +942,7 @@
   // 解说成片列表视图状态
   let commentaryItems = [];
   let commentaryViewMode = 'list';   // grid | list | timeline | gallery
-  let commentarySort = 'mtime-desc'; // 只留时间维度：mtime-desc（最新在前，默认）| mtime-asc（最早在前）
+  let commentarySort = 'mtime-desc'; // mtime-desc | mtime-asc | size-desc | size-asc | name-asc | name-desc
 
   // -------------------------------------------------------------- 节点分流
   // 双节点部署时，国内站请求发往国内节点、海外站发往海外节点，各自直连目标站，
@@ -1221,13 +1017,6 @@
       }
       const err = { message: msg, hint: payload.hint || '', category: payload.category || '' };
       if (response.status === 402) err.subscribe = true;   // 免费额度耗尽，引导订阅
-      // 登录门禁兜底（2026-09-26）：后端要求登录而本端没有 token → 直接拉起登录框。
-      // 即使某个功能入口漏加了前端守卫，用户也不会「点下去毫无反应」，
-      // 而是立刻看到登录提示（并发请求只弹一次，见 _notifyNeedLogin）。
-      if (payload.code === 'NO_AUTH') {
-        err.needLogin = true;
-        _notifyNeedLogin(msg);
-      }
       throw err;
     }
     // 成功响应统一补 ok:true（语义对齐 fetch 的 Response.ok），且**不覆盖已有值**。
@@ -1337,7 +1126,7 @@
     const base = `${window.VDL_API_BASE || ''}`;
     const SLICE = 32 * 1024 * 1024;
     const slice = file.size > SLICE ? file.slice(0, SLICE) : file;
-    const headers = { 'X-Device-Id': deviceId(), ...authBearerHeaders() };
+    const headers = { 'X-Device-Id': deviceId() };
     const tryOnce = async (payload, label) => {
       const fd = new FormData();
       fd.append('file', payload, file.name);
@@ -1403,15 +1192,8 @@
     try {
       response = await doFetch();
       if (response.status === 401) {
-        // 仅当 401 确实来自 API Token 中间件时才引导输入（其响应体含 "API Token"/"访问令牌"）；
-        // 账号会话失效、私密空间、运维密钥等业务 401 各有 UI，误弹本框只会让用户困惑（2026-09-27 修复）。
-        let _isToken401 = false;
-        try {
-          const _j = await response.clone().json();
-          const _s = String((_j && (_j.error || '')) + (_j && (_j.hint || '')) + (_j && (_j.detail || '')));
-          _isToken401 = _s.includes('API Token') || _s.includes('访问令牌');
-        } catch (_e) { /* 非 JSON 响应体 → 视为非 token 401 */ }
-        const t = (_isToken401 && typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
+        // 服务端启用了 token 鉴权但本端未提供/提供错误：引导用户输入
+        const t = (typeof prompt === 'function') ? prompt('该服务已启用访问令牌，请输入 API Token：') : null;
         if (t && t.trim()) {
           localStorage.setItem('vdl_api_token', t.trim());
           merged['X-Api-Key'] = t.trim();
@@ -1568,9 +1350,7 @@
   };
 
   const buildStats = (task) => {
-    if (task.status === 'completed') {
-      return task.file_expired ? `${formatBytes(task.filesize)} · 成品已清理` : `${formatBytes(task.filesize)} · 已就绪`;
-    }
+    if (task.status === 'completed') return `${formatBytes(task.filesize)} · 已就绪`;
     if (task.status === 'failed') return '下载中断';
     if (task.status === 'canceled') return '已取消';
     if (task.status === 'paused') return `已暂停（已下载 ${formatBytes(task.downloaded_bytes)}）`;
@@ -1612,9 +1392,7 @@
         || lower.includes('networkerror') || lower.includes('network error')) {
       return {
         message: '连接本地服务失败',
-        // 2026-09-26：这把"万能烟雾弹"已三次误导排障（真实原因各不相同却都显示同一句）。
-        // 必须把 WebKit 原始错误透传出来，否则永远无法定位是断连/中止/其它。
-        hint: '请稍等 2~3 秒后重试；若仍失败，请完全退出应用（Cmd+Q）再重新打开，避免从 DMG 镜像里启动。（原始错误：' + String(msg || '(空)') + '）'
+        hint: '请稍等 2~3 秒后重试；若仍失败，请完全退出应用（Cmd+Q）再重新打开，避免从 DMG 镜像里启动。'
       };
     }
     return null;
@@ -1710,14 +1488,10 @@
 
   // ------------------------------------------------------------------ 渲染
 
-  // 平台数对外一律「取整百 + 加号」（116 → 100+）：宣传口径不绑定具体可解析数，
-  // 避免某一平台临时失效时，页面数字与实际可用数对不上。
-  const fmtPlatformCount = (n) => (n >= 100 ? `${Math.floor(n / 100) * 100}+` : String(n));
-
   const renderPlatforms = (platforms) => {
     allPlatforms = platforms;
     // 平台列表只保留 header 徽章入口（engineBadge 弹窗），输入区 chips 已移除（顶部已有平台展示，避免重复）
-    el.badge.textContent = `支持 ${fmtPlatformCount(platforms.length)} 平台`;
+    el.badge.textContent = `支持 ${platforms.length} 个平台`;
   };
 
   const openPlatformModal = (platforms) => {
@@ -1790,20 +1564,12 @@
     }
 
     const directUrl = video.direct_url;
-    // 直链是否能在浏览器里直接拉（防盗链判定）：
-    // 字节系 CDN（抖音/快手/微博…）校验 Referer，而 Referer 是浏览器的 forbidden
-    // header（JS/<a>/fetch 都设不了）→ 浏览器直连必然 403，只能交给本机后端/原生桥。
-    const directOk = !!directUrl && (isDesktopShell() || !directNeedsReferer(video));
-    if (directUrl && directOk) {
-      // 直链透传：跳过清晰度选择与服务器下载，直接保存到本机
+    if (directUrl) {
+      // 直链透传：跳过清晰度选择与服务器下载，直接让浏览器从源站拉文件
       el.qualityBlock.hidden = true;
       el.downloadBtn.lastChild.textContent = '直接保存到本机 ⬇';
       el.directHint.hidden = false;
-      el.directHint.textContent = isDesktopShell()
-        ? (directNeedsReferer(video)
-            ? '✅ 检测到这是可直接下载的文件。将由本机直连源站保存到「下载」文件夹（自动携带防盗链 Referer，不经过外网服务器）。'
-            : '✅ 检测到这是可直接下载的文件，已为你跳过服务器处理。点上方按钮即从源站保存到「下载」文件夹。')
-        : '✅ 检测到这是可直接下载的文件，已为你跳过服务器处理。点上方按钮即从源站保存到你的电脑，不经过我们的服务器。';
+      el.directHint.textContent = '✅ 检测到这是可直接下载的文件，已为你跳过服务器处理。点上方按钮即从源站保存到你的电脑，不经过我们的服务器。';
       el.serverFallbackBtn.hidden = false;
     } else {
       el.qualityBlock.hidden = false;
@@ -2103,15 +1869,14 @@
     }
 
     // 失败 / 已取消的任务展示「重试 / 继续下载」按钮
-    // B5：成品已清理的历史条目（completed+file_expired）也出「重新下载」
-    const canRetry = task.status === 'failed' || task.status === 'canceled' || task.file_expired;
+    const canRetry = task.status === 'failed' || task.status === 'canceled';
     refs.retry.hidden = !canRetry;
     if (canRetry) {
       // 断点续传：工作目录残留部分文件时，按钮提示「继续下载」而非「重试」
-      refs.retry.textContent = task.resumable ? '继续下载' : (task.file_expired ? '重新下载' : '重试');
+      refs.retry.textContent = task.resumable ? '继续下载' : '重试';
       refs.retry.title = task.resumable
         ? '从上次中断处继续（已保留已下载部分，不会从头重下）'
-        : (task.file_expired ? '成品文件已超保留期被清理，点此用同一链接重新下载' : '重新下载');
+        : '重新下载';
     }
     // 「删除任务」按钮：终态时可见（进行中用取消代替删除）
     refs.del.hidden = active;
@@ -2126,14 +1891,6 @@
       refs.save.hidden = true;
       refs.saveHint.hidden = true;
       refs.convertWrap.hidden = true;
-      return;
-    }
-    if (task.file_expired) {
-      // B5：成品已随保留期清理的历史条目——不再提供保存/转换，状态行说明原因
-      refs.save.hidden = true;
-      refs.saveHint.hidden = true;
-      refs.convertWrap.hidden = true;
-      refs.status.textContent = '已完成 · 成品文件已清理（超保留期）';
       return;
     }
     refs.save.hidden = false;
@@ -2201,14 +1958,7 @@
       refs.logs.textContent = logs.slice(-30).join('\n');
       const logsWrap = refs.logs.parentElement;
       if (logsWrap && logsWrap.tagName.toLowerCase() === 'details') {
-        // 同解说面板：自动展开**一次**即可，之后尊重用户的手动收起
-        // （旧实现每轮轮询都强制 open，用户收不起来 —— 2026-09-19 用户反馈同源问题）
-        if (task.status === 'failed') {
-          logsWrap.open = true;
-        } else if (logsWrap.dataset.autoOpened !== '1' && logs.length > 3) {
-          logsWrap.open = true;
-          logsWrap.dataset.autoOpened = '1';
-        }
+        logsWrap.open = logs.length > 0 && (task.status === 'failed' || logs.length > 3);
       }
     }
   };
@@ -2367,16 +2117,11 @@
   const UC_CHUNK_CONCURRENCY = 8;               // 单文件分片并发路数（高 RTT 链路多连接并行提速，HTTP/2 无连接限制）
   const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
   const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
-  // 上传端点：只保留同源一个（2026-09-29，与网页版 web-dev 同步修）。
-  // 历史：曾用 `[location.origin, 'https://web-production-b9993.up.railway.app']` 做
-  // 「双端点混合上传」——桌面端起见的同源是 127.0.0.1 本机服务，Railway 那条是早期
-  // 云上同源备份（与主站同一后端同一份分片存储）。
-  // 但该 Railway 应用自 2026-09-11 起已不存在（Application not found / 连接直接失败），
-  // 而选路在「样本不足（<4 片）」时按奇偶分流、重试又固定切到「另一条」
-  // ⇒ 每个奇数下标分片都要先撞一次死主机才成功（样本攒够后仍有 20% 的概率去撞）。
-  // 🔴 红线：任何新增端点必须与主站**同后端、同分片存储**，否则分片会落到别的节点磁盘，
-  //    finish 时必然报「分片不完整」——宁可不加，也不要加一个不同源的端点。
-  const UC_UPLOAD_ENDPOINTS = [location.origin];
+  // 双端点混合上传：hanyuxz.top（Cloudflare 免费版对上传 POST 限速 ~5MB/s）与
+  // Railway 原生域名（无 CF 限速层，直连源站）指向同一个后端、同一份分片存储，
+  // 动态选路：每片发出前按两通道「最近 3 次成功分片平均吞吐」实时选更快通道，
+  // 慢通道（跨境抖动/掉速）自然少被选中，不再拖累整体；单通道失败重试自动故障转移到另一通道。
+  const UC_UPLOAD_ENDPOINTS = [location.origin, 'https://web-production-b9993.up.railway.app'];
   // 通道质量统计（每文件独立）：最近成功分片的平均吞吐 bytes/ms，用于动态选路
   const ucChStats = () => ({
     samples: [[], []],
@@ -2692,7 +2437,6 @@
     xhr.open('POST', (endpoint || location.origin) + '/api/upload-chunk');
     // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
     xhr.setRequestHeader('X-Device-Id', deviceId());
-    { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
     xhr.timeout = 120000;   // 2 分钟单片超时（防后台 tab 限流/网络静默断网卡死）
     if (xhrs) xhrs.add(xhr);
     const cleanup = () => { if (xhrs) xhrs.delete(xhr); };
@@ -2706,12 +2450,7 @@
       if (xhr.status >= 200 && xhr.status < 300) resolve();
       else {
         let msg = '分片上传失败 HTTP ' + xhr.status;
-        let fromServer = false;
-        try { const d = JSON.parse(xhr.responseText || '{}'); if (d.detail) { msg = d.detail; fromServer = true; } } catch (e) { /* ignore */ }
-        // 413 分两种：应用自己的 413 一定带 JSON detail（「单个分片超过大小上限」等）；
-        // 非 JSON 的 413 = 被网关/代理在到达应用前拒掉 —— 说清是网关体积限制，
-        // 否则会被误读成「视频本身太大不能传」。
-        if (xhr.status === 413 && !fromServer) msg = '上传被网关拒绝（HTTP 413·单次体积超限）';
+        try { const d = JSON.parse(xhr.responseText || '{}'); if (d.detail) msg = d.detail; } catch (e) { /* ignore */ }
         reject(new Error(msg));
       }
     });
@@ -2901,7 +2640,6 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
-    { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
     xhr.timeout = 120000;  // finish 含合并+提交转码，CF/Railway 链路偶发 30s+ 慢响应，给浏览器 XHR 2 分钟兜底
     xhr.addEventListener('load', () => {
       try {
@@ -3072,15 +2810,14 @@
     mcCountEl.textContent = segs.length ? `已添加 ${segs.length} 个文件${modeTxt}` : '尚未添加文件';
     mcClearBtn.hidden = mcState.list.length === 0;
     const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult).length;
-    const anyMerging = mcState.list.some(x => x.isResult && x.status === 'running');
-    mcMergeBtn.disabled = ready < 2 || anyMerging;   // 拼接进行中禁用，防重复点出多个「合并结果」
+    mcMergeBtn.disabled = ready < 2;
     if (!mcState.list.length) { mcListEl.innerHTML = ''; return; }
     mcListEl.innerHTML = mcState.list.map((it, idx) => {
       const name = it.name || it.outputName || it.label || (it.isResult ? '合并结果' : '未命名文件');
       const statusText = it.isResult
         ? (it.status === 'running'
              ? (it.stage === '拼接中' ? '拼接中…' : (it.progress ? `拼接中 ${it.progress}%` : '拼接中…'))
-             : it.status === 'completed' ? (it.stale ? '完成 ✅ · 上次结果' : '完成 ✅') : '失败：' + (it.errorMsg || ''))
+             : it.status === 'completed' ? '完成 ✅' : '失败：' + (it.errorMsg || ''))
         : (it.status === 'uploading'
              ? `上传中 ${it.progress || 0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`
              : it.status === 'uploaded' ? '已就绪' : it.status === 'failed' ? '失败：' + (it.errorMsg || '') : '未开始');
@@ -3093,7 +2830,7 @@
       const upDisabled = (it.isResult || idx === 0) ? 'disabled' : '';
       const downDisabled = (it.isResult || idx === mcState.list.length - 1) ? 'disabled' : '';
       return `
-        <li class="uc-item ${cls}${it.stale ? ' is-stale' : ''}" data-id="${it.id}">
+        <li class="uc-item ${cls}" data-id="${it.id}">
           <div class="uc-item-main">
             <div class="uc-item-name" title="${name}">${idx + 1}. ${name}</div>
             ${it.file ? `<div class="uc-item-meta"><span>${mcFormatSize(it.file.size)}</span></div>`
@@ -3139,10 +2876,6 @@
 
   // 添加文件：支持 FileList（网页/上传）或字符串数组本地绝对路径（桌面端免上传）
   const mcAddFiles = (list) => {
-    // 上一轮拼接已完成又添加新片段 → 旧结果降级为「上次结果」（置灰），新结果会用自己的输出名，不再混淆
-    mcState.list.forEach(x => {
-      if (x.isResult && !x.stale && x.status === 'completed') { x.stale = true; x.label = '上次结果'; }
-    });
     const hasLocal = mcState.list.some(x => x.localPath);
     const hasUpload = mcState.list.some(x => x.file);
     Array.from(list).forEach(f => {
@@ -3251,7 +2984,6 @@
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload-chunk/finish');
       xhr.setRequestHeader('X-Device-Id', deviceId());
-      { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
       xhr.timeout = 120000;
       xhr.addEventListener('load', () => {
         try {
@@ -3280,10 +3012,6 @@
 
   const mcPoll = async () => {
     const running = mcState.list.filter(x => x.isResult && x.status === 'running' && x.jobId);
-    if (!running.length) {   // 没有进行中的拼接就停表（此前定时器永不停止、底部状态永远「拼接中…」）
-      if (mcState.polling) { clearInterval(mcState.polling); mcState.polling = null; }
-      return;
-    }
     await Promise.all(running.map(async (it) => {
       try {
         const st = await request('/api/convert/' + it.jobId);
@@ -3298,24 +3026,13 @@
           if (!it.name) it.name = it.outputName;
           it.downloadUrl = `${window.VDL_API_BASE || ''}/api/convert/${it.jobId}/file?device=${encodeURIComponent(deviceId())}`;
           it.libraryId = st.library_id || null;
-          mcStatusEl.textContent = '拼接完成，点击结果行的「下载」保存';
           mcRender();
         } else if (st.status === 'failed') {
           it.status = 'failed'; it.errorMsg = st.error || '未知错误';
-          mcStatusEl.textContent = '拼接失败：' + it.errorMsg;
           mcRender();
         }
       } catch (_e) { /* 忽略 */ }
     }));
-    // 拼接成功后移除本次用掉的源片段（只删本任务提交的那些，绝不误伤用户新加的片段）
-    const segIdSet = new Set();
-    mcState.list.filter(x => x.isResult && x.status === 'completed' && x.segIds)
-      .forEach(x => x.segIds.forEach(id => segIdSet.add(id)));
-    if (segIdSet.size) {
-      const before = mcState.list.length;
-      mcState.list = mcState.list.filter(x => x.isResult || (x.status === 'running') || !segIdSet.has(x.id));
-      if (mcState.list.length !== before) mcRender();
-    }
   };
 
   const mcPump = () => {
@@ -3360,12 +3077,7 @@
     if (!t) return;
     const li = t.closest('.uc-item');
     const it = mcState.list.find(x => x.id === +li.dataset.id);
-    if (!it) return;
-    if (it.isResult) {   // 结果行也允许移除（running 时除外）——此前 × 按钮点了没反应
-      if (it.status === 'running') { mcStatusEl.textContent = '拼接进行中，暂无法移除'; return; }
-      mcState.list = mcState.list.filter(x => x.id !== it.id); mcRender(); mcStatusEl.textContent = '已移除';
-      return;
-    }
+    if (!it || it.isResult) return;
     const act = t.dataset.act;
     if (act === 'remove') mcRemoveItem(it.id);
     else if (act === 'up' || act === 'down') {
@@ -3378,11 +3090,6 @@
   mcMergeBtn.addEventListener('click', () => {
     const ready = mcState.list.filter(x => x.status === 'uploaded' && !x.isResult);
     if (ready.length < 2) { mcStatusEl.textContent = '至少需要 2 个已就绪的文件'; return; }
-    if (mcState.list.some(x => x.isResult && x.status === 'running')) { mcStatusEl.textContent = '正在拼接中，请等待完成'; return; }
-    mcMergeBtn.disabled = true;   // 同步禁用：防 /api/concat 响应返回前双击重复提交
-    mcState.list.forEach(x => {
-      if (x.isResult && !x.stale && x.status === 'completed') { x.stale = true; x.label = '上次结果'; }
-    });
     const body = {
       segments: ready.map(x => x.segName),
       out_format: mcOutFormat.value,
@@ -3396,20 +3103,17 @@
     request(endpoint, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
       .then(data => {
         if (data.job_id) {
-          mcState.list = mcState.list.filter(x => !x.isResult);   // 重新拼接时替换旧结果，绝不堆多个「合并结果」
           mcState.list.push({ id: mcState.nextId++, isResult: true, label: '合并结果',
             name: mcOutName.value || '', status: 'running',
-            jobId: data.job_id, progress: 30, stage: '', downloadUrl: '', outputName: '', errorMsg: '', libraryId: null,
-            segIds: ready.map(x => x.id) });
+            jobId: data.job_id, progress: 30, stage: '', downloadUrl: '', outputName: '', errorMsg: '', libraryId: null });
           mcState.polling = setInterval(mcPoll, UC_POLL_INTERVAL);
           mcStatusEl.textContent = '拼接中…';
           mcRender();
         } else {
           mcStatusEl.textContent = data.detail || data.error || '拼接失败';
-          mcRender();   // 重新计算按钮可用态（解锁）
         }
       })
-      .catch(() => { mcStatusEl.textContent = '拼接请求失败，请重试'; mcRender(); });
+      .catch(() => { mcStatusEl.textContent = '拼接请求失败，请重试'; });
   });
 
   // 事件绑定
@@ -3606,19 +3310,14 @@
       const disabled = !['pending', 'failed', 'uploading', 'uploaded'].includes(it.status) ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
-      const downloadHtml = it.downloadUrl && !['running', 'uploading'].includes(it.status)
+      const downloadHtml = it.status === 'completed' && it.downloadUrl
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName || 'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
-        : '';
-      const reeditHtml = it.status === 'completed'
-        ? `<button type="button" class="uc-item-start" data-act="reedit" title="恢复该行为可编辑状态：可改格式、重新转码（旧结果在重新转码前仍可下载）">重新编辑</button>`
         : '';
       const startHtml = it.status === 'uploaded'
         ? `<button type="button" class="uc-item-start" data-act="start" title="用该行已设置的格式开始转码">开始转码</button>`
         : it.status === 'failed'
           ? `<button type="button" class="uc-item-start" data-act="start" title="清除错误状态，按当前格式重新转码">重新转码</button>`
-          : it.status === 'pending'
-            ? `<button type="button" class="uc-item-start" data-act="start" title="先上传该文件，再按当前格式转码">开始转码</button>`
-            : '';
+          : '';
       const targetDisabled = (it.status === 'running' || it.status === 'completed') ? 'disabled' : '';
       const displayName = it.name || (it.file && it.file.name) || '未命名';
       const metaSpans = it.localPath
@@ -3636,7 +3335,6 @@
           <label class="sr-only" for="musItemTarget-${it.id}">输出格式</label>
           <select id="musItemTarget-${it.id}" data-act="target" ${targetDisabled} title="修改此行的目标格式（开始转码时生效）">${opts}</select>
           ${startHtml}
-          ${reeditHtml}
           ${downloadHtml}
           <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
         </div>
@@ -3727,9 +3425,7 @@
         headers: { 'Content-Type': 'application/json' },
       }).then(data => {
         if (data.job_id) {
-          item.jobId = data.job_id; item.status = 'running'; item.progress = 30;
-          musEnsurePolling();   // 双保险：job_id 到手立刻确保轮询在跑（防 tick 自杀停表后无人重启）
-          musRender(); resolve(data);
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; musRender(); resolve(data);
         } else {
           item.status = 'failed'; item.errorMsg = data.detail || data.error || '本地转换请求失败'; musRender(); reject(new Error(item.errorMsg));
         }
@@ -3754,19 +3450,14 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
-    { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
     xhr.timeout = 120000;
     xhr.addEventListener('load', () => {
       try {
         const data = JSON.parse(xhr.responseText || '{}');
         if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
-          item.jobId = data.job_id; item.status = 'running'; item.progress = 30;
-          item._uploadId = null; item._totalChunks = null;   // 分片已被 finish 合并消化，之后重转需重传
-          musEnsurePolling();   // 双保险：job_id 到手立刻确保轮询在跑（防 tick 自杀停表后无人重启）
-          musRender(); resolve(data);
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; musRender(); resolve(data);
         } else {
           item.status = 'failed';
-          item._uploadId = null; item._totalChunks = null;   // 分片状态已不可信（可能被消化/不完整），下次重新转码走重传
           item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
           musRender(); reject(new Error(item.errorMsg));
         }
@@ -3774,47 +3465,14 @@
         item.status = 'failed'; item.errorMsg = '服务器响应异常（可能是网络/代理超时）'; musRender(); reject(e);
       }
     });
-    xhr.addEventListener('error', () => { item.status = 'failed'; item._uploadId = null; item._totalChunks = null; item.errorMsg = '网络错误'; musRender(); reject(new Error('network')); });
-    xhr.addEventListener('timeout', () => { item.status = 'failed'; item._uploadId = null; item._totalChunks = null; item.errorMsg = '响应超时（请重试）'; musRender(); reject(new Error('timeout')); });
+    xhr.addEventListener('error', () => { item.status = 'failed'; item.errorMsg = '网络错误'; musRender(); reject(new Error('network')); });
+    xhr.addEventListener('timeout', () => { item.status = 'failed'; item.errorMsg = '响应超时（请重试）'; musRender(); reject(new Error('timeout')); });
     xhr.send(form);
-  });
-
-  // 免重传重转：复用服务端保留的源文件（finish 合并产物，网页版 2h TTL）按新格式再次转码。
-  // 410/404（源过期/任务不存在/桌面端即删）时清 _srcJobId 并回退为重新上传。
-  const musReconvert = (item) => new Promise((resolve, reject) => {
-    if (!item || !item._srcJobId) { reject(new Error('无源任务')); return; }
-    item.status = 'running'; item.progress = 30; item.stage = ''; musRender();
-    const form = new FormData();
-    form.append('job_id', item._srcJobId);
-    form.append('target', item.target);
-    form.append('audio_bitrate', item.audio_bitrate || '');
-    form.append('to_library', item.toLibrary ? 'true' : 'false');
-    fetch('/api/convert/reconvert', { method: 'POST', body: form, headers: { 'X-Device-Id': deviceId(), ...authBearerHeaders() } })
-      .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })))
-      .then(({ ok, status, data }) => {
-        if (ok && data.job_id) {
-          item.jobId = data.job_id; item._srcJobId = data.job_id;   // 新任务的源文件即同一份，可继续链式重转
-          item.status = 'running'; item.progress = 30;
-          musEnsurePolling();
-          musRender(); resolve(data);
-        } else if (status === 410 || status === 404) {
-          item._srcJobId = null;
-          item.status = 'pending'; item.progress = 0; musRender();
-          reject(new Error(data.detail || '源文件已过期'));
-        } else {
-          item.status = 'failed'; item.errorMsg = data.detail || data.error || ('HTTP ' + status); musRender(); reject(new Error(item.errorMsg));
-        }
-      })
-      .catch(err => { item.status = 'failed'; item._srcJobId = null; item.errorMsg = '网络错误'; musRender(); reject(err); });
   });
 
   const musPollAll = async () => {
     const running = musState.list.filter(x => x.status === 'running' && x.jobId);
-    // 「活口」守卫：只要还有上传中 / 已开转码但 job_id 未返回的项，就绝不能停表。
-    // 2026-09-29 踩坑：批量开始后第一个 tick（1.5s）发现「无 running 项」就自杀式停表，
-    // 而此时文件还在上传、job_id 还没回来 → 之后没人再重启轮询，UI 永久卡在「转码中 30%」。
-    const live = musState.list.some(x => x.status === 'uploading' || x.status === 'running');
-    if (!running.length && !live) { musStopPolling(); return; }
+    if (!running.length) { musStopPolling(); return; }
     await Promise.all(running.map(async (it) => {
       try {
         const st = await request('/api/convert/' + it.jobId);
@@ -3877,28 +3535,7 @@
     } else if (act === 'start') {
       if (it.status === 'failed') { it.status = 'uploaded'; it.errorMsg = ''; it.progress = 0; it.jobId = null; }
       musEnsurePolling();
-      if (it.localPath) {
-        if (it.status !== 'uploaded') { it.status = 'uploaded'; it.progress = 30; it.stage = '本地文件'; musRender(); }
-        musFinishOne(it).catch(() => {});
-      } else if (it._srcJobId) {
-        // 优先免重传：服务端还保留着源文件（网页版 2h 内），按新格式直接重转；过期则回退重传
-        musReconvert(it).catch(() => {
-          if (it.file) musUploadOne(it).then(() => musFinishOne(it)).catch(() => {});
-        });
-      } else if (it._uploadId) {
-        musFinishOne(it).catch(() => {});            // 已上传（含重新转码）
-      } else {
-        musUploadOne(it).then(() => musFinishOne(it)).catch(() => {});  // 未上传/分片已被 finish 消化：先上传再转
-      }
-    } else if (act === 'reedit') {
-      // 重新编辑：已完成行恢复可编辑（可改格式/重新转码），保留旧结果下载链接直到新结果产出。
-      // 优先免重传：记下源任务 job_id，服务端保留的源文件 2h 内可直接重转；
-      // 分片在 finish 合并时已被服务端删除（p.unlink），_uploadId 必须清掉（复用必报「分片不完整 (0/1)」）。
-      it._srcJobId = it.jobId || null;
-      it.status = it.localPath ? 'uploaded' : 'pending';
-      it.errorMsg = ''; it.jobId = null; it.progress = it.localPath ? 30 : 0; it.stage = it.localPath ? '本地文件' : '';
-      it._uploadId = null; it._totalChunks = null; it._xhrs = null;
-      musRender();
+      musFinishOne(it).catch(() => {});
     }
   });
   el.musClearBtn.addEventListener('click', () => {
@@ -4101,9 +3738,7 @@
         headers: { 'Content-Type': 'application/json' },
       }).then(data => {
         if (data.job_id) {
-          item.jobId = data.job_id; item.status = 'running'; item.progress = 30;
-          imgEnsurePolling();   // 双保险：job_id 到手立刻确保轮询在跑
-          imgRender(); resolve(data);
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; imgRender(); resolve(data);
         } else {
           item.status = 'failed'; item.errorMsg = data.detail || data.error || '本地转换请求失败'; imgRender(); reject(new Error(item.errorMsg));
         }
@@ -4132,15 +3767,12 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload-chunk/finish');
     xhr.setRequestHeader('X-Device-Id', deviceId());
-    { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
     xhr.timeout = 120000;
     xhr.addEventListener('load', () => {
       try {
         const data = JSON.parse(xhr.responseText || '{}');
         if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
-          item.jobId = data.job_id; item.status = 'running'; item.progress = 30;
-          imgEnsurePolling();   // 双保险：job_id 到手立刻确保轮询在跑
-          imgRender(); resolve(data);
+          item.jobId = data.job_id; item.status = 'running'; item.progress = 30; imgRender(); resolve(data);
         } else {
           item.status = 'failed';
           item.errorMsg = data.detail || data.error || ('HTTP ' + xhr.status);
@@ -4157,9 +3789,7 @@
 
   const imgPollAll = async () => {
     const running = imgState.list.filter(x => x.status === 'running' && x.jobId);
-    // 「活口」守卫（与 musPollAll 同源修法）：上传中/finish 在途时绝不停表
-    const live = imgState.list.some(x => x.status === 'uploading' || x.status === 'running');
-    if (!running.length && !live) { imgStopPolling(); return; }
+    if (!running.length) { imgStopPolling(); return; }
     await Promise.all(running.map(async (it) => {
       try {
         const st = await request('/api/convert/' + it.jobId);
@@ -4267,19 +3897,6 @@
   // ===== 压缩（图片 原格式/WebP/AVIF + 视频 H.264/HEVC；2026-09-11 新增，2026-09-11 扩展编码/格式选项）=====
   const CP_POLL_INTERVAL = UC_POLL_INTERVAL || 1500;
   const cpState = { list: [], nextId: 1, pollTimer: null };
-  // 每行「单独设置」用的短标签（行内窄，长解释挂 title）
-  const CP_LEVEL_SHORT = { high: '轻度', balanced: '推荐', strong: '极致' };
-  const CP_FMT_SHORT = { keep: '原格式', webp: 'WebP', jpg: 'JPG', png: 'PNG', avif: 'AVIF' };
-  // ⚠️ 与后端 server/routers/compress.py 的 IMAGE_OUT_FORMATS 保持一致（顺序即下拉顺序）
-  const CP_FMT_LIST = ['keep', 'webp', 'jpg', 'png', 'avif'];
-  const CP_FMT_DESC = {
-    keep: '原格式（PNG 严格无损重压 / JPG 视觉无损）',
-    webp: 'WebP（更小·推荐，全网通用）',
-    jpg: 'JPG（兼容最好·体积小，透明区自动填白）',
-    png: 'PNG（严格无损·保留透明，体积可能变大）',
-    avif: 'AVIF（极致压缩·较慢，新系统/新浏览器）',
-  };
-  const CP_CODEC_SHORT = { h264: 'H.264', hevc: 'HEVC' };
   const cpDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const cpFormatSize = (b) => {
     if (b >= 1024 * 1024 * 1024) return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
@@ -4315,63 +3932,30 @@
               + (it.eta ? ` · 约剩 ${cpMmss(it.eta)}` : '')
               + (it.stale ? ' · 进度刷新受阻（任务仍在进行）' : '')
             : '压缩中…'),
-        // 已完成的行改了参数 → 状态栏顶一句醒目提示，否则用户不知道「改了没生效」
-        completed: (it.dirty ? '参数已改，点「重新压缩」生效 · ' : '')
-          + (it.saving > 0
-            ? `完成 ✅ 节省 ${it.saving}%（${cpFormatSize(it.sizeBefore || 0)} → ${cpFormatSize(it.sizeAfter || 0)}）${it.note || ''}`
-            : `完成 ✅ ${it.note || '体积已足够小'}`),
+        completed: it.saving > 0
+          ? `完成 ✅ 节省 ${it.saving}%（${cpFormatSize(it.sizeBefore || 0)} → ${cpFormatSize(it.sizeAfter || 0)}）${it.note || ''}`
+          : `完成 ✅ ${it.note || '体积已足够小'}`,
         failed: '失败：' + (it.errorMsg || ''),
       }[it.status] || it.status;
       const statusCls = it.status === 'pending' ? '' : 'is-' + it.status;
-      // ★ 仅压缩中禁用移除（2026-09-24）：已完成的行同样可移除——否则「选错了文件又
-      //   已压完」就只能清空整个列表重新来过。
-      const disabled = it.status === 'running' ? 'disabled' : '';
+      const disabled = it.status === 'running' || it.status === 'completed' ? 'disabled' : '';
       const progressHtml = it.status === 'running'
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.jobId
         ? `<a class="uc-item-download" href="/api/compress/${it.jobId}/file" download="${it.outputName || 'compressed'}">下载</a>`
         : '';
-      // ★ 已完成的行也给「重新压缩」（2026-09-24，用户要求「不满意 / 压错了不用重新上传」）：
-      //   行内参数改完点一下即可；本机文件直接复用路径重压，网页文件复用浏览器里已选的
-      //   File 对象（都不需要用户再去选一次文件）。
-      const startTitle = it.status === 'completed'
-        ? '用该行当前参数重新压缩（无需重新选择文件；新结果会替换上一次的下载文件）'
-        : (it.status === 'failed' ? '按当前参数重试该文件' : '按当前强度压缩该文件');
-      const startHtml = ['pending', 'failed', 'completed'].includes(it.status)
-        ? `<button type="button" class="uc-item-start" data-act="start" title="${startTitle}">${it.status === 'pending' ? '开始压缩' : '重新压缩'}</button>`
+      const startHtml = it.status === 'pending' || it.status === 'failed'
+        ? `<button type="button" class="uc-item-start" data-act="start" title="按当前强度压缩该文件">${it.status === 'failed' ? '重新压缩' : '开始压缩'}</button>`
         : '';
-      // ★ 每行「单独设置」（2026-09-24）：与视频 / 音乐 / 图片转换一致，参数可在行内逐条改，
-      //   不再只能靠下方「默认压缩设置」统一应用（用户报「少了单独操作部分」）
-      //   ★ 已完成的行同样可改（同日）：改完点「重新压缩」生效，不必「移除 → 重新添加」
-      const optDis = it.status === 'running' ? 'disabled' : '';
-      const lockHint = it.status === 'running' ? '压缩中不可修改'
-        : it.status === 'completed' ? '改完点「重新压缩」生效（无需重新选择文件）'
-        : '点「开始压缩 / 重新压缩」时生效';
-      const levelSel = `<select class="uc-item-opt" data-act="level" ${optDis}`
-        + ` title="本行压缩强度：轻度 / 推荐 = 视觉无损，极致 = 有损、体积最小 · ${lockHint}">`
-        + ['high', 'balanced', 'strong'].map(v =>
-            `<option value="${v}"${v === it.level ? ' selected' : ''}>${CP_LEVEL_SHORT[v]}</option>`).join('')
-        + `</select>`;
-      const subSel = it.kind === 'video'
-        ? `<select class="uc-item-opt" data-act="codec" ${optDis}`
-          + ` title="本行视频编码：H.264 兼容最好，HEVC 同画质更小（硬件加速） · ${lockHint}">`
-          + ['h264', 'hevc'].map(v =>
-              `<option value="${v}"${v === it.codec ? ' selected' : ''}>${CP_CODEC_SHORT[v]}</option>`).join('')
-          + `</select>`
-        : `<select class="uc-item-opt" data-act="outputFormat" ${optDis}`
-          + ` title="本行图片输出格式：${CP_FMT_LIST.map(v => CP_FMT_DESC[v]).join(' / ')} · 需要 BMP/TIFF/GIF 请用「图片格式转换」 · ${lockHint}">`
-          + CP_FMT_LIST.map(v =>
-              `<option value="${v}"${v === it.outputFormat ? ' selected' : ''} title="${CP_FMT_DESC[v]}">${CP_FMT_SHORT[v]}</option>`).join('')
-          + `</select>`;
       const displayName = it.name || '未命名';
       const levelText = { high: '轻度', balanced: '推荐', strong: '极致·有损' }[it.level] || it.level;
       const codecText = it.kind === 'video' ? ({ h264: 'H.264', hevc: 'HEVC' }[it.codec] || 'H.264') : '';
-      const fmtText = it.kind === 'image' ? (CP_FMT_SHORT[it.outputFormat] || '原格式') : '';
+      const fmtText = it.kind === 'image' ? ({ keep: '原格式', webp: 'WebP', avif: 'AVIF' }[it.outputFormat] || '原格式') : '';
       const kindText = (it.kind === 'video' ? '视频' + (codecText ? ' · ' + codecText : '') : '图片' + (fmtText ? ' · ' + fmtText : ''));
       const metaSpans = it.localPath
         ? `<span style="color:var(--brand);font-size:12px;">本地文件 · 免上传</span><span>${kindText} · ${levelText}${it.sizeBefore ? ' · ' + cpFormatSize(it.sizeBefore) : ''}</span>`
         : (it.file ? `<span>${cpFormatSize(it.file.size)}</span><span>${kindText} · ${levelText}</span>` : `<span>${kindText} · ${levelText}</span>`);
-      return `<li class="uc-item uc-item-cp ${statusCls}" data-id="${it.id}">
+      return `<li class="uc-item ${statusCls}" data-id="${it.id}">
         <div class="uc-item-main">
           <div class="uc-item-name" title="${displayName}">${displayName}</div>
           <div class="uc-item-meta">${metaSpans}</div>
@@ -4379,8 +3963,6 @@
           <div class="uc-item-status">${statusText}</div>
         </div>
         <div class="uc-item-side">
-          ${levelSel}
-          ${subSel}
           ${startHtml}
           ${downloadHtml}
           <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
@@ -4407,7 +3989,6 @@
         status: isLocal ? 'pending' : 'pending',
         jobId: null, progress: 0, stage: '', elapsed: 0, eta: 0,
         errorMsg: '', outputName: '', sizeBefore: 0, sizeAfter: 0, saving: 0, note: '',
-        dirty: false, replaces: '',      // 参数被改动 / 需要顶掉的上一轮 job（重新压缩用）
         _removed: false, _xhrs: null, _uploadId: null, _totalChunks: 0,
       });
     });
@@ -4455,9 +4036,7 @@
     const finishJob = (data) => {
       if (data.job_id) {
         item.jobId = data.job_id; item.status = 'running'; item.progress = 5;
-        item.elapsed = 0; item.eta = 0;
-        item.replaces = '';          // 旧任务已交后端清理，别在后续重试里重复提交
-        cpRender(); resolve(data);
+        item.elapsed = 0; item.eta = 0; cpRender(); resolve(data);
       } else {
         item.status = 'failed'; item.errorMsg = data.detail || data.error || '压缩请求失败'; cpRender(); reject(new Error(item.errorMsg));
       }
@@ -4468,7 +4047,6 @@
         body: JSON.stringify({
           local_path: item.localPath, level: item.level,
           codec: item.codec || 'h264', output_format: item.outputFormat || 'keep',
-          replaces: item.replaces || '',      // 重新压缩时带走上一轮 job，后端顺手清理旧产物
         }),
         headers: { 'Content-Type': 'application/json' },
       }).then(finishJob).catch(err => {
@@ -4501,12 +4079,10 @@
       form.append('level', item.level);
       form.append('codec', item.codec || 'h264');
       form.append('output_format', item.outputFormat || 'keep');
-      if (item.replaces) form.append('replaces', item.replaces);   // 重新压缩：托后端清旧产物
       const xhr = new XMLHttpRequest();
       item._xhrs.add(xhr);
       xhr.open('POST', location.origin + '/api/compress/finish');
       xhr.setRequestHeader('X-Device-Id', deviceId());
-      { const _bt = authBearerToken(); if (_bt) xhr.setRequestHeader('Authorization', 'Bearer ' + _bt); }
       xhr.onload = () => {
         try { finishJob(JSON.parse(xhr.responseText)); }
         catch (_e) { item.status = 'failed'; item.errorMsg = '压缩请求解析失败'; cpRender(); reject(new Error(item.errorMsg)); }
@@ -4529,27 +4105,8 @@
   el.cpFileInput.addEventListener('change', () => {
     if (el.cpFileInput.files && el.cpFileInput.files.length) { cpAddFiles(el.cpFileInput.files); el.cpFileInput.value = ''; }
   });
-  // 行内「单独设置」：压缩强度 / 视频编码 / 图片输出格式（逐条改，立即写回该行）
-  el.cpList.addEventListener('change', (e) => {
-    const t = e.target;
-    const act = t && t.dataset && t.dataset.act;
-    if (act !== 'level' && act !== 'codec' && act !== 'outputFormat') return;
-    const li = t.closest('.uc-item'); if (!li) return;
-    const it = cpState.list.find(x => x.id === +li.dataset.id); if (!it) return;
-    if (act === 'level') it.level = t.value;
-    else if (act === 'codec') it.codec = t.value;
-    else it.outputFormat = t.value;
-    // 已完成的行被改了参数 → 标脏，状态栏出现「参数已改，点『重新压缩』生效」（2026-09-24）
-    it.dirty = it.status === 'completed';
-    cpRender();
-    el.cpStatus.textContent = it.dirty
-      ? '已更新该行参数：点该行「重新压缩」即可生效（无需重新选择文件）'
-      : '已更新该行参数（点「开始压缩」或该行按钮时生效）';
-  });
   el.cpList.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-act]'); if (!btn) return;
-    const act0 = btn.dataset.act;
-    if (act0 !== 'remove' && act0 !== 'start') return;   // 行内下拉不算「操作按钮」
     const li = btn.closest('.uc-item'); const id = +li.dataset.id;
     const it = cpState.list.find(x => x.id === id); if (!it) return;
     const act = btn.dataset.act;
@@ -4558,13 +4115,9 @@
       cpState.list = cpState.list.filter(x => x.id !== id);
       cpRender();
     } else if (act === 'start') {
-      if (it.status === 'completed' || it.status === 'failed') {
-        // 重新压缩（2026-09-24）：把上一次的 job 一并交给后端清理（删旧产物 + 移除记录），
-        // 免得同一源文件的历次结果在磁盘上越堆越多；随后原地回到「未开始」再重投。
-        if (it.status === 'completed' && it.jobId) it.replaces = it.jobId;
+      if (it.status === 'failed') {
         it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null;
         it.elapsed = 0; it.eta = 0;
-        it.sizeAfter = 0; it.saving = 0; it.note = ''; it.dirty = false;
       }
       cpEnsurePolling();
       cpStartOne(it).catch(() => {});
@@ -4588,7 +4141,7 @@
     el.cpStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项（所有项都已开始/完成）';
   });
   el.cpStartAllBtn.addEventListener('click', () => {
-    cpState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; it.elapsed = 0; it.eta = 0; it.dirty = false; } });
+    cpState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; it.elapsed = 0; it.eta = 0; } });
     const wait = cpState.list.filter(x => x.status === 'pending');
     if (!wait.length) { el.cpStatus.textContent = '没有可开始的项（先添加文件）'; return; }
     el.cpStatus.textContent = `批量压缩中…（${wait.length} 个）`;
@@ -4638,17 +4191,6 @@
   const srEnsurePolling = () => { if (!srState.pollTimer) srState.pollTimer = setInterval(srPollAll, SR_POLL_INTERVAL); };
   const srStopPolling = () => { if (srState.pollTimer) { clearInterval(srState.pollTimer); srState.pollTimer = null; } };
 
-  // 每行「单独设置」用的短标签（行内窄，完整解释挂 title）——与下方「默认修复设置」同义，
-  // 选项值必须与后端 MODES / VIDEO_MODES / SCALES 及 index.html 的三个批量下拉一致。
-  const SR_MODE_SHORT_IMAGE = { fast: '快速档', ai: 'AI 档' };
-  const SR_MODE_SHORT_VIDEO = { standard: '标准档', enhance: '增强档' };
-  const SR_MODE_DESC_IMAGE = { fast: '快速档 · 秒级（放大 + 锐化）', ai: 'AI 档 · 细节重建（较慢，效果更好）' };
-  const SR_MODE_DESC_VIDEO = { standard: '标准档 · 5× 实时（推荐）', enhance: '增强档 · 2.5× 实时（含降噪）' };
-  const SR_SCALE_SHORT = { 2: '×2', 4: '×4' };
-  const SR_SCALE_DESC = { 2: '×2（推荐）', 4: '×4（体积与耗时都更大）' };
-  const SR_CODEC_SHORT = { h264: 'H.264', hevc: 'HEVC' };
-  const SR_CODEC_DESC = { h264: 'H.264（兼容性最好）', hevc: 'HEVC（同画质体积约小 25%）' };
-
   const srRender = () => {
     const list = srState.list;
     el.srCount.textContent = list.length ? `已添加 ${list.length} 个文件` : '尚未添加文件';
@@ -4667,62 +4209,24 @@
           + (it.eta ? ` · 约剩 ${srMmss(it.eta)}` : '')
           + (it.stage ? ` · ${escHtml(it.stage)}` : '');
       } else if (it.status === 'completed') {
-        // 已完成的行改了参数 → 顶一句醒目提示，否则用户不知道「改了没生效」
-        statusText = (it.dirty ? '参数已改，点「重新修复」生效 · ' : '')
-          + `完成 ✅ ${it.wBefore}×${it.hBefore} → ${it.wAfter}×${it.hAfter}`
+        statusText = `完成 ✅ ${it.wBefore}×${it.hBefore} → ${it.wAfter}×${it.hAfter}`
           + (it.sizeAfter ? ` · ${cpFormatSize(it.sizeAfter)}` : '')
           + (it.note ? ` · ${escHtml(it.note)}` : '');
       } else if (it.status === 'failed') {
         statusText = '失败：' + escHtml(it.errorMsg || '');
       }
       const statusCls = it.status === 'pending' ? '' : 'is-' + it.status;
-      // ★ 仅修复中禁用移除（2026-09-24）：已完成的行同样可移除（同压缩页口径）
-      const disabled = it.status === 'running' ? 'disabled' : '';
+      const disabled = it.status === 'running' || it.status === 'completed' ? 'disabled' : '';
       const progressHtml = it.status === 'running'
         ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.jobId
         ? `<a class="uc-item-download" href="/api/sr/${it.jobId}/file" download="${escHtml(it.outputName || 'upscaled')}">下载</a>`
         : '';
-      // ★ 已完成的行也给「重新修复」（2026-09-24，与高效压缩页对齐）：改完行内参数
-      //   点一下即可，本机文件直接复用路径，**不用重新选文件**。
-      const startTitle = it.status === 'completed'
-        ? '用该行当前参数重新修复（无需重新选择文件；新结果会替换上一次的下载文件）'
-        : (it.status === 'failed' ? '按当前参数重试该文件' : '按当前档位开始修复');
-      const startHtml = ['pending', 'failed', 'completed'].includes(it.status)
-        ? `<button type="button" class="uc-item-start" data-act="start" title="${startTitle}">`
-          + (it.status === 'pending' ? '开始修复' : (it.status === 'failed' ? '重试' : '重新修复'))
-          + `</button>`
-        : '';
-      // ★ 每行「单独设置」（2026-09-24）：与视频/音乐/图片转换、高效压缩一致，档位与
-      //   倍率可在行内逐条改，不再只能靠下方「默认修复设置」统一应用。
-      //   ★ 已完成的行同样可改（同日）：改完点「重新修复」生效，不必「移除 → 重新添加」。
-      const optDis = it.status === 'running' ? 'disabled' : '';
-      const lockHint = it.status === 'running' ? '修复中不可修改'
-        : it.status === 'completed' ? '改完点「重新修复」生效（无需重新选择文件）'
-        : '点「开始修复 / 重新修复」时生效';
-      const isVid = it.kind === 'video';
-      const modeMap = isVid ? SR_MODE_SHORT_VIDEO : SR_MODE_SHORT_IMAGE;
-      const modeDesc = isVid ? SR_MODE_DESC_VIDEO : SR_MODE_DESC_IMAGE;
-      const modeVals = isVid ? ['standard', 'enhance'] : ['fast', 'ai'];
-      const modeSel = `<select class="uc-item-opt" data-act="mode" ${optDis}`
-        + ` title="本行修复档位：${modeVals.map(v => modeDesc[v]).join(' / ')} · ${lockHint}">`
-        + modeVals.map(v =>
-            `<option value="${v}"${v === it.mode ? ' selected' : ''} title="${modeDesc[v]}">${modeMap[v]}</option>`).join('')
-        + `</select>`;
-      const scaleSel = `<select class="uc-item-opt" data-act="scale" ${optDis}`
-        + ` title="本行放大倍率：${[2, 4].map(v => SR_SCALE_DESC[v]).join(' / ')} · ${lockHint}">`
-        + [2, 4].map(v =>
-            `<option value="${v}"${String(v) === String(it.scale) ? ' selected' : ''} title="${SR_SCALE_DESC[v]}">${SR_SCALE_SHORT[v]}</option>`).join('')
-        + `</select>`;
-      const codecSel = isVid
-        ? `<select class="uc-item-opt" data-act="codec" ${optDis}`
-          + ` title="本行视频编码：${['h264', 'hevc'].map(v => SR_CODEC_DESC[v]).join(' / ')} · ${lockHint}">`
-          + ['h264', 'hevc'].map(v =>
-              `<option value="${v}"${v === it.codec ? ' selected' : ''} title="${SR_CODEC_DESC[v]}">${SR_CODEC_SHORT[v]}</option>`).join('')
-          + `</select>`
+      const startHtml = it.status === 'pending' || it.status === 'failed'
+        ? `<button type="button" class="uc-item-start" data-act="start">${it.status === 'failed' ? '重试' : '开始修复'}</button>`
         : '';
       const safeName = escHtml(it.name || '未命名');
-      return `<li class="uc-item uc-item-sr ${statusCls}" data-id="${it.id}">
+      return `<li class="uc-item ${statusCls}" data-id="${it.id}">
         <div class="uc-item-main">
           <div class="uc-item-name" title="${safeName}">${safeName}</div>
           <div class="uc-item-meta"><span>${modeText} · ×${it.scale}</span></div>
@@ -4730,9 +4234,6 @@
           <div class="uc-item-status">${statusText}</div>
         </div>
         <div class="uc-item-side">
-          ${modeSel}
-          ${scaleSel}
-          ${codecSel}
           ${startHtml}
           ${downloadHtml}
           <button type="button" class="uc-item-remove" data-act="remove" title="从列表移除" ${disabled}>×</button>
@@ -4754,7 +4255,6 @@
         name, kind, mode, scale, codec, status: 'pending', jobId: null, progress: 0, stage: '',
         elapsed: 0, eta: 0, errorMsg: '', outputName: '', note: '',
         wBefore: 0, hBefore: 0, wAfter: 0, hAfter: 0, sizeAfter: 0,
-        dirty: false, replaces: '',      // 参数被改动 / 需要顶掉的上一轮 job（重新修复用）
       });
     });
     srRender();
@@ -4805,7 +4305,6 @@
     const body = item.kind === 'video'
       ? { local_path: item.localPath, mode: item.mode, scale: item.scale, codec: item.codec || 'h264' }
       : { local_path: item.localPath, mode: item.mode, scale: item.scale };
-    body.replaces = item.replaces || '';   // 重新修复：托后端回收上一轮产物
     request(endpoint, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -4813,425 +4312,12 @@
     }).then(data => {
       // 视频提交时后端已回传预估耗时，立刻显示，别让用户对着 0% 干等
       if (data.eta) { item.eta = data.eta; item.stage = '已提交'; srRender(); }
-      if (data.job_id) {
-        item.jobId = data.job_id; item.status = 'running';
-        item.replaces = '';              // 旧任务已交后端清理，别在后续重试里重复提交
-        srRender(); resolve(data);
-      }
+      if (data.job_id) { item.jobId = data.job_id; item.status = 'running'; srRender(); resolve(data); }
       else { item.status = 'failed'; item.errorMsg = data.detail || '修复请求失败'; srRender(); reject(new Error(item.errorMsg)); }
     }).catch(err => {
       item.status = 'failed'; item.errorMsg = (err && err.message) || '修复请求失败'; srRender(); reject(err);
     });
   });
-
-  // ===== 生成二维码（2026-09-20 新增）：本机文件 → 短链 + 二维码 =====
-  // 流程：选本地文件 → 本地后端流式转发到分享节点（带进度）→ 拿短链 → 生成二维码
-  // 为什么经本地后端：桌面端原生文件框只给「路径」，前端拿不到文件内容；
-  // 后端与 App 同机（localhost），转发不产生额外网络开销，还能上报进度、自动换通道。
-  // 节点部署见 desktop/vps-share/（systemd: vdl-share，nginx 在 8888 按域名分流）。
-  {
-    const shCfg = { base: '', limit: 100 * 1024 * 1024, maxUpload: 2 * 1024 ** 3 };
-    // hist = 「我的分享」列表（持久化在本地后端 ~/.videodownloader/share_history.json，
-    //        与 list 不同：list 是本次会话的待上传队列，重开 App 即空）
-    const shState = { list: [], nextId: 1, timer: null, current: null, hist: [] };
-
-    const shFmt = (b) => {
-      if (!b && b !== 0) return '';
-      if (b < 1024) return b + ' B';
-      if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
-      if (b < 1073741824) return (b / 1048576).toFixed(2) + ' MB';
-      return (b / 1073741824).toFixed(2) + ' GB';
-    };
-    const shDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
-    // 文件名来自用户/系统，进 innerHTML 前必须转义
-    const shEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
-      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-    async function shInit() {
-      try {
-        const r = await fetch('/api/share/config');
-        const d = await r.json();
-        if (d && d.ok) {
-          shCfg.base = d.base || '';
-          shCfg.limit = d.cf_body_limit || shCfg.limit;
-          shCfg.maxUpload = d.max_upload || shCfg.maxUpload;
-        }
-      } catch (e) { /* 节点未配置时静默，上传时再报错 */ }
-      // 记住上次选的有效期，下次打开还是它
-      try {
-        const saved = localStorage.getItem('vdl-share-expire');
-        if (saved != null && el.shareExpireSel) el.shareExpireSel.value = saved;
-      } catch (e) {}
-      shLoadHistory();   // 「我的分享」：持久化在本地后端，重开 App 仍在
-    }
-
-    function shRender() {
-      const box = el.shareQueue;
-      if (!box) return;
-      if (!shState.list.length) {
-        box.innerHTML = '';
-        el.shareClearBtn.hidden = true;
-        el.shareCount.textContent = '尚未选择文件';
-        return;
-      }
-      el.shareClearBtn.hidden = false;
-      const okN = shState.list.filter((x) => x.status === 'done').length;
-      el.shareCount.textContent = `${shState.list.length} 个文件（${okN} 个已生成链接）`;
-      box.innerHTML = shState.list.map((it) => {
-        const pct = it.total ? Math.min(100, Math.round((it.sent / it.total) * 100)) : 0;
-        let st = '<span class="st">等待中</span>';
-        if (it.status === 'uploading') st = `<span class="st">上传中 ${pct}%</span>`;
-        else if (it.status === 'done') st = '<span class="st ok">✓ 已生成</span>';
-        else if (it.status === 'failed') st = `<span class="st err">✕ 失败</span>`;
-        const bar = it.status === 'uploading'
-          ? `<div class="share-bar"><i style="width:${pct}%"></i></div>` : '';
-        const acts = [
-          it.status === 'done' ? '<button type="button" class="btn btn-ghost" data-act="show" style="padding:4px 10px;font-size:12px;">看二维码</button>' : '',
-          it.status === 'failed' ? `<button type="button" class="btn btn-ghost" data-act="retry" style="padding:4px 10px;font-size:12px;" title="${shEsc(it.err || '')}">重试</button>` : '',
-        ].join('');
-        return `<div class="share-item" data-id="${it.id}">
-          <span class="nm">${shEsc(it.name)}</span>
-          <span class="sz">${shFmt(it.total)}</span>${bar}${st}${acts}</div>`;
-      }).join('');
-    }
-
-    function shStopPoll() {
-      if (shState.timer) { clearInterval(shState.timer); shState.timer = null; }
-    }
-
-    function shEnsurePoll() {
-      if (shState.timer) return;
-      shState.timer = setInterval(async () => {
-        // 串行推进：没有正在上传的，就启动下一个等待中的（避免多文件抢上行带宽）
-        if (!shState.list.some((x) => x.status === 'uploading')) {
-          const next = shState.list.find((x) => x.status === 'pending');
-          if (next) shStart(next);
-        }
-        const active = shState.list.filter((x) => x.tid && x.status === 'uploading');
-        for (const it of active) {
-          try {
-            const r = await fetch('/api/share/task/' + it.tid);
-            const d = await r.json();
-            if (!d || !d.ok) continue;
-            it.sent = d.sent || 0;
-            it.total = d.total || it.total;
-            if (d.status === 'done') { it.status = 'done'; it.sid = d.sid; it.url = d.url; shShowResult(it); shLoadHistory(); }
-            else if (d.status === 'failed') { it.status = 'failed'; it.err = d.error || '上传失败'; }
-          } catch (e) { /* 轮询抖动忽略，下轮继续 */ }
-        }
-        shRender();
-        const busy = shState.list.some((x) => x.status === 'pending' || x.status === 'uploading');
-        if (!busy) shStopPoll();
-      }, 700);
-    }
-
-    async function shStart(item) {
-      if (item.status === 'uploading') return;
-      // 2026-09-27：登录门禁从「选择文件」按钮挪到真正的上传动作上——
-      // 点选文件不弹登录，开始上传（要传到服务器、占存储）才校验。登录后点「重试」即可继续。
-      if (!authToken()) {
-        item.status = 'failed';
-        item.err = '需要登录后才能分享';
-        shRender();
-        try { _notifyNeedLogin('请先登录或注册账号，即可使用生成二维码'); } catch (_) {}
-        return;
-      }
-      item.status = 'uploading';
-      item.sent = 0;
-      item.err = '';
-      shRender();
-      try {
-        let r;
-        const expire = shGetExpire();          // 0 = 永久
-        if (item.path) {
-          r = await fetch('/api/share/upload_path', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authBearerHeaders() },
-            body: JSON.stringify({ path: item.path, expire }),
-          });
-        } else {
-          const fd = new FormData();
-          fd.append('file', item.file, item.name);
-          r = await fetch('/api/share/upload_file?expire=' + expire, { method: 'POST', body: fd, headers: authBearerHeaders() });
-        }
-        const d = await r.json();
-        if (!r.ok || !d.ok) {
-          const why = d && (d.error === 'too_large'
-            ? `文件超过上限 ${shFmt(d.max || shCfg.maxUpload)}`
-            : (d.error || d.detail || ('HTTP ' + r.status)));
-          throw new Error(why);
-        }
-        item.tid = d.task_id;
-        item.total = d.size || item.total;
-        shEnsurePoll();
-      } catch (e) {
-        item.status = 'failed';
-        item.err = (e && e.message) || '上传失败';
-        shRender();
-      }
-    }
-
-    function shShowResult(it) {
-      if (!it || !it.url) return;
-      shState.current = it;
-      el.shareResult.hidden = false;
-      el.shareQrImg.src = '/api/share/qr?text=' + encodeURIComponent(it.url) + '&size=640';
-      el.shareUrlInput.value = it.url;
-      el.shareHint.textContent = `「${it.name}」已就绪 · 手机扫码即可查看（${shFmt(it.total)}）`;
-      try { el.shareResult.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
-    }
-
-    function shPushPath(p) {
-      const name = String(p).split(/[\\/]/).pop() || 'file';
-      shState.list.push({ id: shState.nextId++, path: p, file: null, name,
-        total: 0, sent: 0, status: 'pending', tid: null, sid: '', url: '', err: '' });
-    }
-
-    function shPushFile(f) {
-      shState.list.push({ id: shState.nextId++, path: '', file: f, name: f.name || 'file',
-        total: f.size || 0, sent: 0, status: 'pending', tid: null, sid: '', url: '', err: '' });
-    }
-
-    // ---------- 有效期（2026-09-21 新增）----------
-    // 传给后端的秒数，0 = 永久；后端经 X-Expire 交给分享节点计算 expire_at。
-    function shGetExpire() {
-      if (!el.shareExpireSel) return 0;
-      const v = parseInt(el.shareExpireSel.value, 10);
-      return Number.isFinite(v) && v > 0 ? v : 0;
-    }
-
-    // ---------- 我的分享：列表 / 删除 / 探活（2026-09-21 新增）----------
-    // 为什么要有：shState 原先是纯内存，切走页面或重开 App 记录全丢 —— 已发出的链接与
-    // 二维码再也找不回；且发出去的东西**既撤不回也删不掉**（节点侧早就有 DELETE 与
-    // X-Expire，桌面端一个都没接上）。记录落盘在后端，删服务器文件也由后端用它内置的
-    // 凭据去调，用户不需要经手任何服务器操作。
-    async function shLoadHistory(probe) {
-      try {
-        const r = await fetch('/api/share/history' + (probe ? '?probe=1' : ''));
-        const d = await r.json();
-        if (d && d.ok) shState.hist = d.items || [];
-      } catch (e) { /* 后端未就绪时静默，不影响上传主流程 */ }
-      // 无论成败都渲染一次：接口不可用时也要让用户看到这块是干什么的，而不是一片空白
-      shRenderHistory();
-    }
-
-    // 剩余有效期文案。expire_at=0 ⇒ 永久（与后端语义一致，不做过期判定）。
-    function shHistLife(it) {
-      if (!it.expire_at) return { text: '永久有效', cls: 'ok' };
-      const left = it.expire_at - Math.floor(Date.now() / 1000);
-      if (left <= 0) return { text: '已过期', cls: 'gone' };
-      const day = Math.floor(left / 86400), hour = Math.floor(left / 3600);
-      const s = day >= 1 ? day + ' 天'
-        : (hour >= 1 ? hour + ' 小时' : Math.max(1, Math.floor(left / 60)) + ' 分钟');
-      return { text: '剩 ' + s, cls: left < 86400 ? 'warn' : 'ok' };
-    }
-
-    function shHistTime(t) {
-      if (!t) return '';
-      try {
-        return new Date(t * 1000).toLocaleString('zh-CN',
-          { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-      } catch (e) { return ''; }
-    }
-
-    function shRenderHistory() {
-      const box = el.shareHistList;
-      if (!box) return;
-      const n = shState.hist.length;
-      if (el.shareHistCount) el.shareHistCount.textContent = n ? (n + ' 条记录') : '还没有分享记录';
-      if (!n) {
-        box.innerHTML = '<div class="share-hist-empty">上传过的文件会记在这里，重开 App 仍在，'
-          + '可随时取回链接/二维码，或从服务器上删掉。</div>';
-        return;
-      }
-      box.innerHTML = shState.hist.map((it) => {
-        const life = shHistLife(it);
-        // 探活结果（只有点「刷新」才有）：alive=false ⇒ 节点上已经没有了（被删或过期清掉）
-        let st;
-        if (it.alive === false) st = '<span class="st gone">链接已失效</span>';
-        else if (it.expired) st = '<span class="st gone">已过期</span>';
-        else if (it.alive === true) st = '<span class="st ok">在线 · ' + life.text + '</span>';
-        else st = '<span class="st ' + life.cls + '">' + life.text + '</span>';
-        const btns = [
-          '<button type="button" class="btn btn-ghost" data-hact="qr" style="padding:4px 10px;font-size:12px;">看二维码</button>',
-          '<button type="button" class="btn btn-ghost" data-hact="del" style="padding:4px 10px;font-size:12px;">删除</button>',
-        ].join('');
-        return '<div class="share-item" data-sid="' + shEsc(it.sid) + '">'
-          + '<span class="nm">' + shEsc(it.name) + '</span>'
-          + '<span class="sz">' + shFmt(it.size) + '</span>'
-          + '<span class="hist-time">' + shEsc(shHistTime(it.time)) + '</span>'
-          + st + btns + '</div>';
-      }).join('');
-    }
-
-    el.shareAddBtn.addEventListener('click', () => {
-      if (shDesktopNative()) {
-        // 铁律：选文件必须显式传类型；'any' 才允许任意格式（不传会被当成 media，文档/压缩包会置灰）
-        window.VDL.desktop.chooseFiles('any')
-          .then((list) => {
-            if (!list || !list.length) return;
-            list.forEach(shPushPath);
-            shRender();
-            shEnsurePoll();
-          })
-          .catch(() => {});
-      } else {
-        el.shareFileInput.click();
-      }
-    });
-    el.shareFileInput.addEventListener('change', () => {
-      const fs = el.shareFileInput.files;
-      if (fs && fs.length) {
-        Array.from(fs).forEach(shPushFile);
-        el.shareFileInput.value = '';
-        shRender();
-        shEnsurePoll();
-      }
-    });
-    el.shareQueue.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-act]');
-      if (!btn) return;
-      const row = btn.closest('.share-item');
-      const id = row ? +row.dataset.id : 0;
-      const it = shState.list.find((x) => x.id === id);
-      if (!it) return;
-      if (btn.dataset.act === 'show') shShowResult(it);
-      else if (btn.dataset.act === 'retry') { it.status = 'pending'; it.err = ''; shRender(); shEnsurePoll(); }
-    });
-    el.shareClearBtn.addEventListener('click', () => {
-      shState.list = shState.list.filter((x) => x.status === 'uploading');
-      if (!shState.list.length) { el.shareResult.hidden = true; shState.current = null; }
-      shRender();
-    });
-
-    // ★ 注意：上面「清空记录」只清本次会话的待上传队列，**不动**「我的分享」历史
-    //   （那是已经发出去的分享，误清会让链接找不回）。历史的删除是逐条的。
-    if (el.shareExpireSel) {
-      el.shareExpireSel.addEventListener('change', () => {
-        try { localStorage.setItem('vdl-share-expire', el.shareExpireSel.value); } catch (e) {}
-      });
-    }
-    if (el.shareHistRefreshBtn) {
-      el.shareHistRefreshBtn.addEventListener('click', async () => {
-        const b = el.shareHistRefreshBtn, label = b.textContent;
-        b.disabled = true; b.textContent = '刷新中…';
-        await shLoadHistory(true);
-        b.disabled = false; b.textContent = label;
-      });
-    }
-    if (el.shareHistList) {
-      el.shareHistList.addEventListener('click', async (e) => {
-        const btn = e.target.closest('[data-hact]');
-        if (!btn) return;
-        const row = btn.closest('.share-item');
-        const sid = row ? row.dataset.sid : '';
-        const it = shState.hist.find((x) => x.sid === sid);
-        if (!it) return;
-
-        if (btn.dataset.hact === 'qr') {
-          // 复用上传完成后的结果区：喂一个同形状的对象即可
-          shShowResult({ name: it.name, url: it.url, total: it.size });
-          return;
-        }
-        if (btn.dataset.hact === 'del') {
-          // ⚠️ 用内置确认框，不用 window.confirm —— 后者在 pywebview 下无效
-          const yes = await showConfirm(
-            '删除后链接立即失效，服务器上的文件也会一起清除，无法恢复。\n\n确定删除「' + it.name + '」吗？',
-            { okText: '删除', cancelText: '取消', danger: true });
-          if (!yes) return;
-          btn.disabled = true; btn.textContent = '删除中…';
-          try {
-            const r = await fetch('/api/share/history/' + encodeURIComponent(sid), { method: 'DELETE' });
-            const d = await r.json().catch(() => ({}));
-            if (!r.ok || !d.ok) throw new Error((d && (d.detail || d.error)) || ('HTTP ' + r.status));
-            shState.hist = shState.hist.filter((x) => x.sid !== sid);
-            shRenderHistory();
-            // 结果区展示的正是它 → 一并收起来，免得留着一张已失效的二维码
-            if (shState.current && shState.current.url === it.url) {
-              el.shareResult.hidden = true; shState.current = null;
-            }
-            showToast('已删除「' + it.name + '」');
-          } catch (err) {
-            btn.disabled = false; btn.textContent = '删除';
-            window.alert('删除失败：' + ((err && err.message) || '未知错误'));
-          }
-        }
-      });
-    }
-    el.shareCopyBtn.addEventListener('click', async () => {
-      const v = el.shareUrlInput.value;
-      if (!v) return;
-      try {
-        await navigator.clipboard.writeText(v);
-      } catch (e) {
-        el.shareUrlInput.select();
-        try { document.execCommand('copy'); } catch (e2) {}
-      }
-      el.shareCopyBtn.textContent = '已复制';
-      setTimeout(() => { el.shareCopyBtn.textContent = '复制链接'; }, 1600);
-    });
-    el.shareOpenBtn.addEventListener('click', () => {
-      const v = el.shareUrlInput.value;
-      if (!v) return;
-      // 桌面版的 WKWebView 会**静默拦截 window.open**（见 desktop_launcher.VdlApi.open_external
-      // 的说明）——原来这一句在 App 里点下去毫无反应。改为让 Python 调系统默认浏览器打开；
-      // 无桥接（网页版）或桥接失败时回退 window.open。
-      const openExt = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal;
-      if (typeof openExt === 'function') {
-        Promise.resolve(openExt(v)).then((ok) => { if (!ok) window.open(v, '_blank'); }).catch(() => { window.open(v, '_blank'); });
-        return;
-      }
-      window.open(v, '_blank');
-    });
-    el.shareSaveQrBtn.addEventListener('click', async () => {
-      const it = shState.current;
-      if (!it || !it.url) return;
-      // ⚠️ 桌面版必须走原生保存面板：WKWebView 不支持 <a download> 的 blob 下载，
-      // 直接 a.click() 会把**主框架导航**到 blob: 图片——整个 App 界面被一张二维码
-      // 替换、只能重启（2026-09-21 用户报「点击保存二维码有问题」的真因，已真机复现）。
-      // 与抠图/导出等流程同套约定：原生桥优先，网页版才回退 <a download>。
-      const nativeSave = window.VDL && window.VDL.desktop && window.VDL.desktop.saveQrImage;
-      const name = '分享二维码-' + String(it.name || 'file').replace(/\.[^.]+$/, '') + '.png';
-      const qrUrl = '/api/share/qr?text=' + encodeURIComponent(it.url) + '&size=1024';
-      const btn = el.shareSaveQrBtn;
-      const label = btn.textContent;
-      const flash = (t) => { btn.textContent = t; setTimeout(() => { btn.textContent = label; }, 1600); };
-      try {
-        const r = await fetch(qrUrl);
-        if (!r.ok) throw new Error('二维码接口返回 ' + r.status);
-        const b = await r.blob();
-        if (typeof nativeSave === 'function') {
-          const dataUrl = await new Promise((res, rej) => {
-            const fr = new FileReader();
-            fr.onload = () => res(String(fr.result || ''));
-            fr.onerror = () => rej(new Error('读取二维码数据失败'));
-            fr.readAsDataURL(b);
-          });
-          const saved = await nativeSave(dataUrl, name);
-          if (saved && String(saved).startsWith('ERROR:')) window.alert('保存失败：' + String(saved).slice(6));
-          else if (saved && saved !== 'CANCELLED') { flash('已保存'); window.alert('已保存到：' + saved); }
-          return;
-        }
-        // 无原生桥（网页版）才用 <a download>；桌面壳内若旧包缺 save_qr_image_dialog
-        // 则**绝不导航**——宁可提示，也不要把整个 App 界面换成一张二维码。
-        if (window.pywebview || (window.VDL && window.VDL.desktop)) {
-          window.alert('当前版本不支持直接保存二维码，请升级后再试。\n（可先用截图保存，或点「复制链接」在浏览器里打开。）');
-          return;
-        }
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(b);
-        a.download = name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-      } catch (e) {
-        window.alert('保存失败：' + ((e && e.message) || '未知错误'));
-      }
-    });
-
-    shInit();
-  }
 
   el.srAddBtn.addEventListener('click', () => {
     if (srDesktopNative()) {
@@ -5245,40 +4331,14 @@
   el.srFileInput.addEventListener('change', () => {
     if (el.srFileInput.files && el.srFileInput.files.length) { srAddFiles(el.srFileInput.files); el.srFileInput.value = ''; }
   });
-  // 行内「单独设置」：修复档位 / 放大倍率 / 视频编码（逐条改，立即写回该行）
-  el.srList.addEventListener('change', (e) => {
-    const t = e.target;
-    const act = t && t.dataset && t.dataset.act;
-    if (act !== 'mode' && act !== 'scale' && act !== 'codec') return;
-    const li = t.closest('.uc-item'); if (!li) return;
-    const it = srState.list.find(x => x.id === +li.dataset.id); if (!it) return;
-    if (act === 'mode') it.mode = t.value;
-    else if (act === 'scale') it.scale = +t.value;
-    else it.codec = t.value;
-    // 已完成的行被改了参数 → 标脏，状态栏出现「参数已改，点『重新修复』生效」（2026-09-24）
-    it.dirty = it.status === 'completed';
-    srRender();
-    el.srStatus.textContent = it.dirty
-      ? '已更新该行参数：点该行「重新修复」即可生效（无需重新选择文件）'
-      : '已更新该行参数（点「开始修复」或该行按钮时生效）';
-  });
   el.srList.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-act]'); if (!btn) return;
-    const act0 = btn.dataset.act;
-    if (act0 !== 'remove' && act0 !== 'start') return;   // 行内下拉不算「操作按钮」
     const li = btn.closest('.uc-item'); const id = +li.dataset.id;
     const it = srState.list.find(x => x.id === id); if (!it) return;
     if (btn.dataset.act === 'remove') {
       srState.list = srState.list.filter(x => x.id !== id); srRender();
     } else if (btn.dataset.act === 'start') {
-      if (it.status === 'completed' || it.status === 'failed') {
-        // 重新修复（2026-09-24）：把上一次的 job 交给后端一并清理（删旧产物 + 移除记录），
-        // 免得同一源文件的历次结果在磁盘上越堆越多；随后原地回到「未开始」再重投。
-        if (it.status === 'completed' && it.jobId) it.replaces = it.jobId;
-        it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null;
-        it.stage = ''; it.elapsed = 0; it.eta = 0;
-        it.wAfter = 0; it.hAfter = 0; it.sizeAfter = 0; it.note = ''; it.dirty = false;
-      }
+      if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; }
       srEnsurePolling(); srStartOne(it).catch(() => {});
     }
   });
@@ -5301,7 +4361,7 @@
     el.srStatus.textContent = n ? `已应用到 ${n} 个项` : '没有可应用的项';
   });
   el.srStartAllBtn.addEventListener('click', () => {
-    srState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; it.dirty = false; } });
+    srState.list.forEach(it => { if (it.status === 'failed') { it.status = 'pending'; it.errorMsg = ''; it.progress = 0; it.jobId = null; } });
     const wait = srState.list.filter(x => x.status === 'pending');
     if (!wait.length) {
       el.srStatus.textContent = srState.kind === 'video'
@@ -5313,382 +4373,10 @@
     wait.forEach(it => srStartOne(it).catch(() => {}));
   });
 
-  // ===== 生成网页（2026-09-30 新增）：本机文件 → 一个自包含 HTML 页面 =====
-  // 与「生成二维码」互补，不是替代：那边给的是**链接**（对方要联网、文件留在分享节点上），
-  // 这边给的是一个**文件**（离线也能看，发出去就归对方）。因此刻意放在同级入口。
-  // 接入方式也保持一致：桌面端走原生框拿路径（免上传），网页端走上传
-  // （服务端把页面内容回传，浏览器直接下载——服务端的磁盘路径对访客没有意义）。
-  const pgDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
-  const PG_MAX_ITEM = 80 * 1024 * 1024;
-  const PG_MAX_TOTAL = 200 * 1024 * 1024;
-  const pgState = { paths: [], files: [], busy: false, pageHtml: '', outName: '',
-                    outPath: '', link: '', sid: '', warn: '' };
-
-  const pgHuman = (n) => (n < 1024 ? n + ' B'
-    : (n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB'));
-
-  const PG_EXT_KIND = {
-    image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif', 'svg'],
-    audio: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'amr'],
-    video: ['mp4', 'm4v', 'webm', 'ogv', 'mov', 'mkv', 'avi', 'flv', 'ts', 'wmv', '3gp'],
-    pdf: ['pdf'],
-    text: ['txt', 'md', 'log', 'csv', 'json', 'xml', 'yaml', 'yml'],
-  };
-  const pgKindOf = (name) => {
-    const m = /\.([A-Za-z0-9]+)$/.exec(String(name || ''));
-    const e = m ? m[1].toLowerCase() : '';
-    for (const k of Object.keys(PG_EXT_KIND)) if (PG_EXT_KIND[k].indexOf(e) >= 0) return k;
-    return 'file';
-  };
-  const PG_KIND_LABEL = { image: '图片', audio: '音频', video: '视频', pdf: 'PDF', text: '文本', file: '文件' };
-
-  const pgItems = () => (pgState.paths.length
-    ? pgState.paths.map((p) => ({ name: String(p).split('/').pop(), size: 0 }))
-    : pgState.files.map((f) => ({ name: f.name, size: f.size })));
-
-  const pgTotal = () => pgState.files.reduce((s, f) => s + (f.size || 0), 0);
-
-  const pgSetHint = (text, color) => {
-    if (!el.pageHint) return;
-    el.pageHint.textContent = text || '';
-    el.pageHint.style.color = color || '';
-  };
-
-  function pgRender() {
-    if (!el.pageQueue) return;
-    const items = pgItems();
-    el.pageQueue.innerHTML = items.map((it, i) => {
-      const kind = pgKindOf(it.name);
-      const heavy = it.size > PG_MAX_ITEM;
-      return '<div class="share-item" data-i="' + i + '">'
-        + '<span class="sz">' + PG_KIND_LABEL[kind] + '</span>'
-        + '<span class="nm">' + escHtml(it.name) + '</span>'
-        + '<span class="sz"' + (heavy ? ' style="color:#dc2626"' : '') + '>'
-        + (it.size ? pgHuman(it.size) : '') + (heavy ? ' 超限' : '') + '</span>'
-        + '<button type="button" class="btn btn-ghost" data-act="del">移除</button>'
-        + '</div>';
-    }).join('');
-    const n = items.length;
-    const total = pgTotal();
-    el.pageCount.textContent = n
-      ? ('已选 ' + n + ' 个文件' + (total ? '（合计 ' + pgHuman(total) + '）' : ''))
-      : '尚未选择文件';
-    if (el.pageClearBtn) el.pageClearBtn.hidden = !n;
-    if (el.pageBuildBtn) el.pageBuildBtn.disabled = !n || pgState.busy;
-    if (el.pageResult && !pgState.outName) el.pageResult.hidden = true;
-  }
-
-  function pgAddPaths(list) {
-    (list || []).forEach((p) => { if (p && pgState.paths.indexOf(p) < 0) pgState.paths.push(p); });
-    pgState.files = [];   // 两种来源不混用，避免「路径 + 上传文件」同时进一个页面时语义混乱
-    pgSetHint('');
-    pgRender();
-  }
-
-  function pgAddFiles(files) {
-    Array.from(files || []).forEach((f) => pgState.files.push(f));
-    pgState.paths = [];
-    pgSetHint('');
-    pgRender();
-  }
-
-  function pgReset() {
-    pgState.paths = []; pgState.files = []; pgState.pageHtml = ''; pgState.outName = '';
-    pgState.outPath = ''; pgState.link = ''; pgState.sid = ''; pgState.warn = '';
-    if (el.pageResult) el.pageResult.hidden = true;
-    if (el.pagePathInput) el.pagePathInput.value = '';
-    if (el.pageLinkInput) { el.pageLinkInput.value = ''; el.pageLinkInput.placeholder = '正在生成在线链接…'; }
-    if (el.pageQrWrap) el.pageQrWrap.hidden = true;
-    if (el.pageQrImg) el.pageQrImg.removeAttribute('src');
-    pgRenderLink(-1, '');
-    if (el.pageResultHint) el.pageResultHint.textContent = '';
-    pgSetHint('');
-    pgRender();
-  }
-
-  // 前端先挡一道：超限的请求不必发出去（后端也有同样的闸门，见 pagetool.MAX_*）
-  function pgTooBig() {
-    const items = pgItems();
-    const over = items.filter((it) => it.size > PG_MAX_ITEM);
-    if (over.length) return '「' + over[0].name + '」超过单文件 ' + pgHuman(PG_MAX_ITEM) + ' 上限，请先压缩。';
-    const total = pgTotal();
-    if (total > PG_MAX_TOTAL) {
-      return '合计 ' + pgHuman(total) + ' 超过 ' + pgHuman(PG_MAX_TOTAL) + ' 上限，请分批生成（内嵌会整体膨胀约 33%）。';
-    }
-    return '';
-  }
-
-  function pgShowResult(data, isUpload) {
-    pgState.outName = data.out_name || '';
-    pgState.pageHtml = data.page_html || '';
-    pgState.outPath = data.out_path || '';
-    pgState.link = ''; pgState.sid = '';
-    if (el.pageResult) el.pageResult.hidden = false;
-    if (el.pagePathInput) {
-      el.pagePathInput.value = isUpload ? (data.out_name || '') : (data.out_path || '');
-    }
-    if (el.pageCopyPathBtn) el.pageCopyPathBtn.hidden = !!isUpload;
-    if (el.pageOpenBtn) el.pageOpenBtn.textContent = isUpload ? '下载网页（HTML）' : '用浏览器打开';
-    if (el.pageLocalTag) {
-      el.pageLocalTag.textContent = '本地文件 · ' + pgHuman(data.html_size || 0)
-        + '（源 ' + pgHuman(data.source_size || 0) + '，膨胀 ' + (data.inflated || 1) + ' 倍）';
-    }
-    const kinds = (data.items || []).map((x) => PG_KIND_LABEL[x.kind] || '文件');
-    pgState.warn = kinds.indexOf('视频') >= 0
-      ? ' ⚠️ 页面里的视频需为 H.264 / VP9 / AV1 编码，否则浏览器无法播放（MKV、MPEG-4 Visual 等都不行）。'
-      : '';
-    // 主产出 = 在线链接：生成完立即上传分享节点换链接 + 二维码
-    if (el.pageQrWrap) el.pageQrWrap.hidden = true;
-    if (el.pageQrImg) el.pageQrImg.removeAttribute('src');
-    pgRenderLink(0);
-    pgSetHint('生成完成', '#16a34a');
-    pgPublishLink(pgState.outPath);
-  }
-
-  // 在线链接区状态渲染：0=上传中 · 2=上传中(带进度) · 1=完成 · -1=失败/不可用
-  function pgRenderLink(st, arg) {
-    const inp = el.pageLinkInput;
-    if (!inp) return;
-    if (st === 1) {
-      inp.value = pgState.link;
-      if (el.pageQrWrap) el.pageQrWrap.hidden = false;
-      if (el.pageQrImg) el.pageQrImg.src = '/api/share/qr?text=' + encodeURIComponent(pgState.link) + '&size=640';
-      if (el.pageResultHint) {
-        el.pageResultHint.textContent = '在线链接已就绪 —— 把链接或二维码发给别人，手机 / 电脑点开就能看。'
-          + (pgState.warn || '');
-      }
-    } else if (st === 0) {
-      inp.value = '正在生成在线链接…';
-    } else if (st === 2) {
-      inp.value = '正在上传 ' + pgHuman(arg || 0) + '…';
-    } else {
-      inp.value = '';
-      inp.placeholder = '在线链接不可用' + (arg ? '：' + arg : '');
-      if (el.pageResultHint) {
-        // 未登录是可预期状态（生成靠本机、链接要传到服务器），单独给一句能照着做的提示
-        const needLogin = !!(arg && arg.indexOf('登录') >= 0);
-        el.pageResultHint.textContent = (needLogin
-          ? '登录 / 注册后重新点「生成网页」，即可拿到在线链接。'
-          : ((arg ? '未能生成在线链接（' + arg + '）。' : '')
-             + '本地 HTML 文件仍可用，可点下方「复制路径 / 用浏览器打开」。'))
-          + (pgState.warn || '');
-      }
-    }
-    const busy = (st === 0 || st === 2);
-    if (el.pageCopyLinkBtn) el.pageCopyLinkBtn.disabled = busy || !pgState.link;
-    if (el.pageOpenLinkBtn) el.pageOpenLinkBtn.disabled = busy || !pgState.link;
-  }
-
-  // 把刚生成的 HTML 传上分享节点换「在线链接」。
-  // 复用「生成二维码」那套现成通道（/api/share/upload_path + /api/share/task），不新增后端接口。
-  async function pgPublishLink(outPath) {
-    if (!outPath) { pgRenderLink(-1, '没有可上传的本地文件'); return; }
-    if (!authToken()) {
-      pgRenderLink(-1, '未登录');
-      try { _notifyNeedLogin('请先登录或注册账号，即可生成在线链接'); } catch (_) {}
-      return;
-    }
-    let tid = '';
-    try {
-      const r = await fetch('/api/share/upload_path', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authBearerHeaders() },
-        body: JSON.stringify({ path: outPath, expire: 0 }),   // 0 = 永久有效
-      });
-      if (r.status === 404) throw new Error('当前版本没有分享通道');
-      const d = await r.json().catch(() => null);
-      if (!r.ok || !d || !d.ok) {
-        throw new Error((d && (d.error || d.detail)) || ('HTTP ' + r.status));
-      }
-      tid = d.task_id;
-    } catch (e) {
-      pgRenderLink(-1, (e && e.message) || '上传失败');
-      return;
-    }
-    // 轮询上传进度（上传在后台线程跑，不能阻塞界面；2MB 级页面通常 1~3 秒）
-    for (let i = 0; i < 240; i++) {
-      await new Promise((res) => setTimeout(res, 500));
-      let t = null;
-      try {
-        const rr = await fetch('/api/share/task/' + encodeURIComponent(tid), { headers: authBearerHeaders() });
-        t = await rr.json();
-      } catch (_) { continue; }
-      if (!t || !t.ok) continue;
-      if (t.status === 'done' && t.url) {
-        pgState.link = t.url; pgState.sid = t.sid || '';
-        pgRenderLink(1);
-        return;
-      }
-      if (t.status === 'failed') { pgRenderLink(-1, t.error || '上传失败'); return; }
-      pgRenderLink(2, t.sent || 0);
-    }
-    pgRenderLink(-1, '上传超时，请重试');
-  }
-
-  // 网页端：页面内容随响应回来，用 Blob 存到访客本机。
-  // ⚠️ 这条兜底只在**真浏览器**里用；桌面壳 WKWebView 不支持 <a download>（会把主框架
-  //    导航到 blob:，整个界面被页面替换，2026-09-21 生成二维码踩过），所以桌面端不给这个按钮。
-  function pgDownloadHtml() {
-    if (!pgState.pageHtml) return;
-    const blob = new Blob([pgState.pageHtml], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = pgState.outName || '页面.html';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-  }
-
-  async function pgBuild() {
-    if (pgState.busy) return;
-    const items = pgItems();
-    if (!items.length) { pgSetHint('请先选择文件', '#dc2626'); return; }
-    const bad = pgTooBig();
-    if (bad) { pgSetHint(bad, '#dc2626'); return; }
-
-    const isUpload = !pgState.paths.length;
-    const title = (el.pageTitleInput && el.pageTitleInput.value || '').trim();
-    pgState.busy = true;
-    if (el.pageBuildBtn) el.pageBuildBtn.disabled = true;
-    pgSetHint('正在生成…');
-
-    try {
-      let data;
-      if (!isUpload) {
-        data = await request('/api/pagetool/build', {
-          method: 'POST',
-          body: JSON.stringify({ paths: pgState.paths, title: title }),
-          timeout: 300000,
-        });
-      } else {
-        const fd = new FormData();
-        pgState.files.forEach((f) => fd.append('files', f, f.name));
-        fd.append('title', title);
-        data = await request('/api/pagetool/build-upload', {
-          method: 'POST', body: fd, timeout: 300000,
-        });
-      }
-      if (!data || !data.ok) throw { message: (data && data.msg) || '生成失败' };
-      pgShowResult(data, isUpload);
-    } catch (e) {
-      pgSetHint((e && e.message) || '生成失败，请重试', '#dc2626');
-      if (e && e.hint) pgSetHint(((e && e.message) || '生成失败') + ' ' + e.hint, '#dc2626');
-    } finally {
-      pgState.busy = false;
-      if (el.pageBuildBtn) el.pageBuildBtn.disabled = pgItems().length === 0;
-    }
-  }
-
-  if (el.pageAddBtn) {
-    el.pageAddBtn.addEventListener('click', () => {
-      if (pgDesktopNative()) {
-        // 铁律：必须显式传 'any'，否则原生框按视频/音频过滤，图片和 PDF 会被置灰
-        window.VDL.desktop.chooseFiles('any')
-          .then((list) => { if (list && list.length) pgAddPaths(list); })
-          .catch(() => {});
-      } else {
-        el.pageFileInput.click();
-      }
-    });
-  }
-  if (el.pageFileInput) {
-    el.pageFileInput.addEventListener('change', () => {
-      const fs = el.pageFileInput.files;
-      if (fs && fs.length) pgAddFiles(fs);
-      el.pageFileInput.value = '';   // 清空以便同一个文件能再次选择
-    });
-  }
-  if (el.pageQueue) {
-    el.pageQueue.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-act]');
-      if (!btn) return;
-      const row = btn.closest('.share-item');
-      const i = row ? +row.dataset.i : -1;
-      if (i < 0) return;
-      if (pgState.paths.length) pgState.paths.splice(i, 1);
-      else pgState.files.splice(i, 1);
-      pgRender();
-    });
-  }
-  if (el.pageClearBtn) el.pageClearBtn.addEventListener('click', pgReset);
-  if (el.pageBuildBtn) el.pageBuildBtn.addEventListener('click', () => { pgBuild(); });
-  if (el.pageCopyPathBtn) {
-    el.pageCopyPathBtn.addEventListener('click', () => {
-      const v = el.pagePathInput ? el.pagePathInput.value : '';
-      if (!v) return;
-      el.pagePathInput.select();
-      try { document.execCommand('copy'); } catch (e2) {}
-      const btn = el.pageCopyPathBtn;
-      btn.textContent = '已复制';
-      setTimeout(() => { btn.textContent = '复制路径'; }, 1600);
-    });
-  }
-  if (el.pageOpenBtn) {
-    el.pageOpenBtn.addEventListener('click', () => {
-      // 网页端：没有本机路径，改为把页面内容存到访客本机
-      if (!pgState.paths.length) { pgDownloadHtml(); return; }
-      const p = el.pagePathInput ? el.pagePathInput.value : '';
-      if (!p) return;
-      // file:// 交给系统默认浏览器打开；桌面壳里 window.open 会被静默拦截（见 desktop_launcher.open_external）
-      const fileUrl = 'file://' + p.split('/').map(encodeURIComponent).join('/');
-      const openExt = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal;
-      if (typeof openExt === 'function') {
-        Promise.resolve(openExt(fileUrl)).then((ok) => { if (!ok) window.open(fileUrl, '_blank'); })
-          .catch(() => { window.open(fileUrl, '_blank'); });
-        return;
-      }
-      window.open(fileUrl, '_blank');
-    });
-  }
-  if (el.pageCopyLinkBtn) {
-    el.pageCopyLinkBtn.addEventListener('click', () => {
-      const v = pgState.link || (el.pageLinkInput ? el.pageLinkInput.value : '');
-      if (!v) return;
-      if (el.pageLinkInput) el.pageLinkInput.select();
-      try { document.execCommand('copy'); } catch (e2) {}
-      const btn = el.pageCopyLinkBtn;
-      btn.textContent = '已复制';
-      setTimeout(() => { btn.textContent = '复制链接'; }, 1600);
-    });
-  }
-  if (el.pageOpenLinkBtn) {
-    el.pageOpenLinkBtn.addEventListener('click', () => {
-      if (!pgState.link) return;
-      // 桌面壳里 window.open 会被静默拦截，优先走原生「外部浏览器打开」
-      const openExt = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal;
-      if (typeof openExt === 'function') {
-        Promise.resolve(openExt(pgState.link)).then((ok) => { if (!ok) window.open(pgState.link, '_blank'); })
-          .catch(() => { window.open(pgState.link, '_blank'); });
-        return;
-      }
-      window.open(pgState.link, '_blank');
-    });
-  }
-  pgRender();
-
   // ===== 本地视频字幕提取（faster-whisper ASR，MIT；VAD 逐句精准分段 → SRT/TXT）=====
   const sbDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
-  const sbState = { jobId: null, timer: null, path: '', name: '', srtName: '', txtName: '',
-                    preview: null, view: 'srt', metaParts: null };
+  const sbState = { jobId: null, timer: null, path: '', name: '', srtName: '', txtName: '' };
   const sbSetStatus = (text) => { el.sbStatus.textContent = text; };
-  // 结果卡标题行：句数/语言/线程 + 覆盖时段。
-  // 句数以**预览接口解析文件得到的数量**为准（预览到达后覆盖状态接口的值），
-  // 这样「共 N 句」与下面列出的内容永远同源，不会出现标题与列表对不上。
-  const sbSetMeta = () => {
-    const p = sbState.metaParts;
-    if (!el.sbMeta || !p) return;
-    let s = `共 ${p.lines} 句`;
-    if (p.source === 'lyrics') {
-      // 歌词库直取：不是听写出来的，文本逐字准确 —— 明确标出来，用户才知道可放心使用
-      s += ` · 官方歌词${p.lyricsFrom ? '（' + p.lyricsFrom + '）' : ''}`;
-    } else {
-      s += ` · 语言 ${p.lang} · ${p.threads} 线程`;
-    }
-    if (p.covered && p.covered.start) s += ` · 覆盖 ${p.covered.start} → ${p.covered.end}`;
-    el.sbMeta.textContent = s;
-  };
   const sbStopPolling = () => { if (sbState.timer) { clearInterval(sbState.timer); sbState.timer = null; } };
 
   const sbSetFile = (pathOrName) => {
@@ -5700,7 +4388,6 @@
     el.sbFileLabel.textContent = sbState.name;
     el.sbStartBtn.disabled = false;
     el.sbResult.hidden = true;
-    sbResetPreview('识别完成后在此预览');
     sbSetStatus('');
   };
 
@@ -5718,16 +4405,9 @@
         el.sbProgressFill.style.width = '100%';
         sbState.srtName = st.srt_name || 'subtitle.srt';
         sbState.txtName = st.txt_name || 'subtitle.txt';
-        // 覆盖时段由预览接口补上（见 sbLoadPreview）——「共 N 句」回答不了
-        // 用户真正在意的「全片都识别了吗」
-        sbState.metaParts = { lines: st.lines || 0, lang: st.language || 'auto',
-                              threads: st.cpu_threads || 4, covered: null,
-                              source: st.source || '', lyricsFrom: st.lyrics_from || '' };
-        sbSetMeta();
+        el.sbMeta.textContent = `共 ${st.lines || 0} 句 · 语言 ${st.language || 'auto'} · ${st.cpu_threads || 4} 线程`;
         el.sbResult.hidden = false;
         sbSetStatus('完成 ✅');
-        // 识别结果立即可预览（2026-09-22）：不必先下载
-        sbLoadPreview(sbState.jobId);
       } else if (st.status === 'failed') {
         sbStopPolling();
         el.sbProgressWrap.hidden = true;
@@ -5760,133 +4440,6 @@
     } catch (e) { sbSetStatus('下载失败：' + (e && e.message || e)); }
   };
 
-  // ---------- 识别结果预览（2026-09-22 用户要求「识别完要可预览」） ----------
-  // 结果卡此前只有两个下载按钮，用户必须先下载才能看到识别内容。这里在卡内直接渲染
-  // 逐句列表（时间轴视图）+ 纯文本视图，并可一键复制（不用先落盘）。
-  const sbFmtSrtTs = (sec) => {
-    const ms = Math.max(0, Math.round((Number(sec) || 0) * 1000));
-    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
-    const s = Math.floor((ms % 60000) / 1000), r = ms % 1000;
-    const p = (n, w) => String(n).padStart(w, '0');
-    return `${p(h, 2)}:${p(m, 2)}:${p(s, 2)},${p(r, 3)}`;
-  };
-
-  const sbRenderPreview = () => {
-    if (!el.sbLines) return;
-    el.sbLines.textContent = '';
-    const pv = sbState.preview;
-    const segs = (pv && pv.segments) || [];
-    if (!segs.length) {
-      const empty = document.createElement('div');
-      empty.className = 'sb-preview-empty';
-      empty.textContent = '没有可预览的内容';
-      el.sbLines.appendChild(empty);
-      return;
-    }
-    // 用 createElement + textContent 构建（字幕文本可能含 < & 等字符，绝不拼 innerHTML）
-    const frag = document.createDocumentFragment();
-    segs.forEach((seg) => {
-      const row = document.createElement('div');
-      row.className = 'sb-line';
-      const ts = document.createElement('span');
-      ts.className = 'sb-line-ts';
-      ts.textContent = seg.ts || '';
-      const no = document.createElement('span');
-      no.className = 'sb-line-no';
-      no.textContent = String(seg.i == null ? '' : seg.i);
-      const tx = document.createElement('span');
-      tx.className = 'sb-line-text';
-      tx.textContent = seg.text || '';
-      row.appendChild(ts); row.appendChild(no); row.appendChild(tx);
-      frag.appendChild(row);
-    });
-    el.sbLines.appendChild(frag);
-    el.sbLines.scrollTop = 0;
-  };
-
-  const sbSetPreviewView = (view) => {
-    sbState.view = view === 'txt' ? 'txt' : 'srt';
-    const isTxt = sbState.view === 'txt';
-    if (el.sbPreview) el.sbPreview.classList.toggle('is-txt', isTxt);
-    if (el.sbTabSrt) { el.sbTabSrt.classList.toggle('is-active', !isTxt); el.sbTabSrt.setAttribute('aria-selected', isTxt ? 'false' : 'true'); }
-    if (el.sbTabTxt) { el.sbTabTxt.classList.toggle('is-active', isTxt); el.sbTabTxt.setAttribute('aria-selected', isTxt ? 'true' : 'false'); }
-    // 说明位只承担「提示/异常」信息（句数已在卡标题里，不重复）：
-    // 被截断 → 说明只预览了前 N 句；列表放不下 → 提示可滚动（否则最后一行被切一半像卡住）
-    const pv = sbState.preview;
-    if (el.sbPreviewNote && pv && pv.segments) {
-      if (pv.truncated) {
-        el.sbPreviewNote.textContent =
-          `内容较长，此处仅显示前 ${pv.segments.length} 句（共 ${pv.lines} 句），完整内容请下载`;
-      } else {
-        // 在切换视图之后量（纯文本视图行更矮，是否溢出会变）
-        const scrollable = el.sbLines && el.sbLines.scrollHeight > el.sbLines.clientHeight + 4;
-        el.sbPreviewNote.textContent = scrollable ? '上下滚动查看全部' : '';
-      }
-    }
-  };
-
-  const sbResetPreview = (note) => {
-    sbState.preview = null;
-    if (el.sbLines) el.sbLines.textContent = '';
-    if (el.sbPreviewNote) el.sbPreviewNote.textContent = note || '识别完成后在此预览';
-    sbSetPreviewView('srt');
-  };
-
-  const sbLoadPreview = async (jobId) => {
-    if (!jobId || !el.sbLines) return;
-    if (el.sbPreviewNote) el.sbPreviewNote.textContent = '正在读取字幕…';
-    try {
-      const pv = await request(`/api/subtitle/${jobId}/preview`);
-      // 期间用户可能已经换了文件/重新提交 → 丢弃过期响应
-      if (sbState.jobId !== jobId) return;
-      sbState.preview = pv;
-      // 「覆盖 00:00 → 44:17」：直接回答「有没有提取全片」——45 分钟剧集有 872 句，
-      // 只看「共 N 句」判断不了范围，用户会以为识别到一半就断了（2026-09-22 实测踩到）。
-      // 句数同步改为以文件实际内容为准（status 接口的 lines 与文件可能因截断/重写不一致）。
-      if (sbState.metaParts) {
-        if (pv.lines) sbState.metaParts.lines = pv.lines;
-        if (pv.covered && pv.covered.start) sbState.metaParts.covered = pv.covered;
-        sbSetMeta();
-      }
-      sbRenderPreview();
-      sbSetPreviewView(sbState.view);
-    } catch (e) {
-      if (el.sbPreviewNote) el.sbPreviewNote.textContent = '预览加载失败：' + ((e && e.message) || e);
-    }
-  };
-
-  const sbCopyPreview = async () => {
-    const pv = sbState.preview;
-    const segs = (pv && pv.segments) || [];
-    if (!segs.length) { sbSetStatus('暂无可复制的内容'); return; }
-    const isTxt = sbState.view === 'txt';
-    const payload = isTxt
-      ? segs.map((s) => s.text || '').join('\n')
-      : segs.map((s) => `${s.i}\n${sbFmtSrtTs(s.start)} --> ${sbFmtSrtTs(s.end)}\n${s.text || ''}\n`).join('\n');
-    let ok = false;
-    try {
-      await navigator.clipboard.writeText(payload);
-      ok = true;
-    } catch (_e) {
-      // WKWebView 下 clipboard API 可能被拒 → 退回隐藏 textarea + execCommand
-      const ta = document.createElement('textarea');
-      ta.value = payload;
-      ta.setAttribute('readonly', 'readonly');
-      ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
-      document.body.appendChild(ta);
-      ta.select();
-      try { ok = document.execCommand('copy'); } catch (_e2) { ok = false; }
-      document.body.removeChild(ta);
-    }
-    sbSetStatus(ok
-      ? `已复制${isTxt ? '纯文本' : '带时间轴字幕'}（${segs.length} 句）`
-      : '复制失败，请改用下方下载按钮');
-  };
-
-  if (el.sbTabSrt) el.sbTabSrt.addEventListener('click', () => sbSetPreviewView('srt'));
-  if (el.sbTabTxt) el.sbTabTxt.addEventListener('click', () => sbSetPreviewView('txt'));
-  if (el.sbCopyBtn) el.sbCopyBtn.addEventListener('click', () => { sbCopyPreview(); });
-
   el.sbPickBtn.addEventListener('click', () => {
     if (sbDesktopNative()) {
       window.VDL.desktop.chooseFiles().then(list => {
@@ -5903,7 +4456,6 @@
   const sbStartExtract = () => {
     if (!sbState.path) return;
     el.sbResult.hidden = true;
-    sbResetPreview('识别完成后在此预览');
     el.sbProgressWrap.hidden = false;
     el.sbProgressFill.style.width = '0%';
     sbSetStatus('提交中…');
@@ -5911,7 +4463,7 @@
       method: 'POST',
       body: JSON.stringify({
         local_path: sbState.path,
-        model_size: el.sbModel.value || 'medium',
+        model_size: el.sbModel.value || 'small',
         language: el.sbLang.value || '',
         fast: !!(el.sbFast && el.sbFast.checked),
       }),
@@ -5938,8 +4490,8 @@
     if (!authToken()) {
       try { window._pendingSubtitleExtract = true; } catch (_) {}
       sbSetStatus('请先登录或注册账号，即可开始提取字幕');
-      openAuthModal();   // 先开弹窗（openAuthModal 内部会清空提示），再写文案
       _authMsg('请先登录或注册账号，即可开始提取字幕', true);
+      openAuthModal();
       return;
     }
     sbStartExtract();
@@ -5961,42 +4513,12 @@
 
   // ------------------------------------------------------------------ 去水印（需求文档模块二）
 
-  // ★ 视频去水印「统一停止播放」入口（2026-09-24）
-  // 根因：WKWebView（macOS 桌面端 WebView）里 <video hidden> / 祖先 hidden **不会自动暂停**，
-  // 画面消失了但解码仍在跑、声音照出 —— 用户报「完成预览点了重新选取素材，视频还在播放」。
-  // 所以凡是「把 video 藏起来」的地方都必须先过这个函数，不能只写 hidden = true。
-  //   release = true → 连 src 一起摘掉并 load()，彻底放掉解码器 / blob URL / 网络连接
-  //   rewind   = true → currentTime 归零，下次再显示时从片头开始（避免停在中间一帧）
-  const dwStopVideo = (v, { release = false, rewind = false } = {}) => {
-    if (!v) return;
-    try { v.pause(); } catch (_e) { /* 未初始化就忽略 */ }
-    if (rewind) { try { v.currentTime = 0; } catch (_e) { /* 忽略 */ } }
-    if (release) {
-      try { v.removeAttribute('src'); v.load(); } catch (_e) { /* 忽略 */ }
-    }
-  };
-  // 视频去水印涉及的全部播放器：工作区预览 / 结果区「原视频」「处理后」/ 灯箱大屏
-  const dwStopAllVideos = (opts = {}) => {
-    [el.dwVidPlayer, el.dwVidOrig, el.dwVidOut, el.dwModalVid].forEach((v) => dwStopVideo(v, opts));
-  };
-  // 停掉「结果区」那两个对比播放器（原视频 / 处理后）——保持 src，用户还能回来看
-  const dwStopResultVideos = (opts = {}) => {
-    [el.dwVidOrig, el.dwVidOut].forEach((v) => dwStopVideo(v, opts));
-  };
-
   // 图片 / PDF / 视频 / 一键抠图 子模式切换
   // 2026-09-08 视图内 dw-tabs 按钮行已删（子模式由侧栏入口直达），dwMode* 元素不存在，做防御式处理
-  // 2026-09-26 标题跟随子模式：四个入口在侧栏是独立入口（图片去水印 / PDF 去水印 /
-  // 视频去水印 / 一键抠图），共用同一个 dwView。标题原先写死「图片 / PDF / 视频 去水印」，
-  // 导致单看「图片去水印」时也显示另外两个功能 —— 用户要求「图片去水印只保留图片」。
-  const DW_PANE_TITLE = { img: '图片去水印', pdf: 'PDF 去水印', video: '视频去水印', matting: '一键抠图' };
   const dwSwitchPane = (mode) => {
-    if (el.dwTitle) el.dwTitle.textContent = DW_PANE_TITLE[mode] || '图片去水印';
     el.dwImgPane.hidden = mode !== 'img';
     el.dwPdfPane.hidden = mode !== 'pdf';
     el.dwVideoPane.hidden = mode !== 'video';
-    // 离开视频子面板（切到图片/PDF/一键抠图）时同样要停：hidden 不等于 pause
-    if (mode !== 'video') dwStopAllVideos();
     el.dwMattingPane.hidden = mode !== 'matting';
     for (const [elRef, m] of [[el.dwModeImg, 'img'], [el.dwModePdf, 'pdf'], [el.dwModeVideo, 'video'], [el.dwModeMatting, 'matting']]) {
       if (elRef) elRef.classList.toggle('is-active', mode === m);
@@ -6006,17 +4528,6 @@
     el.dwVidStatus.textContent = '';
     if (el.matStatus) el.matStatus.textContent = '';
   };
-
-  // 兜底保险：任何一个装着 <video> 的容器被 hidden，就把里面的播放器停掉。
-  // 上面已经逐个调用点修了，但每加一条「把视频藏起来」的分支都要记得 pause 太脆，
-  // 这里用 MutationObserver 兜住未来所有新路径 —— hidden 变化 ⇒ 自动 pause。
-  [el.dwView, el.dwVideoPane, el.dwVidResult, el.dwImgModal].forEach((node) => {
-    if (!node || typeof MutationObserver === 'undefined') return;
-    new MutationObserver(() => {
-      if (!node.hidden) return;
-      node.querySelectorAll('video').forEach((v) => { try { v.pause(); } catch (_e) { /* 忽略 */ } });
-    }).observe(node, { attributes: true, attributeFilter: ['hidden'] });
-  });
   // 2026-09-08 dwMode* 按钮已从视图删除（子模式经侧栏入口直达），原 4 行 click 绑定一并移除
 
   // ---- 一键抠图（图片去背景，输出透明 PNG）----
@@ -6064,7 +4575,7 @@
     el.matModel.addEventListener('change', () => {
       fetch('/api/matting/model', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authBearerHeaders() },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: el.matModel.value }),
       })
         .then(r => r.json())
@@ -6135,7 +4646,7 @@
       const fd = new FormData();
       fd.append('file', file);
       fd.append('payload', JSON.stringify({ model: el.matModel && el.matModel.value }));
-      fetch('/api/matting/upload-model', { method: 'POST', body: fd, headers: authBearerHeaders() })
+      fetch('/api/matting/upload-model', { method: 'POST', body: fd })
         .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
         .then(d => {
           if (el.matUploadStatus) el.matUploadStatus.textContent = `✅ 上传成功（${d.size_mb} MB），已可直接抠图`;
@@ -6446,7 +4957,7 @@
       const fd = new FormData();
       fd.append('file', file);
       if (el.matTextDetect && el.matTextDetect.checked) fd.append('with_text', '1');
-      const r = await fetch('/api/matting/analyze', { method: 'POST', body: fd, headers: authBearerHeaders() });
+      const r = await fetch('/api/matting/analyze', { method: 'POST', body: fd });
       const d = await r.json();
       if (d && d.blocks) {
         matBlockList = d.blocks;
@@ -6480,7 +4991,7 @@
       const fd = new FormData();
       fd.append('file', file);
       fd.append('block', JSON.stringify({ contour: target.contour }));
-      const r = await fetch('/api/matting/blocks/split', { method: 'POST', body: fd, headers: authBearerHeaders() });
+      const r = await fetch('/api/matting/blocks/split', { method: 'POST', body: fd });
       const d = await r.json();
       if (d && d.blocks && d.blocks.length) {
         // 父块移除，子块加入候选（不自动选中）
@@ -7117,19 +5628,13 @@
         fd.append('prompt', promptText);
         fd.append('vision_guide', '1');
         if (el.matVision) el.matVision.checked = true;
-        // 🔧 前置校验：视觉服务是否就绪。
-        // 🔴 2026-10-05 修正：原先读 `el.visionApiKey.value` —— 但那个输入框早已
-        // 「保留 DOM、不展示、不提交」（凭据由超管统一下发），值恒为空 ⇒
-        // **即使管理员已配好 Key 也永远走警告分支**，用户看到「未配置云端视觉服务」。
-        // 正确判据是管理员受管配置状态（renderVisionManaged 写入 dataset.configured），
-        // 与 renderVisionRuntime 用的是同一份结论。
-        const _visionManaged = (el.visionManagedStatus && el.visionManagedStatus.dataset) || {};
-        const _visionReady = _visionManaged.configured === 'true';
-        if (!_visionReady) {
+        // 🔧 前置校验：未配置视觉模型 Key 时大声警告，避免静默回退让人以为「AI 没用」
+        const vp = (el.visionProvider && el.visionProvider.value) || '';
+        const vk = (el.visionApiKey && el.visionApiKey.value) || '';
+        if (!vp || !vk) {
           el.matStatus.textContent = '⚠️ AI 视觉定位已启用（说扣什么：' + promptText + '），但未配置云端视觉服务（由管理员统一配置，无需你操作），将回退普通抠图';
         } else {
-          const _vn = _visionManaged.name || '管理员已配置';
-          el.matStatus.textContent = '上传中…（🤖 按描述定位：' + promptText + '，视觉服务：' + _vn + '）';
+          el.matStatus.textContent = '上传中…（🤖 按描述定位：' + promptText + '）';
         }
       } else {
         // ⬜ 手动抠图：按选区/智能/精细方式走，忽略 prompt 输入框内容
@@ -7186,20 +5691,20 @@
           // 有手动选区：尊重用户选区，关闭 AI 视觉定位（后端不做交集，绝不误切）
           if (el.matVision) el.matVision.checked = false;
         } else {
-          // 无选区：自动启用 AI 视觉定位（凭据由管理员统一下发）
+          // 无选区：自动启用 AI 视觉定位（需配视觉模型 Key）
           if (el.matVision) el.matVision.checked = true;
           fd.append('vision_guide', '1');
-          // 🔴 2026-10-05 修正：同 7121 行那个 bug —— 读已隐藏输入框的值恒为空，
-          // 导致管理员配好 Key 后仍报「未配置」。改用受管配置状态。
-          const _vm2 = (el.visionManagedStatus && el.visionManagedStatus.dataset) || {};
-          if (_vm2.configured !== 'true') {
+          // 🔧 前置校验：未配置视觉模型 Key 时大声警告，避免静默回退让人以为「AI 没用」
+          const vp = (el.visionProvider && el.visionProvider.value) || '';
+          const vk = (el.visionApiKey && el.visionApiKey.value) || '';
+          if (!vp || !vk) {
             el.matStatus.textContent = '⚠️ AI 视觉定位已自动启用（无选区），但未配置云端视觉服务（由管理员统一配置，无需你操作），将回退普通抠图';
           } else {
             el.matStatus.textContent = '上传中…（🤖 AI 视觉定位：先让模型看懂图再抠主体）';
           }
         }
       }
-      fetch('/api/matting/image', { method: 'POST', body: fd, headers: authBearerHeaders() })
+      fetch('/api/matting/image', { method: 'POST', body: fd })
         .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
         .then(d => {
           matJobId = d.job_id;
@@ -7240,7 +5745,7 @@
     const fd = new FormData();
     fd.append('file', file);
     fd.append('force_cloud', '1');
-      fetch('/api/matting/image', { method: 'POST', body: fd, headers: authBearerHeaders() })
+      fetch('/api/matting/image', { method: 'POST', body: fd })
         .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
         .then(d => {
           matJobId = d.job_id;
@@ -7569,10 +6074,7 @@
       // （旧逻辑：z>1 且起点落在已有加选区内也 pan——这会让「加选」模式下在已有选区上拖动时
       //   误把图片平移走，而非按用户本意加画新框。现已收紧到只能显式移动模式。）
       let startPan = false;
-      // 结果查看模式（只读）：按住即平移（无需先切「移动」），且绝不产生新选区
-      if (target === 'modal' && dwModalMode === 'result') {
-        if (dwModalZoom > 1.0001) startPan = true;
-      } else if (target === 'modal' && dwDrawMode === 'pan' && dwModalZoom > 1.0001) {
+      if (target === 'modal' && dwDrawMode === 'pan' && dwModalZoom > 1.0001) {
         startPan = true;
       }
       if (startPan) {
@@ -7583,7 +6085,6 @@
         e.preventDefault();
         return;
       }
-      if (target === 'modal' && dwModalMode === 'result') { e.preventDefault(); return; }
       dwDragging = true;
       dwDragTarget = target;
       const [nx, ny] = dwNormFromEvent(img, e.clientX, e.clientY);
@@ -7597,24 +6098,7 @@
   dwBindView(el.dwModalImg, el.dwModalCanvas, { get value() { return dwModalZoom; }, set value(v) { dwModalZoom = v; } }, 'modal');
 
   // 滚动时叠加层必须重新跟随图片位置，否则选区会“跑”
-  // 触控板捏合（Chrome 上是 ctrlKey+wheel）默认会缩放整个页面——白色弹窗框会跟着一起变大。
-  // 在去水印区域统一拦截：捏合一律转成「只放大图片」（2026-09-29 用户反馈，与 web-dev 同源）。
-  const dwPinchToZoom = (target) => (e) => {
-    if (!e.ctrlKey) return;
-    e.preventDefault();
-    if (e.target === el.dwImgPreview || e.target === el.dwImgCanvas || e.target === el.dwImgSvg) return;
-    if (target === 'modal' && (e.target === el.dwModalImg || e.target === el.dwModalCanvas || e.target === el.dwModalSvg)) return;
-    const zObj = target === 'modal'
-      ? { get value() { return dwModalZoom; }, set value(v) { dwModalZoom = v; } }
-      : { get value() { return dwZoom; }, set value(v) { dwZoom = v; } };
-    zObj.value = e.deltaY < 0 ? Math.min(5, zObj.value + 0.2) : Math.max(1, zObj.value - 0.2);
-    dwApplyZoom(target);
-  };
-  if (el.dwImgModal) el.dwImgModal.addEventListener('wheel', dwPinchToZoom('modal'), { passive: false });
-  if (el.dwPreviewWrap) {
-    el.dwPreviewWrap.addEventListener('wheel', dwPinchToZoom('preview'), { passive: false });
-    el.dwPreviewWrap.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
-  }
+  if (el.dwPreviewWrap) el.dwPreviewWrap.addEventListener('scroll', () => { dwResizeAll(); dwDrawAll(); });
   if (el.dwModalPreviewWrap) {
     // 弹窗真正的滚动容器是 .dw-modal-body（wrap 本身 overflow:visible 不滚动）
     const modalBody = el.dwModalPreviewWrap.closest('.dw-modal-body');
@@ -7695,75 +6179,22 @@
   if (el.dwModalZoomFit) el.dwModalZoomFit.addEventListener('click', () => { dwModalZoom = 1; dwApplyZoom('modal'); });
 
   // 打开 / 关闭弹窗
-  // 灯箱两种用途：'edit'（框选水印区域，默认）/ 'result'（只读查看处理结果，可缩放平移）
-  let dwModalMode = 'edit';
-  let dwResultMedia = 'image';   // 'image' | 'video'（仅 result 模式有意义）
-  const dwSetModalMode = (mode, media) => {
-    dwModalMode = mode;
-    dwResultMedia = media || 'image';
-    const viewing = mode === 'result';
-    const isVideo = dwResultMedia === 'video';
-    if (el.dwImgModal) {
-      el.dwImgModal.classList.toggle('is-view-result', viewing);
-      el.dwImgModal.classList.toggle('is-view-video', viewing && isVideo);
-    }
-    if (el.dwModalTitle) el.dwModalTitle.textContent = viewing
-      ? (isVideo ? '查看处理后的视频' : '查看处理结果') : '框选去水印区域';
-    if (el.dwModalDone) el.dwModalDone.hidden = viewing;
-    if (el.dwModalViewClose) el.dwModalViewClose.hidden = !viewing;
-    if (el.dwModalSelInfo) el.dwModalSelInfo.hidden = viewing;
-    if (el.dwModalViewHint) el.dwModalViewHint.hidden = !viewing || isVideo;
-  };
-  const dwShowModal = () => {
+  const dwOpenModal = () => {
+    // 放宽前置校验：文件选择器选图、或拖拽/粘贴/回填导致预览图已加载，都能开灯箱
+    const hasImg = el.dwImgFile.files[0] || (el.dwImgPreview.src && el.dwImgPreview.naturalWidth > 0);
+    if (!hasImg) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
     el.dwImgModal.hidden = false;
     document.body.style.overflow = 'hidden';
     dwModalZoom = 1;
-    dwPanX = 0; dwPanY = 0;
-    if (el.dwModalPreviewWrap) el.dwModalPreviewWrap.style.transform = 'translate(0px, 0px)';
     if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
     // 同步模式按钮高亮
     dwSyncModeButtons();
     // 等布局稳定后按可用区域适配（否则弹窗以原图自然尺寸显示，过大无法编辑）
     requestAnimationFrame(() => requestAnimationFrame(() => dwApplyZoom('modal')));
   };
-  const dwOpenModal = () => {
-    // 放宽前置校验：文件选择器选图、或拖拽/粘贴/回填导致预览图已加载，都能开灯箱
-    const hasImg = el.dwImgFile.files[0] || (el.dwImgPreview.src && el.dwImgPreview.naturalWidth > 0);
-    if (!hasImg) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
-    dwSetModalMode('edit', 'image');
-    if (el.dwModalVid) { el.dwModalVid.pause(); el.dwModalVid.hidden = true; el.dwModalVid.removeAttribute('src'); }
-    if (el.dwModalImg) el.dwModalImg.hidden = false;
-    dwShowModal();
-  };
-  // 结果「放大查看」：图片走灯箱缩放/平移；视频在灯箱里大屏播放（不做缩放）
-  const dwOpenResultViewer = (media) => {
-    if (media === 'video') {
-      const src = el.dwVidOut && el.dwVidOut.src;
-      if (!src) { el.dwVidStatus && (el.dwVidStatus.textContent = '尚无处理结果'); return; }
-      dwSetModalMode('result', 'video');
-      if (el.dwModalImg) { el.dwModalImg.hidden = true; el.dwModalImg.removeAttribute('src'); }
-      // 大屏播放前先停掉结果区里那两个小窗（否则灯箱声音 + 背后细节窗声音叠在一起）
-      dwStopResultVideos();
-      if (el.dwModalVid) { el.dwModalVid.hidden = false; el.dwModalVid.src = src; el.dwModalVid.currentTime = 0; }
-      dwShowModal();
-      return;
-    }
-    const src = el.dwImgOut && el.dwImgOut.src;
-    if (!src) { el.dwImgStatus.textContent = '尚无处理结果'; return; }
-    dwSetModalMode('result', 'image');
-    if (el.dwModalVid) { el.dwModalVid.pause(); el.dwModalVid.hidden = true; el.dwModalVid.removeAttribute('src'); }
-    if (el.dwModalImg) { el.dwModalImg.hidden = false; el.dwModalImg.src = src; }
-    dwShowModal();
-  };
   const dwCloseModal = () => {
     el.dwImgModal.hidden = true;
     document.body.style.overflow = '';
-    // 关闭即停止视频播放并释放句柄，避免后台继续出声/占资源
-    // （release：摘 src + load()，否则 WKWebView 里 removeAttribute('src') 未必立刻断流）
-    dwStopVideo(el.dwModalVid, { release: true, rewind: true });
-    if (el.dwModalVid) el.dwModalVid.hidden = true;
-    if (el.dwModalImg) el.dwModalImg.hidden = false;
-    dwSetModalMode('edit', 'image');
     dwResizeAll();
     dwDrawAll();
   };
@@ -7771,24 +6202,6 @@
   el.dwExpandBtn2.addEventListener('click', dwOpenModal);
   el.dwModalClose.addEventListener('click', dwCloseModal);
   el.dwModalDone.addEventListener('click', dwCloseModal);
-  if (el.dwModalViewClose) el.dwModalViewClose.addEventListener('click', dwCloseModal);
-  // 悬浮退出按钮（窗口右上角常显，不依赖 header/footer 布局）
-  if (el.dwModalFloatClose) el.dwModalFloatClose.addEventListener('click', dwCloseModal);
-  // 结果图点击 / 结果区「放大查看」按钮
-  if (el.dwImgOut) el.dwImgOut.addEventListener('click', () => dwOpenResultViewer('image'));
-  if (el.dwImgOutZoom) el.dwImgOutZoom.addEventListener('click', () => dwOpenResultViewer('image'));
-  if (el.dwVidOutZoom) el.dwVidOutZoom.addEventListener('click', () => dwOpenResultViewer('video'));
-  // Esc 关闭灯箱（灯箱不是 <dialog>，没有原生 Esc）
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && el.dwImgModal && !el.dwImgModal.hidden) dwCloseModal();
-  });
-  // 灯箱图加载完成后按窗口重新适配：结果图是刚生成的 URL，用户可能立刻点「放大查看」，
-  // 此时图片尚未解码（naturalWidth=0），dwApplyZoom 会提前返回 → 图会以原始尺寸溢出弹窗。
-  if (el.dwModalImg) {
-    el.dwModalImg.addEventListener('load', () => {
-      if (el.dwImgModal && !el.dwImgModal.hidden && !el.dwModalImg.hidden) dwApplyZoom('modal');
-    });
-  }
   el.dwImgModal.addEventListener('click', (e) => { if (e.target === el.dwImgModal || e.target.classList.contains('dw-modal-backdrop')) dwCloseModal(); });
 
   const startDwImage = async () => {
@@ -8179,10 +6592,6 @@
 // 显示工作态 cap「原视频预览 · 在画面上拖框选水印」（默认 hidden，mousedown 拖框即隐藏）。
 if (el.dwVidEmpty) el.dwVidEmpty.hidden = true;
 if (el.dwVidCapOverlay) el.dwVidCapOverlay.hidden = false;
-    // ★ 换素材时上一次的结果必须彻底作废：只 hidden 不 pause 会「画面没了声音还在」
-    // （release 会摘 src + load()，把解码器与 blob/媒体句柄一起放掉）
-    dwStopResultVideos({ release: true });
-    dwStopVideo(el.dwVidPlayer, { release: true });
     const url = URL.createObjectURL(f);
     // 结果区「原视频」对比框用同一个 blob URL（input 视频本身就是原视频）
     el.dwVidOrig.src = url;
@@ -8204,7 +6613,7 @@ const wrap = el.dwVidThumb && el.dwVidThumb.parentElement;
 if (wrap) wrap.classList.remove('is-playable');
 wrap.style.aspectRatio = '';
 el.dwVidPlayer.hidden = true;
-// src 已在上面 dwStopVideo(release) 摘掉；这里再保险一次防止半路重建过 src
+el.dwVidPlayer.removeAttribute('src');
     // 视频预览默认开启（WKWebView 不转码播不了，所以"开箱即播"是默认体验）；
     // 用户取消勾选后才走"无转码"主链路：仅首帧 img 框选，无播放器。
     const wantPreview = !!(el.dwVidPreviewToggle && el.dwVidPreviewToggle.checked);
@@ -8228,7 +6637,7 @@ el.dwVidPlayer.hidden = true;
       const wf = new FormData();
       wf.append('int8', el.dwVidInt8.checked ? '1' : '0');
       if (el.dwVidModel) wf.append('model', el.dwVidModel.value || 'lama');
-      fetch((window.VDL_API_BASE || '') + '/api/dw/ai/warmup', { method: 'POST', body: wf, headers: authBearerHeaders() });
+      fetch((window.VDL_API_BASE || '') + '/api/dw/ai/warmup', { method: 'POST', body: wf });
     } catch (_e) { /* 预热失败不影响主流程 */ }
     // 抽首帧（img 框选）与 filmstrip（点击跳转时间线）：
     //   之前用 Promise.all([thumb, film]) 等齐才往下走——filmstrip 要 decode 20 帧再 tile，
@@ -8246,7 +6655,7 @@ el.dwVidPlayer.hidden = true;
     const ctrl = new AbortController();
     const ctrlTs = Date.now();
     const timer = setTimeout(() => ctrl.abort(), 90000);
-    const headers = { 'X-Device-Id': deviceId(), ...authBearerHeaders() };
+    const headers = { 'X-Device-Id': deviceId() };
 
     // ① 本地抽帧（秒级最佳 UX）
     let localThumb = null;
@@ -8371,20 +6780,16 @@ el.dwVidPlayer.hidden = true;
     if (el.dwVidCapOverlay && !el.dwVidCapOverlay.hidden) el.dwVidCapOverlay.hidden = true;
     const [nx, ny] = dwNormFromEvent(el.dwVidThumb, e.clientX, e.clientY);
     dwVidSel = { x: nx, y: ny, w: 0, h: 0 };
-    dwVidDragAnchor = { x: nx, y: ny };  // 固定锚点：宽高必须相对起点算（2026-09-24）
     e.preventDefault();
   }, { capture: true });
-  let dwVidDragAnchor = null;  // 拖拽起手点（归一化）。此前误用 sel.x/y 当锚点——
-  // min() 覆写后再算 |nx - sel.x|，向上/向左拖时宽高恒为 0，mouseup 把选区当误点丢弃
-  // → 「往右上框 Seko 水印/从下往上框字幕永远框不上，且无任何提示」（用户报：删除重选后添加不了选区）
   document.addEventListener('mousemove', (e) => {
-    if (!dwVidDrag || !dwVidDragAnchor) return;
+    if (!dwVidDrag) return;
     const [nx, ny] = dwNormFromEvent(el.dwVidThumb, e.clientX, e.clientY);
-    // 与图片面板同款：相对固定锚点取 min/abs，四个拖拽方向都成立
-    dwVidSel.x = Math.min(dwVidDragAnchor.x, nx);
-    dwVidSel.y = Math.min(dwVidDragAnchor.y, ny);
-    dwVidSel.w = Math.abs(nx - dwVidDragAnchor.x);
-    dwVidSel.h = Math.abs(ny - dwVidDragAnchor.y);
+    const x0 = Math.min(dwVidSel.x, nx), y0 = Math.min(dwVidSel.y, ny);
+    dwVidSel.x = x0;
+    dwVidSel.y = y0;
+    dwVidSel.w = Math.abs(nx - dwVidSel.x);
+    dwVidSel.h = Math.abs(ny - dwVidSel.y);
     if (dwVidSel.w < 0.005) dwVidSel.w = 0.005;
     if (dwVidSel.h < 0.005) dwVidSel.h = 0.005;
     dwVidDraw();
@@ -8772,8 +7177,6 @@ el.dwVidPlayer.hidden = true;
     }
     el.dwVidBtn.disabled = true;
     el.dwVidStatus.textContent = '视频去水印处理中（逐帧推理，请稍候）…';
-    // ★ 提交新一轮前先停掉上一轮结果的播放（避免重复音轨叠加）
-    dwStopResultVideos();
     el.dwVidResult.hidden = true;
     const startSec = parseFloat(el.dwVidStart.value) || 0;
     const endSec = parseFloat(el.dwVidEnd.value) || 0;
@@ -8967,8 +7370,6 @@ el.dwVidPlayer.hidden = true;
   // 重新处理：显示工作区（原视频预览/框选/参数），隐藏结果区，回到可重新提交的初始态。
   if (el.dwVidRedo) el.dwVidRedo.addEventListener('click', () => {
     if (el.dwVidWork) el.dwVidWork.hidden = false;
-    // ★ 先停再藏：否则结果区虽隐藏，「原视频/处理后」两段仍在后台继续出声
-    dwStopResultVideos();
     el.dwVidResult.hidden = true;
     el.dwVidRunCtrls.hidden = true;
     el.dwVidStatus.textContent = '';
@@ -8988,8 +7389,6 @@ el.dwVidPlayer.hidden = true;
     } else {
       // 关闭预览：取消轮询，隐藏 player / spinner，回到「仅首帧」静态态
       if (el._dwPreviewPoll) { clearInterval(el._dwPreviewPoll); el._dwPreviewPoll = null; }
-      // 停 + 释放：只 hidden 的话 WKWebView 还在后台播
-      dwStopVideo(el.dwVidPlayer, { release: true });
       if (el.dwVidPlayer) { el.dwVidPlayer.hidden = true; el.dwVidPlayer.removeAttribute('src'); }
       if (el.dwVidTranscoding) el.dwVidTranscoding.hidden = true;
       if (el.dwVidPlayerHead) el.dwVidPlayerHead.hidden = true;
@@ -8998,12 +7397,9 @@ el.dwVidPlayer.hidden = true;
       if (el.dwVidStatus && el.dwVidStatus.textContent.includes('转码')) el.dwVidStatus.textContent = '';
     }
   });
-  // 视频结果下载：与图片/PDF 同套——桌面端走原生保存面板（save_dw_file_dialog），
-  // 绕过 WKWebView 对 <a download> 的拦截（否则一点就跳走/白屏，2026-09-25 用户报障）。
-  // 按钮是 <a download>，默认会触发导航，必须 preventDefault 后再走 dwDownload。
+  // 视频结果下载：直接走浏览器下载（<a download>），不调用桌面桥接保存面板
   el.dwVidDownload.addEventListener('click', (e) => {
-    e.preventDefault();
-    dwDownload(el.dwVidDownload, 'video');
+    if (!el.dwVidDownload.href) e.preventDefault();
   });
 
   // 去水印结果下载：桌面端(pywebview/WKWebView) <a download> 不弹保存框，
@@ -9013,7 +7409,7 @@ el.dwVidPlayer.hidden = true;
   const dwDownload = async (btn, kind) => {
     const href = btn.href || '';
     const jobId = btn.dataset.jobId || (() => {
-      const m = href.match(/\/api\/dw\/(?:image|pdf|video)\/([^/?#]+)(?:\/file)?/);
+      const m = href.match(/\/api\/dw\/(?:image|pdf)\/([^/?#]+)(?:\/file)?/);
       return m ? m[1] : null;
     })();
     const filename = btn.getAttribute('download') || (kind === 'image' ? 'dewatered.png' : 'dewatered.pdf');
@@ -9495,11 +7891,7 @@ el.dwVidPlayer.hidden = true;
     setLoading(true);
     el.resultPanel.hidden = true;
     el.hqTip.hidden = true;   // 每次重新解析时重置「更高分辨率」提示，避免残留
-    // 解析一律走本机后端（base=''）：后端对海外链接会自动转发对端节点，
-    // 并且会实时携带本机浏览器解密的登录态。前端若直发对端，浏览器 Cookie
-    // 会丢在半路 → 对端误报「YouTube 需要登录 Cookie」（2026-09-22 实测踩坑）。
-    // 下载/进度/取件也统一走本机：后端 create_download 自己决定是否交对端执行。
-    const base = '';
+    const base = baseFor(url);
     // 歌单/专辑链接 → 走 /api/playlist 列出全部曲目（网易云歌单/榜单、喜马拉雅专辑）
     if (isPlaylistUrl(url)) {
       await handlePlaylist(url, base, cookie, proxy);
@@ -9507,9 +7899,7 @@ el.dwVidPlayer.hidden = true;
       return;
     }
     try {
-      // timeout 300s（2026-09-26）：解析（尤其 YouTube 走代理）实测可达 50s+，
-      // 默认 120s 曾把仍在进行的解析掐断 → 误报「连接本地服务失败」。后端上限 90s，300s 留足余量。
-      resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }), timeout: 300000 }, base);
+      resolved = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ url, cookie, proxy }) }, base);
       resolved.cookie = cookie;
       resolved.proxy = proxy;
       resolved.base = base;                        // 后续下载/进度/取件都锁定同一节点
@@ -9575,16 +7965,10 @@ el.dwVidPlayer.hidden = true;
     } catch (error) {
       const _msg2 = (error && error.message) || '';
       if (_msg2.indexOf('MEMBER_QUOTA|') === 0) {
-        // 这里收两种墙，共用 MEMBER_QUOTA| 前缀：
-        //   ① 清晰度档位墙（2026-10-02）：免费用户选 2K/4K → 后端 402
-        //   ② 每日次数墙（2026-09-06）：免费 10 次/日用尽
-        // 第二行引导必须跟着分岔 —— 否则「清晰度不够」会被说成「额度明天刷新」。
+        // 会员下载配额超限（2026-09-06）：弹会员中心 + 引导
         const tip = _msg2.split('|').slice(1).join('|') || '今日免费下载次数已用尽';
         try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
-        const hint = /清晰度/.test(tip)
-          ? '开通下载会员即可解锁 2K/4K 原画（1080P 及以下免费不限档）'
-          : '开通下载会员即可继续下载（免费额度每日 24:00 刷新）';
-        showError(tip, hint);
+        showError(tip, '开通下载会员即可继续下载（免费额度每日 24:00 刷新）');
       } else if (error.subscribe) {
         promptSubscribe();
         showError('今日免费下载次数已用完', '点右上角「订阅解锁」后即可无限下载');
@@ -9595,100 +7979,27 @@ el.dwVidPlayer.hidden = true;
     }
   };
 
-  // ---- 直链保存（2026-09-22 修复：桌面版「直接保存到本机」把应用界面顶成 403 页）----
-  // 根因：① 桌面壳是 WKWebView，`<a href=源站CDN>` 会把**整个应用界面**导航到该 URL，
-  //        抖音 CDN 防盗链返回 403 openresty 页面 → 应用界面消失，只能重开 App；
-  //      ② Referer 是浏览器 forbidden header（JS/<a>/fetch 都设不了），字节系 CDN
-  //        校验 Referer（缺则 403）→ 「直链丢给浏览器下载」对这些平台天然不成立。
-  // 修法：桌面版走本机原生桥 save_direct_url（Python 带 Referer/UA 拉流写盘，与后端
-  //       下载同源，仍不经过外网服务器）；浏览器版仅无防盗链时用 <a download>，其余
-  //       交给服务器下载（渲染时已按 directOk 切到普通下载流程）。
-  const isDesktopShell = () => !!(window.pywebview && window.pywebview.api);
-
-  const directNeedsReferer = (video) => !!(video && video.direct_needs_referer);
-
-  const directHeaderOf = (video, name) => {
-    const h = (video && video.direct_headers) || {};
-    const lower = name.toLowerCase();
-    for (const k of Object.keys(h)) {
-      if (k.toLowerCase() === lower) return h[k] || '';
-    }
-    return '';
-  };
-
-  /** 本机原生桥保存直链；返回保存路径字符串或抛错。 */
-  const saveDirectViaBridge = async (video) => {
-    const api = window.pywebview && window.pywebview.api;
-    if (!api || typeof api.save_direct_url !== 'function') {
-      throw new Error('当前版本不支持本机直存，请更新应用');
-    }
-    const res = await api.save_direct_url(
-      video.direct_url,
-      video.title || '视频.mp4',
-      directHeaderOf(video, 'Referer'),
-      directHeaderOf(video, 'User-Agent'),
-    );
-    if (typeof res === 'string' && res.startsWith('ERROR:')) {
-      throw new Error(res.replace(/^ERROR:\s*/, ''));
-    }
-    return String(res || '');
-  };
-
-  /** 直链保存入口：桌面走原生桥，浏览器走 <a download>。失败自动回落到服务器下载。 */
-  const triggerDirectDownload = async (video) => {
-    if (!isDesktopShell()) {
-      const a = document.createElement('a');
-      a.href = video.direct_url;
-      if (video.title) a.download = video.title;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      el.directHint.hidden = false;
-      el.directHint.textContent = '⬇ 已开始从源站下载，请查看浏览器下载栏（文件不经过我们的服务器）。';
-      return;
-    }
-    // 桌面：绝不能让 WKWebView 导航到外站（会把应用界面顶掉），改由 Python 拉流写盘
-    const btn = el.downloadBtn;
-    if (btn.dataset.submitting === '1') return;
-    btn.dataset.submitting = '1';
-    btn.disabled = true;
-    const orig = btn.lastChild.textContent;
-    btn.lastChild.textContent = '正在保存到本机…';
-    el.directHint.hidden = false;
-    el.directHint.textContent = '⬇ 请在弹出的窗口中选择保存位置，选好后开始从源站下载（大文件需要一会儿，请勿关闭窗口）。';
-    try {
-      const saved = await saveDirectViaBridge(video);
-      el.directHint.hidden = false;
-      if (saved === 'CANCELLED') {
-        // 用户在系统保存面板点了「取消」：这不是错误，别触发服务器下载兜底。
-        el.directHint.textContent = '已取消保存（未下载任何文件）。';
-        return;
-      }
-      el.directHint.textContent = `✅ 已保存到本机：${saved}（右键可用它打开 / 在访达中显示）`;
-    } catch (err) {
-      const msg = (err && err.message) || '本机直存失败';
-      el.directHint.hidden = false;
-      el.directHint.textContent = `源站直连失败，已自动改用服务器下载（${msg}）`;
-      await startDownload(selectedQuality || 'best');
-    } finally {
-      btn.dataset.submitting = '';
-      btn.disabled = false;
-      btn.lastChild.textContent = orig;
-    }
+  const triggerDirectDownload = (url, title) => {
+    const a = document.createElement('a');
+    a.href = url;
+    if (title) a.download = title;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    el.directHint.textContent = '⬇ 已开始从源站下载，请查看浏览器下载栏（文件不经过我们的服务器）。若源站拒绝直连，请用上方「改用服务器下载」。';
   };
 
   const handleDownload = async () => {
     if (!authToken()) {
       // 未登录：引导登录/注册，成功后可自动继续下载
       try { window._pendingDownload = true; } catch (_) {}
-      openAuthModal();   // 先开弹窗（openAuthModal 内部会清空提示），再写文案
       _authMsg('请先登录或注册账号，即可开始下载', true);
+      openAuthModal();
       return;
     }
-    const dv = resolved?.video;
-    if (dv?.direct_url && (isDesktopShell() || !directNeedsReferer(dv))) {
-      // 直链直存：桌面走原生桥（带 Referer 拉流写盘），浏览器无防盗链时交下载栏
-      await triggerDirectDownload(dv);
+    if (resolved?.video?.direct_url) {
+      // 直链直存：浏览器从源站拉文件，瞬时响应，无需 loading 态
+      triggerDirectDownload(resolved.video.direct_url, resolved.video.title);
       return;
     }
     // 服务器下载：loading 态防重复点击（连点会建多个任务）；后端 90s 内命中
@@ -9831,166 +8142,9 @@ el.dwVidPlayer.hidden = true;
   const comSelectResetters = [];
   const resetComSelects = () => { comSelectResetters.forEach((fn) => fn()); };
 
-  /** 成片文件名：renderComArtifact 已把步骤里解析出的产物全路径写在 comArtifact.title，
-   *  这里取它的 basename（管线命名是「<原片名>-解说完成<时间>.mp4」）。
-   *  拿不到就退回通用名 —— 只是名字不精确，绝不能让保存因取名失败而中断。 */
-  const comFinishedName = () => {
-    const p = (el.comArtifact && el.comArtifact.title) || '';
-    const base = String(p).split('/').pop() || '';
-    return /\.(mp4|mkv|mov|webm)$/i.test(base) ? base : '解说成片.mp4';
-  };
-
-  // ═══════════ 🎬 渲染完成弹窗（2026-09-20）═══════════════════════════════════
-  // 用户原话：「现在渲染完还是没提示，应该加个『已渲染完成，请在解说历史里保存到本地』的弹窗。
-  //   直接存在解说历史里面，用户都不知道有没有渲染完成，解说历史应该是保存的历史文件，
-  //   它有可能不在同一文件夹里面」。
-  // 为什么非要多一个模态窗口：渲染长片动辄十几分钟，用户早切去别的视图了，
-  //   底部那条 6 秒的 toast 他根本等不到 —— 模态会一直等他点，这才是「有提示」。
-  // ⚠️ 与既有「toast + 自动另存到下载夹」并存、不替换（那部分在正常工作，别动）。
-  /** 历史条目 id 是「成片绝对路径」的 base64（见服务端 /api/commentary/list）——
-   *  解出来就能如实告诉用户文件到底在哪个文件夹。⚠️ 服务端用的是 URL-safe 变体（-_ 而非 +/）。 */
-  const comDoneDecodePath = (id) => {
-    try {
-      const b64 = String(id || '').replace(/-/g, '+').replace(/_/g, '/');
-      const pad = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
-      const bin = atob(pad);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-      return new TextDecoder('utf-8').decode(bytes);
-    } catch (_e) { return ''; }
-  };
-
-  /** 按成片名反查它的真实落盘路径（拿不到就返回空，绝不影响弹窗本身弹出）。 */
-  const comDoneLocate = async (name) => {
-    if (!name) return '';
-    try {
-      const data = await request('/api/commentary/list');
-      const items = (data && data.items) || [];
-      const hit = items.find((x) => x.name === name);
-      return hit ? comDoneDecodePath(hit.id) : '';
-    } catch (_e) { return ''; }
-  };
-
-  /** 弹出「已渲染完成」弹窗。savedFull=自动另存到「下载」的完整路径（Web 版为空）。 */
-  const comDoneShow = (opts) => {
-    const dlg = el.comDoneModal;
-    if (!dlg) return;
-    const o = opts || {};
-    const where = o.folder || '';
-    if (el.comDoneName) {
-      el.comDoneName.textContent = o.name || '解说成片.mp4';
-      el.comDoneName.title = o.name || '';
-    }
-    if (el.comDonePath) {
-      if (where) {
-        el.comDonePath.textContent = where;
-        el.comDonePath.title = where;
-      } else {
-        el.comDonePath.textContent = '（读取中…）';
-        el.comDonePath.title = '';
-        // 异步补上真实目录：路径拿不到也不影响弹窗已经给出的指引
-        comDoneLocate(o.name).then((full) => {
-          if (!el.comDonePath || el.comDonePath.textContent !== '（读取中…）') return;
-          const dir = full ? full.split('/').slice(0, -1).join('/') : '';
-          el.comDonePath.textContent = dir || '（暂时读不到路径，到「📂 解说历史」里能看到）';
-          el.comDonePath.title = dir;
-        });
-      }
-    }
-    if (el.comDoneLead) {
-      el.comDoneLead.textContent = o.savedFull
-        ? '成片已生成，并已自动另存到「下载」文件夹。想放到别的位置，就到「📂 解说历史」里点「💾 保存」。'
-        : '成片已渲染完成。请到「📂 解说历史」里点「💾 保存」，把成片存到你要的文件夹。';
-    }
-    if (el.comDoneNote) {
-      el.comDoneNote.innerHTML = '解说历史里的成片存在 App 自己的成片归档目录，'
-        + '<b>不一定在你平时放视频的文件夹</b>；要放进自己的文件夹，就点那条的「💾 保存」。';
-    }
-    if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
-    else dlg.setAttribute('open', '');
-  };
-
-  const comDoneClose = () => {
-    const dlg = el.comDoneModal;
-    if (!dlg) return;
-    if (typeof dlg.close === 'function' && dlg.open) dlg.close();
-    else dlg.removeAttribute('open');
-  };
-
-  if (el.comDoneClose) el.comDoneClose.addEventListener('click', comDoneClose);
-  if (el.comDoneLater) el.comDoneLater.addEventListener('click', comDoneClose);
-  if (el.comDoneModal) {
-    el.comDoneModal.addEventListener('cancel', () => { /* Esc 直接关，无需额外清理 */ });
-    el.comDoneModal.addEventListener('click', (ev) => { if (ev.target === el.comDoneModal) comDoneClose(); });
-  }
-  if (el.comDoneOpenHist) {
-    el.comDoneOpenHist.addEventListener('click', () => {
-      comDoneClose();
-      // 展开左栏「📂 解说历史」浮层并把它带进视野 —— 用户下一步就是在那儿点「💾 保存」
-      try { setHistOpen(true); } catch (_e) { /* ignore */ }
-      try {
-        const t = $('comHistToggle');
-        if (t) t.scrollIntoView({ block: 'center' });
-      } catch (_e) { /* ignore */ }
-    });
-  }
-
-  /** 成片完成时必须「出声」（2026-09-20 用户：「解说完成怎么默不作声呢？
-   *  要有个提示吧或者保存什么的吧」）。渲染长片时用户基本都会切去别的视图等，
-   *  只改面板里那行文字他根本看不到，所以：
-   *   ① 立刻弹 toast（fixed 定位，任何视图都看得见）；
-   *   ② 桌面版顺手把成片另存到「下载」文件夹 —— 复用「⬇ 保存到本机」同一条原生桥
-   *      save_commentary_file（写 ~/Downloads；重名自动加 (1)/(2)，不会覆盖旧文件），
-   *      存好后把真实落盘文件名回写进 toast 与状态行，用户不必再去点按钮；
-   *   ③ Web 版没有原生桥 → 只弹 toast，其余与旧版一致（面板里的下载链接照旧可用）。
-   *  同一个 job 只播报一次（重复轮询/回看历史都不会重弹）。
-   *  2026-09-20 追加 ④：弹一个**模态**窗口（comDoneShow），因为 toast 会被错过。 */
-  const _comAnnounced = new Set();
-  const comAnnounceFinished = async (jobId, name, refs) => {
-    if (!jobId || _comAnnounced.has(jobId)) return;
-    _comAnnounced.add(jobId);
-    const api = window.pywebview && window.pywebview.api;
-    const canSave = !!(api && api.save_commentary_file);
-    const say = (msg, ms) => { try { showToast(msg, ms); } catch (e) { /* toast 失败不影响成片 */ } };
-    say(canSave ? '🎬 解说成片已生成，正在保存到「下载」文件夹…' : '🎬 解说成片已生成', 6000);
-    if (!canSave) {
-      // Web 版：没有原生桥，指引用户自己在解说历史里下载
-      comDoneShow({ name, savedFull: '', folder: '' });
-      return;
-    }
-    try {
-      const res = await api.save_commentary_file(jobId, name);
-      if (typeof res === 'string' && res.startsWith('ERROR:')) {
-        say('成片已生成，但自动保存失败：' + res.replace(/^ERROR:\s*/, '').slice(0, 60), 9000);
-        comDoneShow({ name, savedFull: '', folder: '' });
-      } else if (typeof res === 'string' && res) {
-        const saved = res.split('/').pop() || name;
-        say(`🎬 解说成片已完成，已保存到「下载」：${saved}`, 9000);
-        if (refs && refs.commentaryStatus) {
-          // ⚠️ 追加而不是覆盖：本函数在 onCompleted() 之后才跑完，而 onCompleted 会往同一行写
-          // 「成片已完成…点『📄 继续审核』可回到脚本再渲染一版」（见调用点）。直接赋值会把它抹掉。
-          const prev = refs.commentaryStatus.textContent || '';
-          refs.commentaryStatus.textContent = (prev ? prev + '\n' : '') + `已保存到「下载」：${saved}`;
-        }
-        // 「位置」优先显示刚另存成功的那条路径（最贴近用户此刻关心的「文件在哪」）
-        comDoneShow({
-          name,
-          savedFull: res,
-          folder: res.split('/').slice(0, -1).join('/'),
-        });
-      } else {
-        // 桥接返回了空/非字符串：当成没存成功，仍然给出指引
-        comDoneShow({ name, savedFull: '', folder: '' });
-      }
-    } catch (e) {
-      // 自动保存失败不改变「成片已生成」这个事实：面板里「⬇ 保存到本机」仍可手动保存
-      // —— 但必须告诉用户，否则他以为「没提示 = 没渲染完」
-      comDoneShow({ name, savedFull: '', folder: '' });
-    }
-  };
-
   // 通用轮询：拿到 job_id 后定时查状态，更新 refs（commentary 按钮 / status / file 链接）。
-  const pollCommentaryJob = (job_id, refs, base = '', onCompleted = null) => {    refs.commentaryStatus.hidden = false;
+  const pollCommentaryJob = (job_id, refs, base = '', onCompleted = null) => {
+    refs.commentaryStatus.hidden = false;
     refs.commentaryStatus.textContent = '正在生成解说成片，长视频可能需数分钟…';
     let shownProgress = 0;  // 已显示过的进度行数，避免重复追加
     const poll = setInterval(async () => {
@@ -10003,19 +8157,15 @@ el.dwVidPlayer.hidden = true;
         }
         if (st.status === 'completed') {
           clearInterval(poll);
-          // 成片名用真实产物名，别一律叫「解说成片.mp4」——用户下载/保存到下载夹后要能分辨是哪一条
-          const outName = comFinishedName();
           refs.commentaryStatus.textContent = '解说成片已生成';
           refs.commentaryFile.href = `${base}/api/commentary/${job_id}/file`;
-          refs.commentaryFile.setAttribute('download', outName);
+          refs.commentaryFile.setAttribute('download', '解说成片.mp4');
           refs.commentaryFile.hidden = false;
           if (refs.commentary) refs.commentary.hidden = true;
           el.comProgress.hidden = true;
           el.comEta.hidden = true;
           if (typeof onCompleted === 'function') onCompleted();
           resetComSelects();
-          // 完成播报 + 自动另存到「下载」（用户 2026-09-20：「解说完成怎么默不作声呢」）
-          comAnnounceFinished(job_id, outName, refs);
         } else if (st.status === 'failed') {
           clearInterval(poll);
           refs.commentaryStatus.textContent = `生成失败：${st.error || '未知错误'}`;
@@ -10090,72 +8240,14 @@ el.dwVidPlayer.hidden = true;
     return { phase, pct };
   };
 
-  /** 步骤详情里的绝对路径单独抽出来（2026-09-18 用户：「并入下方进度条显示就可以了」）。
-   *  此前 detail 直接塞整行日志（含 /Users/... 产物全路径），把每个步骤都撑成三行；
-   *  现在步骤行只留文字，路径统一交给进度条下方那一行（见 renderComArtifact）。 */
-  const splitDetailPath = (raw) => {
-    const s = String(raw == null ? '' : raw);
-    const m = s.match(/\/[^\s，,；;、"']+/);
-    if (!m) return { text: s, path: '' };
-    const path = m[0].replace(/[.。]+$/, '');
-    const text = s.replace(m[0], '').replace(/\s*[:：]\s*$/, '').trim();
-    return { text, path };
-  };
-
-  /** 产物路径缩略：优先「…/最近两级目录/文件名」——文件名是用户真正要看的那截，
-   *  而且缩得更短才不会又被容器的 text-overflow 从右边二次截掉。完整值放 title。 */
-  const shrinkArtifactPath = (p, max = 78) => {
-    const s = String(p || '');
-    if (s.length <= max) return s;
-    const parts = s.split('/').filter(Boolean);
-    for (let keep = 3; keep >= 1; keep -= 1) {
-      if (parts.length > keep) {
-        const short = '…/' + parts.slice(-keep).join('/');
-        if (short.length <= max) return short;
-      }
-    }
-    return '…' + s.slice(-(max - 1));
-  };
-
-  /** 把本轮步骤里出现的产物路径并到进度条下方那一行（单行、不撑高面板）。 */
-  const renderComArtifact = (paths) => {
-    if (!el.comArtifact) return;
-    const last = paths.length ? paths[paths.length - 1] : '';
-    el.comArtifact.hidden = !last;
-    el.comArtifact.textContent = last ? '📄 ' + shrinkArtifactPath(last) : '';
-    el.comArtifact.title = last;
-  };
-
   const renderComSteps = (st) => {
     const steps = Array.isArray(st.steps) ? st.steps : [];
     const logs = Array.isArray(st.logs) ? st.logs : [];
-    // 时间轴头部同源进度「第 x/y 步 · 名称 详情」——与步骤面板取同一份 steps，别另建一套口径
-    const tlStep = $('comTlStep');
     if (steps.length === 0) {
       el.comStepsPanel.hidden = true;
-      if (tlStep) { tlStep.hidden = true; tlStep.textContent = ''; }
       return;
     }
     el.comStepsPanel.hidden = false;
-    // 当前步骤口径只算一次：时间轴头部（#comTlStep）与进度条区的摘要行（#comStepsNow）
-    // 共用它，避免两处各算一遍导致显示不一致。
-    // 优先级：正在跑的那一步 → 最后一个已完成的 → 第 1 步。
-    let cur = steps.findIndex((s) => s.status === 'running');
-    if (cur < 0) {
-      let lastDone = -1;
-      steps.forEach((s, i) => { if (s.status === 'done') lastDone = i; });
-      cur = lastDone >= 0 ? lastDone : 0;
-    }
-    const cs = steps[cur] || {};
-    const csDetail = splitDetailPath(cs.detail);
-    const detail = csDetail.text ? ' ' + csDetail.text : '';
-    const stepLine = `第 ${cur + 1}/${steps.length} 步 · ${cs.name || ''}${detail}`;
-    if (tlStep) {
-      tlStep.hidden = false;
-      tlStep.textContent = stepLine;
-    }
-    if (el.comStepsNow) el.comStepsNow.textContent = stepLine;
-    const artifacts = [];
     el.comStepsList.innerHTML = steps.map((s) => {
       const statusClass = s.status === 'running' ? 'task-step--running' :
                           s.status === 'done' ? 'task-step--done' :
@@ -10163,9 +8255,7 @@ el.dwVidPlayer.hidden = true;
       const icon = s.status === 'running' ? '●' :
                    s.status === 'done' ? '✓' :
                    s.status === 'error' ? '✕' : '○';
-      const { text, path } = splitDetailPath(s.detail);
-      if (path) artifacts.push(path);
-      const detail = text ? `<span class="task-step-detail">${escHtml(text)}</span>` : '';
+      const detail = s.detail ? `<span class="task-step-detail">${escHtml(String(s.detail))}</span>` : '';
       return `<div class="task-step ${statusClass}">
         <span class="task-step-dot">${icon}</span>
         <div class="task-step-body">
@@ -10174,20 +8264,10 @@ el.dwVidPlayer.hidden = true;
         </div>
       </div>`;
     }).join('');
-    renderComArtifact(artifacts);
     el.comLogs.textContent = logs.slice(-30).join('\n');
     const logsWrap = el.comLogs.parentElement;
     if (logsWrap && logsWrap.tagName.toLowerCase() === 'details') {
-      // 🔴 2026-09-19 用户反馈「点这个没有收起」：旧实现每次轮询（2 秒）都按
-      //    `logs.length > 3` 强制 open=true —— 用户手动收起后 2 秒又被弹开，永远收不起来。
-      //    现在只在「日志首次够多」时自动展开一次（任务失败则强制展开，原因必须可见），
-      //    之后一律尊重用户的手动开合。
-      if (st.status === 'failed') {
-        logsWrap.open = true;
-      } else if (logsWrap.dataset.autoOpened !== '1' && logs.length > 3) {
-        logsWrap.open = true;
-        logsWrap.dataset.autoOpened = '1';
-      }
+      logsWrap.open = logs.length > 0 && (st.status === 'failed' || logs.length > 3);
     }
   };
 
@@ -10222,13 +8302,11 @@ el.dwVidPlayer.hidden = true;
     const styleEl = document.querySelector('input[name="comStyle"]:checked');
     // 正剧边界只保留「绝对时间」一处（片头/片尾秒数 UI 已下线：与它同侧互斥、完全等价，
     // 而这里本就接受纯秒数写法；后端 intro_sec/outro_sec 参数保留供外部调用兼容）
+    const dramaStart = el.comDramaStart && el.comDramaStart.value ? parseTimeSec(el.comDramaStart.value) : null;
+    const dramaEnd = el.comDramaEnd && el.comDramaEnd.value ? parseTimeSec(el.comDramaEnd.value) : null;
     // 片头片尾 2 选 1：默认「保留·不解说」（绝对不解说片头片尾）
     const introOutroMode = el.comIntroOutroMode();
     const skip_intro_outro = introOutroMode === 'skip';
-    // 起点/终点只在「去片头片尾」下生效（2026-09-20 定稿：非 skip 显示 00:00:00 且不参与
-    // 提交——那边填的只是草稿；否则用户在非 skip 模式里的草稿会被当成全片裁剪区间）。
-    const dramaStart = (skip_intro_outro && el.comDramaStart && el.comDramaStart.value) ? parseTimeSec(el.comDramaStart.value) : null;
-    const dramaEnd = (skip_intro_outro && el.comDramaEnd && el.comDramaEnd.value) ? parseTimeSec(el.comDramaEnd.value) : null;
     const no_narrate_intro_outro = true; // 两个模式都不解说片头片尾（skip 模式已剪掉）
     return {
       commentary_type: typeEl ? typeEl.value : 'deep_hl',
@@ -10239,18 +8317,14 @@ el.dwVidPlayer.hidden = true;
       drama_start_sec: dramaStart,
       drama_end_sec: dramaEnd,
       style: styleEl ? styleEl.value : 'none',
-      style_intensity: (() => { const si = document.getElementById('comStyleIntensity'); return si ? (parseInt(si.value, 10) || 65) : 65; })(),
       vision: !!(el.comVision && el.comVision.checked),
       tts_provider: el.comTtsProvider ? el.comTtsProvider.value : '',
-      // 后端 CommentaryRequest.correct_transcript 是 str('1'=开/'0'=关)，勿发布尔（bool 会 422）。
-      // 2026-09-19：ASR 校正改为 opt-in（默认关，省一次万级 token 调用），勾选才传 '1'。
-      correct_transcript: (el.comCorrectTranscript && el.comCorrectTranscript.checked) ? '1' : '0',
+      // 后端 CommentaryRequest.correct_transcript 是 str('0'=关/''=开)，勿发布尔（bool 会 422）
+      correct_transcript: !(el.comCorrectTranscript && el.comCorrectTranscript.checked) ? '0' : '',
       export_jianying: comGetExportJianying(),
-      // 音乐轨（2026-09-18）：状态在 comMusic（原 comBgm* 元素 2026-09-15 随「成片增强」块删除，
-      // 保留的 el.comBgm 引用恒为 null → 配乐一直是 off）。用 (comMusic || {}) 兜住初始化顺序。
-      bgm: (comMusic || {}).kind || 'off',
-      bgm_file: (comMusic && comMusic.kind === 'user') ? (comMusic.file || '') : '',
-      bgm_volume: (comMusic && comMusic.volume) || 0.18,
+      bgm: el.comBgm ? el.comBgm.value : 'off',
+      bgm_file: el.comBgmFile ? el.comBgmFile.value : '',
+      bgm_volume: el.comBgmVolume ? Number(el.comBgmVolume.value) : 0.18,
       subtitle_size: comNumVal(el.comSubSize, 1.0),
       subtitle_color: el.comSubColor ? el.comSubColor.value.replace('#', '').toUpperCase() : 'FFFFFF',
       subtitle_border: comNumVal(el.comSubBorder, 1.0),
@@ -10279,9 +8353,6 @@ el.dwVidPlayer.hidden = true;
     if (!dot || !txt) return;
     txt.textContent = text || '';
     dot.className = 'com-tts-status-dot is-' + (state || 'gray');
-    // 🔴 必须同时显示状态条：它在 index.html 里带内联 `style="display:none"`，
-    // 内联样式优先级高于样式表，光写文字永远不会露出来（2026-09-18 修）。
-    if (el.comTtsStatusBar) el.comTtsStatusBar.style.display = '';
   };
 
   /** 隐藏本地语音克隆状态条（非本地语音克隆/收费项时）。 */
@@ -10291,12 +8362,7 @@ el.dwVidPlayer.hidden = true;
 
   /** 根据本机配置/服务就绪状态，自动识别每个配音引擎是否可用，不可用项直接置灰禁用。 */
   let _ttsStatusCache = null;
-  /** 「我的音色」样本的本地态（audio_path/ref_text/ready）。
-   *  声明在这里而不是靠下的实现块里：comRefreshTtsStatus 在初始化阶段就会被调用，
-   *  若用 let 声明在下方会命中 TDZ 抛 ReferenceError。 */
-  let comVoiceSampleState = { audio_path: '', ref_text: '', name: '', ready: false };
-  /** 「我的音色」未配置时自动展开其所在卡（现「配音与音量」），只做一次（避免用户手动折起后反复被打开）。 */
-  let _myVoiceAutoOpened = false;
+  let _ttsAutoStartTried = false;
   const comRefreshTtsStatus = async (opts = {}) => {
     const sel = el.comTtsProvider;
     if (!sel) return;
@@ -10309,77 +8375,82 @@ el.dwVidPlayer.hidden = true;
         _ttsStatusCache = status;
       } catch (_e) {
         // 检测失败：保守起见只放行 edge-tts，其余统一置灰
-        status = { minimax_configured: false, siliconflow_configured: false };
+        status = { indextts_mlx_ready: false, apple_silicon: false, minimax_configured: false, siliconflow_configured: false };
         _ttsStatusCache = null;
       }
     }
 
     // 自动识别可用性并设置 option 禁用态（不可用项直接置灰、不可选中）
-    const setOpt = (val, disabled, suffix, fullText) => {
+    const setOpt = (val, disabled, suffix) => {
       const opt = sel.querySelector(`option[value="${val}"]`);
       if (!opt) return;
       const base = opt.dataset.base || opt.textContent.split('　')[0];
       if (!opt.dataset.base) opt.dataset.base = base;
       opt.disabled = !!disabled;
-      if (fullText) {
-        opt.textContent = fullText;
-      } else {
-        opt.textContent = base + (suffix ? '　' + suffix : '');
-      }
+      opt.textContent = base + (suffix ? '　' + suffix : '');
     };
 
-    // 🔴 默认引擎 = edge-tts（2026-09-18 用户拍板「先退回 edge」）。
-    // 原因：Qwen3-TTS 是纯 CPU 推理，本机 macOS 13（MPS 需 ≥14）合成一句话数分钟量级，
-    // 且选中即自动拉起 7871（常驻约 2GB 内存）——在性能问题解决前不该做默认。
-    // 注意：这里只是「默认选中」，不是「禁用」；用户主动选 qwen3tts 时照样会拉起服务。
-    setOpt('qwen3tts', false, status.voice_sample_ready ? '' : '需先配「我的音色」');
+    // 默认 edge-tts：始终可用
+    setOpt('', false, '免费');
+    // IndexTTS-MLX：仅 Apple Silicon + 服务就绪可用，否则置灰
+    if (status.indextts_mlx_ready) {
+      setOpt('indextts_mlx', false, '免费（已就绪）');
+    } else if (status.apple_silicon) {
+      setOpt('indextts_mlx', true, '免费（本机未就绪，暂不可用）');
+    } else {
+      setOpt('indextts_mlx', true, '免费（仅苹果芯片 Mac 可用）');
+    }
     // MiniMax / SiliconFlow 已从下拉移除（需自填密钥，与「用户不配密钥」的产品约定不符）
-    // IndexTTS-MLX 已从下拉移除（2026-09-21 商用合规：bilibili 协议仅限非商用，克隆统一走 Apache-2.0 的 qwen3tts）
-    // 系统音色（edge-tts）：始终可用兜底
-    setOpt('edge', false, '');
+    // edge-tts：始终可用兜底
+    setOpt('edge', false, '免费（兜底）');
 
-    // 当前选中的项若已被禁用，自动回退到 edge 兜底（不能再回落成 ''，'' 已不是合法取值）
+    // 当前选中的项若已被禁用，自动回退到默认引擎
     if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
-      sel.value = 'edge';
+      sel.value = '';
     }
 
     // 刷新只读状态条提示
     const cur = sel.value;
-    if (cur === 'minimax' || cur === 'siliconflow') {
+    if (cur === 'indextts_mlx') {
+      if (status.indextts_mlx_ready) {
+        comSetTtsStatusBar('green', '本地语音克隆已就绪，可直接使用');
+      } else if (status.apple_silicon) {
+        comSetTtsStatusBar('orange', '本地语音克隆本机已支持，正在准备运行环境…（可稍后重试）');
+      } else {
+        comSetTtsStatusBar('gray', '本地语音克隆需要苹果芯片 Mac（M 系列）');
+      }
+    } else if (cur === 'minimax' || cur === 'siliconflow') {
       const ok = status[(cur === 'minimax' ? 'minimax' : 'siliconflow') + '_configured'];
       comSetTtsStatusBar(ok ? 'green' : 'gray', ok ? '密钥已配置，可直接使用' : '需在设置中填写对应平台密钥后才能使用');
-    } else if (cur === 'qwen3tts') {
-      // 2026-09-18：克隆真正生效需要 ①运行环境已装 ②服务在跑 ③有「我的音色」样本。缺哪样就说哪样，
-      // 不再出现「界面显示就绪、成片却是 edge 声」这种误导。
-      comRefreshCloneEnv();   // 顺带把环境状态刷成最新（缺失时会顶掉「我的音色」并接管状态条）
-      if (_cloneEnvReady === false) {
-        // 环境没装：状态条由下载入口那段文案负责。这里**必须什么都不写** ——
-        // 否则会一边说「正在自动启动服务」一边永远等不到（服务压根没有 venv 可跑）。
-      } else if (!status.voice_sample_ready) {
-        comSetTtsStatusBar('orange', '还差一步：在「配音与音量 → 我的音色」里选一段自己的录音 + 填文字稿并保存');
-        comEnsureQwen3Tts(); // 服务可以并行预热，配好样本即可直接用
-        // 「我的音色」默认折在「配音与音量」卡里 —— 只自动展开一次（每会话），
-        // 否则用户手动折起后每次刷新都被强行打开，很烦。
-        // 2026-09-19 它随用户要求从「解说参数」搬进「配音与音量」：就近找所属 details 展开，
-        // 不绑死卡 id，以后再搬家这里也不用跟着改。
-        if (!_myVoiceAutoOpened && el.comMyVoiceRow) {
-          _myVoiceAutoOpened = true;
-          const _fold = el.comMyVoiceRow.closest('details');
-          if (_fold) _fold.open = true;
-          try { el.comMyVoiceRow.scrollIntoView({ block: 'nearest' }); } catch (_) {}
-        }
-      } else if (status.qwen3tts_ready) {
-        comSetTtsStatusBar('green', 'TTS语音克隆已就绪，将用「我的音色」里的声音解说');
+    } else if (cur === '') {
+      if (status.qwen3tts_ready) {
+        comSetTtsStatusBar('green', 'Qwen3-TTS 本地语音克隆已就绪，可直接使用');
       } else {
-        comSetTtsStatusBar('orange', 'TTS语音克隆：正在自动启动（首次加载权重约 30–70 秒），稍候即可用你的克隆声');
+        comSetTtsStatusBar('orange', 'Qwen3-TTS 本地语音克隆：选中后自动启动中（约 25 秒），稍候即可用你的克隆声');
         comEnsureQwen3Tts(); // 默认引擎即被选中 → 自动起服务（选中即起）
       }
     } else {
       comHideTtsStatusBar();
     }
 
-    // 「我的音色」整行：只在选中克隆引擎时露出，其余引擎下藏起来（避免无关噪音）
-    if (el.comMyVoiceRow) el.comMyVoiceRow.hidden = (cur !== 'qwen3tts');
+    // 自动识别：Apple Silicon 但服务未起时，自动后台尝试启动本地语音克隆（取代手动「一键开启」）
+    if (status.apple_silicon && !status.indextts_mlx_ready && !_ttsAutoStartTried) {
+      _ttsAutoStartTried = true;
+      comAutoStartIndexTts();
+    }
+  };
+
+  /** 自动尝试启动本地语音克隆服务（无需用户手动点按钮，启动成功后自动刷新使选项亮起）。 */
+  const comAutoStartIndexTts = async () => {
+    try {
+      if (window.VDL && window.VDL.desktop && typeof window.VDL.desktop.startIndexTts === 'function') {
+        await window.VDL.desktop.startIndexTts();
+        // 启动后稍等再强制刷新，让选项自动变亮
+        setTimeout(() => comRefreshTtsStatus({ force: true }), 6000);
+      }
+    } catch (_e) {
+      // 自动启动失败保持静默，选项维持置灰，状态条已说明
+    }
   };
 
   /** 选中 Qwen3-TTS 时自动拉起本机 7871 服务（选中即起、未选中即停）。
@@ -10402,26 +8473,20 @@ el.dwVidPlayer.hidden = true;
         _ttsQwenStarting = false;
         return;
       }
-      comSetTtsStatusBar('orange', '正在启动 TTS语音克隆服务（首次加载权重约 30–70 秒）…');
+      comSetTtsStatusBar('orange', '正在启动 Qwen3-TTS 本地语音克隆服务（约 25 秒）…');
       let tries = 0;
       const tick = async () => {
         tries++;
         try {
           const st = await request('/api/commentary/tts-status');
           if (st && st.qwen3tts_ready) {
-            comSetTtsStatusBar('green', 'TTS语音克隆已就绪，可直接使用');
+            comSetTtsStatusBar('green', 'Qwen3-TTS 本地语音克隆已就绪，可直接使用');
             _ttsQwenStarting = false;
             return;
           }
         } catch (_) { /* 忽略 */ }
-        // 最多等 120s（48×2.5s）：MLX 8bit 权重冷启动实测 28–35s，留足慢机余量。
-        if (tries < 48) setTimeout(tick, 2500);
-        else {
-          // 这里不是错误：渲染时管线自己会等就绪（最多 120s），别让人误以为必须手动刷新。
-          comSetTtsStatusBar('orange', '本地服务首次加载较慢（权重较大）。状态稍后会自动变绿；'
-            + '此时直接点渲染也没问题——管线会等到服务就绪再配音，不会退回 edge。');
-          _ttsQwenStarting = false;
-        }
+        if (tries < 30) setTimeout(tick, 2500);
+        else { comSetTtsStatusBar('orange', '本地服务启动较慢，可稍后刷新页面查看状态'); _ttsQwenStarting = false; }
       };
       setTimeout(tick, 2500);
     } catch (_) {
@@ -10435,96 +8500,6 @@ el.dwVidPlayer.hidden = true;
       const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.stopQwen3Tts;
       if (typeof fn === 'function') await fn();
     } catch (_) { /* 忽略 */ }
-  };
-
-  /* ── 本地语音克隆「运行环境」按需下载（2026-09-18）────────────────────────
-     这个能力要两样大资源：500MB 的 venv（mlx + mlx-audio）+ 1.9GB 的 Qwen3-TTS 权重，
-     合计约 2.4GB，远超发行包体积目标 → **不进包**，首次用它才下（后端见 server/clone_env.py）。
-     环境没装好时「我的音色」配了也跑不起来，所以用下载入口顶掉那一段，
-     并把状态条交给它 —— 否则会一边喊「正在启动服务」一边永远等不到。 */
-  let _cloneEnvReady = null;      // null=未知（按原逻辑显示，避免首屏闪烁）
-  let _cloneEnvTimer = null;
-  const comRenderCloneEnv = (st) => {
-    const box = el.comCloneEnvBox, text = el.comCloneEnvText,
-          btn = el.comCloneEnvBtn, cancelBtn = el.comCloneEnvCancel,
-          bar = el.comCloneEnvBar, fill = el.comCloneEnvFill, grid = el.comMyVoiceGrid;
-    if (!box) return;
-    // 状态拿不到 / 本机不支持（非 Apple Silicon）：不插下载入口，「我的音色」照常显示，
-    // 真要选了克隆引擎时由 tts-status 那条分支去解释原因。
-    if (!st || !st.supported) {
-      box.hidden = true;
-      if (grid) grid.hidden = false;
-      return;
-    }
-    const inst = st.install || {};
-    _cloneEnvReady = !!(st.ready && !inst.active);
-    if (_cloneEnvReady) {
-      box.hidden = true;
-      if (grid) grid.hidden = false;
-      return;
-    }
-    box.hidden = false;
-    box.classList.toggle('is-error', inst.phase === 'error');
-    if (grid) grid.hidden = true;   // 环境都没装好，先配音色没有意义
-    // 状态条也归这里管：环境没装时不能再说「正在启动服务」（服务没有 venv 可跑）。
-    // 只在当前选中的就是克隆引擎时改写，免得污染其它引擎的提示。
-    const curProv = el.comTtsProvider ? el.comTtsProvider.value : '';
-    if (curProv === 'qwen3tts') {
-      comSetTtsStatusBar('orange', inst.active
-        ? '正在下载安装 TTS语音克隆运行环境…（可继续用其它功能）'
-        : '本机还没安装 TTS语音克隆运行环境：点下面的按钮下载安装（约 2.4GB，一次性）');
-    }
-    if (inst.active) {
-      const pct = Math.max(2, Math.min(100, Number(inst.pct || 0)));
-      bar.hidden = false; fill.style.width = pct + '%';
-      btn.hidden = true; cancelBtn.hidden = false;
-      const mb = (inst.total_mb || 0) > 0
-        ? ` ${(inst.done_mb || 0).toFixed(0)} / ${(inst.total_mb || 0).toFixed(0)} MB` : '';
-      text.textContent = `正在下载安装 TTS语音克隆环境…${mb}`
-        + (inst.msg ? `\n${inst.msg}` : '')
-        + '\n（过程中可以正常用其它功能）';
-    } else {
-      bar.hidden = true; btn.hidden = false; cancelBtn.hidden = true;
-      const gb = ((st.needed_mb || 2400) / 1024).toFixed(1);
-      btn.textContent = `⤓ 下载并安装（约 ${gb}GB）`;
-      // 磁盘不足先拦住：下到 1.8GB 才失败是最糟的体验
-      const lowDisk = Number(st.disk_free_mb) >= 0 && Number(st.disk_free_mb) < Number(st.needed_mb || 0) + 500;
-      btn.disabled = lowDisk;
-      if (inst.phase === 'error') {
-        text.textContent = `安装失败：${inst.error || '未知原因'}\n可重试；若卡在下载，可换镜像（设 VDL_CLONE_HF_ENDPOINT）`
-          + (st.note ? `\n${st.note}` : '');
-      } else if (inst.phase === 'cancelled') {
-        text.textContent = '安装已取消，可重新开始。' + (st.note ? `\n${st.note}` : '');
-      } else {
-        text.textContent = '本机还没安装「TTS语音克隆」运行环境（约 2.4GB，一次性）'
-          + (st.note ? `\n${st.note}` : '');
-      }
-      if (lowDisk && inst.phase !== 'error') {
-        text.textContent += `\n⚠️ 磁盘可用仅 ${st.disk_free_mb}MB，不够（需约 ${st.needed_mb}MB），请先腾空间。`;
-      }
-    }
-  };
-  const comRefreshCloneEnv = async () => {
-    try {
-      const st = await request('/api/commentary/clone-env');
-      comRenderCloneEnv(st);
-      // 安装中 → 自动轮询到结束，不用用户手动刷新
-      if (st && st.install && st.install.active && !_cloneEnvTimer) {
-        _cloneEnvTimer = setInterval(async () => {
-          let s2 = null;
-          try { s2 = await request('/api/commentary/clone-env'); } catch (_) { /* 忽略 */ }
-          comRenderCloneEnv(s2);
-          if (!s2 || !s2.install || !s2.install.active) {
-            clearInterval(_cloneEnvTimer); _cloneEnvTimer = null;
-            if (s2 && s2.ready) {
-              // 装好了 → 让 tts-status 那条链路照常把服务拉起来
-              comSetTtsStatusBar('green', '运行环境已装好，正在启动 TTS语音克隆服务…');
-              comRefreshTtsStatus({ force: true });
-            }
-          }
-        }, 2000);
-      }
-    } catch (_) { /* 拉不到就维持现状 */ }
   };
 
   /** 画幅选择：auto（跟视频走，默认）/ landscape（横屏）/ vertical（竖屏 9:16）。 */
@@ -10584,7 +8559,7 @@ el.dwVidPlayer.hidden = true;
         refs.commentary.textContent = comButtonOriginalText(refs.commentary);
       }
       el.comGenerateScript.disabled = false;
-      el.comGenerateScript.textContent = '生成脚本';
+      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
     }
   };
 
@@ -10603,11 +8578,7 @@ el.dwVidPlayer.hidden = true;
     const res = await request('/api/commentary/stash', { method: 'POST', body: fd });
     const dt = Date.now() - t0;
     if (res && res.from_cache) {
-      // 2026-09-20 用户「这个提示是不是多余」：命中缓存时确实什么都不用等，别让整块状态卡渲染三行
-      // 技术说明（「直接复用」与「0 字节上传」是同一件事，重复了）→ 压成一行。
-      // 但也不能整条删掉：上一行刚写过「正在把视频保存到本机（…）」，什么都不留会让用户
-      // 以为还在上传、不敢动。
-      setStatus(`已复用本机缓存（${formatBytes(res.size)}）`);
+      setStatus(`本机已缓存该视频（${formatBytes(res.size)}），直接复用，0 字节上传`);
     } else {
       setStatus(`视频已保存到本机（${formatBytes(res.size)}，${(dt / 1000).toFixed(1)}s），开始转写…`);
     }
@@ -10651,7 +8622,7 @@ el.dwVidPlayer.hidden = true;
     } catch (err) {
       el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
       el.comGenerateScript.disabled = false;
-      el.comGenerateScript.textContent = '生成脚本';
+      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
     }
   };
 
@@ -10688,7 +8659,7 @@ el.dwVidPlayer.hidden = true;
     } catch (err) {
       el.comStatus.textContent = `无法开始：${err.message || '请稍后重试'}`;
       el.comGenerateScript.disabled = false;
-      el.comGenerateScript.textContent = '生成脚本';
+      el.comGenerateScript.textContent = '生成脚本（可审核修改）';
     }
   };
 
@@ -10772,25 +8743,10 @@ el.dwVidPlayer.hidden = true;
     }, 2500);
   };
 
-  /** 最小化 / 展开「解说词审核」浮层（2026-09-18 用户：「加最小化按钮」）。
-   *  最小化只把面板压矮成标题条（CSS .is-min 收起段落列表与底部操作），露出中栏预览/时间轴；
-   *  解说词数据、编辑内容、currentScriptJobId 全部保留，点标题条上的「▢ 展开」原样还原。
-   *  与「✕ 关闭」的区别：关闭是整块收起（回「📄 继续审核」入口），最小化面板仍在眼前。 */
-  const setScriptMin = (min) => {
-    if (!el.comScriptPanel) return;
-    el.comScriptPanel.classList.toggle('is-min', !!min);
-    if (el.comScriptMin) {
-      el.comScriptMin.textContent = min ? '▢ 展开' : '➖ 最小化';
-      el.comScriptMin.title = min ? '展开审核面板' : '最小化审核面板（解说词保留，可再展开）';
-    }
-  };
-
   /** 打开脚本审核面板：先展示面板（带加载态），再异步拉取脚本内容。
    *  即使拉取失败也保留面板可见，并给出重试按钮，避免用户看不到任何反馈。 */
   const openScriptReview = (job_id, opts = {}) => {
     el.comScriptPanel.hidden = false;
-    setScriptMin(false);  // 每次打开都是完整面板（上次若最小化过，先还原）
-    if (el.comScriptReopen) el.comScriptReopen.hidden = true;  // 面板已打开，提示行不再需要「继续审核」
     if (el.comEmpty) el.comEmpty.hidden = true;
     el.comScriptSegments.replaceChildren();
     el.comScriptStatus.hidden = false;
@@ -10858,16 +8814,21 @@ el.dwVidPlayer.hidden = true;
       el.comScriptPanel.hidden = false;
       el.comScriptSegments.replaceChildren();
 
-      // 初始化全局配音选择器（默认选中当前风格联动的音色）。
-      // 先拉一次样本状态：选项里要不要带「🎤 我的音色（克隆）」取决于 ready，别吃旧值。
-      await comLoadVoiceSample();
-      comFillScriptVoice(STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural');
+      // 初始化全局配音选择器（默认选中当前风格联动的音色）
+      el.comScriptVoice.replaceChildren();
+      const linkedVoice = STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural';
+      COM_VOICES.forEach((v) => {
+        const o = document.createElement('option');
+        o.value = v.value;
+        o.textContent = v.label;
+        if (v.value === linkedVoice) o.selected = true;
+        el.comScriptVoice.appendChild(o);
+      });
 
       // 逐段渲染可编辑行
       const segs = data.segments || [];
       currentScriptSegments = segs;  // 保留原始时间戳+note，供 saveScript 合并
       currentScriptBudgets = data.budgets || [];  // 每段的字数预算（语速常量由后端统一给出）
-      comTlSync();  // 三轨时间轴：脚本就绪即把「旁白 / 字幕」两轨按 start/end 画出来
       segs.forEach((seg, idx) => {
         const row = document.createElement('div');
         row.className = 'com-seg-row';
@@ -10891,12 +8852,6 @@ el.dwVidPlayer.hidden = true;
       el.comScriptStatus.hidden = true;
       el.comScriptSave.disabled = false;
       el.comScriptRender.disabled = false;
-      // 🔴 2026-09-19 修「在哪里渲染呢」：上一轮渲染完成后 pollCommentaryJob 会把
-      //    「🎬 生成成片」按钮 hidden=true（防重复渲染），但此后再载入任何脚本
-      //    （点「📄 继续审核」/ 从历史打开）都没人把它恢复 → 面板底行只剩
-      //    「保存修改 / 保存到本机」，渲染入口永久消失。这里一并还原文字与可见性。
-      el.comScriptRender.hidden = false;
-      el.comScriptRender.textContent = '🎬 生成成片';
       currentScriptJobId = job_id; // 兜底：面板打开时确保全局 job_id 与显示内容一致
       // 审核态：底部粘性条的「重新生成脚本」大按钮退场（2026-09-17）——它与「生成成片」
       // 空间贴近且层级在上，用户极易误触白等一遍；重新生成入口挪到审核区提示框上方。
@@ -10957,7 +8912,7 @@ el.dwVidPlayer.hidden = true;
         method: 'PUT',
         body: JSON.stringify({
           segments,
-          voice: comVoiceForBackend(),
+          voice: el.comScriptVoice.value,
         }),
       });
       const over = (res && Array.isArray(res.over_limit)) ? res.over_limit : [];
@@ -10972,9 +8927,6 @@ el.dwVidPlayer.hidden = true;
         el.comScriptStatus.className = 'com-script-status com-script-ok';
         setTimeout(() => { el.comScriptStatus.hidden = true; }, 2000);
       }
-      // 保存成功后同步三轨时间轴（段数/工具提示跟着人工改动走）
-      currentScriptSegments = segments;
-      comTlSync();
     } catch (err) {
       el.comScriptStatus.textContent = `保存失败：${err.message}`;
       el.comScriptStatus.className = 'com-script-status com-script-err';
@@ -11000,7 +8952,7 @@ el.dwVidPlayer.hidden = true;
     try {
       const form = new FormData();
       form.append('vertical', String(resolveVertical()));
-      form.append('voice', comVoiceForBackend());
+      form.append('voice', el.comScriptVoice.value);
       const exportJy = comGetExportJianying();
       if (exportJy) form.append('export_jianying', exportJy);
       const _opts = comGetOptions();
@@ -11014,31 +8966,6 @@ el.dwVidPlayer.hidden = true;
       form.append('subtitle_pos', _opts.subtitle_pos);
       form.append('max_chars', String(_opts.max_chars));
       if (_opts.feather_opt) form.append('feather_opt', _opts.feather_opt);
-      // 配音引擎必须随渲染一起发下去（2026-09-18 修）：本接口此前没有这个参数，
-      // 界面选了本地语音克隆也传不到渲染子进程 → 成片用的是 tts_config.json 里的旧引擎。
-      const _renderProvider = comTtsProviderForBackend();
-      // 选了克隆但还没配「我的音色」→ 先说清楚会退回 edge 音色，避免出片后才发现不是自己的声音。
-      if (_renderProvider === 'qwen3tts') {
-        // 🔴 此处按钮已被置为「渲染中…」禁用态，提前退出必须自己还原，
-        //    否则用户取消后就再也点不动渲染了。
-        const _restoreRenderBtn = () => {
-          el.comScriptRender.disabled = false;
-          el.comScriptRender.textContent = '🎬 生成成片';
-        };
-        await comLoadVoiceSample();   // 用最新状态判定，别吃缓存
-        if (!comVoiceSampleState.ready) {
-          const goOn = window.confirm(
-            '还没配「我的音色」——这句解说会用不到你自己的声音，成片里的旁白会退回系统免费音色。\n\n' +
-            '建议先取消，在「配音与音量 → 我的音色」里选一段自己的录音（3~15 秒）并填上文字稿保存。\n\n' +
-            '仍要继续渲染吗？'
-          );
-          if (!goOn) {
-            _restoreRenderBtn();
-            return;
-          }
-        }
-      }
-      if (_renderProvider) form.append('tts_provider', _renderProvider);
       const _rr = await request(`/api/commentary/render/${currentScriptJobId}`, {
         method: 'POST', body: form,
       });
@@ -11057,21 +8984,9 @@ el.dwVidPlayer.hidden = true;
         { commentary: el.comScriptRender, commentaryStatus: el.comStatus, commentaryFile: el.comScriptFile },
         '',
         () => {
-          // 2026-09-19 修「渲染完成后没有入口再渲染」：loadCommentary() 会把面板、
-          // currentScriptJobId 全部重置，用户此后只能重新生成脚本才能再渲染一版
-          //（用户原话「最小化后没办法渲染成片，没有入口」的真凶之一）。
-          // 改为保留任务号 + 露出「📄 继续审核」，一键回到同一份脚本的审核面板再渲染。
-          const _doneJob = currentScriptJobId;
           loadCommentary();
-          if (_doneJob) {
-            currentScriptJobId = _doneJob;
-            if (el.comScriptReopen) el.comScriptReopen.hidden = false;
-            el.comReviewActions.hidden = false;
-            if (el.comGenerateRow) el.comGenerateRow.hidden = false;
-            el.comGenerateScript.textContent = '重新生成脚本';
-            el.comStatus.hidden = false;
-            el.comStatus.textContent = '成片已完成，已加入下方解说历史；点「📄 继续审核」可回到脚本再渲染一版';
-          }
+          el.comScriptPanel.hidden = true;
+          currentScriptJobId = null;
         });
     } catch (err) {
       el.comStatus.textContent = `渲染启动失败：${err.message}`;
@@ -11108,10 +9023,6 @@ el.dwVidPlayer.hidden = true;
         dataUrl = blobOrUrl;
       }
     }
-    // 🔧 2026-09-20：先彻底清空源再挂 data URL，规避 WebKit「上一段 play() 还在进行 /
-    // 已 ended 时再点播放静默拒绝」的坑——表现为「试听 / 再听一遍点了没反应、也没报错」。
-    audio.removeAttribute('src');
-    audio.load();
     audio.src = dataUrl;
     audio.dataset.dataUrl = dataUrl;
     audio.currentTime = 0;
@@ -11133,7 +9044,7 @@ el.dwVidPlayer.hidden = true;
       el.comScriptStatus.textContent = '解说环境未就绪，无法试听';
       return;
     }
-    const voice = comVoiceForBackend();
+    const voice = el.comScriptVoice.value;
     const originalText = el.comScriptVoicePreview.textContent;
     el.comScriptVoicePreview.disabled = true;
     el.comScriptVoicePreview.textContent = '⏳ 生成中…';
@@ -11141,10 +9052,6 @@ el.dwVidPlayer.hidden = true;
       const form = new FormData();
       form.append('voice', voice);
       form.append('text', '你好，我是视频解说员。我将为你解说这段视频。');
-      // provider（2026-09-18）：选中克隆引擎时让后端直接走本机克隆试听。
-      // 不传的话试听恒为 edge，用户永远验不出克隆有没有生效（这正是一开始的坑）。
-      const _prevProvider = comTtsProviderForBackend();
-      if (_prevProvider) form.append('provider', _prevProvider);
       // request 不能直接拿 blob，但 /api/commentary/voice-preview 返回 mp3 二进制；
       // 这里直接用 fetch 处理，方便放 audio 播放
       const resp = await fetch('/api/commentary/voice-preview', { method: 'POST', body: form });
@@ -11166,9 +9073,7 @@ el.dwVidPlayer.hidden = true;
       }, 30000);
       el.comScriptStatus.hidden = false;
       el.comScriptStatus.className = 'com-script-status com-script-ok';
-      el.comScriptStatus.textContent = _prevProvider === 'qwen3tts'
-        ? '✓ 已用你的克隆声试听'
-        : `✓ 已用 ${voice} 试听`;
+      el.comScriptStatus.textContent = `✓ 已用 ${voice} 试听`;
       setTimeout(() => { el.comScriptStatus.hidden = true; }, 2000);
     } catch (err) {
       el.comScriptStatus.hidden = false;
@@ -11188,7 +9093,7 @@ el.dwVidPlayer.hidden = true;
       el.comScriptStatus.textContent = '解说环境未就绪，无法试听';
       return;
     }
-    const voice = comVoiceForBackend();
+    const voice = el.comScriptVoice.value;
     const loudness = el.comLoudnessOff.checked ? 'off' : String(el.comLoudness.value);
     const boost = String(el.comBoost.value);
     const original = el.comVolPreview.textContent;
@@ -11203,10 +9108,6 @@ el.dwVidPlayer.hidden = true;
       form.append('text', '你好，我是视频解说员。这段视频的精彩内容，我来为你娓娓道来。');
       form.append('loudness', loudness);
       form.append('boost', boost);
-      // provider：克隆引擎下让后端用「我的音色」合成，再对 wav 做同样的响度/增益后处理，
-      // 这样这里听到的响度才真的等于成片响度（后端已支持对克隆产物做后处理）。
-      const _volProvider = comTtsProviderForBackend();
-      if (_volProvider) form.append('provider', _volProvider);
       const resp = await fetch('/api/commentary/voice-preview', { method: 'POST', body: form });
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({}));
@@ -11215,9 +9116,7 @@ el.dwVidPlayer.hidden = true;
       const blob = await resp.blob();
       await playAudio(blob);
       el.comScriptStatus.className = 'com-script-status com-script-ok';
-      el.comScriptStatus.textContent = _volProvider === 'qwen3tts'
-        ? `✓ 已试听你的克隆声（响度 ${loudness} / 增益 ${boost}×）`
-        : `✓ 已试听（响度 ${loudness} / 增益 ${boost}×）`;
+      el.comScriptStatus.textContent = `✓ 已试听（响度 ${loudness} / 增益 ${boost}×）`;
       setTimeout(() => { el.comScriptStatus.hidden = true; }, 2500);
     } catch (err) {
       el.comScriptStatus.className = 'com-script-status com-script-err';
@@ -11244,10 +9143,10 @@ el.dwVidPlayer.hidden = true;
     el.comScriptStatus.textContent = '正在用当前配音生成前 3 段预览…';
     try {
       const form = new FormData();
-      form.append('voice', comVoiceForBackend());
+      form.append('voice', el.comScriptVoice.value);
       form.append('max_segments', '3');
       const resp = await fetch(`/api/commentary/preview/${currentScriptJobId}`, {
-        method: 'POST', body: form, headers: authBearerHeaders(),
+        method: 'POST', body: form,
       });
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({}));
@@ -11280,21 +9179,6 @@ el.dwVidPlayer.hidden = true;
   el.comScriptSave.addEventListener('click', saveScript);
   el.comScriptRender.addEventListener('click', renderFromScript);
   el.comScriptVoicePreview.addEventListener('click', previewVoice);
-
-  // 在「全局配音」里选了「🎤 我的音色（克隆）」→ 把「配音引擎」也切到克隆（2026-09-20）。
-  // 不切的话用户以为选了自己的声音，实际引擎还是 edge-tts，出片仍是系统音色 ——
-  // 这正是「我的音色配了却没生效」那类投诉的来源。
-  // 用 dispatchEvent('change') 而不是直接调函数：引擎下拉自己的监听里带着
-  // 「起 qwen3tts 服务 / 刷新状态条 / 露出我的音色行」一整套逻辑，别抄第二份。
-  if (el.comScriptVoice) {
-    el.comScriptVoice.addEventListener('change', () => {
-      if (el.comScriptVoice.value !== COM_CLONE_VOICE) return;
-      if (!el.comTtsProvider) return;
-      if (COM_CLONE_PROVIDERS.indexOf(el.comTtsProvider.value) >= 0) return;  // 已经是克隆引擎
-      el.comTtsProvider.value = COM_CLONE_PROVIDERS[0];
-      el.comTtsProvider.dispatchEvent(new Event('change'));
-    });
-  }
   el.comScriptPrevAll.addEventListener('click', previewAllSegments);
   if (el.comVolPreview) el.comVolPreview.addEventListener('click', previewNarration);
 
@@ -11318,30 +9202,8 @@ el.dwVidPlayer.hidden = true;
       ev.preventDefault();
       if (!cid) { aEl.textContent = '保存失败：缺少成片标识'; setTimeout(() => aEl.textContent = orig, 3000); return; }
 
-      // 方案 A：优先调用**带保存位置面板**的原生桥（与直存/去水印/抠图/二维码同一约定：
-      // 用户主动点「保存到本机」必须先让他选放哪儿，而不是静默塞进「下载」）。
-      // 老桥（无面板、静默写「下载」）保留为兼容回退，仅当新桥不存在时才用。
-      if (api && api.save_commentary_file_dialog) {
-        aEl.textContent = '请在弹出的窗口中选择保存位置…';
-        try {
-          const res = await api.save_commentary_file_dialog(cid, filename);
-          if (res === 'CANCELLED') {
-            aEl.textContent = '已取消保存';
-          } else if (typeof res === 'string' && res.startsWith('ERROR:')) {
-            aEl.textContent = '保存失败：' + res.replace(/^ERROR:\s*/, '').slice(0, 40);
-          } else if (typeof res === 'string' && res) {
-            aEl.textContent = '已保存到：' + (res.split('/').pop() || res);
-          } else {
-            aEl.textContent = '保存失败：未拿到保存路径';
-          }
-        } catch (err) {
-          aEl.textContent = '保存失败：' + ((err && err.message) || '桥接调用失败');
-        }
-        setTimeout(() => { aEl.textContent = orig; }, 4000);
-        return;
-      }
-
-      // 方案 A′：老版本原生桥（无保存位置面板，固定写「下载」文件夹）
+      // 方案 A：优先调用原生 Python 桥接。该桥接内部会请求 GET /api/commentary/{id}/file
+      // 并把文件写到用户「下载」文件夹（VideoDownloader 桌面版的原生能力）。
       if (api && api.save_commentary_file) {
         aEl.textContent = '保存中…';
         try {
@@ -11418,61 +9280,6 @@ el.dwVidPlayer.hidden = true;
     sarcastic:   'zh-CN-YunyangNeural',   // 毒舌：新闻腔男声（犀利冷幽默）
   };
 
-  /** 「全局配音」下拉里的克隆音色哨兵值（2026-09-20）。
-   *  用户要求「录完试听没问题就保存到全局配音里供选择」—— 配好「我的音色」后，
-   *  它就和 7 个系统音色一样出现在同一个下拉里。
-   *  🔴 它**不是**合法的 edge 音色名：凡是要发给后端的 voice 必须先过 comVoiceForBackend()
-   *     翻译、引擎过 comTtsProviderForBackend()，绝不能让哨兵值漏进请求体。 */
-  const COM_CLONE_VOICE = '__my_voice__';
-  /** 真正的克隆引擎（选了「我的音色」时至少要切到其中之一，否则出片还是系统音色）。 */
-  const COM_CLONE_PROVIDERS = ['qwen3tts'];
-
-  /** 是否已存好克隆样本 —— 决定「全局配音」里要不要出现「我的音色」那一项。 */
-  const comCloneVoiceReady = () => !!(comVoiceSampleState && comVoiceSampleState.ready);
-
-  /** 重建「全局配音」选项：7 个系统音色 ＋（样本就绪时）「🎤 我的音色（克隆）」。
-   *  默认选中当前风格联动的音色；keepValue 传当前值以在重建后保持用户选择。 */
-  const comFillScriptVoice = (keepValue) => {
-    if (!el.comScriptVoice) return;
-    const want = keepValue || el.comScriptVoice.value || '';
-    el.comScriptVoice.replaceChildren();
-    if (comCloneVoiceReady()) {
-      const oc = document.createElement('option');
-      oc.value = COM_CLONE_VOICE;
-      oc.textContent = '🎤 我的音色（克隆）';
-      el.comScriptVoice.appendChild(oc);
-    }
-    const linkedVoice = STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural';
-    COM_VOICES.forEach((v) => {
-      const o = document.createElement('option');
-      o.value = v.value;
-      o.textContent = v.label;
-      if (v.value === linkedVoice) o.selected = true;
-      el.comScriptVoice.appendChild(o);
-    });
-    if (want && Array.prototype.some.call(el.comScriptVoice.options, (o) => o.value === want)) {
-      el.comScriptVoice.value = want;
-    }
-  };
-
-  /** 发给后端的 voice。选了「我的音色」时翻成当前风格联动的系统音色 ——
-   *  克隆没生效时仍有正常旁白兜底，而不是把一个非法音色名丢给后端。 */
-  const comVoiceForBackend = () => {
-    const v = el.comScriptVoice ? el.comScriptVoice.value : '';
-    if (v === COM_CLONE_VOICE) return STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural';
-    return v;
-  };
-
-  /** 发给后端的配音引擎。选了「我的音色」就必须走克隆引擎 ——
-   *  否则用户以为选了自己的声音，实际渲染用的还是 edge，成片里仍是系统音色。 */
-  const comTtsProviderForBackend = () => {
-    const cur = el.comTtsProvider ? el.comTtsProvider.value : '';
-    if (el.comScriptVoice && el.comScriptVoice.value === COM_CLONE_VOICE) {
-      return COM_CLONE_PROVIDERS.indexOf(cur) >= 0 ? cur : COM_CLONE_PROVIDERS[0];
-    }
-    return cur;
-  };
-
   /** 把音色 value 翻译成展示名（用于在提示里显示联动音色）。 */
   const comVoiceLabel = (v) => {
     const hit = COM_VOICES.find((x) => x.value === v);
@@ -11500,7 +9307,6 @@ el.dwVidPlayer.hidden = true;
         hint.textContent = `「${st}」风格已联动音色：${comVoiceLabel(v)}（可在下方「全局配音」手动改）。`;
       }
     }
-    comSyncStyleFoldHint();  // 折叠卡摘要跟着变（收起状态下也能看到当前风格）
   };
 
   const refreshCommentaryDiagnostics = async () => {
@@ -11529,7 +9335,7 @@ el.dwVidPlayer.hidden = true;
   async function loadCommentary() {
     // 重置生成区状态
     el.comGenerateScript.disabled = false;
-    el.comGenerateScript.textContent = '生成脚本';
+    el.comGenerateScript.textContent = '生成脚本（可审核修改）';
     el.comGenerateScript.hidden = false;
     if (el.comGenerateRow) el.comGenerateRow.hidden = false;  // 离开审核态：底部入口恢复
     el.comScriptPanel.hidden = true;
@@ -11557,7 +9363,6 @@ el.dwVidPlayer.hidden = true;
     refreshComSource();
     refreshCommentaryDiagnostics();
     loadVolumeConfig();
-    comLoadVoiceSample();   // 「我的音色」当前态（回填路径/文字稿/徽标）
     comRefreshTtsStatus();
   };
 
@@ -11654,7 +9459,7 @@ el.dwVidPlayer.hidden = true;
     if (items.length === 0) {
       el.comEmpty.textContent = '还没有解说成片。从下载历史库选择视频，或拖入本地视频即可开始。';
     } else {
-      // 2026-09-18：标题行的「N 个」计数徽标已按用户要求移除（只留「📂 解说历史」）
+      el.comHistoryCount.textContent = `${items.length} 个`;
       if (commentaryViewMode === 'timeline') {
         const groups = {};
         items.forEach((it) => {
@@ -11688,17 +9493,9 @@ el.dwVidPlayer.hidden = true;
       const current = el.comSource.value;
       el.comSource.replaceChildren();
       const def = document.createElement('option');
-      // 2026-09-19（用户：优化，参考图二）：小标题已删，入口名改由控件自己承担 ⇒
-      // 下拉的默认项就写「📚 从下载历史库生成」。
-      // 🔴 空库时不能再拼「（暂无视频）」：左栏仅 196px、下拉实宽 162px，13px 字号下
-      //    「📚 从下载历史库生成」已占 129px（可用约 134px），再长必然被原生 select 截断
-      //    （没有省略号，会硬切成「从下载历史库生」）。所以空态改成 hover 提示，不占排版。
       def.value = '';
-      def.textContent = '📚 从下载历史库生成';
+      def.textContent = items.length ? '选择视频…' : '媒体库暂无视频';
       el.comSource.appendChild(def);
-      el.comSource.title = items.length
-        ? '从下载历史库（媒体库）里选一部片子'
-        : '媒体库暂无视频：先在「下载」里下好，或用下面的「从本地文件生成」';
       items.forEach((i) => {
         const o = document.createElement('option');
         o.value = i.id;
@@ -11713,38 +9510,12 @@ el.dwVidPlayer.hidden = true;
       // 媒体库不可用时下拉只保留默认提示
       el.comSource.replaceChildren();
       const def = document.createElement('option');
-      def.value = ''; def.textContent = '📚 从下载历史库生成';
-      el.comSource.title = '媒体库读取失败：稍后重试，或用下面的「从本地文件生成」';
+      def.value = ''; def.textContent = '无法读取媒体库';
       el.comSource.appendChild(def);
     }
   };
 
   // ---- 预览与裁剪逻辑 ----
-  /** 无片时复位所有「挂在画面上」的预览覆层。
-   *
-   *  🔴 2026-09-18 用户截图实锤：切走再切回「视频解说」页（或点「刷新」）会走
-   *     `loadCommentary() → setupComPreview(null)` 把视频源清掉，但**覆层不会自己消失** ——
-   *     黑屏上继续挂着「字幕预览」示例文字、「原字幕羽化范围」虚线框，虚框里的擦除预览
-   *     还留着上一支片那一帧的内容（canvas 只在 play/pause/seeked/loadeddata/resize 时重绘，
-   *     清源只触发 `emptied`，没人听），时间轴也停在上一支片的时长标尺与配乐条上。
-   *     覆层各自「无画面即自隐」的逻辑都在，只是没被叫醒 —— 所以这里统一叫一次。 */
-  const comResetPreviewOverlays = () => {
-    // 上述三者的绘制入口在文件靠后的块里定义（初始化期调用本函数时会踩 TDZ），故一律 try 包住。
-    try { comFeatherPaint(); } catch (_) { /* 初始化未就绪 */ }
-    // 无画面时 comFeatherPaint 会在清画布之前就 return（sync 已把两层藏了），
-    // 旧帧的擦除预览会留在 canvas 位图里 —— 显式抹掉，免得下次显示时闪一下旧内容。
-    try {
-      const cv = el.comFeatherCanvas;
-      if (cv && cv.width) cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
-    } catch (_) { /* 忽略 */ }
-    try { comUpdateSubPreview(); } catch (_) { /* 同上 */ }
-    // 时间轴量程 = 素材时长：清源后必须归零，否则 comTlDur() 仍返回上一支片的时长，
-    // 标尺/正剧区间/配乐条会整条留在那儿（comTlSync 会读 el.comDramaEndRange.max）。
-    if (el.comDramaStartRange) el.comDramaStartRange.max = '100';
-    if (el.comDramaEndRange) el.comDramaEndRange.max = '100';
-    try { comTlSync(); } catch (_) { /* 同上 */ }
-  };
-
   const resetComPreviewElement = () => {
     // 清空 video 元素内部状态（避免残留已 revoke 的旧 blob src 触发 race 性 onerror）
     try {
@@ -11761,66 +9532,6 @@ el.dwVidPlayer.hidden = true;
     comPreviewUrl = null;
   };
 
-  // ===== 预览舞台高度＝素材比例（2026-09-17 晚，第二轮）=========================
-  // 历史：① 舞台原为 flex:1，比 16:9 高 → 空预览按 16:9 占位时上下各留一条灰边；
-  //       ② 改为 video 铺满舞台后，灰边变黑边，**但对 16:9 素材仍是「很大的边」**
-  //          （用户第二次反馈「还是很大」）——根因是舞台高度与素材比例无关。
-  // 结论：舞台高度必须跟着素材走，播放器盒子＝画面本身，边才真正为零。
-  //   · 有元数据 → 用 videoWidth/videoHeight；
-  //   · 无片/未就绪 → 跟「画幅」档位（16:9 / 9:16），即用户要的「常用画幅」。
-  // 中栏因此让出的高度由 flex 布局留在时间轴下方（舞台不再吃掉全部剩余高度）。
-  const comPreviewRatio = () => {
-    const v = el.comPreview;
-    if (v && v.videoWidth > 0 && v.videoHeight > 0) return v.videoWidth / v.videoHeight;
-    return comGetAspect() === 'vertical' ? 9 / 16 : 16 / 9;
-  };
-  const comSyncStageSize = () => {
-    const stage = el.comPreview && el.comPreview.closest('.com-preview-stage');
-    const col = stage && stage.parentElement;
-    if (!stage || !col) return;
-    const pad = parseFloat(getComputedStyle(stage).paddingTop) || 0;
-    const colH = col.clientHeight, colW = col.clientWidth;
-    if (colH < 160 || colW < 160) return;              // 面板未开/尺寸未就绪：交给 CSS 兜底
-    const gap = parseFloat(getComputedStyle(col).rowGap) || 0;
-    let othersH = 0, othersN = 0;                      // 同栏其他卡片（操作条 / 时间轴）都是 flex:none
-    Array.prototype.forEach.call(col.children, (n) => {
-      if (n !== stage) { othersH += n.getBoundingClientRect().height; othersN++; }
-    });
-    const availInnerH = colH - othersH - gap * othersN - pad * 2;
-    // 🔴 可用宽度按「中栏」算，不要读 stage.clientWidth（2026-09-17）：
-    //   舞台一旦因为引擎差异被撑宽，读它自己就等于把错误放大一轮（旧版 WebKit 下
-    //   高度 270 → 宽度被比例反推成 480 → 再读 480 算高度 285 → 宽度 507… 逐次胀大）。
-    const colCS = getComputedStyle(col);
-    const availInnerW = colW - (parseFloat(colCS.paddingLeft) || 0)
-                             - (parseFloat(colCS.paddingRight) || 0) - pad * 2;
-    if (availInnerH < 80 || availInnerW < 80) return;
-    let h = availInnerW / comPreviewRatio();           // 先按占满宽度
-    if (h > availInnerH) h = availInnerH;              // 竖屏素材太高 → 按可用高度封顶
-    const want = Math.round(h + pad * 2) + 'px';
-    if (stage.style.height !== want) stage.style.height = want;   // 比现值再写，避免观察器自激
-  };
-
-  /** 拖动把手「往上移」（2026-09-19 用户截图反馈「往上调整」）：
-   *  把虚线把手的中点对齐到**视频舞台**的竖向中心，而不是整栏（.com-v2）的中心。
-   *  原因：.com-v2 的高度由中栏决定（舞台 + 播放条 + 操作条 + 时间轴），比两侧面板
-   *  内容高得多（实测 1360×880：v2 高 688，左栏内容只到 534、右栏到 515），
-   *  居中于整栏会把把手顶到 y390~590 —— 下半截垂在两侧面板内容之外的空处。
-   *  对齐舞台中心后把手落在 y216~416，贴在画面区中间，视觉上才像"两栏之间的分隔"。
-   *  写在 CSS 变量 --com-split-y 上（`styles.css` 的 .com-splitter::after 读它），
-   *  这样宽度拖动、画幅切换、窗口缩放都不必重算 CSS 规则。 */
-  const comSyncSplitHandle = () => {
-    const v2 = document.querySelector('.com-v2');
-    const stage = el.comPreview && el.comPreview.closest('.com-preview-stage');
-    if (!v2 || !stage) return;
-    const vr = v2.getBoundingClientRect();
-    const sr = stage.getBoundingClientRect();
-    // 面板未打开 / 尺寸未就绪时不动它（CSS 的 50% 兜底仍然生效）
-    if (vr.height < 120 || sr.height < 40) return;
-    const y = (sr.top + sr.bottom) / 2 - vr.top;
-    if (!(y > 0) || y >= vr.height) return;
-    v2.style.setProperty('--com-split-y', Math.round(y) + 'px');
-  };
-
   const setupComPreview = (url, title) => {
     if (!url) {
       el.comTrimCard.hidden = true;
@@ -11830,8 +9541,6 @@ el.dwVidPlayer.hidden = true;
       comTrimEnd = 0;
       comPreviewDuration = 0;
       if (el.comTrimTitle) { el.comTrimTitle.hidden = true; el.comTrimTitle.textContent = ''; }
-      comSyncStageSize();   // 无片：舞台回到「画幅」档位的常用比例
-      comResetPreviewOverlays();   // 覆层（羽化带/擦除预览/字幕示例/时间轴标尺）一并复位
       return;
     }
     // 切到新 src 之前先把 video 元素内部状态清零，避免 onerror race 触发导致首次没显示
@@ -11857,7 +9566,6 @@ el.dwVidPlayer.hidden = true;
       if (el.comDramaStartRange) el.comDramaStartRange.max = String(comPreviewDuration || 100);
       if (el.comDramaEndRange) el.comDramaEndRange.max = String(comPreviewDuration || 100);
       resetTrim();
-      comDramaSuggestFetch();   // 后台轻量探测片头/片尾边界，到货后自动预填（2026-09-20）
     };
     // 加载失败不再硬藏卡片 —— 让用户能继续操作，错误提示放在状态栏
     el.comPreview.onerror = () => {
@@ -11880,10 +9588,7 @@ el.dwVidPlayer.hidden = true;
     // 滑块回到「起点=0 / 终点=片尾」的默认位置
     if (el.comDramaStartRange) el.comDramaStartRange.value = '0';
     if (el.comDramaEndRange) el.comDramaEndRange.value = String(comPreviewDuration || 100);
-    // 换片：旧片的草稿与建议值全部作废，占位符/预填按当前模式重来（2026-09-20）
-    comDramaStash.start = '';
-    comDramaStash.end = '';
-    comDramaGate();
+    syncTrimInputs();
   };
 
   // 名字沿用（调用点较多）：现在只负责刷新卡头那行提示
@@ -11891,101 +9596,20 @@ el.dwVidPlayer.hidden = true;
     updateTrimDurationText();
   };
 
-  // 卡头时长；若两处正剧时间互相矛盾，就地换成红色提醒（见 styles.css .com-trim-dur.is-warn）
-  // 2026-09-20：去掉「片长：」前缀（真实左栏卡头可用宽仅 ~137px，标题+前缀+时间会折成三行，
-  // 见 styles.css .com-trim-head 的注释）→ 标签信息改挂 title 悬停，窄栏里只留时间本身。
+  // 卡头「片长：xx」；若两处正剧时间互相矛盾，就地换成红色提醒（见 styles.css .com-trim-dur.is-warn）
   const updateTrimDurationText = () => {
     if (!el.comTrimDuration) return;
     const s = el.comDramaStart && el.comDramaStart.value.trim() ? parseTimeSec(el.comDramaStart.value) : null;
     const e = el.comDramaEnd && el.comDramaEnd.value.trim() ? parseTimeSec(el.comDramaEnd.value) : null;
     if (s != null && e != null && e <= s) {
       el.comTrimDuration.textContent = '⚠ 片尾开始需晚于正剧开始';
-      el.comTrimDuration.title = '片尾开始时间必须晚于正剧开始时间';
       el.comTrimDuration.classList.add('is-warn');
       return;
     }
     el.comTrimDuration.classList.remove('is-warn');
     const total = comPreviewDuration || 0;
-    el.comTrimDuration.textContent = total ? (formatDuration(total) || '0s') : '--';
-    el.comTrimDuration.title = total ? `片长：${formatDuration(total) || '0s'}` : '片长：未知';
+    el.comTrimDuration.textContent = total ? `片长：${formatDuration(total) || '0s'}` : '片长：--';
   };
-
-  // ═══════════ 起点/终点（2026-09-20 晚定稿，取代早上的「门控置灰」方案）═════════
-  // 用户原话：「选了去片头片尾，左边的起点肯定是有时间的不是0；选择不去片头片尾
-  //   左边的肯定是0；左边要默认可以编辑，手动输入权限最大」。
-  // ⇒ ① 两个输入框**任何模式下都可编辑**（不再置灰）；
-  //    ②「去片头片尾」选中且输入为空时，自动预填后端轻量探测到的真实边界
-  //    （POST /api/commentary/suggest-range，静音/黑场/静止信号秒级出结果；
-  //    探测不到保持「自动检测」占位，渲染时管线再做全量检测含视觉集数卡）；
-  //    ③ 非 skip 模式显示 00:00:00（此模式不裁剪，填的值只是草稿、不参与提交，
-  //    见 comGetOptions），切回 skip 原样恢复；
-  //    ④ 提交的值即最终边界（后端 drama_start/end 优先级本来就最高）。
-  /** 暂存用户手填的时间：切到非 skip 再切回来时原样恢复，免得白填。 */
-  let comDramaStash = { start: '', end: '' };
-  let comDramaSuggest = null;      // {lo, hi, dur} | null（轻量探测建议值）
-  let comDramaSuggestSeq = 0;      // 换片竞态保护：旧请求迟到直接丢弃
-  const COM_DRAMA_GATE_NOTE = '当前是「保留片头片尾·不解说」，<b>不会裁剪</b>，起点/终点显示 00:00:00'
-    + '（这里填的时间只是草稿，切到「去片头片尾」才生效）。';
-  const COM_DRAMA_OPEN_NOTE = '「去片头片尾」：<b>留空＝自动检测</b>（读片名/集数画面+人声黑场，识别不到兜底跳过前 90 秒）；'
-    + '<b>填了就以你填的为准</b>（人工输入优先级最高，也可直接填秒数如 85）。预填的时间是系统探测到的建议值，可直接改。';
-  /** 向后端要轻量边界建议（媒体库/下载源才有 id；本地拖拽文件拿不到服务端路径，
-   *  不预填、留给渲染时全量检测——避免拿 audio-only 的建议值盖掉更准的视觉识别）。 */
-  const comDramaSuggestFetch = async (fidOverride) => {
-    comDramaSuggest = null;
-    const seq = ++comDramaSuggestSeq;
-    if (selectedLocalFile) return;
-    const fid = fidOverride || (el.comSource && el.comSource.value) || '';
-    if (!fid) return;
-    try {
-      const r = await request('/api/commentary/suggest-range', {
-        method: 'POST',
-        body: JSON.stringify({ file_id: fid }),
-      });
-      if (seq !== comDramaSuggestSeq) return;   // 期间已换片
-      if (r && r.ok) comDramaSuggest = { lo: r.lo, hi: r.hi, dur: r.dur };
-      comDramaGate();   // 到货后按当前模式应用一次（skip 且输入为空 → 预填）
-    } catch (e) { /* 建议值失败不影响主流程：保持自动检测 */ }
-  };
-  /** 把探测到的边界填进**空的**输入框（用户已填的值绝不动 → 手动永远优先）。 */
-  const comDramaFillSuggestion = () => {
-    if (!comDramaSuggest) return false;
-    const s = el.comDramaStart, e = el.comDramaEnd;
-    let filled = false;
-    if (s && !s.value.trim() && comDramaSuggest.lo != null) { s.value = formatHMS(comDramaSuggest.lo); filled = true; }
-    if (e && !e.value.trim() && comDramaSuggest.hi != null) { e.value = formatHMS(comDramaSuggest.hi); filled = true; }
-    if (filled) {
-      if (typeof syncDramaSlider === 'function') { if (s) syncDramaSlider(s); if (e) syncDramaSlider(e); }
-      updateTrimDurationText();
-    }
-    return filled;
-  };
-  const comDramaGate = () => {
-    const s = el.comDramaStart, e = el.comDramaEnd;
-    const note = el.comDramaNote;
-    const open = el.comIntroOutroMode() === 'skip';
-    if (!open) {
-      // 非 skip：显示 00:00:00（comGetOptions 里非 skip 不提交这两个值），先暂存手填值
-      if (s && s.value.trim()) comDramaStash.start = s.value.trim();
-      if (e && e.value.trim()) comDramaStash.end = e.value.trim();
-      if (s) { s.value = ''; s.placeholder = '00:00:00'; }
-      if (e) { e.value = ''; e.placeholder = '00:00:00'; }
-    } else {
-      if (s) s.placeholder = '自动检测';
-      if (e) e.placeholder = '自动检测';
-      if (comDramaStash.start || comDramaStash.end) {
-        if (s && !s.value.trim()) s.value = comDramaStash.start;
-        if (e && !e.value.trim()) e.value = comDramaStash.end;
-      } else {
-        comDramaFillSuggestion();   // 无草稿 → 预填探测到的真实边界
-      }
-    }
-    if (note) note.innerHTML = open ? COM_DRAMA_OPEN_NOTE : COM_DRAMA_GATE_NOTE;
-    updateTrimDurationText();
-  };
-  document.querySelectorAll('input[name="comIntroOutroMode"]').forEach((r) => {
-    r.addEventListener('change', comDramaGate);
-  });
-  comDramaGate();   // 页面进来先按默认模式置一次，避免首屏出现「可编辑」的错觉
 
   /** 渲染后给某张成片卡换/加/移除配乐（轻量 amix，秒级，成品就地替换）。 */
 
@@ -11998,9 +9622,7 @@ el.dwVidPlayer.hidden = true;
     const video = document.createElement('video');
     video.className = 'com-video';
     video.src = url;
-    // 紧凑行（列表视图）里 64px 宽的缩略图挂控件只会糊成一团 → 默认不挂；
-    // 点这一行就地展开时，由 el.comGrid 的 click 委托把 controls 挂回来。
-    video.controls = false;
+    video.controls = true;
     video.preload = 'metadata';
 
     const meta = document.createElement('div');
@@ -12008,19 +9630,10 @@ el.dwVidPlayer.hidden = true;
     const name = document.createElement('span');
     name.className = 'com-name';
     name.title = it.name;
-    // 剧名放内层 span：列表视图下 .com-name 是定宽「视窗」，内层负责超长时悬停平移
-    // 展示完整剧名（2026-09-18 用户「剧名展示不齐 / 鼠标悬停可左右滚动」）。
-    const nameIn = document.createElement('span');
-    nameIn.className = 'com-name-in';
-    nameIn.textContent = it.name;
-    name.appendChild(nameIn);
+    name.textContent = it.name;
     const size = document.createElement('span');
     size.className = 'com-size';
-    // 日期不带年、不带秒：面板收窄到 187px 后「大小 · 日期」一行只有 105px 视窗，
-    // 实测 `485 MB · 2026/9/17 10:18` 宽 125（截掉时间），`485 MB · 9/17 10:18` 正好 105 塞满不截断。
-    const _dt = new Date(it.mtime * 1000);
-    const _p2 = (n) => String(n).padStart(2, '0');
-    size.textContent = `${formatBytes(it.size)} · ${_dt.getMonth() + 1}/${_dt.getDate()} ${_p2(_dt.getHours())}:${_p2(_dt.getMinutes())}`;
+    size.textContent = `${formatBytes(it.size)} · ${new Date(it.mtime * 1000).toLocaleString()}`;
     meta.appendChild(name);
     meta.appendChild(size);
 
@@ -12030,9 +9643,7 @@ el.dwVidPlayer.hidden = true;
     dl.type = 'button';
     dl.className = 'btn btn-success btn-sm';
     dl.title = '选择保存位置（可重命名），默认存入下载文件夹';
-    // 图标与文字拆成两个 span：紧凑行里只留图标（384px 宽放不下「💾 保存 🗑 删除」
-    // 两个带字按钮），点展开后才出文字 —— 见 #comGrid.com-view-list .lbl 样式。
-    dl.innerHTML = '<span class="ico" aria-hidden="true">💾</span><span class="lbl">保存</span>';
+    dl.textContent = '💾 保存';
     dl.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -12042,7 +9653,7 @@ el.dwVidPlayer.hidden = true;
     delBtn.type = 'button';
     delBtn.className = 'btn btn-ghost btn-sm';
     delBtn.title = '删除（移入回收站）';
-    delBtn.innerHTML = '<span class="ico" aria-hidden="true">🗑</span><span class="lbl">删除</span>';
+    delBtn.textContent = '🗑 删除';
     delBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -12060,9 +9671,7 @@ el.dwVidPlayer.hidden = true;
   /** 「保存」：桌面端弹出原生保存面板（默认下载文件夹、可重命名/改位置）；Web 端退化为浏览器下载 */
   const saveCommentaryAs = async (id, name, btn) => {
     const api = window.pywebview && window.pywebview.api;
-    // 🔴 存 innerHTML 而不是 textContent：按钮内容是「图标 span + 文字 span」，
-    // 用 textContent 恢复会把结构抹平成纯文本（紧凑行就再也显示不出图标了）。
-    const orig = btn.innerHTML;
+    const orig = btn.textContent;
     btn.disabled = true;
     btn.textContent = '选择中…';
     try {
@@ -12088,7 +9697,7 @@ el.dwVidPlayer.hidden = true;
       showError('保存失败：' + (e.message || '未知错误'), '');
     } finally {
       btn.disabled = false;
-      btn.innerHTML = orig;
+      btn.textContent = orig;
     }
   };
 
@@ -12206,932 +9815,23 @@ el.dwVidPlayer.hidden = true;
   el.comGenerateScript.addEventListener('click', comStartScriptGeneration);
   if (el.comRegenScript) el.comRegenScript.addEventListener('click', comStartScriptGeneration);
 
-  /** 收起审核面板（2026-09-18 用户：「解说词页面没有退出按钮」）。
-   *  只收起、不丢脚本：currentScriptJobId 留着，提示行的「📄 继续审核」可原样打开同一份，
-   *  底部「生成脚本」入口也回来，用户能换素材/改设置重跑。 */
-  const closeScriptReview = () => {
-    const hasScript = !!currentScriptJobId;
-    el.comScriptPanel.hidden = true;
-    setScriptMin(false);  // 关闭时清掉最小化态，下次打开 / 「继续审核」是完整面板
-    if (el.comScriptReopen) el.comScriptReopen.hidden = !hasScript;
-    el.comReviewActions.hidden = !hasScript;
-    if (el.comGenerateRow) el.comGenerateRow.hidden = false;
-    el.comGenerateScript.disabled = false;
-    el.comGenerateScript.textContent = hasScript ? '重新生成脚本' : '生成脚本';
-    if (hasScript) {
-      el.comStatus.hidden = false;
-      el.comStatus.textContent = '解说词已收起（脚本仍保留在本机），点「📄 继续审核」可回到编辑';
-    }
-  };
-  if (el.comScriptClose) el.comScriptClose.addEventListener('click', closeScriptReview);
-  if (el.comScriptMin) {
-    el.comScriptMin.addEventListener('click', () => {
-      setScriptMin(!el.comScriptPanel.classList.contains('is-min'));
-    });
-  }
-  // 最小化态：点标题条任意空白处也能展开（2026-09-19 用户「最小化后没有入口」——
-  // 只留右上角一个小「▢ 展开」太隐蔽）。展开态不加监听动作，避免误点收起。
-  const _comScriptHead = document.querySelector('#comScriptPanel .com-script-head');
-  if (_comScriptHead) {
-    _comScriptHead.addEventListener('click', (ev) => {
-      if (!el.comScriptPanel.classList.contains('is-min')) return;
-      if (ev.target && ev.target.closest && ev.target.closest('button, select, label, input, a')) return;
-      setScriptMin(false);
-    });
-  }
-  if (el.comScriptReopen) {
-    el.comScriptReopen.addEventListener('click', () => {
-      if (!currentScriptJobId) return;
-      el.comScriptReopen.hidden = true;
-      openScriptReview(currentScriptJobId, { autoScroll: true });
-    });
-  }
-
-  /** 解说风格折叠卡的摘要：实时显示「当前风格 · 强度 n」（收起时也能一眼看清当前选择）。
-   *  2026-09-21 用户要求这块跟上面几张卡一样能收起来 → 收起后列表与滑杆都不可见，
-   *  所以摘要必须自己承担「当前值」的展示；宽度不够时靠 title 看全文。
-   *  ⚠️ 用 getElementById 取滑杆，不引用下面才定义的 comStyleIntensityEl（否则初始化时 TDZ 报错）。 */
-  const comStyleFoldHintEl = document.getElementById('comStyleFoldHint');
-  const comSyncStyleFoldHint = () => {
-    if (!comStyleFoldHintEl) return;
-    const radio = document.querySelector('input[name="comStyle"]:checked');
-    const labEl = radio ? radio.closest('label') : null;
-    const spanEl = labEl ? labEl.querySelector('span') : null;
-    const name = ((spanEl ? spanEl.textContent : '默认') || '默认').trim();
-    const rng = document.getElementById('comStyleIntensity');
-    const val = rng ? rng.value : '65';
-    const txt = name + ' · 强度 ' + val;
-    if (comStyleFoldHintEl.textContent !== txt) comStyleFoldHintEl.textContent = txt;
-    comStyleFoldHintEl.title = txt;
-  };
-
   // 解说风格切换：联动默认音色 + 更新提示文案（用户仍可在审核面板手动改音色）
   document.querySelectorAll('input[name="comStyle"]').forEach((r) => {
     r.addEventListener('change', comApplyStyleVoice);
   });
   comApplyStyleVoice();  // 初始化提示
 
-  // 风格强度滑杆：实时回显数值
-  const comStyleIntensityEl = document.getElementById('comStyleIntensity');
-  const comStyleIntensityValEl = document.getElementById('comStyleIntensityVal');
-  if (comStyleIntensityEl && comStyleIntensityValEl) {
-    const syncStyleIntensity = () => {
-      comStyleIntensityValEl.textContent = comStyleIntensityEl.value;
-      comSyncStyleFoldHint();
-    };
-    comStyleIntensityEl.addEventListener('input', syncStyleIntensity);
-    syncStyleIntensity();  // 初始化回显
-  }
-  comSyncStyleFoldHint();  // 折叠卡摘要初始化
-
   // 切换配音引擎时，实时刷新可用性（自动识别并置灰不可用项）
   if (el.comTtsProvider) {
     el.comTtsProvider.addEventListener('change', () => {
-      // 选中 Qwen3-TTS → 自动起本机 7871 服务；切到别的引擎 → 自动停，省资源
-      if (el.comTtsProvider.value === 'qwen3tts') {
+      // 选中 Qwen3-TTS（空值=默认项）→ 自动起本机 7871 服务；切到别的引擎 → 自动停，省资源
+      if (el.comTtsProvider.value === '') {
         comEnsureQwen3Tts();
-        if (!comVoiceSampleState.ready) comLoadVoiceSample(); // 顺手拉一次样本状态，保证提示准确
       } else {
         comAutoStopQwen3Tts();
       }
-      comRefreshTtsStatus({ force: true });
+      comRefreshTtsStatus({ force: false });
     });
-  }
-
-  // ===== 「我的音色」（本地克隆源）：选录音 + 填文字稿 + 保存 =====
-  // 2026-09-18 新增。这是「配音引擎 = Qwen3-TTS 本地语音克隆」真正生效的前提：
-  // 没有样本时管线拿不到 QWEN3TTS_REF_AUDIO/REF_TEXT，服务起来了也只是静默回退 edge。
-  /** 短路径显示：只留「…/父目录/文件名」，避免长绝对路径把这一行撑爆 */
-  const comVoiceSampleBrief = (p) => {
-    const s = String(p || '');
-    if (!s) return '';
-    const parts = s.split('/').filter(Boolean);
-    if (parts.length <= 2) return s;
-    return '…/' + parts.slice(-2).join('/');
-  };
-  const comSetVoiceStatus = (kind, msg) => {
-    const node = el.comMyVoiceStatus;
-    if (node) {
-      if (!msg) { node.hidden = true; node.textContent = ''; }
-      else { node.hidden = false; node.textContent = msg; node.dataset.kind = kind || 'info'; }
-    }
-    // 2026-09-20：录制弹窗盖住整屏时，卡片里那行状态用户根本看不到 ——
-    // 所以同一条消息**镜像**进弹窗内的状态条（弹窗关着时不显示，避免两边重复）。
-    const m = el.comVoiceModalStatus;
-    if (m) {
-      const open = !!(el.comVoiceRecModal && el.comVoiceRecModal.open);
-      if (!msg) { m.hidden = true; m.textContent = ''; }
-      else if (open) { m.hidden = false; m.textContent = msg; m.dataset.kind = kind || 'info'; }
-      else { m.hidden = true; m.textContent = ''; }
-    }
-  };
-  /** 音色的默认名字（2026-09-20）：优先取文字稿开头几个字 —— 「我的声音 A/B/C」这种
-   *  千篇一律的名字在「全部音色」列表里根本认不出哪一个是什么。 */
-  const comDefaultVoiceName = () => {
-    const t = (el.comMyVoiceText ? el.comMyVoiceText.value : '').trim();
-    if (t) return t.slice(0, 12);
-    const d = new Date();
-    return '音色 ' + (d.getMonth() + 1) + '/' + d.getDate() + ' '
-      + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  };
-  const comRenderVoiceSample = (s) => {
-    comVoiceSampleState = {
-      audio_path: (s && s.audio_path) || '',
-      ref_text: (s && s.ref_text) || '',
-      name: (s && s.name) || '',
-      ready: !!(s && s.ready),
-    };
-    if (el.comMyVoicePath) {
-      const brief = comVoiceSampleBrief(comVoiceSampleState.audio_path);
-      el.comMyVoicePath.textContent = brief || '还没选择录音文件';
-      el.comMyVoicePath.title = comVoiceSampleState.audio_path || '';
-      el.comMyVoicePath.classList.toggle('is-set', !!brief);
-    }
-    if (el.comMyVoiceText && document.activeElement !== el.comMyVoiceText) {
-      el.comMyVoiceText.value = comVoiceSampleState.ref_text;
-    }
-    // 名字回填：正在输入时绝不覆盖用户手里的值（与上面文字稿同一条规则）
-    if (el.comVoiceName && document.activeElement !== el.comVoiceName
-      && (comVoiceSampleState.name || !el.comVoiceName.value.trim())) {
-      el.comVoiceName.value = comVoiceSampleState.name || comDefaultVoiceName();
-    }
-    if (el.comMyVoiceBadge) {
-      el.comMyVoiceBadge.textContent = comVoiceSampleState.ready ? '已配置' : '未配置';
-      el.comMyVoiceBadge.classList.toggle('is-ready', comVoiceSampleState.ready);
-    }
-  };
-  const comLoadVoiceSample = async () => {
-    try {
-      const s = await request('/api/commentary/voice-sample');
-      comRenderVoiceSample(s);
-    } catch (_e) { /* 拉不到就维持现状，不打扰用户 */ }
-  };
-  // 克隆运行环境的下载 / 取消两个按钮（2026-09-18）。
-  // 🔴 POST 必须发 FormData：接口参数是 FastAPI 的 Form，发 JSON 会被判 422。
-  if (el.comCloneEnvBtn) {
-    el.comCloneEnvBtn.addEventListener('click', async () => {
-      el.comCloneEnvBtn.disabled = true;
-      try {
-        const r = await request('/api/commentary/clone-env/install',
-          { method: 'POST', body: new FormData() });
-        // 后端会拒绝的情况（磁盘不足 / 非 Apple Silicon / 已在装）都不是异常，是明确答复，
-        // 原样展示 + 马上刷新状态，别让按钮一直卡在禁用态说不清。
-        comSetTtsStatusBar((r && r.ok) ? 'orange' : 'gray',
-          (r && r.msg) || '安装请求已发送');
-        await comRefreshCloneEnv();
-      } catch (_e) {
-        comSetTtsStatusBar('gray', '安装请求失败，请看下方提示');
-      } finally {
-        el.comCloneEnvBtn.disabled = false;
-      }
-    });
-  }
-  if (el.comCloneEnvCancel) {
-    el.comCloneEnvCancel.addEventListener('click', async () => {
-      try {
-        const r = await request('/api/commentary/clone-env/cancel',
-          { method: 'POST', body: new FormData() });
-        if (r && r.msg) comSetTtsStatusBar('gray', r.msg);
-        await comRefreshCloneEnv();
-      } catch (_e) { /* 忽略 */ }
-    });
-  }
-  // ===== 「我的音色」页面内直接录制（2026-09-19）=====
-  // 用户问「录音能在这里直接录吗」——此前只能先开别的录音软件录好再回来选文件，太重。
-  // 采集用 WebAudio（**不用 MediaRecorder**：Safari 给 m4a、Chrome 给 webm，格式不统一，
-  // 后端还得多判；这里自己把 PCM 编 16bit WAV，落盘即是最稳的样本格式）。
-  // 桌面端两条硬依赖（缺任一都会「点了没反应/一直卡在获取麦克风」）：
-  //   ① desktop_launcher.py 给 pywebview 的 WKUIDelegate 补 requestMediaCapturePermissionForOrigin 放行；
-  //   ② 包内 Info.plist 声明 NSMicrophoneUsageDescription（desktop/build_mac.sh 注入）。
-  const COM_REC_MAX_SEC = 30;      // 上限：超过自动停止（样本 3~15 秒最准）
-  const COM_REC_MIN_SEC = 1.0;     // 下限：不到 1 秒必然没内容
-  const COM_REC_PEAK_MIN = 0.02;   // 整段峰值下限，低于它视为「没采到声音」
-  const comRec = {
-    active: false, busy: false, stream: null, ctx: null, proc: null, src: null, sink: null,
-    chunks: [], t0: 0, tick: 0, autoStop: 0, level: 0,
-    // 录完待确认的那段（2026-09-20）：{blob, sec, round}。**先试听、再落盘**，
-    // 不直接上传 —— 否则用户不满意只能「先存坏的样本 → 再重录覆盖」，白写一次盘。
-    pending: null,
-    // 2026-09-20：「✅ 没问题，保存并结束」走的是「上传录音 → 再存音色」两跳，
-    // 存音色那一步要等异步回来才知道成败，所以用这个标记把「存成功后自动关弹窗」
-    // 挂到保存结果上 —— 提前关会让用户看不到失败原因。
-    closeAfterSave: false,
-  };
-
-  function comRecSupported() {
-    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia
-      && (window.AudioContext || window.webkitAudioContext));
-  }
-
-  // 等麦克风授权的那几秒里按钮既不能重复点、也不能点不动没反应
-  function comRecBusy(on) {
-    comRec.busy = !!on;
-    if (el.comMyVoiceRec) {
-      el.comMyVoiceRec.disabled = !!on;
-      if (on) el.comMyVoiceRec.textContent = '⏳ 连接麦克风…';
-    }
-  }
-
-  function comRecSetBar(on) {
-    comRec.busy = false;
-    if (el.comMyVoiceRecBar) el.comMyVoiceRecBar.hidden = !on;
-    // 弹窗内的「取消录制 / ⏹ 停止并试听」整行跟着录制条一起显隐（2026-09-20）：
-    // 保持「录制中」的所有可见元素只有一个开关，避免出现「有计时条却没有停止键」。
-    if (el.comRecModalRecActions) el.comRecModalRecActions.hidden = !on;
-    if (el.comMyVoiceRec) {
-      // 🔴 录制中让主按钮自己变成「停止并保存」，别禁用它：
-      // 之前把主按钮禁掉、把唯一的停止键只放在文字稿下面的录制条里，而真机设置面板
-      // 会把录制条滚出可视区 ⇒ 用户只看到一个点不动的「录制中…」，报「没有结束键」。
-      el.comMyVoiceRec.disabled = false;
-      el.comMyVoiceRec.textContent = on ? '⏹ 停止并保存' : '⏺ 直接录制';
-      el.comMyVoiceRec.classList.toggle('is-recording', !!on);
-    }
-    if (el.comMyVoiceText) el.comMyVoiceText.readOnly = !!on;   // 录制中别改稿，免得念的和存的对不上
-  }
-
-  /** 试听条显隐（2026-09-20）。与录制条互斥：录完把录制条收掉、换成试听条，
-   *  所以这里不收录制条，由 comRecTeardown() 负责。 */
-  function comAuditSet(on, info) {
-    if (el.comMyVoiceAudit) el.comMyVoiceAudit.hidden = !on;
-    if (el.comMyVoiceAuditInfo) el.comMyVoiceAuditInfo.textContent = on ? (info || '') : '';
-  }
-
-  /** 放一遍待确认的那段录音。
-   *  走 playAudio()（DOM 内 <audio> + data URL）—— WKWebView 对 blob URL 支持不佳，
-   *  直接用 audio.src=blob: 会报 "The operation is not supported"。 */
-  async function comAuditPlay() {
-    const p = comRec.pending;
-    if (!p) { comSetVoiceStatus('warn', '没有待确认的录音，请先点「⏺ 直接录制」'); return; }
-    try {
-      await playAudio(p.blob);
-      comSetVoiceStatus('info', '正在播放你刚录的这段 —— 满意就点「✅ 没问题，保存音色」，不满意点「🔄 重录」');
-    } catch (e) {
-      // 自动播放被系统策略挡住是常见情况（playAudio 内部有一次异步转码，会脱离点击手势），
-      // 不是「功能坏了」→ 别吓用户，给一条能立刻照做的指引，细节留给控制台。
-      console.warn('[试听] 播放失败', e);
-      comSetVoiceStatus('warn', '试听没能自动播放，请点「▶ 试听」手动听一遍（先确认再保存，别存一段没听过的）');
-    }
-  }
-
-  /** 丢掉待确认的那段，重新录。顺手停掉可能还在响的回放。 */
-  function comAuditRedo() {
-    comRec.pending = null;
-    comAuditSet(false);
-    try {
-      const a = el.comAudioPreview;
-      if (a) { a.pause(); a.removeAttribute('src'); a.load(); }
-    } catch (_e) { /* ignore */ }
-    comSetVoiceStatus('info', '已丢弃刚才那段，点「⏺ 直接录制」重录一遍');
-  }
-
-  /** 「没问题」→ 落盘 + 存成音色（原来 comRecStop 里干的事，挪到用户确认之后）。 */
-  async function comAuditConfirm() {
-    const p = comRec.pending;
-    if (!p) { comSetVoiceStatus('warn', '没有待确认的录音，请先点「⏺ 直接录制」'); return; }
-    const text = el.comMyVoiceText ? el.comMyVoiceText.value.trim() : '';
-    if (!text) {
-      comSetVoiceStatus('warn', '请先填上这段录音里念的内容（克隆要靠它对齐韵律）');
-      if (el.comMyVoiceText) el.comMyVoiceText.focus();
-      return;
-    }
-    if (el.comMyVoiceAuditOk) el.comMyVoiceAuditOk.disabled = true;
-    comSetVoiceStatus('info', '正在保存录音…');
-    try {
-      const fd = new FormData();
-      fd.append('audio', p.blob, 'voice_rec.wav');
-      fd.append('duration', p.sec.toFixed(2));
-      const res = await fetch('/api/commentary/voice-sample/record', { method: 'POST', body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        comSetVoiceStatus('warn', (data && data.detail) || ('保存录音失败（HTTP ' + res.status + '）'));
-        return;
-      }
-      const path = (data && data.audio_path) || '';
-      if (!path) { comSetVoiceStatus('warn', '后端没返回录音路径，请重试'); return; }
-      comRec.pending = null;
-      comAuditSet(false);
-      comVoiceSampleState.audio_path = path;
-      if (el.comMyVoicePath) {
-        el.comMyVoicePath.textContent = comVoiceSampleBrief(path);
-        el.comMyVoicePath.title = path;
-        el.comMyVoicePath.classList.add('is-set');
-      }
-      comSetVoiceStatus('info', '录音已存好，正在存成音色…');
-      // 文字稿是「能开录」的前置条件，这里直接落库省一步点击；成败由保存按钮自己播报
-      if (el.comMyVoiceSave) el.comMyVoiceSave.click();
-    } catch (e) {
-      comSetVoiceStatus('warn', '保存录音失败：' + e);
-    } finally {
-      if (el.comMyVoiceAuditOk) el.comMyVoiceAuditOk.disabled = false;
-    }
-  }
-
-
-  // ─────────────────── 居中录制弹窗（2026-09-20）───────────────────────────
-  // 用户原话：「录制的时候能不能弹个窗口在画面中间，现在位置太小了，然后试听可以编辑配音
-  //   名字保存，点保存，任务就结束，弹窗自动关闭」。
-  // 做法：**不新建第二套录制 UI** —— 原来的「录制条」#comMyVoiceRecBar 与「试听条」
-  //   #comMyVoiceAudit 是整体搬进弹窗的（id 一个没改），这里只加「开合 + 阶段切换」。
-  //   好处：所有既有状态机（计时/电平/静音检测/试听/上传）一行没动。
-  /** 弹窗内的阶段：rec=正在录（计时条 + 停止键）/ audit=录完待确认（试听 + 命名）/ none=都不显示。 */
-  function comRecModalStage(stage) {
-    const rec = stage === 'rec';
-    if (el.comRecModalRecActions) el.comRecModalRecActions.hidden = !rec;
-    if (el.comMyVoiceRecBar) el.comMyVoiceRecBar.hidden = !rec;
-    if (el.comMyVoiceAudit) el.comMyVoiceAudit.hidden = stage !== 'audit';
-    if (stage === 'audit' && el.comVoiceName) {
-      // 弹窗里第一件该做的事就是给这段音色起个名（也能直接改），所以聚焦并全选现成的默认名
-      try { el.comVoiceName.focus(); el.comVoiceName.select(); } catch (_e) { /* ignore */ }
-    }
-  }
-
-  /** 打开录制弹窗（居中）。开着就不重复 showModal（重复调用会抛 InvalidStateError）。 */
-  function comRecModalOpen() {
-    const dlg = el.comVoiceRecModal;
-    if (!dlg) return;
-    if (el.comRecModalRead) {
-      // 要念的稿子就是下面那份文字稿 —— 弹窗里大字显示，省得来回滚
-      el.comRecModalRead.textContent = (el.comMyVoiceText ? el.comMyVoiceText.value.trim() : '');
-    }
-    if (el.comVoiceName && !el.comVoiceName.value.trim()) {
-      el.comVoiceName.value = comVoiceSampleState.name || comDefaultVoiceName();
-    }
-    comSetVoiceStatus('', '');          // 清掉上一次的残留提示
-    comRecModalStage('rec');
-    if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
-    else dlg.setAttribute('open', '');
-  }
-
-  /** 关弹窗。录制中=取消录制；有待确认的录音=丢弃（**没点「保存并结束」的一律不算数**）。 */
-  function comRecModalClose() {
-    comRec.closeAfterSave = false;
-    if (comRec.active) comRecStop(false, false);
-    if (comRec.pending) {
-      comRec.pending = null;
-      comSetVoiceStatus('info', '已丢弃这段录音（没保存）');
-    }
-    try {
-      const a = el.comAudioPreview;
-      if (a) { a.pause(); a.removeAttribute('src'); a.load(); }
-    } catch (_e) { /* ignore */ }
-    comRecModalStage('none');
-    if (el.comVoiceModalStatus) { el.comVoiceModalStatus.hidden = true; el.comVoiceModalStatus.textContent = ''; }
-    const dlg = el.comVoiceRecModal;
-    if (!dlg) return;
-    if (typeof dlg.close === 'function' && dlg.open) dlg.close();
-    else dlg.removeAttribute('open');
-  }
-
-  /** 「✅ 没问题，保存并结束」：录完确认后落盘 + 存成音色，成功后**自动关闭弹窗**（用户要求）。 */
-  async function comAuditConfirmAndFinish() {
-    if (!comRec.pending) { comSetVoiceStatus('warn', '没有待确认的录音，请先点「⏺ 直接录制」'); return; }
-    comRec.closeAfterSave = true;       // 保存成功那一刻由保存流程收尾关窗（失败要留着让用户看原因）
-    await comAuditConfirm();
-  }
-
-  /** 收掉采集链路（麦克风、AudioContext、计时器）。**不动 comRec.pending** ——
-   *  录完后待确认的那段要活到用户点「✅ 没问题」或「🔄 重录」为止。 */
-  function comRecTeardown() {
-    try { if (comRec.proc) comRec.proc.disconnect(); } catch (_) { /* ignore */ }
-    try { if (comRec.src) comRec.src.disconnect(); } catch (_) { /* ignore */ }
-    try { if (comRec.sink) comRec.sink.disconnect(); } catch (_) { /* ignore */ }
-    try { if (comRec.stream) comRec.stream.getTracks().forEach((t) => t.stop()); } catch (_) { /* ignore */ }
-    try { if (comRec.ctx && comRec.ctx.state !== 'closed') comRec.ctx.close(); } catch (_) { /* ignore */ }
-    if (comRec.tick) { clearInterval(comRec.tick); comRec.tick = 0; }
-    if (comRec.autoStop) { clearTimeout(comRec.autoStop); comRec.autoStop = 0; }
-    comRec.active = false; comRec.stream = null; comRec.ctx = null;
-    comRec.proc = null; comRec.src = null; comRec.sink = null;
-    comRecSetBar(false);
-    if (el.comMyVoiceRecLevel) el.comMyVoiceRecLevel.style.width = '0%';
-    if (el.comMyVoiceRecTime) el.comMyVoiceRecTime.textContent = '0.0s';
-  }
-
-  // Float32 PCM → 16bit 单声道 WAV（标准 44 字节头）。参考样本不需要压缩。
-  function comRecEncodeWav(chunks, sampleRate) {
-    let n = 0;
-    for (let i = 0; i < chunks.length; i++) n += chunks[i].length;
-    const dv = new DataView(new ArrayBuffer(44 + n * 2));
-    const wr = (off, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(off + i, s.charCodeAt(i)); };
-    wr(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); wr(8, 'WAVE');
-    wr(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
-    dv.setUint32(24, sampleRate, true); dv.setUint32(28, sampleRate * 2, true);
-    dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
-    wr(36, 'data'); dv.setUint32(40, n * 2, true);
-    let off = 44;
-    for (let i = 0; i < chunks.length; i++) {
-      const c = chunks[i];
-      for (let j = 0; j < c.length; j++, off += 2) {
-        const s = Math.max(-1, Math.min(1, c[j]));
-        dv.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-      }
-    }
-    return new Blob([dv.buffer], { type: 'audio/wav' });
-  }
-
-  async function comRecStart() {
-    if (comRec.active || comRec.busy) return;   // 等授权期间再点一下会拿到第二条流、旧的那条漏着不放
-    // 直接开始新一次录制 = 放弃上一段待确认的（否则试听条会挂着一份对不上的旧录音）
-    if (comRec.pending) { comRec.pending = null; comAuditSet(false); }
-    const text = el.comMyVoiceText ? el.comMyVoiceText.value.trim() : '';
-    if (!text) {
-      comSetVoiceStatus('warn', '请先写好你要念的内容（1~2 句），录制时照着读 —— 克隆要靠它对齐韵律');
-      if (el.comMyVoiceText) el.comMyVoiceText.focus();
-      return;
-    }
-    if (!comRecSupported()) {
-      comSetVoiceStatus('warn', '当前环境不支持直接录制，请用「🎙 选择录音」导入已录好的音频');
-      return;
-    }
-    comSetVoiceStatus('info', '正在获取麦克风…（首次使用系统会问一次授权）');
-    comRecBusy(true);
-    let stream;
-    try {
-      stream = await Promise.race([
-        navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-        }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true })),
-        // 权限被系统层挡住时 promise 可能一直不落定 → 12 秒当失败，给可执行的提示
-        new Promise((_, rej) => setTimeout(() => rej(new Error('COM_REC_TIMEOUT')), 12000)),
-      ]);
-    } catch (e) {
-      const name = (e && e.name) || '';
-      let msg = '拿不到麦克风：' + ((e && e.message) || e);
-      if (name === 'NotAllowedError') {
-        msg = '麦克风被拒绝：请到「系统设置 → 隐私与安全性 → 麦克风」里允许「视频工坊」，再回来重试';
-      } else if (name === 'NotFoundError') {
-        msg = '没找到可用的麦克风设备';
-      } else if ((e && e.message) === 'COM_REC_TIMEOUT') {
-        msg = '麦克风一直没有响应：请检查「系统设置 → 隐私与安全性 → 麦克风」是否已允许「视频工坊」，然后重试';
-      }
-      comRecSetBar(false);   // 还原按钮，顺带清掉 busy
-      comSetVoiceStatus('warn', msg);
-      return;
-    }
-    try {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AC();
-      // 🔴 2026-09-20：`ctx.resume()` 在**没有可用音频输出设备**时可能**永远不落定**
-      //    （离线/无头环境、声卡被占、蓝牙设备刚断开都会这样）。裸 await 会卡死在
-      //    「⏳ 连接麦克风…」，而取消键在弹窗里、弹窗又要等拿到流才开 ⇒ 用户彻底点不动。
-      //    这里给它 3 秒上限：超时就带着 suspended 的上下文继续，真录不出声音的话
-      //    既有的峰值检测会明确提示「这段几乎没有声音」，不会静默失败。
-      if (ctx.state === 'suspended') {
-        try {
-          await Promise.race([
-            ctx.resume(),
-            new Promise((res) => setTimeout(res, 3000)),
-          ]);
-        } catch (_) { /* ignore */ }
-      }
-      const src = ctx.createMediaStreamSource(stream);
-      const proc = ctx.createScriptProcessor(4096, 1, 1);
-      const sink = ctx.createGain();
-      sink.gain.value = 0;   // 静音接目的地：既驱动节点，又不会把声音放出来（否则啸叫）
-      comRec.chunks = []; comRec.level = 0;
-      proc.onaudioprocess = (ev) => {
-        const ch = ev.inputBuffer.getChannelData(0);
-        comRec.chunks.push(new Float32Array(ch));
-        let peak = 0;
-        for (let i = 0; i < ch.length; i += 8) {
-          const v = ch[i] < 0 ? -ch[i] : ch[i];
-          if (v > peak) peak = v;
-        }
-        if (peak * 1.6 > comRec.level) comRec.level = Math.min(1, peak * 1.6);
-      };
-      src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
-      comRec.active = true; comRec.stream = stream; comRec.ctx = ctx;
-      comRec.proc = proc; comRec.src = src; comRec.sink = sink;
-      comRec.t0 = Date.now();
-      // 麦克风**拿到之后**才弹窗（2026-09-20）：授权/超时失败时不该先糊一个空窗口，
-      // 那条路径继续用卡片里原有的错误提示，用户看得见也关得掉。
-      comRecModalOpen();
-      comRecSetBar(true);
-      // 弹窗是 top layer，不再需要把录制条滚进视野；但要保证弹窗里的稿子是最新的
-      try { if (el.comRecModalRead) el.comRecModalRead.textContent = (el.comMyVoiceText ? el.comMyVoiceText.value.trim() : ''); } catch (_) { /* ignore */ }
-      comSetVoiceStatus('info', '录制中：照着弹窗里的稿子念一遍，念完点「⏹ 停止并试听」');
-      comRec.tick = setInterval(() => {
-        const sec = (Date.now() - comRec.t0) / 1000;
-        if (el.comMyVoiceRecTime) el.comMyVoiceRecTime.textContent = sec.toFixed(1) + 's';
-        if (el.comMyVoiceRecLevel) {
-          el.comMyVoiceRecLevel.style.width = Math.round(comRec.level * 100) + '%';
-          comRec.level *= 0.72;   // 回落，否则一直顶格看不出变化
-        }
-      }, 100);
-      // 到上限自动收：超长样本没意义，也免得忘了停一直占着麦克风
-      comRec.autoStop = setTimeout(() => { comRecStop(true, true); }, COM_REC_MAX_SEC * 1000);
-    } catch (e) {
-      try { stream.getTracks().forEach((t) => t.stop()); } catch (_) { /* ignore */ }
-      comRecTeardown();
-      comSetVoiceStatus('warn', '启动录音失败：' + ((e && e.message) || e));
-    }
-  }
-
-  async function comRecStop(save, auto) {
-    if (!comRec.active) { comRecTeardown(); return; }
-    const sec = (Date.now() - comRec.t0) / 1000;
-    const chunks = comRec.chunks.slice();
-    const sampleRate = comRec.ctx ? comRec.ctx.sampleRate : 48000;
-    let peak = 0;
-    for (let i = 0; i < chunks.length; i++) {
-      const c = chunks[i];
-      for (let j = 0; j < c.length; j += 4) {
-        const v = c[j] < 0 ? -c[j] : c[j];
-        if (v > peak) peak = v;
-      }
-    }
-    comRecTeardown();
-    if (!save) { comSetVoiceStatus('info', '已取消录制'); return; }
-    if (sec < COM_REC_MIN_SEC) { comSetVoiceStatus('warn', '录得太短（不到 1 秒），请重录'); return; }
-    if (peak < COM_REC_PEAK_MIN) {
-      comSetVoiceStatus('warn', '这段几乎没有声音（麦克风可能没采到），请检查输入设备后重录');
-      return;
-    }
-    const blob = comRecEncodeWav(chunks, sampleRate);
-    if (!blob.size) { comSetVoiceStatus('warn', '录音数据为空，请重录'); return; }
-    // 🔴 2026-09-20：到这里**不落盘**了。先把 WAV 留在内存里试听，用户点「✅ 没问题」才
-    //    上传 + 存音色（comAuditConfirm）。此前是录完立刻上传并自动保存 —— 用户报
-    //    「自己录完声音预览怎么没有呢？录完应该有个试听，没问题再保存」。
-    comRec.pending = { blob, sec };
-    comAuditSet(true, (auto ? '已录满 ' + COM_REC_MAX_SEC + 's · ' : '') + '共 ' + sec.toFixed(1) + 's');
-    // 切到「待确认」阶段：录制条 + 停止键收起，取而代之的是「试听 + 配音名字 + 保存并结束」
-    comRecModalStage('audit');
-    comSetVoiceStatus('info', '录好了 —— 先听一遍：没问题点「✅ 没问题，保存并结束」，不满意点「🔄 重录」');
-    comAuditPlay();   // 用户要的就是「录完就有得听」，不用再点一次；被自动播放策略挡住时按钮仍在
-  }
-
-  // 同一个按钮两种状态：闲置＝开始录，录制中＝停止并保存 —— 结束键永远在用户刚点的位置
-  // （2026-09-20：录制中那个「结束键」现在也有弹窗内的「⏹ 停止并试听」一份，两者等价）
-  if (el.comMyVoiceRec) {
-    el.comMyVoiceRec.addEventListener('click', () => {
-      if (comRec.active) comRecStop(true, false); else comRecStart();
-    });
-  }
-  // ── 录制弹窗内的控件（2026-09-20）─────────────────────────────────────────
-  if (el.comRecModalStop) {
-    el.comRecModalStop.addEventListener('click', () => { comRecStop(true, false); });
-  }
-  if (el.comMyVoiceRecCancel) {
-    // 弹窗里的「取消录制」= 放弃这段并关窗（原来只停录制、弹窗会留在那儿，用户还得再点一次 ✕）
-    el.comMyVoiceRecCancel.addEventListener('click', () => { comRecModalClose(); });
-  }
-  if (el.comVoiceRecModalClose) {
-    el.comVoiceRecModalClose.addEventListener('click', () => { comRecModalClose(); });
-  }
-  if (el.comVoiceRecModal) {
-    // Esc 关窗走原生 cancel —— 必须拦下来走自己的清理，否则录制中的麦克风不会释放
-    el.comVoiceRecModal.addEventListener('cancel', (ev) => { ev.preventDefault(); comRecModalClose(); });
-    // 点遮罩（dialog 自身区域）关窗，与 .modal 的既有交互习惯一致
-    el.comVoiceRecModal.addEventListener('click', (ev) => {
-      if (ev.target === el.comVoiceRecModal) comRecModalClose();
-    });
-  }
-  // 试听条三个动作（2026-09-20）：试听 / 重录 / 确认保存
-  if (el.comMyVoiceAuditPlay) el.comMyVoiceAuditPlay.addEventListener('click', () => { comAuditPlay(); });
-  if (el.comMyVoiceAuditRedo) {
-    // 重录：丢掉这段并**就地重开一次录制**。原来只丢不录，用户在弹窗里会卡住
-    // （「⏺ 直接录制」在卡片里，被弹窗盖着点不到）。
-    el.comMyVoiceAuditRedo.addEventListener('click', () => { comAuditRedo(); comRecStart(); });
-  }
-  if (el.comMyVoiceAuditOk) el.comMyVoiceAuditOk.addEventListener('click', () => { comAuditConfirmAndFinish(); });
-
-  if (el.comMyVoicePick) {
-    el.comMyVoicePick.addEventListener('click', async () => {
-      const pick = window.VDL && window.VDL.desktop && window.VDL.desktop.pickVoiceSample;
-      if (typeof pick !== 'function') {
-        comSetVoiceStatus('warn', '网页版不支持弹文件框，请直接粘贴音频的完整路径');
-        if (el.comMyVoicePath) {
-          el.comMyVoicePath.textContent = '（把音频绝对路径粘贴到这里）';
-          el.comMyVoicePath.classList.add('is-set');
-        }
-        return;
-      }
-      const p = await pick();
-      if (!p) return; // 用户取消
-      if (String(p).startsWith('ERROR')) { comSetVoiceStatus('warn', String(p).slice(7)); return; }
-      comVoiceSampleState.audio_path = p;
-      if (el.comMyVoicePath) {
-        el.comMyVoicePath.textContent = comVoiceSampleBrief(p);
-        el.comMyVoicePath.title = p;
-        el.comMyVoicePath.classList.add('is-set');
-      }
-      comSetVoiceStatus('info', '录音已选好，请补上它念的内容并保存');
-    });
-  }
-  if (el.comMyVoiceSave) {
-    el.comMyVoiceSave.addEventListener('click', async () => {
-      const path = (comVoiceSampleState.audio_path || '').trim();
-      const text = (el.comMyVoiceText ? el.comMyVoiceText.value : '').trim();
-      if (!path) { comSetVoiceStatus('warn', '请先选择一段录音'); return; }
-      if (!text) { comSetVoiceStatus('warn', '请填写那段录音里念的内容（克隆需要它对齐韵律）'); return; }
-      el.comMyVoiceSave.disabled = true;
-      comSetVoiceStatus('info', '保存中…');
-      try {
-        const fd = new FormData();
-        fd.append('audio_path', path);
-        fd.append('ref_text', text);
-        // 配音名字（2026-09-20）：随样本一起落库，并登记进音色库（「🎧 全部音色」列表用）
-        const nm = (el.comVoiceName ? el.comVoiceName.value : '').trim();
-        if (nm) fd.append('name', nm);
-        const res = await fetch('/api/commentary/voice-sample', { method: 'POST', body: fd });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          comRec.closeAfterSave = false;   // 失败不关弹窗：得让用户看到原因
-          comSetVoiceStatus('warn', (data && data.detail) || ('保存失败（HTTP ' + res.status + '）'));
-          return;
-        }
-        comRenderVoiceSample(data);
-        // 存好之后立刻把它挂进「全局配音」下拉（2026-09-20 用户要求「保存到全局配音里供选择」）：
-        // 不刷新的话，下拉里那一项要等下次打开审核面板才出现，用户会以为没保存上。
-        comFillScriptVoice();
-        const shown = (data && data.name) || nm;
-        comSetVoiceStatus('ok', '音色已保存 ✓' + (shown ? '（' + shown + '）' : '')
-          + '已加进右上「全局配音」与「🎧 全部音色」');
-        _ttsStatusCache = null;           // 样本变了 → 让状态条重新判定「就绪」
-        comRefreshTtsStatus({ force: true });
-        comVoiceLibItems = [];            // 库内容变了：下次开「全部音色」重新拉
-      } catch (e) {
-        comRec.closeAfterSave = false;
-        comSetVoiceStatus('warn', '保存失败：' + e);
-      } finally {
-        el.comMyVoiceSave.disabled = false;
-        // 「✅ 没问题，保存并结束」→ 落库成功即收工关窗（用户明确要求「点保存，任务就结束，
-        // 弹窗自动关闭」）。放在 finally 而不是 try 里，是为了让上面那些提示能先渲染出来。
-        if (comRec.closeAfterSave) {
-          setTimeout(() => { if (comRec.closeAfterSave) comRecModalClose(); }, 700);
-        }
-      }
-    });
-  }
-
-  // ═══════════ 🎧 全部音色弹窗（2026-09-20）══════════════════════════════════
-  // 用户原话：「在我的音色里面应该也加个可以看到全部音色的弹窗，这样更合理」。
-  // 一个列表合成两条来源：
-  //   ① 「你保存的音色」= 后端 voice_library.json（名字 + 录的那段 + 文字稿 + 哪条在生效）；
-  //   ② 「系统音色」    = COM_VOICES（edge-tts 的 7 个，与右上「全局配音」同一份数据）。
-  // 🔴 「使用」**不新开状态**：值写回右上那个「全局配音」下拉并派发 change ——
-  //    引擎联动、哨兵值翻译、渲染时取值全都沿用既有那一套，这里绝不复制第二份。
-  let comVoiceLibItems = [];
-  let comVoiceLibActiveName = '';
-
-  const comVoiceLibHint = (msg, kind) => {
-    const n = el.comVoiceLibHint;
-    if (!n) return;
-    n.textContent = msg || '';
-    n.dataset.kind = kind || '';
-  };
-
-  /** 把库里某条设为「当前生效样本」（复用既有 POST /voice-sample，同一套校验）。 */
-  const comVoiceLibActivate = async (it) => {
-    const fd = new FormData();
-    fd.append('audio_path', it.audio_path);
-    fd.append('ref_text', it.ref_text);
-    if (it.name) fd.append('name', it.name);
-    const res = await fetch('/api/commentary/voice-sample', { method: 'POST', body: fd });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((data && data.detail) || ('切换失败（HTTP ' + res.status + '）'));
-    return data;
-  };
-
-  /** 试听一段声音：系统音色 → edge 合成；我的音色 → 克隆引擎按当前样本合成。
-   *  provider 为空时后端走默认 edge（这对「系统音色」是刻意的：必须真听见系统音色）。 */
-  const comVoiceLibPlay = async (voiceValue, provider) => {
-    const form = new FormData();
-    form.append('voice', voiceValue);
-    form.append('text', '你好，我是视频解说员。我将为你解说这段视频。');
-    if (provider) form.append('provider', provider);
-    const resp = await fetch('/api/commentary/voice-preview', { method: 'POST', body: form });
-    if (!resp.ok) {
-      const d = await resp.json().catch(() => ({}));
-      throw new Error((d && (d.detail || d.error)) || ('试听失败（HTTP ' + resp.status + '）'));
-    }
-    await playAudio(await resp.blob());
-  };
-
-  /** 生成一行音色。opts.onUse/onPlay 由调用方给（两条来源的语义不同）。 */
-  const comVoiceLibRow = (opts) => {
-    const row = document.createElement('div');
-    row.className = 'com-voicelib-item'
-      + (opts.active ? ' is-active' : '') + (opts.dead ? ' is-dead' : '');
-    const main = document.createElement('div');
-    main.className = 'com-voicelib-main';
-    const nm = document.createElement('span');
-    nm.className = 'com-voicelib-name';
-    nm.textContent = opts.name;
-    nm.title = opts.name;
-    const meta = document.createElement('span');
-    meta.className = 'com-voicelib-meta';
-    meta.textContent = opts.meta || '';
-    meta.title = opts.meta || '';
-    main.append(nm, meta);
-    row.appendChild(main);
-
-    const play = document.createElement('button');
-    play.type = 'button';
-    play.className = 'btn btn-sm btn-secondary';
-    play.textContent = '▶';
-    play.title = '试听这段声音';
-    play.addEventListener('click', () => opts.onPlay(play));
-    row.appendChild(play);
-
-    const use = document.createElement('button');
-    use.type = 'button';
-    use.className = 'btn btn-sm ' + (opts.active ? 'btn-ghost' : 'btn-primary');
-    use.textContent = opts.active ? '使用中' : '使用';
-    use.disabled = !!opts.active || !!opts.dead;
-    if (!use.disabled) use.addEventListener('click', () => opts.onUse(use));
-    row.appendChild(use);
-
-    if (opts.onDelete) {
-      // 删除做两步确认（按钮就地改文案）：库里删一条会连带删 App 自己录的那个 wav，
-      // 不该一击即中。用就地两段式而不是 window.confirm —— WKWebView 里的原生确认框
-      // 会阻塞事件循环，且样式与应用完全脱节。
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'btn btn-sm btn-ghost';
-      del.textContent = '🗑';
-      del.title = '从列表里删掉这个音色';
-      let armed = 0;
-      del.addEventListener('click', () => {
-        if (!armed) {
-          armed = setTimeout(() => { armed = 0; del.textContent = '🗑'; del.title = '从列表里删掉这个音色'; }, 4000);
-          del.textContent = '确认删?';
-          del.title = '再点一次即删除';
-          return;
-        }
-        clearTimeout(armed);
-        armed = 0;
-        opts.onDelete(del);
-      });
-      row.appendChild(del);
-    }
-    return row;
-  };
-
-  const comVoiceLibRender = () => {
-    const box = el.comVoiceLibList;
-    if (!box) return;
-    box.replaceChildren();
-    const cur = el.comScriptVoice ? el.comScriptVoice.value : '';
-    const cloneOn = cur === COM_CLONE_VOICE;
-
-    // ── 组 1：我的音色（用户自己保存的）──
-    const g1 = document.createElement('div');
-    g1.className = 'com-voicelib-group';
-    g1.textContent = '🎤 我的音色（你保存的）';
-    box.appendChild(g1);
-    if (!comVoiceLibItems.length) {
-      const empty = document.createElement('div');
-      empty.className = 'com-voicelib-empty';
-      empty.textContent = '还没有保存过自己的音色。到「📇 我的音色」点「⏺ 直接录制」录一段，或「🎙 选择录音」挑一个音频文件。';
-      box.appendChild(empty);
-    }
-    comVoiceLibItems.forEach((it) => {
-      const active = !!(it.active && cloneOn);
-      box.appendChild(comVoiceLibRow({
-        name: it.name,
-        meta: it.ready
-          ? (it.active ? '当前生效' : '已保存') + (it.created_at ? ' · ' + it.created_at : '')
-          : '⚠ 音频文件不在了（被删或换过电脑），重新录一段吧',
-        dead: !it.ready,
-        active,
-        onPlay: async (btn) => {
-          if (!it.ready) { comVoiceLibHint('这条的音频文件已经不在，没法试听', 'warn'); return; }
-          btn.disabled = true;
-          comVoiceLibHint('正在切到「' + it.name + '」并试听…', '');
-          try {
-            const data = await comVoiceLibActivate(it);
-            comRenderVoiceSample(data);
-            comFillScriptVoice();
-            await comVoiceLibPlay(STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural', COM_CLONE_PROVIDERS[0]);
-            comVoiceLibHint('这是「' + it.name + '」的克隆声（已顺便切到它）', '');
-          } catch (e) {
-            comVoiceLibHint(String((e && e.message) || e), 'warn');
-          } finally {
-            btn.disabled = false;
-          }
-        },
-        onUse: async (btn) => {
-          btn.disabled = true;
-          comVoiceLibHint('正在切到「' + it.name + '」…', '');
-          try {
-            const data = await comVoiceLibActivate(it);
-            comRenderVoiceSample(data);
-            comFillScriptVoice();
-            if (el.comScriptVoice) {
-              el.comScriptVoice.value = COM_CLONE_VOICE;
-              // 派发 change 会让既有监听把「配音引擎」也切到克隆 —— 不切的话出片还是系统音色
-              el.comScriptVoice.dispatchEvent(new Event('change'));
-            }
-            _ttsStatusCache = null;
-            comRefreshTtsStatus({ force: true });
-            comVoiceLibHint('已使用「' + it.name + '」：右上「全局配音」＝🎤 我的音色（克隆）', '');
-            await comVoiceLibLoad();
-          } catch (e) {
-            comVoiceLibHint(String((e && e.message) || e), 'warn');
-            btn.disabled = false;
-          }
-        },
-        onDelete: async () => {
-          try {
-            const fd = new FormData();
-            fd.append('id', it.id);
-            const res = await fetch('/api/commentary/voice-library/delete', { method: 'POST', body: fd });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error((data && data.detail) || ('删除失败（HTTP ' + res.status + '）'));
-            comVoiceLibHint('已删除「' + it.name + '」'
-              + ((data && data.removed && data.removed.removed_file) ? '（录音文件也一并清掉了）' : ''), '');
-            _ttsStatusCache = null;
-            await comVoiceLibLoad();
-          } catch (e) {
-            comVoiceLibHint(String((e && e.message) || e), 'warn');
-          }
-        },
-      }));
-    });
-
-    // ── 组 2：系统音色（与右上「全局配音」同一份 COM_VOICES）──
-    const g2 = document.createElement('div');
-    g2.className = 'com-voicelib-group';
-    g2.textContent = '🌐 系统音色（免费用，不需要录音）';
-    box.appendChild(g2);
-    COM_VOICES.forEach((v) => {
-      const active = !cloneOn && cur === v.value;
-      box.appendChild(comVoiceLibRow({
-        name: v.label,
-        meta: active ? '当前生效' : '在线合成',
-        active,
-        onPlay: async (btn) => {
-          btn.disabled = true;
-          comVoiceLibHint('正在生成「' + v.label + '」的试听…', '');
-          try {
-            await comVoiceLibPlay(v.value, '');
-            comVoiceLibHint('刚才那段是「' + v.label + '」', '');
-          } catch (e) {
-            comVoiceLibHint(String((e && e.message) || e), 'warn');
-          } finally {
-            btn.disabled = false;
-          }
-        },
-        onUse: (btn) => {
-          if (!el.comScriptVoice) { comVoiceLibHint('「全局配音」下拉还没初始化，稍后再试', 'warn'); return; }
-          btn.disabled = true;
-          // 🔴 2026-09-20 实测踩坑：这个下拉**只在加载过脚本时才被填充**（comFillScriptVoice
-          //    原本只在 loadScriptToPanel / 存音色时调用）。刚进解说页还没选视频时它是**空的**
-          //    （options.length=0），直接 `.value = v.value` 会静默失败 ⇒ 看起来点了「使用」
-          //    却什么都没选。所以必须先填充再选中（keepValue 机制会把它选上）。
-          comFillScriptVoice(v.value);
-          el.comScriptVoice.dispatchEvent(new Event('change'));
-          // 🔴 引擎若停在克隆档，出片会走你的克隆声、把刚选的系统音色整个吃掉 ——
-          //    自动切回 edge 并**说明原因**，否则用户会以为「选了没用」。
-          if (el.comTtsProvider && COM_CLONE_PROVIDERS.indexOf(el.comTtsProvider.value) >= 0) {
-            el.comTtsProvider.value = 'edge';
-            el.comTtsProvider.dispatchEvent(new Event('change'));
-            comVoiceLibHint('已使用「' + v.label + '」，并把引擎从克隆切回 edge（不切的话出片仍是你的克隆声）', '');
-          } else {
-            comVoiceLibHint('已使用「' + v.label + '」', '');
-          }
-          comVoiceLibRender();
-        },
-      }));
-    });
-  };
-
-  const comVoiceLibLoad = async () => {
-    try {
-      const d = await request('/api/commentary/voice-library');
-      comVoiceLibItems = (d && d.items) || [];
-      comVoiceLibActiveName = (d && d.active_name) || '';
-      comVoiceLibHint('');
-    } catch (e) {
-      comVoiceLibItems = [];
-      comVoiceLibHint('读取「你保存的音色」失败：' + ((e && e.message) || e) + '（下面的系统音色仍可选）', 'warn');
-    }
-    comVoiceLibRender();
-  };
-
-  const comVoiceLibOpen = async () => {
-    const dlg = el.comVoiceLibModal;
-    if (!dlg) return;
-    comVoiceLibHint('加载中…', '');
-    if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
-    else dlg.setAttribute('open', '');
-    // 每次打开都重新渲染：期间可能刚录完一段新音色
-    comVoiceLibRender();
-    await comVoiceLibLoad();
-  };
-
-  const comVoiceLibClose = () => {
-    const dlg = el.comVoiceLibModal;
-    if (!dlg) return;
-    if (typeof dlg.close === 'function' && dlg.open) dlg.close();
-    else dlg.removeAttribute('open');
-  };
-
-  if (el.comMyVoiceAll) el.comMyVoiceAll.addEventListener('click', () => { comVoiceLibOpen(); });
-  if (el.comVoiceLibClose) el.comVoiceLibClose.addEventListener('click', comVoiceLibClose);
-  if (el.comVoiceLibDone) el.comVoiceLibDone.addEventListener('click', comVoiceLibClose);
-  if (el.comVoiceLibModal) {
-    el.comVoiceLibModal.addEventListener('click', (ev) => { if (ev.target === el.comVoiceLibModal) comVoiceLibClose(); });
   }
 
   // 导出剪映草稿：勾选后显示目录输入行；「选择文件夹」按钮走桌面原生桥接（无桥接则聚焦输入框手动填）
@@ -13151,10 +9851,34 @@ el.dwVidPlayer.hidden = true;
     });
   }
 
-  // === 成片增强控件事件绑定（字幕样式 / 解说长度）===
-  // 🔴 BGM 的三个处理器（comBgm / comBgmFilePick / comBgmVolume）已于 2026-09-18 删除：
-  //    它们绑的 DOM 在 2026-09-15 随「成片增强 · 自动配乐」块一起没了（el.comBgm* 恒为 null），
-  //    配乐改成时间轴第 4 条「音乐」轨（见 comMusic* 一组），这里只留死绑定没有任何作用。
+  // === 成片增强控件事件绑定（BGM / 字幕样式 / 解说长度）===
+  if (el.comBgm) {
+    el.comBgm.addEventListener('change', () => {
+      const v = el.comBgm.value;
+      if (el.comBgmVolWrap) el.comBgmVolWrap.hidden = (v === 'off');
+      if (el.comBgmFileWrap) el.comBgmFileWrap.hidden = (v !== 'user');
+    });
+  }
+  // 本地音乐选择：走 pywebview 桌面桥 chooseFiles（无桥接回退为聚焦输入框）
+  if (el.comBgmFilePick) {
+    el.comBgmFilePick.addEventListener('click', async () => {
+      try {
+        const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.chooseFiles;
+        let p = '';
+        if (typeof fn === 'function') {
+          const arr = await fn();
+          p = (Array.isArray(arr) && arr.length) ? arr[0] : '';
+        }
+        if (p && el.comBgmFile) el.comBgmFile.value = p;
+        else if (el.comBgmFile) el.comBgmFile.placeholder = '请把 mp3/wav 路径粘到这里';
+      } catch (_) { /* 用户取消或环境不支持，忽略 */ }
+    });
+  }
+  if (el.comBgmVolume) {
+    el.comBgmVolume.addEventListener('input', () => {
+      if (el.comBgmVolumeVal) el.comBgmVolumeVal.textContent = Math.round(Number(el.comBgmVolume.value) * 100) + '%';
+    });
+  }
   // 字号 / 描边：数字框 + 预设下拉（仿 Excel 字号选择器）；改值即刷新实时预览
   comSetupNumSel(el.comSubSize, el.comSubSizeCaret, el.comSubSizePop,
                  [0.8, 0.9, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 1.6], 2, '×');
@@ -13195,9 +9919,6 @@ el.dwVidPlayer.hidden = true;
     if (!box || !txt || !vid) return;
     // 视频未展示（面板未开/无源且高度为 0）时隐藏覆盖层
     if (!vid.offsetParent || vid.clientWidth < 40 || vid.clientHeight < 40) { box.hidden = true; return; }
-    // 没有实际画面（还没选片 / 源被清空 / 加载失败）时也不显示示例字幕 —— 舞台是空的，
-    // 悬空的一行白字会被误读成「这素材有问题」（2026-09-18 用户截图：清源后黑屏上残留示例字）。
-    if (!vid.videoWidth || !vid.videoHeight) { box.hidden = true; return; }
     box.hidden = false;
     // 🔴 定位基准一律取「画面内容区」（扣掉 letterbox 黑边），与羽化层、与成片同源。
     //    旧版靠 CSS flex + `margin-bottom:7%` 落位 —— 百分比 margin 是按**容器宽度**解析的，
@@ -13332,57 +10053,21 @@ el.dwVidPlayer.hidden = true;
 
   // ===== 原字幕羽化（2026-09-16）=============================================
   // 背景：「擦除原字幕」原先完全靠管线自动探测，UI 零暴露 —— 探测偏了只能跑完整条任务
-  // 才发现，白等十几分钟拿到废片。现在在预览窗口标出「带」的位置/范围，参数即时可见、可微调。
+  // 才发现，白等十几分钟拿到废片。现在在预览窗口用 Canvas 复刻擦除效果，参数即时可见、可微调。
   //
-  // 🔴 2026-09-18 **三轮**用户反馈后的**最终形态**（改这块前务必读完，别再反复）：
-  //   第 1 轮：预览里默认画「擦除模拟」（Canvas 复刻管线 fade/stretch/blur —— 取带上下各 2px
-  //           一行纵向拉伸满带高再叠回，数学等价、确实"所见即所得"）。用户判为**乱码**。
-  //           ⚠️ 事后查明**真凶是带子位置偏**（聚合取纯中位数），擦除把没有字幕的正常画面拉花；
-  //              同一个模拟在这种前提下当然"像坏掉"。 → 见 server/subtitle_band.py 的「鲁棒并集」。
-  //           当时我误判成"模拟本身不能要"，把它默认关掉。
-  //   第 2 轮：不画 ⇒ 「羽化看不到预览效果」。实测原因**不在逻辑**而在可见度：
-  //           `styles.css` 里 `.com-preview-stage .com-feather-band` 把虚线压成 40% 白、
-  //           底色只有 10% alpha，舞台底又是真实视频 ⇒ 几乎不可见；
-  //           且 `is-tiny` 阈值 16px 恰好等于 5% 带高在中等舞台上算出的 16px ⇒ 标签被永久隐藏。
-  //   ⇒ 范围框是"带在哪"的唯一表达，必须显眼（黄虚线 2px + 黑色外描边 + 实心标签胶囊 +
-  //      未生效时写明"未生效"）。
-  //   第 3 轮：用户选了「高斯模糊」却什么都看不到 ⇒ "没有一点效果"；同时发现
-  //           ① 勾了「自适应」后框**拖不动**（代码里刻意 preventDefault 拦掉）；
-  //           ② 「自适应逐段」只在下发给管线时生效，**预览里完全不体现** ⇒ "根据这幕来羽化吗，
-  //              为什么没有产生作用"。
-  //   ⇒ 现在的口径：
-  //      a) **擦除模拟默认打开**（选了擦除方式就该看到那种方式的效果），开关留给嫌它挡视线的人；
-  //      b) 自适应模式下拖动不再拦截，而是**自动打开「手动微调补救」写 dy 偏移**（不动绝对位置，
-  //         自适应不失效 —— 方向对的东西，交互不能让它看起来是坏的）；
-  //      c) 抽帧按**时间步长**、后端回 `per_frame` ⇒ 预览跟着播放头切到「这一幕」的带（跟幕）。
-  //   真实擦除效果以成片为准；预览不承诺"看到什么就烧什么"。
-  //   历史实现见 git（本文件 2026-09-18 之前的 comFeatherPaint，含 fade/stretch/blur 三支）。
+  // 保真度：fade（默认）在管线里是**纯几何运算**
+  //   crop 带上一行/下一行各 2px → scale 到带高 → blend='A*(1-Y/H)+B*(Y/H)' → overlay 叠回
+  // 这里用 drawImage 取同样两行拉伸 + 线性 alpha 混合，数学等价；
+  // stretch / blur 用到 ffmpeg 的 gblur，这里用 canvas filter 的 blur 近似（视觉一致，非像素级）。
   //
-  // ⚠️ 几何一律用「占画面高的比例」而非像素：竖屏管线 canvas 固定 480x854、横屏是源分辨率，
-  //    只有比例在两边都成立 —— 带子位置/高度仍然按比例同步给管线（band_y_ratio / band_h_ratio）。
-  // ⚠️ 任何"早退"都必须发生在 comFeatherSync() **之后**：它是范围框唯一的定位入口，
-  //    早退挪到它前面 = 关掉模拟就看不到框（正是第 2 轮那个 bug 的形态）。
+  // ⚠️ 传输一律用「占画面高的比例」而非像素：竖屏管线 canvas 固定 480x854、横屏是源分辨率，
+  //    只有比例在两边都成立 —— 这是「预览看到什么，成片就烧什么」的前提。
   const COM_FEATHER_DEFAULT = { bandY: 0.86, bandH: 0.05 };
-  /** 擦除模拟预览的**默认值**（true＝默认就在带内画出所选擦除方式的近似效果）。
-   *  运行期真值在 comFeather.sim，由卡片里的「预览擦除效果」勾选框控制，可随时关掉。
-   *  ⚠️ 2026-09-18 **三轮**反馈的最终口径（别再改回去）：
-   *    ① 默认画 fade 模拟 ⇒ 用户判为"乱码" —— 但**真凶是当时带子位置偏**（聚合取纯中位数），
-   *       擦除把没有字幕的正常画面拉成糊块；聚合改成「鲁棒并集」后带子落在真字幕上，同一模拟不再乱。
-   *    ② 改成默认不画 ⇒ 用户马上反馈"羽化看不到预览效果"。
-   *    ③ 用户在卡片里选了「高斯模糊」、调了强度，**预览里一无所获** ⇒ "高斯模糊没有一点效果"。
-   *  ⇒ 结论：**默认打开**（选了擦除方式就必须能看到那种方式的效果），开关保留给"嫌吵"的人关。
-   *  fade/stretch/blur 三支模拟逻辑在 comFeatherPaint 里，sim=true 即按 comFeather.mode 画。 */
-  const COM_FEATHER_SIM_DEFAULT = true;
   const comFeather = {
     found: false,       // 自动探测是否命中
     manual: false,      // 用户是否手动改过（改了就覆盖探测结果）
-    // 2026-09-19 用户拍板：自适应**默认开启**（全片固定带对位置漂移/亮场景只能给一条
-    // 折中带，是「带太高/残字」两类反馈的共同根源）。手动调过带仍覆盖之。
-    dynamic: true,      // 羽化带随原字幕逐段自适应（与手动带位置互斥）
+    dynamic: false,     // 羽化带随原字幕逐段自适应（与手动带位置互斥）
     tune: false,        // 自适应之上的手动微调补救（dy/dh 偏移叠加在每个探测带上）
-    sim: COM_FEATHER_SIM_DEFAULT,  // 是否在带内画擦除模拟（用户勾选控制）
-    segs: [],           // 逐帧探测结果 [{t,y,h}]（t=源内秒）：勾自适应时预览「跟幕」取带，
-                        // 见 comFeatherBandAt()。空数组＝退回单条聚合带（旧行为）。
     dy: 0,              // 带顶微调（占画面高比例，可负）
     dh: 0,              // 带高加成（占画面高比例，可负=收窄）
     bandY: COM_FEATHER_DEFAULT.bandY,
@@ -13396,34 +10081,10 @@ el.dwVidPlayer.hidden = true;
   };
   let _comFeatherRaf = 0;
 
-  /** 从逐帧探测结果里取「当前播放头所在那一幕」的带（就近取，不插值）。
-   *  未命中该帧时向后/向前取最近的有效帧；全都没命中返回 null（调用方退回聚合带）。
-   *  ⚠️ 这就是用户要的「根据这幕来羽化」在预览侧的体现：管线渲染时逐段探测，
-   *  预览拿不到段落划分，用「抽帧时间点 + 就近取」做同一件事的近似。 */
-  function comFeatherBandAt(t) {
-    const segs = comFeather.segs;
-    if (!segs || !segs.length) return null;
-    let best = null, bestD = Infinity;
-    for (let i = 0; i < segs.length; i++) {
-      const s = segs[i];
-      if (s.y == null) continue;
-      const d = Math.abs(s.t - t);
-      if (d < bestD) { bestD = d; best = s; }
-    }
-    return best ? { y: best.y, h: best.h } : null;
-  }
-
   /** 预览与成片「实际生效」的带几何：自适应+微调时在探测结果上叠加 dy/dh 偏移，
    *  其余模式原样返回探测/手动值。预览画到哪里，管线就擦哪里（同一套偏移口径）。 */
   function comFeatherEff() {
     let y = comFeather.bandY, h = comFeather.bandH;
-    // 勾了「随原字幕自适应」且已有逐帧探测结果 ⇒ 预览跟着播放头走**这一幕**的带。
-    // （不做这一步的话：播放时框纹丝不动，用户看到的就是「自适应没产生作用」。）
-    if (comFeather.dynamic) {
-      const vid = el.comPreview;
-      const at = (vid && isFinite(vid.currentTime)) ? comFeatherBandAt(vid.currentTime) : null;
-      if (at) { y = at.y; h = at.h; }
-    }
     if (comFeather.dynamic && comFeather.tune) {
       y = Math.max(0, Math.min(0.98, y + comFeather.dy));
       h = Math.max(0.005, Math.min(0.4, h + comFeather.dh));
@@ -13447,8 +10108,7 @@ el.dwVidPlayer.hidden = true;
              y: vr.top - wr.top + (vr.height - h) / 2, w, h, scale };
   }
 
-  /** 复用同一个离屏 canvas（尺寸变化会重置上下文状态，调用方用前必须重设 filter/gCO）。
-   *  ⚠️ 只被模拟分支（comFeather.sim=true）使用；未勾选「预览擦除效果」时是"备用但不调用"。 */
+  /** 复用同一个离屏 canvas（尺寸变化会重置上下文状态，调用方用前必须重设 filter/gCO）。 */
   let _comFeatherOffCv = null;
   function comFeatherOff(w, h) {
     if (!_comFeatherOffCv) _comFeatherOffCv = document.createElement('canvas');
@@ -13458,81 +10118,7 @@ el.dwVidPlayer.hidden = true;
     return c.getContext('2d');
   }
 
-  /** 离屏画布池：模糊要**同时**持有「同尺寸的多张」（源 / 中间结果），
-   *  单张复用会互相覆盖 —— 所以按尺寸各留若干张轮转。
-   *  ⚠️ 拿到的 ctx 已被复位（transform/alpha/composite/smoothing），可直接画。 */
-  const _comFeatherPool = new Map();
-  function comFeatherPool(w, h) {
-    const key = w + 'x' + h;
-    let slot = _comFeatherPool.get(key);
-    if (!slot) {
-      if (_comFeatherPool.size > 16) _comFeatherPool.clear();   // 尺寸频繁变化时不无限涨
-      slot = { list: [], i: 0 };
-      _comFeatherPool.set(key, slot);
-    }
-    if (!slot.list.length) {
-      for (let n = 0; n < 6; n++) {
-        const c = document.createElement('canvas');
-        c.width = w; c.height = h;
-        slot.list.push(c);
-      }
-    }
-    const g = slot.list[slot.i++ % slot.list.length].getContext('2d');
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.globalCompositeOperation = 'source-over';
-    g.globalAlpha = 1;
-    g.imageSmoothingEnabled = true;
-    g.imageSmoothingQuality = 'high';
-    g.clearRect(0, 0, w, h);
-    return g;
-  }
-
-  /** 高斯模糊近似：**逐级减半的金字塔**（下采样链 → 逐级平滑升回），纯 drawImage。
-   *
-   *  🔴 为什么**不能**用 `ctx.filter = 'blur(Npx)'`（2026-09-18 踩过，别再改回去）：
-   *     canvas 2D 的 `filter` 属性在 **Safari 18 / macOS 15 之前根本不存在**。
-   *     本机 WKWebView = `AppleWebKit/605.1.15`（macOS 13.7.8），真机探针实测：
-   *       · `'filter' in ctx`  → **false**（引擎里没有这个 IDL 属性，赋值只是挂了个 JS 扩展属性）
-   *       · 设 `blur(6px)` 后画高对比棋盘，像素方差 **12192.2 → 12192.2**（逐位相同）
-   *     ⇒ 旧代码 blur 分支里的 `off.filter = 'blur(...)'` 一直是**静默空操作**，
-   *        带内画出来的就是原样清晰的画面 —— 这就是用户报「高斯模糊没有一点预览效果」的真凶。
-   *        （fade 分支不用 filter，所以只有高斯模糊"没效果"、fade 好好的，症状高度指向这里。）
-   *
-   *  ⚠️ 为什么是"逐级减半"而不是"一次降到 1/f"：
-   *     一次性把 69px 高的带压到 6px 再放大回 69px，bilinear 会留下 **~11px 的方块台阶**，
-   *     真机截图里肉眼可见一格一格的块斑（第一版实测如此）。逐级减半每次只放大 2×，
-   *     台阶被摊平 ⇒ 观感是均匀糊开，与成片 `gblur` 接近。
-   *
-   *  @param radiusPx 期望模糊半径（**目标画布的设备像素**，不是源像素）
-   *  @returns 一张 (dw, dh) 的 canvas —— 池内复用，调用方须**立即** drawImage 走
-   */
-  function comFeatherBlur(src, sx, sy, sw, sh, dw, dh, radiusPx) {
-    const base = comFeatherPool(dw, dh);
-    base.drawImage(src, sx, sy, sw, sh, 0, 0, dw, dh);
-
-    // ① 逐级减半：每减半一次＝平均窗口 ×2，所以「减半次数 ≈ log2(半径)」时窗口刚好覆盖半径。
-    //    这样模糊量由 radiusPx 唯一决定（stretch 的轻度软化不会被过度糊）。
-    const steps = Math.max(1, Math.min(6, Math.round(Math.log2(Math.max(2, radiusPx || 4)))));
-    const chain = [{ cv: base.canvas, w: dw, h: dh }];
-    let cw = dw, ch = dh;
-    for (let i = 0; i < steps && Math.min(cw, ch) > 3; i++) {
-      const nw = Math.max(1, Math.round(cw / 2)), nh = Math.max(1, Math.round(ch / 2));
-      const g = comFeatherPool(nw, nh);
-      g.drawImage(chain[chain.length - 1].cv, 0, 0, cw, ch, 0, 0, nw, nh);
-      chain.push({ cv: g.canvas, w: nw, h: nh });
-      cw = nw; ch = nh;
-    }
-    // ② 从最粗一级逐级升回（每级只 ×2）
-    let cur = chain[chain.length - 1];
-    for (let i = chain.length - 2; i >= 0; i--) {
-      const g = comFeatherPool(chain[i].w, chain[i].h);
-      g.drawImage(cur.cv, 0, 0, cur.w, cur.h, 0, 0, chain[i].w, chain[i].h);
-      cur = { cv: g.canvas, w: chain[i].w, h: chain[i].h };
-    }
-    return cur.cv;
-  }
-
-  /** 同步羽化层几何（虚线框贴住带）；返回画面区矩形，不可用返回 null。 */
+  /** 同步羽化层几何（canvas 铺满画面区、虚线框贴住带）；返回画面区矩形，不可用返回 null。 */
   function comFeatherSync() {
     const cv = el.comFeatherCanvas, box = el.comFeatherBand;
     const r = comFeatherContentRect();
@@ -13559,26 +10145,13 @@ el.dwVidPlayer.hidden = true;
     box.style.top = (r.y + by * r.h) + 'px';
     box.style.height = Math.max(6, bh * r.h) + 'px';
     box.hidden = false;
-    // 阈值从 16px 降到 11px：5% 带高在中档舞台上正好 ≈16px，旧阈值会**永远**把标签藏掉，
-    // 用户连"框在哪"都无从判断 —— 这正是「羽化看不到预览效果」的一半原因。
-    box.classList.toggle('is-tiny', bh * r.h < 11);
+    box.classList.toggle('is-tiny', bh * r.h < 16);
     // 未生效（既没探测到、用户也没手动指定）时用灰框示意，避免误导成"已应用"
-    const inactive = !comFeather.found && !comFeather.manual;
-    box.classList.toggle('is-inactive', inactive);
-    // 标签写清"生效 / 未生效"，避免灰框被当成已完成设置
-    if (el.comFeatherBandTag) {
-      el.comFeatherBandTag.textContent = inactive
-        ? '原字幕羽化范围（未生效：未探测到，可拖动指定）'
-        : (comFeather.dynamic ? '原字幕羽化范围（自适应逐段）' : '原字幕羽化范围');
-    }
+    box.classList.toggle('is-inactive', !comFeather.found && !comFeather.manual);
     return r;
   }
 
-  /** 重绘羽化覆层：**2026-09-18 起只清画布 + 同步范围框**，不再画拉伸擦除模拟
-   *  （默认 comFeather.sim=false，由卡片「预览擦除效果」勾选框控制）。
-   *  旧的三支模拟（fade/stretch/blur）原样保留在闸门之后，勾选即启用。
-   *  ⚠️ 无论 sim 开关如何，**comFeatherSync() 都必须先跑**（它是唯一的范围框定位入口，
-   *  早退只能发生在 sync 之后），否则关掉模拟会连框一起不显示。 */
+  /** 在预览画面上复刻管线的擦除效果：只画「带」这一条，其余保持透明漏出原画面。 */
   function comFeatherPaint() {
     const cv = el.comFeatherCanvas, vid = el.comPreview;
     const r = comFeatherSync();
@@ -13588,13 +10161,8 @@ el.dwVidPlayer.hidden = true;
     const W = cv.width, H = cv.height;                 // canvas 设备像素
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    // 🔴 默认不画（用户第 1 轮反馈：带内那块拉伸糊块像乱码）。只有用户**显式勾选**
-    // 「预览擦除效果」才画 —— 勾了就是"我想看效果"。
-    if (!comFeather.sim) return;
-    // ⚠️ 这里**不再**用 `!found && !manual` 早退（2026-09-18 第 2 轮真机实测出来的坑）：
-    //    勾上开关时若恰好没探测到、用户也没手动指定，早退会让 canvas 一个像素都不画 ⇒
-    //    「勾了没反应」，用户照样"看不到预览效果"。宁可画一个"未来不会被应用"的近似效果
-    //    （框已经是灰的、标签也写明「未生效」），也不要让开关看起来是坏的。
+    // 未生效时不画效果（虚线框仍显示，提示"可拖动指定"）
+    if (!comFeather.found && !comFeather.manual) return;
     if (!vid.videoWidth || vid.readyState < 2) return;  // 当前帧尚不可用
 
     const vw = vid.videoWidth, vh = vid.videoHeight;
@@ -13682,20 +10250,15 @@ el.dwVidPlayer.hidden = true;
       const stripSrc = Math.max(3, Math.min(dhSrc2, dySrc2, bandHSrc * 0.12 * 4));
       const softSrc = Math.max(1, Math.min(10,
         Math.round(Math.max(2, Math.min(6, dhSrc2 * 0.05)) * strength)));
-      // 先纵向拉满，再**用 drawImage 软化**（旧的 `off2.filter` 在 Safari 16 上是空操作 ⇒
-      // 拉伸纹路肉眼可见）。see comFeatherBlur 顶部注释。
-      const stretched = comFeatherPool(exW, offH2);
-      stretched.drawImage(vid, ex0, Math.max(0, dySrc2 - stripSrc),
-                          ex1 - ex0, stripSrc, 0, 0, exW, offH2);
-      const soft = comFeatherBlur(stretched.canvas, 0, 0, exW, offH2, exW, offH2,
-                                  blurPx(softSrc));
-      off2.drawImage(soft, 0, 0, exW, offH2, 0, 0, exW, offH2);
+      off2.filter = `blur(${blurPx(softSrc).toFixed(2)}px)`;
+      off2.drawImage(vid, ex0, Math.max(0, dySrc2 - stripSrc), ex1 - ex0, stripSrc, 0, 0, exW, offH2);
+      off2.filter = 'none';
     } else {
       // 整条高斯模糊（经典的"糊带"，留作兜底）
       const sigmaSrc = Math.max(8, Math.min(28, Math.round(Math.max(6, bandHSrc * 0.22) * strength)));
-      const blurred = comFeatherBlur(vid, ex0, dySrc2, ex1 - ex0, dhSrc2, exW, offH2,
-                                     blurPx(sigmaSrc));
-      off2.drawImage(blurred, 0, 0, exW, offH2, 0, 0, exW, offH2);
+      off2.filter = `blur(${blurPx(sigmaSrc).toFixed(2)}px)`;
+      off2.drawImage(vid, ex0, dySrc2, ex1 - ex0, dhSrc2, 0, 0, exW, offH2);
+      off2.filter = 'none';
     }
     // 上下渐隐（对应管线 geq 的 alpha_expr）：顶部透明渐入、底部渐出，边缘自然融入画面
     const gzr = Math.max(0.02, Math.min(0.45, (Math.max(2, bandHSrc * 0.25) * k) / offH2));
@@ -13746,9 +10309,7 @@ el.dwVidPlayer.hidden = true;
   }
 
   function comFeatherMarkManual() {
-    // 2026-09-19 用户拍板：去掉「手动指定」字样，徽章只留「覆盖自动探测」，
-    // 跟在「🎨 原字幕羽化」标题后一行放下（旧长文案在窄栏会折行/挤丢）。
-    comFeatherSetState('ok', '覆盖自动探测');
+    comFeatherSetState('ok', '手动指定（覆盖自动探测）');
   }
 
   /** 等待一次 seek 完成（带兜底超时，绝不卡死后续流程）。 */
@@ -13768,12 +10329,8 @@ el.dwVidPlayer.hidden = true;
     });
   }
 
-  /** 从预览视频抽帧 JPEG（缩到 480 宽）交给后端探测原字幕带。抽完把播放头放回原位。
-   *  返回 `[{blob, t}]`（t＝源内秒）—— **t 必须带上**：勾了「自适应」时预览要按播放头
-   *  就近取"这一幕"的带（comFeatherBandAt），后端 per_frame 的顺序与此处一一对应。
-   *  抽帧密度：按**时间步长**而非固定条数（每 STEP 秒一帧，24 帧封顶、8 帧兜底）。
-   *  旧实现固定 10 帧均匀分布 ⇒ 长片里相邻两帧可能差好几分钟，跟幕必跟丢。 */
-  async function comFeatherGrabFrames() {
+  /** 从预览视频抽 N 帧 JPEG（缩到 480 宽）交给后端探测原字幕带。抽完把播放头放回原位。 */
+  async function comFeatherGrabFrames(n) {
     const vid = el.comPreview;
     if (!vid || !vid.videoWidth || !(vid.duration > 0)) return [];
     const cvs = document.createElement('canvas');
@@ -13783,19 +10340,13 @@ el.dwVidPlayer.hidden = true;
     cvs.height = h;
     const c = cvs.getContext('2d');
     const saved = vid.currentTime || 0;
-    const dur = vid.duration;
-    let step = Math.max(8, dur / 24);                 // 长片自动稀释到 ≤24 帧
-    if (dur / step < 8) step = Math.max(0.5, dur / 8); // 短片保底 8 帧
-    const ts = [];
-    for (let t = step * 0.5; t < dur - 0.2 && ts.length < 24; t += step) ts.push(t);
     const out = [];
-    for (const t of ts) {
-      await comFeatherSeekTo(vid, t);
+    for (let i = 1; i <= n; i++) {
+      await comFeatherSeekTo(vid, vid.duration * (i / (n + 1)));
       try {
         c.drawImage(vid, 0, 0, w, h);
         const blob = await new Promise((r) => cvs.toBlob(r, 'image/jpeg', 0.7));
-        // 用**实际落点**（seek 未必精确）而不是请求值，跟幕才对得上
-        if (blob) out.push({ blob, t: Math.round(vid.currentTime * 1000) / 1000 });
+        if (blob) out.push(blob);
       } catch (_) { /* 单帧失败不影响其它帧 */ }
     }
     await comFeatherSeekTo(vid, saved);
@@ -13816,33 +10367,18 @@ el.dwVidPlayer.hidden = true;
       comFeather.bandH = COM_FEATHER_DEFAULT.bandH;
       comFeather.bandX = null;
       comFeather.bandW = null;
-      comFeather.segs = [];   // 旧片的逐帧带对新片毫无意义（否则勾自适应会画到错位置）
       comFeatherSyncInputs();
     }
     comFeather.probing = true;
     comFeather.srcKey = key;
     comFeatherSetState('busy', '探测中…');
     try {
-      // 按时间步长抽帧（见 comFeatherGrabFrames）：硬字幕间歇出现，稀疏命中会误报
-      // 「未探测到」；探测是纯 PIL（~10ms/帧），瓶颈在 seek，24 帧封顶可控。
-      const picked = await comFeatherGrabFrames();
-      if (!picked.length) throw new Error('抽帧失败（视频未就绪）');
-      const times = picked.map((x) => x.t);
+      const blobs = await comFeatherGrabFrames(4);
+      if (!blobs.length) throw new Error('抽帧失败（视频未就绪）');
       const fd = new FormData();
-      picked.forEach((x, i) => fd.append('frames', x.blob, `f${i}.jpg`));
+      blobs.forEach((b, i) => fd.append('frames', b, `f${i}.jpg`));
       fd.append('vertical', String(resolveVertical()));
       const res = await request('/api/commentary/feather-detect', { method: 'POST', body: fd });
-      // 🔴 逐帧带 → segs：勾了「随原字幕自适应」时预览按播放头就近取带（"跟幕"）。
-      //    后端尚未返回 per_frame（比如还没重构建）时 segs 为空 → 自动退回单条聚合带（旧行为），
-      //    不会报错，只是不跟幕。
-      comFeather.segs = [];
-      const pf = Array.isArray(res && res.per_frame) ? res.per_frame : [];
-      for (let i = 0; i < pf.length && i < times.length; i++) {
-        const f = pf[i];
-        if (f && typeof f.band_y_ratio === 'number' && f.band_h_ratio > 0) {
-          comFeather.segs.push({ t: times[i], y: f.band_y_ratio, h: f.band_h_ratio });
-        }
-      }
       if (res && res.found) {
         comFeather.found = true;
         // 横向范围（可选）：测到才存，预览擦除效果按它收窄（与成片同一口径）
@@ -13867,12 +10403,11 @@ el.dwVidPlayer.hidden = true;
       }
       if (el.comFeatherHint) {
         el.comFeatherHint.textContent = comFeather.found
-          ? '虚线框＝成片里会被擦除的原字幕位置；拖动可微调（改这里＝手动指定，覆盖自动探测）。'
+          ? '在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。'
           : '未探测到原字幕（画面较干净或字幕不是白色）。如确有原字幕，请在此手动指定带位置后拖动微调。';
       }
     } catch (err) {
       comFeather.found = false;
-      comFeather.segs = [];   // 探测失败：段表也要清，免得拿上一次的带继续跟幕
       comFeatherSetState('miss', '探测失败：' + ((err && err.message) || '未知错误'));
     } finally {
       comFeather.probing = false;
@@ -13880,13 +10415,9 @@ el.dwVidPlayer.hidden = true;
     }
   }
 
-  /** 播放时跟帧重绘（暂停时按需单次重绘即可，避免空转）。
-   *  ⚠️ 早退条件必须同时考虑**跟幕**：勾了「自适应」且已有逐帧带时，即使关着擦除模拟，
-   *  播放过程中框要跟着这一幕的字幕位置走 —— 早退会让框定死在第一帧的位置上。 */
+  /** 播放时跟帧重绘（暂停时按需单次重绘即可，避免空转）。 */
   function comFeatherTick() {
     _comFeatherRaf = 0;
-    const followScene = comFeather.dynamic && comFeather.segs.length > 0;
-    if (!comFeather.sim && !followScene) return;
     comFeatherPaint();
     const vid = el.comPreview;
     if (vid && !vid.paused && !vid.ended) _comFeatherRaf = requestAnimationFrame(comFeatherTick);
@@ -13922,40 +10453,29 @@ el.dwVidPlayer.hidden = true;
     } catch (_) { return ''; }
   };
 
-  /** 把 comFeather.dynamic 的当前值同步到 UI：输入框禁用、微调行显隐、提示文案、重绘。
-   *  2026-09-19 自适应默认开启 ⇒ 初始化时也必须跑一次，不能只在 change 里做。 */
-  const comFeatherApplyDynamic = () => {
-    comFeather.dynamic = !!(el.comFeatherDynamic && el.comFeatherDynamic.checked);
-    // 自适应时带位置/带高交给逐段探测，手动值不再下发（输入框保留但灰掉，避免误导）
-    if (el.comFeatherBandY) el.comFeatherBandY.disabled = comFeather.dynamic;
-    if (el.comFeatherBandH) el.comFeatherBandH.disabled = comFeather.dynamic;
-    // 微调补救行只在自适应下出现；关掉自适应时连微调一起归零（探测结果不背旧偏移）
-    if (el.comFeatherTuneRow) el.comFeatherTuneRow.hidden = !comFeather.dynamic;
-    if (!comFeather.dynamic && el.comFeatherTune) {
-      el.comFeatherTune.checked = false;
-      comFeather.tune = false;
-      comFeather.dy = 0;
-      comFeather.dh = 0;
-      if (el.comFeatherDy) { el.comFeatherDy.value = '0'; el.comFeatherDy.disabled = true; }
-      if (el.comFeatherDh) { el.comFeatherDh.value = '0'; el.comFeatherDh.disabled = true; }
-    }
-    if (el.comFeatherHint) {
-      el.comFeatherHint.textContent = comFeather.dynamic
-        ? (comFeather.segs.length
-            ? '自适应已开：预览会跟着播放头切到「这一幕」探测到的字幕位置；拖框＝给每段加偏移（自动打开「手动微调补救」），残字漏出就把带高再加一点。'
-            : '自适应已开（渲染时每个解说段单独探测）。预览还没取到逐帧结果 —— 点「重新探测」后即可在这里跟着每一幕预览。')
-        : '虚线框＝成片里会被擦除的原字幕位置；拖动可微调（改这里＝手动指定，覆盖自动探测）。';
-    }
-    // 跟幕靠逐帧重绘驱动：tick 在「未开模拟且无跟幕」时会早退，这里补一次调度
-    if (comFeather.dynamic && comFeather.segs.length && !_comFeatherRaf) {
-      _comFeatherRaf = requestAnimationFrame(comFeatherTick);
-    }
-    comFeatherPaint();
-  };
   if (el.comFeatherDynamic) {
-    el.comFeatherDynamic.checked = !!comFeather.dynamic;   // 默认开启（与 comFeather.dynamic 初始值一致）
-    el.comFeatherDynamic.addEventListener('change', comFeatherApplyDynamic);
-    comFeatherApplyDynamic();
+    el.comFeatherDynamic.addEventListener('change', () => {
+      comFeather.dynamic = !!el.comFeatherDynamic.checked;
+      // 自适应时带位置/带高交给逐段探测，手动值不再下发（输入框保留但灰掉，避免误导）
+      if (el.comFeatherBandY) el.comFeatherBandY.disabled = comFeather.dynamic;
+      if (el.comFeatherBandH) el.comFeatherBandH.disabled = comFeather.dynamic;
+      // 微调补救行只在自适应下出现；关掉自适应时连微调一起归零（探测结果不背旧偏移）
+      if (el.comFeatherTuneRow) el.comFeatherTuneRow.hidden = !comFeather.dynamic;
+      if (!comFeather.dynamic && el.comFeatherTune) {
+        el.comFeatherTune.checked = false;
+        comFeather.tune = false;
+        comFeather.dy = 0;
+        comFeather.dh = 0;
+        if (el.comFeatherDy) { el.comFeatherDy.value = '0'; el.comFeatherDy.disabled = true; }
+        if (el.comFeatherDh) { el.comFeatherDh.value = '0'; el.comFeatherDh.disabled = true; }
+      }
+      if (el.comFeatherHint) {
+        el.comFeatherHint.textContent = comFeather.dynamic
+          ? '自适应已开：每个解说段开播前单独探测原字幕，没字幕的段不擦除。擦不干净（残字漏出）就勾「手动微调补救」加高/平移带。'
+          : '在预览窗口拖动虚线框可微调位置；改这里＝手动指定，会覆盖自动探测。';
+      }
+      comFeatherPaint();
+    });
   }
   // 自适应之上的手动微调：dy/dh 是**偏移量**（叠加在每个探测出的带上），不是绝对值，
   // 所以这里绝不置 manual —— 置了就会整体退化成固定带，自适应失效。
@@ -13971,21 +10491,6 @@ el.dwVidPlayer.hidden = true;
         if (el.comFeatherDh) el.comFeatherDh.value = '0';
       }
       comFeatherPaint();
-    });
-  }
-  // 「预览擦除效果」开关（2026-09-18 新增，默认关）：
-  //   关 → 带内只留范围框（默认，避免"糊块像乱码"）；
-  //   开 → 画出 fade/stretch/blur 近似模拟，用于确认"擦得干不干净"。
-  //   打开时若正在播放，需要重新挂上跟帧重绘（comFeatherTick 在 sim=false 时会直接返回）。
-  if (el.comFeatherSim) {
-    el.comFeatherSim.checked = !!comFeather.sim;   // 默认打开（见 COM_FEATHER_SIM_DEFAULT）
-    el.comFeatherSim.addEventListener('change', () => {
-      comFeather.sim = !!el.comFeatherSim.checked;
-      comFeatherPaint();
-      const vid = el.comPreview;
-      if (comFeather.sim && vid && !vid.paused && !vid.ended && !_comFeatherRaf) {
-        _comFeatherRaf = requestAnimationFrame(comFeatherTick);
-      }
     });
   }
   const comFeatherOnTuneEdit = () => {
@@ -14045,38 +10550,30 @@ el.dwVidPlayer.hidden = true;
     });
   }
   // 拖动虚线框微调带位置（上下手柄不做：高度用数值框更精确，也避免和播放器控件抢指针）
-  // 🔴 2026-09-18 用户实锤：**自适应模式下这个框以前是拖不动的**（代码里刻意 preventDefault 拦掉），
-  //    理由是"拖动＝写绝对位置，会让整条任务退化成固定带"。方向对、交互错：用户只会觉得"坏了"。
-  //    现在改成 —— 自适应下拖动＝**自动打开「手动微调补救」并写 dy 偏移**（偏移叠加在每段探测带上，
-  //    自适应照样生效）；非自适应下仍是老语义（写绝对位置 = 手动指定）。
   if (el.comFeatherBand) {
     const box = el.comFeatherBand;
     box.addEventListener('pointerdown', (ev) => {
+      // 自适应模式下拖拽＝绝对位置，会让整条任务退化成固定带、自适应失效 —— 拦掉，
+      // 想补救请用「手动微调补救」的 dy/dh 偏移（叠加在每段探测结果上）。
+      if (comFeather.dynamic) {
+        ev.preventDefault();
+        if (el.comFeatherHint) {
+          el.comFeatherHint.textContent = '自适应模式下不支持拖动虚线框（那是固定带用法）；擦不干净请勾「手动微调补救」加偏移。';
+        }
+        return;
+      }
       const r = comFeatherContentRect();
       if (!r) return;
       ev.preventDefault();
-      const dyn = comFeather.dynamic;
-      if (dyn) {
-        // 自动切到「微调补救」：拖动改的是**偏移量**，不动绝对带位置 ⇒ 自适应不失效
-        comFeather.tune = true;
-        if (el.comFeatherTune) el.comFeatherTune.checked = true;
-        if (el.comFeatherDy) el.comFeatherDy.disabled = false;
-        if (el.comFeatherDh) el.comFeatherDh.disabled = false;
-      }
       box.classList.add('is-drag');
       try { box.setPointerCapture(ev.pointerId); } catch (_) {}
       const startY = ev.clientY;
-      const startOff = dyn ? comFeather.dy : comFeather.bandY;
+      const startRatio = comFeather.bandY;
       const onMove = (e2) => {
-        const d = (e2.clientY - startY) / r.h;
-        if (dyn) {
-          comFeather.dy = Math.max(-0.1, Math.min(0.1, startOff + d));
-          if (el.comFeatherDy) el.comFeatherDy.value = (comFeather.dy * 100).toFixed(1);
-        } else {
-          comFeather.bandY = Math.max(0, Math.min(0.98 - comFeather.bandH, startOff + d));
-          comFeather.manual = true;
-          comFeatherSyncInputs();
-        }
+        const dy = (e2.clientY - startY) / r.h;
+        comFeather.bandY = Math.max(0, Math.min(0.98 - comFeather.bandH, startRatio + dy));
+        comFeather.manual = true;
+        comFeatherSyncInputs();
         comFeatherPaint();
       };
       const onUp = () => {
@@ -14084,14 +10581,7 @@ el.dwVidPlayer.hidden = true;
         box.removeEventListener('pointermove', onMove);
         box.removeEventListener('pointerup', onUp);
         box.removeEventListener('pointercancel', onUp);
-        if (dyn) {
-          if (el.comFeatherHint) {
-            el.comFeatherHint.textContent = '已按拖动量设了「带顶偏移 ' + (comFeather.dy * 100).toFixed(1)
-              + '%」：偏移叠加在每段探测出的带上，自适应仍然有效（想要更大范围直接改「带顶 ±%」）。';
-          }
-        } else {
-          comFeatherMarkManual();
-        }
+        comFeatherMarkManual();
       };
       box.addEventListener('pointermove', onMove);
       box.addEventListener('pointerup', onUp);
@@ -14105,12 +10595,6 @@ el.dwVidPlayer.hidden = true;
     el.comPreview.addEventListener('pause', comFeatherPaint);
     el.comPreview.addEventListener('seeked', comFeatherPaint);
     el.comPreview.addEventListener('loadeddata', comFeatherPaint);
-    // 源被清空 / 加载失败：画面没了，两层必须立刻隐掉（否则黑屏上留着上一帧的擦除预览）。
-    // ⚠️ 不要在这里调 comResetPreviewOverlays()（那会连时间轴量程一起归零），
-    //    清源路径（setupComPreview(null)）自己会调，这里只管覆层。
-    const hideOverlaysNoPicture = () => { comFeatherPaint(); comUpdateSubPreview(); };
-    el.comPreview.addEventListener('emptied', hideOverlaysNoPicture);
-    el.comPreview.addEventListener('error', hideOverlaysNoPicture);
     // 元数据就绪即自动探测一次（异步，不阻塞预览）
     el.comPreview.addEventListener('loadedmetadata', () => {
       comFeatherPaint();
@@ -14160,35 +10644,16 @@ el.dwVidPlayer.hidden = true;
   }
   window.addEventListener('resize', comUpdateSubPreview);
   comUpdateSubPreview();
-  // 舞台高度跟着素材比例走：中栏尺寸 / 素材元数据 / 「画幅」档位 三种变化都要重算。
-  // 观察的是**中栏**而不是舞台本身（舞台高度由本函数写，观察它会自激）。
-  if (el.comPreview) {
-    const stageEl = el.comPreview.closest('.com-preview-stage');
-    if (stageEl && stageEl.parentElement) {
-      new ResizeObserver(() => { comSyncStageSize(); comSyncSplitHandle(); })
-        .observe(stageEl.parentElement);
-    }
-    el.comPreview.addEventListener('loadedmetadata', () => { comSyncStageSize(); comSyncSplitHandle(); });
-    document.addEventListener('change', (e) => {
-      const t = e.target;
-      if (t && t.name === 'comAspect') { comSyncStageSize(); comSyncSplitHandle(); }
-    });
-  }
-  // 拖动把手位置（--com-split-y）跟着舞台走：切换视图时 .com-v2 从 0 变成真实尺寸、
-  // 窗口缩放、画幅切换都要重算。观察 .com-v2 而不是把手自身（写变量不该触发自激）。
-  const comV2El = document.querySelector('.com-v2');
-  if (comV2El) new ResizeObserver(comSyncSplitHandle).observe(comV2El);
-  window.addEventListener('resize', comSyncSplitHandle);
-  comSyncStageSize();
-  comSyncSplitHandle();
   if (el.comMaxChars) {
     el.comMaxChars.addEventListener('input', () => {
       if (el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
     });
   }
   // 初始化：根据默认值同步显隐与回显
-  // （BGM 的三行初始化 2026-09-18 删除：comBgm* 元素已不存在，配乐改用 comMusic；
-  //   comMusicSync() 在音乐轨自己的初始化里调用。）
+  const _initBgm = el.comBgm ? el.comBgm.value : 'off';
+  if (el.comBgmVolWrap) el.comBgmVolWrap.hidden = (_initBgm === 'off');
+  if (el.comBgmFileWrap) el.comBgmFileWrap.hidden = (_initBgm !== 'user');
+  if (el.comBgmVolume && el.comBgmVolumeVal) el.comBgmVolumeVal.textContent = Math.round(Number(el.comBgmVolume.value) * 100) + '%';
   if (el.comMaxChars && el.comMaxCharsVal) el.comMaxCharsVal.textContent = (Number(el.comMaxChars.value) === 0) ? '不限' : (Number(el.comMaxChars.value) + '字');
 
   // 来源互斥：选了下拉就清空本地文件
@@ -14197,9 +10662,7 @@ el.dwVidPlayer.hidden = true;
       selectedLocalFile = null;
       el.comFileStatus.hidden = true;
       const opt = el.comSource.options[el.comSource.selectedIndex];
-      // ?play=1：内联播放模式（后端按扩展名给 video/mp4 等正确 MIME）。
-      // 🔴 不带它时后端回 application/octet-stream + attachment，WKWebView 拒解码 ⇒ 预览恒黑屏。
-      setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}?play=1`, opt ? opt.textContent : '');
+      setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}`, opt ? opt.textContent : '');
       // 立刻预检：交给后端 ffprobe 探测真实时长（含裁剪折算），不通过当场提示
       comRunPrecheck({ fileId: el.comSource.value });
     } else {
@@ -14262,15 +10725,6 @@ el.dwVidPlayer.hidden = true;
       const qs = new URLSearchParams();
       if (durationSec > 0) qs.set('duration_sec', String(durationSec));
       if (fileId) qs.set('file_id', fileId);
-      // 裁剪口径必须与后端一致（app._fold_commentary_range：外层裁剪 ∩「正剧范围」）。
-      // 🔴 2026-09-19：此前完全不传 —— 后端只能按片长判，用户把 45 分钟片子设成只做
-      //    中间 15 分钟，预检仍按 45 分钟算（免费档可能被误拦），而真正跑起来又只处理 15 分钟。
-      if (comTrimStart > 0) qs.set('trim_start', String(comTrimStart));
-      if (comTrimEnd > 0) qs.set('trim_end', String(comTrimEnd));
-      const _dStart = el.comDramaStart && el.comDramaStart.value ? parseTimeSec(el.comDramaStart.value) : null;
-      const _dEnd = el.comDramaEnd && el.comDramaEnd.value ? parseTimeSec(el.comDramaEnd.value) : null;
-      if (_dStart) qs.set('drama_start_sec', String(_dStart));
-      if (_dEnd) qs.set('drama_end_sec', String(_dEnd));
       // 带上「界面上当前选中的档位」而不是让后端只读已保存配置：用户可能先切档位、
       // 再去选素材（还没点保存），不传就会出现「界面写本机优先、提示却说要用云端额度」
       // 这种自相矛盾的提示。（此处不复用 comNormalizeEngine：它声明在另一个 IIFE 里，
@@ -14439,7 +10893,7 @@ el.dwVidPlayer.hidden = true;
     },
     comIntroOutroMode: {
       kind: 'radio',
-      title: '片头片尾处理',
+      title: '固定选择项',
       hide: '.com-mode-fixed',
       options: [['keep_no_narrate', '保留片头片尾·不解说'], ['skip', '去片头片尾']],
     },
@@ -14489,9 +10943,6 @@ el.dwVidPlayer.hidden = true;
   };
 
   const initComSelect = (block) => {
-    // data-com-select-inline：保留原生单选组的内联胶囊排布，不做下拉化
-    // （解说风格：10 个 2~4 字短标签，下拉浮层会盖住下方内容且一路拉到底）
-    if (block.hasAttribute('data-com-select-inline')) return;
     const key = block.getAttribute('data-com-select');
     const def = COM_SELECT_DEFS[key];
     if (!def) return;
@@ -14540,71 +10991,7 @@ el.dwVidPlayer.hidden = true;
 
     let dirty = false;
     const defaultVal = def.kind === 'checkbox' ? 'off' : (def.options[0] || [''])[0];
-    // ---- 展开定位（2026-09-21 修复"风格选择不了 / 拉不下去"）----
-    // 面板原本常驻在 trigger 旁边（absolute），被两层东西挡住：
-    //   ① 右栏 .com-right 是 overflow:auto 的滚动容器 → 面板伸出容器底部就被**裁掉**，
-    //      被裁掉的选项看不见、也点不到（点击穿透到背后的时间轴元素）；
-    //   ② .com-col-right 是 position:sticky（自成层叠上下文）→ 面板 z-index 抬到 999
-    //      仍压不过右栏粘滞表头(z-index:2)与时间轴（elementsFromPoint 实测确认）。
-    // 解法：展开时把面板移到 <body> 下并加 .is-portal（position:fixed），脱离这两层；
-    // 按**视口**定位，面板就能完整显示；收起时放回原位、清掉内联样式。
-    const PANEL_MAX_H = 320, PANEL_GAP = 7, PANEL_PAD = 8, PANEL_MIN_H = 120;
-    const clipHost = (() => {                 // 用于「trigger 被滚出视野就自动收起」
-      let n = panel.parentElement;
-      while (n && n !== document.documentElement) {
-        const cs = getComputedStyle(n);
-        if (cs.overflow !== 'visible' || cs.overflowY !== 'visible') return n;
-        n = n.parentElement;
-      }
-      return null;
-    })();
-    let _placeKey = '';
-    const placePanel = () => {
-      if (panel.hidden || !panel.classList.contains('is-portal')) return;
-      const tr = btn.getBoundingClientRect();
-      const vh = window.innerHeight;
-      const key = [Math.round(tr.top), Math.round(tr.left), Math.round(tr.width), vh].join(',');
-      if (key === _placeKey) return;          // 位置没变就不重复量（面板内部滚动也会触发 scroll）
-      _placeKey = key;
-      // 宽度：至少与 trigger 同宽，但要容得下最长的选项（右栏 trigger 只有 80px，「短剧解说」「影视深度」会被省略号截断）
-      panel.style.left = '0px';
-      panel.style.width = 'max-content';
-      panel.style.minWidth = Math.round(tr.width) + 'px';
-      const pw = Math.min(panel.offsetWidth, window.innerWidth - PANEL_PAD * 2);
-      panel.style.minWidth = '';
-      panel.style.width = Math.round(pw) + 'px';
-      panel.style.left = Math.round(Math.max(PANEL_PAD, Math.min(tr.left, window.innerWidth - pw - PANEL_PAD))) + 'px';
-      panel.style.top = Math.round(tr.bottom + PANEL_GAP) + 'px';
-      panel.style.maxHeight = '';
-      const need = panel.scrollHeight;        // 自然高度（清掉 max-height 后量）
-      const want = Math.min(need, PANEL_MAX_H);
-      const below = vh - tr.bottom - PANEL_GAP - PANEL_PAD;
-      const above = tr.top - PANEL_GAP - PANEL_PAD;
-      if (below < want && above > below) {
-        // 下方不够且上方更宽裕 → 向上翻：先定 max-height 再量高，才能把底边贴到 trigger 上沿
-        panel.style.maxHeight = Math.round(Math.max(Math.min(want, above), PANEL_MIN_H)) + 'px';
-        const h = panel.offsetHeight;
-        panel.style.top = Math.round(Math.max(tr.top - PANEL_GAP - h, PANEL_PAD)) + 'px';
-      } else if (below < want) {
-        // 两侧都不够 → 按可用高度收 max-height，面板自己滚（保证每一项都能点到）
-        panel.style.maxHeight = Math.round(Math.max(below, PANEL_MIN_H)) + 'px';
-      }
-    };
-    const openPanel = () => {
-      document.body.appendChild(panel);       // 脱离 overflow 裁剪 + .com-col-right 层叠上下文
-      panel.classList.add('is-portal');
-      panel.hidden = false;
-      btn.setAttribute('aria-expanded', 'true');
-      placePanel();
-    };
-    const close = () => {
-      panel.hidden = true;
-      btn.setAttribute('aria-expanded', 'false');
-      panel.classList.remove('is-portal');
-      panel.removeAttribute('style');
-      _placeKey = '';
-      if (panel.parentElement !== wrap) wrap.appendChild(panel);   // 放回原位
-    };
+    const close = () => { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
     const syncUI = () => {
       const cur = comSelectRead(def, key);
       // 用户未选择时显示组名（功能标题），选择后显示具体参数；
@@ -14623,7 +11010,7 @@ el.dwVidPlayer.hidden = true;
 
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (panel.hidden) openPanel();
+      if (panel.hidden) { panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); }
       else close();
     });
     panel.querySelectorAll('.com-mode-dropdown-option').forEach((b) => {
@@ -14634,31 +11021,18 @@ el.dwVidPlayer.hidden = true;
         close();
       });
     });
-    // 展开时面板被移到 <body> 下（.is-portal），点击判定要同时看 wrap 和 panel
     document.addEventListener('click', (e) => {
-      if (wrap.contains(e.target) || panel.contains(e.target)) return;
+      if (wrap.contains(e.target)) return;
       close();
     });
-    // 鼠标离开 trigger + panel 整体时自动折起（面板已 portal 到 body，两边都要挂）
+    // 鼠标离开 trigger + panel 整体时自动折起
     let _leaveTimer = null;
-    const onLeave = () => { _leaveTimer = setTimeout(close, 120); };
-    const onEnter = () => { if (_leaveTimer) { clearTimeout(_leaveTimer); _leaveTimer = null; } };
-    wrap.addEventListener('mouseleave', onLeave);
-    wrap.addEventListener('mouseenter', onEnter);
-    panel.addEventListener('mouseleave', onLeave);
-    panel.addEventListener('mouseenter', onEnter);
-    // 展开状态下容器滚动（右栏 .com-right 可滚）/ 窗口缩放时重新定位；
-    // trigger 被滚出右栏视野就收起（面板已 fixed 到 body，不会再跟着一起滚出去）
-    const _reposition = () => {
-      if (panel.hidden) return;
-      if (clipHost) {
-        const hr = clipHost.getBoundingClientRect(), tr = btn.getBoundingClientRect();
-        if (tr.bottom < hr.top || tr.top > hr.bottom) { close(); return; }
-      }
-      placePanel();
-    };
-    window.addEventListener('resize', _reposition, { passive: true });
-    document.addEventListener('scroll', _reposition, { capture: true, passive: true });
+    wrap.addEventListener('mouseleave', () => {
+      _leaveTimer = setTimeout(close, 120);
+    });
+    wrap.addEventListener('mouseenter', () => {
+      if (_leaveTimer) { clearTimeout(_leaveTimer); _leaveTimer = null; }
+    });
     syncUI();
   };
 
@@ -14702,696 +11076,6 @@ el.dwVidPlayer.hidden = true;
   }
   el.comTrimReset.addEventListener('click', resetTrim);
 
-  // ===== v2 剪映式改版（2026-09-17）：历史面板 / 时间轴同步 / 窄窗口检查器抽屉 =====
-  // 解说历史：2026-09-18 用户「换个方式展示，在这里做个展开查看」——从右侧大抽屉
-  // 改为**锚定左栏「📂 解说历史」按钮下方的就地展开浮层**（宽 ~384px，不压暗页面）。
-  // 列表渲染/排序/视图切换逻辑不变，只有定位与开合方式换了。
-  const comHistToggleBtn = $('comHistToggle');
-  const comHistScrim = $('comHistScrim');
-  const comHistCloseBtn = $('comHistClose');
-  /** 把面板放到按钮正下方（fixed 定位不随左栏滚动，需在 resize/滚动时重算）。
-   *  🔴 面板宽度与位置全部由这里实测决定：CSS 里只给初始值，避免写死像素。 */
-  const positionHistPop = () => {
-    const pop = el.comHistory, btn = comHistToggleBtn;
-    if (!pop || !btn) return;
-    const r = btn.getBoundingClientRect();
-    // 宽度：**右端对齐左栏右边界**（2026-09-18 用户「还是太宽，缩到截图最右边」——
-    // 实测那张截图的右边界就是左栏右边界，即按钮右边 + 左栏内边距 12.8）。
-    // 左端仍锚在按钮左边，所以 宽度 = 左栏右 − 按钮左（1340 窗口下 424.2−237.2 = 187）。
-    // 左栏缺失时退回 320 上限；窗口过窄时再让一步。
-    const colEl = $('comLeftCol');
-    const colRight = colEl ? colEl.getBoundingClientRect().right : 0;
-    const target = colRight > r.left + 40 ? Math.round(colRight - r.left) : 320;
-    const W = Math.min(320, Math.max(170, Math.min(target, window.innerWidth - 24)));
-    const left = Math.max(12, Math.min(r.left, window.innerWidth - W - 12));
-    const below = window.innerHeight - (r.bottom + 8) - 12;
-    const above = r.top - 8 - 12;
-    let top = r.bottom + 8;
-    let maxH = Math.min(620, Math.max(200, below));
-    if (below < 260 && above > below) {   // 按钮贴近视口底部时改为向上翻
-      maxH = Math.min(620, Math.max(200, above));
-      top = Math.max(12, r.top - 8 - maxH);
-    }
-    pop.style.left = Math.round(left) + 'px';
-    pop.style.top = Math.round(top) + 'px';
-    pop.style.width = Math.round(W) + 'px';
-    pop.style.maxHeight = Math.round(maxH) + 'px';
-  };
-  const isHistOpen = () => document.body.classList.contains('com-hist-open');
-  const setHistOpen = (open) => {
-    if (open) {
-      positionHistPop();
-      if (el.comGrid) el.comGrid.scrollTop = 0;   // 每次展开都从最新一条看起
-    }
-    document.body.classList.toggle('com-hist-open', !!open);
-    if (comHistToggleBtn) comHistToggleBtn.setAttribute('aria-expanded', String(!!open));
-  };
-  if (comHistToggleBtn) comHistToggleBtn.addEventListener('click', () => setHistOpen(!isHistOpen()));
-  if (comHistCloseBtn) comHistCloseBtn.addEventListener('click', () => setHistOpen(false));
-  if (comHistScrim) comHistScrim.addEventListener('click', () => setHistOpen(false));
-  document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape' && isHistOpen()) setHistOpen(false);
-  });
-  window.addEventListener('resize', () => { if (isHistOpen()) positionHistPop(); });
-  const comLeftColEl = $('comLeftCol');
-  if (comLeftColEl) comLeftColEl.addEventListener('scroll', () => { if (isHistOpen()) positionHistPop(); });
-
-  // 点列表某一行 → 该行就地展开（同一时刻只留一行展开，避免列表被拉得过长）；
-  // 展开时才把 video 的 controls 挂回来。保存/删除按钮与重命名输入框不触发展开。
-  if (el.comGrid) {
-    el.comGrid.addEventListener('click', (ev) => {
-      if (ev.target.closest('.com-actions')) return;
-      if (ev.target.closest('input, textarea, select, a')) return;
-      const card = ev.target.closest('.com-card');
-      if (!card || !el.comGrid.classList.contains('com-view-list')) return;
-      const open = !card.classList.contains('is-open');
-      if (open) {
-        Array.prototype.forEach.call(el.comGrid.querySelectorAll('.com-card.is-open'), (c) => {
-          if (c === card) return;
-          c.classList.remove('is-open');
-          const cv = c.querySelector('video');
-          if (cv) cv.removeAttribute('controls');
-        });
-      }
-      card.classList.toggle('is-open', open);
-      const v = card.querySelector('video');
-      if (v) { if (open) v.setAttribute('controls', ''); else v.removeAttribute('controls'); }
-    });
-
-    // 悬停某一行 → 剧名若被截断，则内层文本缓慢左右滚动（alternate 往返）展示完整剧名。
-    // 距离/时长按实测算：--mv = -(inner.scrollWidth - name.clientWidth)，--md = 距离/42s（夹在 2.6~9s）。
-    // 只在 list 视图生效（其它视图剧名会换行显示，不需要滚）。
-    // 移出时不用清理：动画由 .com-card:hover 触发，:hover 消失即取消并回到起点。
-    el.comGrid.addEventListener('mouseover', (ev) => {
-      const t = ev.target;
-      if (!t || !t.closest) return;
-      const card = t.closest('.com-card');
-      if (!card || !el.comGrid.classList.contains('com-view-list')) return;
-      if (card.classList.contains('is-open')) return;
-      const nm = card.querySelector('.com-name'), inner = card.querySelector('.com-name-in');
-      if (!nm || !inner) return;
-      const over = Math.round(inner.scrollWidth - nm.clientWidth);
-      if (over > 4) {
-        inner.style.setProperty('--mv', (-over) + 'px');
-        inner.style.setProperty('--md', Math.min(9, Math.max(2.6, over / 42)).toFixed(2) + 's');
-        inner.setAttribute('data-ov', '1');
-        // 已经用滚动展示全名了，去掉原生 tooltip，否则它会盖住正在滚动的文字
-        nm.removeAttribute('title');
-      } else {
-        inner.removeAttribute('data-ov');
-        if (!nm.getAttribute('title')) nm.setAttribute('title', nm.textContent || '');
-      }
-    });
-  }
-  // ===== 剪映式三轨时间轴（2026-09-17 晚）：原声 / 旁白 / 字幕 =====
-  // 数据源（全部前端已有，无需改后端）：
-  //   · 原声轨 = 视频总时长（#comDramaEndRange.max）+ 正剧区间；区间外＝被剪掉的头部/尾部。
-  //   · 旁白轨 = currentScriptSegments 的 start/end（GET /api/commentary/script 返回）。
-  //   · 字幕轨 = 与旁白同源时间码（成片里字幕跟随旁白），分两轨是为对齐剪映「音轨/字幕轨」形态。
-  const comTlDrama = $('comTlDrama'), comTlRange = $('comTlRange');
-  const comTlLaneNarr = $('comTlLaneNarr'), comTlLaneSubs = $('comTlLaneSubs');
-  const comTlScale = $('comTlScale'), comTlCut = $('comTlCut'), comTlStep = $('comTlStep');
-  const comTlInner = $('comTlInner'), comTlZoomVal = $('comTlZoomVal'), comTlRoot = $('comTimeline');
-  // 交互层（2026-09-18）：原声轨引用、正剧把手、播放头
-  const comTlLaneOrig = $('comTlLaneOrig'), comTlHandleL = $('comTlHandleL'), comTlHandleR = $('comTlHandleR');
-  const comTlPlayhead = $('comTlPlayhead');
-  /** 时间轴时长（秒）＝片尾滑块 max（与预览视频时长同源）。 */
-  const comTlDur = () => {
-    const d = parseFloat(el.comDramaEndRange && el.comDramaEndRange.max) || 0;
-    return d > 0 && isFinite(d) ? d : 0;
-  };
-  /** 时间轴轨道区（原声/旁白/字幕三轨等宽同左边界）的屏幕几何。 */
-  const comTlLaneGeom = () => {
-    const ref = comTlLaneNarr || comTlLaneSubs || comTlLaneOrig;
-    if (!ref) return null;
-    const r = ref.getBoundingClientRect();
-    return r.width > 0 ? r : null;
-  };
-  /** 屏幕横坐标 → 时间轴秒数（超出轨道两端自动夹住）。 */
-  const comTlSecFromX = (clientX) => {
-    const g = comTlLaneGeom(), dur = comTlDur();
-    if (!g || !dur) return null;
-    const ratio = Math.max(0, Math.min(1, (clientX - g.left) / g.width));
-    return ratio * dur;
-  };
-  /** 定位预览到某秒（与独立播放条解耦：改 currentTime 后由它的 timeupdate 自己同步）。 */
-  const comTlSeekTo = (sec) => {
-    const v = $('comPreview');
-    if (!v || !v.getAttribute('src') || !v.readyState) return false;
-    const d = (isFinite(v.duration) && v.duration > 0) ? v.duration : comTlDur();
-    const t = Math.max(0, Math.min(d || sec, Number(sec) || 0));
-    try { v.currentTime = t; } catch (_) { return false; }
-    comTlSyncPlayhead();
-    return true;
-  };
-  /** 播放头位置＝当前播放时间在轨道上的投影；无素材/无时长时隐藏。 */
-  function comTlSyncPlayhead() {
-    if (!comTlPlayhead) return;
-    const v = $('comPreview'), lane = comTlLaneNarr || comTlLaneOrig, dur = comTlDur();
-    if (!v || !lane || !dur || !v.getAttribute('src') || !(isFinite(v.duration) && v.duration > 0)) {
-      comTlPlayhead.hidden = true; return;
-    }
-    const t = Math.max(0, Math.min(dur, v.currentTime || 0));
-    const innerR = comTlInner ? comTlInner.getBoundingClientRect() : null;
-    const laneR = lane.getBoundingClientRect();
-    const base = innerR ? (laneR.left - innerR.left) : 0;
-    comTlPlayhead.hidden = false;
-    comTlPlayhead.style.left = (base + (t / dur) * laneR.width).toFixed(1) + 'px';
-  }
-  /** 两枚正剧把手贴到当前区间两端（跟随滑块/输入框/清空/脚本重绘）。 */
-  const comTlPlaceHandles = () => {
-    const dur = comTlDur();
-    const s = parseTimeSec(el.comDramaStart.value);
-    const e2 = parseTimeSec(el.comDramaEnd.value);
-    const put = (h, sec, dflt) => {
-      if (!h) return;
-      h.hidden = !dur;
-      if (!dur) return;
-      const v = sec == null ? dflt : sec;
-      h.style.left = Math.max(0, Math.min(100, (v / dur) * 100)).toFixed(3) + '%';
-    };
-    put(comTlHandleL, s, 0);
-    put(comTlHandleR, e2, dur);
-  };
-  /** 拖把手 → 改「正剧范围」。🔴 只回写左栏已有的两个滑块并派发 input：
-      复用现成的同步链（滑块→文本输入框→片长文案→三轨重绘），
-      全站仍然只有「正剧范围」这一处范围控件，这里只是它的第二个操作面。 */
-  const comTlMinGap = 1;   // 秒：起止最小间距，避免拖成零长区间
-  const comTlSetDrama = (side, sec) => {
-    const dur = comTlDur();
-    const rs = el.comDramaStartRange, re = el.comDramaEndRange;
-    if (!dur || !rs || !re) return;
-    let start = parseFloat(rs.value) || 0;
-    let end = parseFloat(re.value);
-    if (!isFinite(end) || end <= 0) end = dur;
-    const v = Math.max(0, Math.min(dur, Number(sec) || 0));
-    if (side === 'l') start = Math.max(0, Math.min(v, end - comTlMinGap));
-    else end = Math.min(dur, Math.max(v, start + comTlMinGap));
-    if (parseFloat(rs.value) !== start) rs.value = String(start);
-    if (parseFloat(re.value) !== end) re.value = String(end);
-    rs.dispatchEvent(new Event('input', { bubbles: true }));
-    re.dispatchEvent(new Event('input', { bubbles: true }));
-  };
-  /** 选中某段：两条轨同 idx 的段 + 脚本面板对应行一起高亮，并把面板滚到那一行。 */
-  const comTlActiveSeg = (idx) => {
-    [comTlLaneNarr, comTlLaneSubs].forEach((lane) => {
-      if (!lane) return;
-      Array.prototype.forEach.call(lane.querySelectorAll('.com-tl-seg'), (d) => {
-        d.classList.toggle('is-active', parseInt(d.dataset.idx, 10) === idx);
-      });
-    });
-    const box = el.comScriptSegments;
-    if (!box || !el.comScriptPanel || el.comScriptPanel.hidden) return;
-    Array.prototype.forEach.call(box.querySelectorAll('.com-seg-row'), (row, i) => {
-      row.classList.toggle('is-tl-active', i === idx);
-    });
-    const row = box.children[idx];
-    if (row && row.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  };
-
-  // ===== 音乐轨（2026-09-18）：配乐状态 / 选择面板 / 试听 / 应用到已有成片 =====
-  // 🔴 用 var：渲染 payload 在源码上位于本块之前（buildPayload 一带），var 提升避免
-  //    初始化顺序上的 TDZ；payload 侧一律用 (comMusic || {}) 兜底取值。
-  //    配乐在渲染成片时混入（后端 build 的 bgm/bgm_file/bgm_volume 参数一直在，只是
-  //    2026-09-15 删掉「成片增强」里的 BGM 块后，前端恒发 off）。
-  var comMusic = { kind: 'off', file: '', volume: 0.18 };
-  var comMusicAuditionEl = null;
-  var comMusicOutCache = null;              // { ts, item } 最近一次成片列表查询结果
-  const COM_MUSIC_LABEL = { off: '无', soft: '柔和', light: '轻快', epic: '恢弘', user: '本地文件' };
-  const comMusicEls = () => ({
-    add: $('comTlMusicAdd'), clip: $('comTlMusicClip'), txt: $('comTlMusicTxt'),
-    pop: $('comTlMusicPop'), opts: $('comTlMusicOpts'), fileRow: $('comTlMusicFileRow'),
-    path: $('comTlMusicPath'), vol: $('comTlMusicVol'), volVal: $('comTlMusicVolVal'),
-    pick: $('comTlMusicPick'), audition: $('comTlMusicAudition'),
-    apply: $('comTlMusicApply'), hint: $('comTlMusicHint')
-  });
-  const comMusicLabel = () => COM_MUSIC_LABEL[comMusic.kind] || '无';
-  const comMusicFileBase = () => String(comMusic.file || '').split('/').pop();
-  const comMusicHint = (txt, cls) => {
-    const m = comMusicEls();
-    if (!m.hint) return;
-    m.hint.textContent = txt || '';
-    m.hint.className = 'com-tl-music-hint' + (cls ? ' is-' + cls : '');
-  };
-  /** 轨道 + 面板 UI 与 comMusic 对齐。 */
-  const comMusicSync = () => {
-    const m = comMusicEls();
-    const on = comMusic.kind !== 'off';
-    const pct = Math.round(comMusic.volume * 100) + '%';
-    if (m.add) m.add.hidden = on;
-    if (m.clip) {
-      m.clip.hidden = !on;
-      m.clip.title = '配乐：' + comMusicLabel() + ' · 音量 ' + pct + '（点击更换/移除）';
-    }
-    if (m.txt && on) {
-      m.txt.textContent = '🎵 ' + comMusicLabel()
-        + (comMusic.kind === 'user' && comMusic.file ? ' · ' + comMusicFileBase() : '')
-        + ' · ' + pct;
-    }
-    if (m.opts) {
-      Array.prototype.forEach.call(m.opts.querySelectorAll('.com-tl-music-opt'), (b) => {
-        b.classList.toggle('is-on', b.dataset.kind === comMusic.kind);
-      });
-    }
-    if (m.fileRow) m.fileRow.hidden = comMusic.kind !== 'user';
-    if (m.path) { m.path.textContent = comMusic.file || '未选择'; m.path.title = comMusic.file || ''; }
-    if (m.vol) m.vol.value = String(comMusic.volume);
-    if (m.volVal) m.volVal.textContent = pct;
-  };
-  /** 最近一支成片（试听内置曲 / 一键应用都要 cid）。15s 内复用，避免频繁打接口。 */
-  const comMusicOut = async (fresh) => {
-    if (!fresh && comMusicOutCache && Date.now() - comMusicOutCache.ts < 15000) return comMusicOutCache.item;
-    try {
-      const d = await request('/api/commentary/list');
-      const item = (d && d.items && d.items[0]) || null;
-      comMusicOutCache = { ts: Date.now(), item };
-      return item;
-    } catch (_) {
-      return null;
-    }
-  };
-  const comMusicOpening = async () => {
-    const m = comMusicEls();
-    if (!m.pop || m.pop.hidden) return;
-    comMusicSync();
-    if (m.apply) m.apply.hidden = true;
-    const pending = '正在查最近成片…';
-    comMusicHint(pending);
-    const item = await comMusicOut(true);
-    if (m.apply) m.apply.hidden = !item;
-    // 🔴 只在提示还是「查询中」时才覆盖：否则会把用户已经点出来的「已选柔和」等提示顶掉
-    const now = comMusicEls().hint;
-    if (now && now.textContent !== pending) return;
-    if (!item) {
-      comMusicHint('还没有成片：配乐会在下次「生成成片」时一起混进去；渲染完就能在这里一键换/加/移除。');
-      return;
-    }
-    const st = item.bgm_state || {};
-    const cur = (st.bgm && st.bgm !== 'off')
-      ? (COM_MUSIC_LABEL[st.bgm] || st.bgm) + ' · ' + Math.round((st.volume || 0.18) * 100) + '%'
-      : '无配乐';
-    comMusicHint('最近成片：' + item.name + '（当前 ' + cur + '）。改完点「应用到当前成片」秒级生效，不用重渲。');
-  };
-  const comMusicOpen = (open) => {
-    const m = comMusicEls();
-    if (!m.pop) return;
-    m.pop.hidden = !open;
-    if (open) comMusicOpening();
-  };
-  const comMusicAudition = async () => {
-    const m = comMusicEls();
-    if (comMusicAuditionEl) {
-      try { comMusicAuditionEl.pause(); } catch (_) { /* 已释放 */ }
-      comMusicAuditionEl = null;
-    }
-    if (comMusic.kind === 'off') { comMusicHint('先选一首配乐再试听'); return; }
-    let url = '';
-    if (comMusic.kind === 'user') {
-      if (!comMusic.file) { comMusicHint('先点「选择音乐文件」挑一首', 'err'); return; }
-      url = '/api/commentary/audio-preview?path=' + encodeURIComponent(comMusic.file);
-    } else {
-      const item = await comMusicOut();
-      if (!item || (item.bgm_previews || []).indexOf(comMusic.kind) < 0) {
-        comMusicHint('内置曲的试听文件是渲染成片时一并生成的：先渲一次成片就能试听，或改用「本地文件…」。', 'err');
-        return;
-      }
-      url = '/api/commentary/bgm-preview/' + encodeURIComponent(item.id) + '/' + comMusic.kind;
-    }
-    try {
-      const a = new Audio(url);
-      a.volume = Math.max(0, Math.min(1, comMusic.volume));
-      comMusicAuditionEl = a;
-      await a.play();
-      comMusicHint('试听中…（音量按上面的滑块，实际成片里也是这个音量）', 'ok');
-    } catch (e) {
-      comMusicHint('试听失败：' + ((e && e.message) || e), 'err');
-    }
-  };
-  /** 把当前配乐应用到已有成片：轻量 amix，秒级，就地替换成片（不重渲）。 */
-  const comMusicApply = async () => {
-    const m = comMusicEls();
-    const item = await comMusicOut(true);
-    if (!item) { comMusicHint('没找到已渲染的成片——先点「生成成片」，渲染完再回来应用配乐。', 'err'); return; }
-    if (comMusic.kind === 'user' && !comMusic.file) { comMusicHint('「本地文件…」还没选文件', 'err'); return; }
-    if (m.apply) m.apply.disabled = true;
-    comMusicHint('正在混入配乐（秒级，不重渲）…');
-    try {
-      const form = new FormData();
-      form.append('bgm', comMusic.kind);
-      if (comMusic.kind === 'user' && comMusic.file) form.append('bgm_file', comMusic.file);
-      form.append('bgm_volume', String(comMusic.volume));
-      const r = await request('/api/commentary/remux-bgm/' + encodeURIComponent(item.id), { method: 'POST', body: form });
-      const jid = r && r.job_id;
-      if (!jid) throw new Error('未拿到混音任务号');
-      for (let i = 0; i < 90; i++) {
-        await new Promise((res) => setTimeout(res, 1000));
-        const st = await request('/api/commentary/' + jid);
-        if (!st) continue;
-        if (st.status === 'completed') {
-          comMusicOutCache = null;   // 成片的 bgm_state 变了，缓存作废
-          comMusicHint('✅ 已应用到成片：' + item.name + '（' + comMusicLabel() + ' · '
-            + Math.round(comMusic.volume * 100) + '%）', 'ok');
-          return;
-        }
-        if (st.status === 'failed') throw new Error(st.error || '混音失败');
-        const last = (st.progress || []).slice(-1)[0];
-        comMusicHint('混音中… ' + (last || ''));
-      }
-      throw new Error('等待超时（90s），可在「成片」列表里看结果');
-    } catch (e) {
-      comMusicHint('应用失败：' + ((e && e.message) || e), 'err');
-    } finally {
-      if (m.apply) m.apply.disabled = false;
-    }
-  };
-  (() => {
-    const m = comMusicEls();
-    const toggle = () => comMusicOpen(!!(m.pop && m.pop.hidden));
-    if (m.add) m.add.addEventListener('click', toggle);
-    if (m.clip) m.clip.addEventListener('click', toggle);
-    const closeBtn = $('comTlMusicClose');
-    if (closeBtn) closeBtn.addEventListener('click', () => comMusicOpen(false));
-    if (m.opts) {
-      m.opts.addEventListener('click', (ev) => {
-        const b = ev.target && ev.target.closest ? ev.target.closest('.com-tl-music-opt') : null;
-        if (!b) return;
-        comMusic.kind = b.dataset.kind || 'off';
-        const cur = comMusicEls();
-        comMusicSync();
-        if (comMusic.kind === 'off') comMusicHint('已移除配乐（下次渲染生效；已渲染的成片点「应用到当前成片」立即去掉）');
-        else if (comMusic.kind === 'user') comMusicHint('挑一个本地音乐文件（mp3 / wav / m4a / flac）');
-        else comMusicHint('已选「' + comMusicLabel() + '」，可先点「试听」');
-      });
-    }
-    if (m.pick) {
-      m.pick.addEventListener('click', async () => {
-        // 复用桌面桥 chooseFiles（无桥接时提示手动贴路径）
-        try {
-          const fn = window.VDL && window.VDL.desktop && window.VDL.desktop.chooseFiles;
-          let p = '';
-          if (typeof fn === 'function') {
-            const arr = await fn();
-            p = (Array.isArray(arr) && arr.length) ? arr[0] : '';
-          }
-          if (p) {
-            comMusic.file = p;
-            comMusicSync();
-            comMusicHint('已选：' + comMusicFileBase() + '，可先试听');
-          } else {
-            comMusicHint('没选到文件（桌面桥不可用时可把绝对路径贴到下面的输入框）', 'err');
-            if (m.path && m.path.tagName === 'SPAN') {
-              const inp = document.createElement('input');
-              inp.type = 'text';
-              inp.className = 'com-tl-music-path';
-              inp.placeholder = '/Users/you/Music/bgm.mp3';
-              inp.value = comMusic.file || '';
-              inp.addEventListener('change', () => {
-                comMusic.file = inp.value.trim();
-                comMusicSync();
-              });
-              m.path.replaceWith(inp);
-            }
-          }
-        } catch (_) { /* 用户取消 */ }
-      });
-    }
-    if (m.vol) {
-      m.vol.addEventListener('input', () => {
-        comMusic.volume = Math.max(0.02, Math.min(0.6, Number(m.vol.value) || 0.18));
-        comMusicSync();
-      });
-    }
-    if (m.audition) m.audition.addEventListener('click', comMusicAudition);
-    if (m.apply) m.apply.addEventListener('click', comMusicApply);
-    comMusicSync();
-  })();
-  let comTlZoom = 100;  // 100 = 铺满视口；>100 横向滚动（同时放大三轨与刻度）
-
-  /** 秒 → 「m:ss」/「h:mm:ss」（刻度尺用，比 formatHMS 紧凑）。 */
-  const comTlTickText = (sec) => {
-    const t = Math.max(0, Math.round(sec));
-    const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
-    const p = (n) => String(n).padStart(2, '0');
-    return h > 0 ? `${h}:${p(m)}:${p(s)}` : `${m}:${p(s)}`;
-  };
-  /** 把「秒/格」向上取整成 1/2/5×10^n，保证刻度落在整数时间上。 */
-  const comTlNiceStep = (raw) => {
-    if (!isFinite(raw) || raw <= 0) return 1;
-    const pow = Math.pow(10, Math.floor(Math.log10(raw)));
-    const n = raw / pow;
-    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
-  };
-  /** 渲染刻度尺：按轨道实际像素宽决定密度（约每 72px 一格）。 */
-  const comTlRenderScale = (dur) => {
-    if (!comTlScale) return;
-    if (!dur || !isFinite(dur)) { comTlScale.replaceChildren(); return; }
-    const laneW = (comTlLaneNarr && comTlLaneNarr.clientWidth) || comTlScale.clientWidth || 0;
-    const want = laneW > 0 ? Math.max(2, Math.round(laneW / 72)) : 5;
-    const step = comTlNiceStep(dur / want);
-    const parts = [];
-    let i = 0;
-    for (let t = 0; t <= dur + step * 0.001; t += step, i++) {
-      const sp = document.createElement('span');
-      sp.className = 'com-tl-tick';
-      sp.style.left = ((t / dur) * 100).toFixed(3) + '%';
-      const txt = document.createElement('span');
-      txt.textContent = comTlTickText(t);
-      sp.appendChild(txt);
-      parts.push(sp);
-    }
-    if (parts.length) {
-      parts[0].classList.add('com-tl-tick-first');
-      parts[parts.length - 1].classList.add('com-tl-tick-last');
-    }
-    comTlScale.replaceChildren(...parts);
-  };
-  /** 把一组 {start,end}(秒) 画到某条轨道上。 */
-  const comTlRenderSegs = (lane, segs, dur) => {
-    if (!lane) return;
-    if (!dur || !Array.isArray(segs) || !segs.length) { lane.replaceChildren(); return; }
-    const parts = [];
-    segs.forEach((sg, idx) => {
-      const a = Math.max(0, Math.min(dur, Number(sg.start) || 0));
-      const b = Math.max(a, Math.min(dur, Number(sg.end) || a));
-      if (b - a < 0.05) return;
-      const d = document.createElement('div');
-      d.className = 'com-tl-clip com-tl-seg';
-      d.style.left = ((a / dur) * 100).toFixed(3) + '%';
-      d.style.width = Math.max(0.35, ((b - a) / dur) * 100).toFixed(3) + '%';
-      // 交互用锚点（2026-09-18）：点段定位预览 + 联动脚本面板同 idx 的行
-      d.dataset.idx = String(idx);
-      d.dataset.start = String(a);
-      d.dataset.end = String(b);
-      const txt = String(sg.narration || '').replace(/\s+/g, ' ').trim();
-      d.title = `${formatHMS(Math.floor(a))} – ${formatHMS(Math.floor(b))}（${(b - a).toFixed(1)}s）${txt ? '\n' + txt.slice(0, 60) : ''}\n点一下：预览跳到这一句`;
-      if (b - a < 0.6) d.classList.add('is-tiny');   // 极短段：够窄也要能点中（CSS 给最小命中宽度）
-      parts.push(d);
-    });
-    lane.replaceChildren(...parts);
-  };
-  /** 全量重绘。触发：滑块 input / 输入框 change / 清空 / 视频元数据 / 脚本载入 / 缩放 / 窗口尺寸。 */
-  /** 把时间轴实测总高写进 #commentaryView 的 --com-tl-h。
-      中栏时间轴 2026-09-17 晚起向右伸出、右端与设置栏右边界齐平 → 会压在设置栏下半区上，
-      设置栏靠 `max-height: calc(100% - var(--com-tl-h))` 让位，保证最下面的卡片不被盖住。
-      offsetHeight 为 0（视图还没显示）时不写，沿用 CSS 兜底 108px。 */
-  const comTlPublishHeight = () => {
-    if (!comTlRoot) return;
-    const host = document.getElementById('commentaryView');
-    if (!host) return;
-    // 🔴 预留量＝「中栏底边 − 时间轴顶边 + 8px 安全间距」，不是「时间轴高度 + 12」：
-    // 时间轴并不贴中栏底边（下面还有约 19px 空隙），用高度算会少算约 17px
-    // → 设置栏底边压到时间轴顶边之下 8px（实测重叠），最后一张卡被盖住。
-    const col = comTlRoot.parentElement;
-    const colBox = col && col.getBoundingClientRect();
-    const tlBox = comTlRoot.getBoundingClientRect();
-    let want;
-    if (colBox && colBox.height > 0 && tlBox.height > 0) {
-      want = Math.max(0, Math.round(colBox.bottom - tlBox.top + 8)) + 'px';
-    } else {
-      want = Math.round(comTlRoot.offsetHeight + 20) + 'px';
-    }
-    if (host.style.getPropertyValue('--com-tl-h') !== want) host.style.setProperty('--com-tl-h', want);
-  };
-  const comTlSync = () => {
-    const dur = parseFloat(el.comDramaEndRange && el.comDramaEndRange.max) || 0;
-    const hasDur = !!dur && isFinite(dur);
-    const s = parseTimeSec(el.comDramaStart.value);
-    const e2 = parseTimeSec(el.comDramaEnd.value);
-    if (comTlRoot) comTlRoot.classList.toggle('is-empty', !hasDur);
-    // 原声轨：正剧区间高亮（区间外＝被剪掉的头尾，留在暗底上）
-    if (comTlDrama) {
-      if (!hasDur) {
-        comTlDrama.style.display = 'none';
-      } else {
-        comTlDrama.style.display = '';
-        const sPct = Math.max(0, Math.min(100, ((s == null ? 0 : s) / dur) * 100));
-        const ePct = Math.max(sPct, Math.min(100, ((e2 == null ? dur : e2) / dur) * 100));
-        comTlDrama.style.left = sPct.toFixed(3) + '%';
-        comTlDrama.style.width = Math.max(0.5, ePct - sPct).toFixed(3) + '%';
-      }
-    }
-    if (comTlRange) {
-      comTlRange.textContent = (!hasDur || (s == null && e2 == null))
-        ? '正剧范围：自动检测'
-        : '正剧 ' + formatHMS(Math.floor(s == null ? 0 : s)) + ' → ' + (e2 == null ? '片尾' : formatHMS(Math.floor(e2)));
-    }
-    // 剪掉段数＝正剧区间之外被排除的连续区间（头/尾各最多 1 段）。
-    // 管线当前只暴露正剧起止，故上限为 2；将来若拿到中间插段会自动变多，无需改这里。
-    if (comTlCut) {
-      let n = 0;
-      if (hasDur) {
-        if (s != null && s > 0.5) n += 1;
-        if (e2 != null && dur - e2 > 0.5) n += 1;
-      }
-      comTlCut.hidden = n === 0;
-      comTlCut.textContent = n ? `剪掉 ${n} 段` : '';
-    }
-    const segs = Array.isArray(currentScriptSegments) ? currentScriptSegments : [];
-    comTlRenderSegs(comTlLaneNarr, segs, hasDur ? dur : 0);
-    comTlRenderSegs(comTlLaneSubs, segs, hasDur ? dur : 0);
-    comTlRenderScale(hasDur ? dur : 0);
-    comTlPlaceHandles();
-    comTlSyncPlayhead();
-    comTlPublishHeight();
-  };
-  /** 缩放：写 width%（>100 才写内联，100% 铺满）；并重算刻度密度。 */
-  const comTlApplyZoom = () => {
-    if (comTlZoomVal) comTlZoomVal.textContent = comTlZoom + '%';
-    if (comTlInner) comTlInner.style.width = comTlZoom > 100 ? comTlZoom + '%' : '';
-    const out = $('comTlZoomOut'), inc = $('comTlZoomIn');
-    if (out) out.disabled = comTlZoom <= 100;
-    if (inc) inc.disabled = comTlZoom >= 500;
-    comTlSync();
-  };
-  const comTlZoomOutBtn = $('comTlZoomOut'), comTlZoomInBtn = $('comTlZoomIn');
-  if (comTlZoomOutBtn) comTlZoomOutBtn.addEventListener('click', () => { comTlZoom = Math.max(100, comTlZoom - 50); comTlApplyZoom(); });
-  if (comTlZoomInBtn) comTlZoomInBtn.addEventListener('click', () => { comTlZoom = Math.min(500, comTlZoom + 50); comTlApplyZoom(); });
-
-  // ===== 时间轴交互（2026-09-18）：点轨道定位 / 拖把手改正剧 / 点段联动脚本面板 =====
-  /** 拖正剧把手：pointer 拖拽（capture）+ 键盘微调（← →，Shift=10s）。 */
-  const comTlBindHandle = (handle, side) => {
-    if (!handle) return;
-    let dragging = false;
-    const onMove = (ev) => {
-      if (!dragging) return;
-      const sec = comTlSecFromX(ev.clientX);
-      if (sec == null) return;
-      ev.preventDefault();
-      comTlSetDrama(side, sec);
-    };
-    const stop = (ev) => {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove('dragging');
-      try { handle.releasePointerCapture(ev.pointerId); } catch (_) { /* 未捕获过则忽略 */ }
-    };
-    handle.addEventListener('pointerdown', (ev) => {
-      if (!comTlDur()) return;
-      ev.preventDefault();
-      ev.stopPropagation();          // 别让轨道把这次按下当成「点此定位」
-      dragging = true;
-      handle.classList.add('dragging');
-      try { handle.setPointerCapture(ev.pointerId); } catch (_) { /* 老引擎忽略 */ }
-    });
-    handle.addEventListener('pointermove', onMove);
-    handle.addEventListener('pointerup', stop);
-    handle.addEventListener('pointercancel', stop);
-    handle.addEventListener('keydown', (ev) => {
-      const step = ev.shiftKey ? 10 : 1;
-      const rs = el.comDramaStartRange, re = el.comDramaEndRange;
-      if (!rs || !re) return;
-      const cur = parseFloat(side === 'l' ? rs.value : re.value) || 0;
-      if (ev.key === 'ArrowLeft') { ev.preventDefault(); comTlSetDrama(side, cur - step); }
-      else if (ev.key === 'ArrowRight') { ev.preventDefault(); comTlSetDrama(side, cur + step); }
-    });
-  };
-  comTlBindHandle(comTlHandleL, 'l');
-  comTlBindHandle(comTlHandleR, 'r');
-
-  /** 点轨道 = 定位预览；点在某个旁白/字幕段上 = 定位到该段起点并联动脚本面板。 */
-  const comTlBindSeek = (node) => {
-    if (!node) return;
-    node.addEventListener('click', (ev) => {
-      if (ev.target && ev.target.classList && ev.target.classList.contains('com-tl-handle')) return;
-      const segEl = ev.target && ev.target.closest ? ev.target.closest('.com-tl-seg') : null;
-      if (segEl && segEl.dataset.start != null) {
-        comTlSeekTo(segEl.dataset.start);
-        const idx = parseInt(segEl.dataset.idx, 10);
-        if (idx >= 0) comTlActiveSeg(idx);
-        return;
-      }
-      const sec = comTlSecFromX(ev.clientX);
-      if (sec == null) return;
-      comTlSeekTo(sec);
-      comTlActiveSeg(-1);            // 点空白＝取消选中
-    });
-  };
-  [comTlLaneOrig, comTlLaneNarr, comTlLaneSubs, comTlScale].forEach(comTlBindSeek);
-
-  // 反向联动：点脚本面板某段的「#N + 时间码」行 → 时间轴高亮该段 + 预览跳过去。
-  // 只在 .com-seg-meta 上触发（不拦 textarea，编辑时视频不会乱跳）。
-  if (el.comScriptSegments) {
-    el.comScriptSegments.addEventListener('click', (ev) => {
-      const meta = ev.target && ev.target.closest ? ev.target.closest('.com-seg-meta') : null;
-      if (!meta) return;
-      const row = meta.closest('.com-seg-row');
-      const idx = Array.prototype.indexOf.call(el.comScriptSegments.children, row);
-      if (idx < 0) return;
-      comTlActiveSeg(idx);
-      // 起跳时间优先取状态数组；状态与 DOM 行号可能错位（saveScript 会丢弃空旁白行），
-      // 这时退回轨上同 idx 段的 dataset.start，避免「点了行、时间轴高亮了、预览却没动」。
-      const sg = (currentScriptSegments || [])[idx];
-      let start = sg ? Number(sg.start) : NaN;
-      if (!isFinite(start)) {
-        const segEl = comTlLaneNarr && comTlLaneNarr.querySelector('.com-tl-seg[data-idx="' + idx + '"]');
-        if (segEl && segEl.dataset.start != null) start = Number(segEl.dataset.start);
-      }
-      if (isFinite(start)) comTlSeekTo(start);
-    });
-  }
-
-  // 播放头跟随播放位置（rAF 节流，避免 timeupdate 高频重排）
-  const comTlPreviewEl = $('comPreview');
-  if (comTlPreviewEl) {
-    let phRaf = 0;
-    comTlPreviewEl.addEventListener('timeupdate', () => {
-      if (phRaf) return;
-      phRaf = requestAnimationFrame(() => { phRaf = 0; comTlSyncPlayhead(); });
-    });
-    comTlPreviewEl.addEventListener('seeked', comTlSyncPlayhead);
-    comTlPreviewEl.addEventListener('loadedmetadata', () => setTimeout(comTlSyncPlayhead, 0));
-    comTlPreviewEl.addEventListener('emptied', comTlSyncPlayhead);
-  }
-  // 窗口尺寸变化：轨道像素宽变了，刻度密度跟着重算（防抖，避免拖动窗口时反复重排）
-  let comTlResizeT = null;
-  window.addEventListener('resize', () => {
-    clearTimeout(comTlResizeT);
-    // 走 comTlSync（而不是只重算刻度）：窗口变了时间轴顶边位置也变，
-    // --com-tl-h 预留量必须跟着重算，否则设置栏底边会重新压到时间轴上。
-    comTlResizeT = setTimeout(comTlSync, 120);
-  });
-  [el.comDramaStartRange, el.comDramaEndRange].forEach((r) => r && r.addEventListener('input', comTlSync));
-  [el.comDramaStart, el.comDramaEnd].forEach((i) => i && i.addEventListener('change', comTlSync));
-  if (el.comTrimReset) el.comTrimReset.addEventListener('click', () => setTimeout(comTlSync, 0));
-  const comPreviewEl = $('comPreview');
-  if (comPreviewEl) comPreviewEl.addEventListener('loadedmetadata', () => setTimeout(comTlSync, 0));
-  comTlApplyZoom();  // 初始化（含「缩小」按钮置灰）
-  setTimeout(comTlSync, 800);
-  /** 单行折叠卡的摘要放不下会被省略号截断 → 挂原生 title，hover 可看全文。 */
-  const comHintTitles = () => {
-    const host = document.querySelector('.com-right');
-    if (!host) return;
-    Array.prototype.forEach.call(host.querySelectorAll('.com-fold-hint'), (h) => {
-      const t = (h.textContent || '').trim();
-      if (t && !h.title) h.title = t;
-    });
-  };
-  comHintTitles();
-  // 窄窗口（<1280）：检查器收抽屉，浮动按钮/「完成」开合
-  const comInspFab = $('comInspFab'), comInspCloseBtn = $('comInspClose'), comInspector = $('comInspector');
-  if (comInspFab && comInspector) comInspFab.addEventListener('click', () => comInspector.classList.toggle('open'));
-  if (comInspCloseBtn && comInspector) comInspCloseBtn.addEventListener('click', () => comInspector.classList.remove('open'));
-
   el.comRefresh.addEventListener('click', loadCommentary);
 
   // 配音与音量：手动调节滑块 + 保存/重置
@@ -15411,26 +11095,37 @@ el.dwVidPlayer.hidden = true;
     renderCommentaryList();
   });
 
-  // 解说成片：排序（2026-09-18 用户「排序方式默认当前，其他排序方式不要，只留这个」）
-  // 只保留时间维度：⇅ 按钮一键在「最新在前 / 最早在前」之间切换，默认仍是 mtime-desc。
-  // 原来的下拉菜单（大小 2 项 + 名称 2 项）连同带字 label / 下三角 caret 一并删除 ——
-  // 面板只有 187px，一个方向切换就够；「当前排序」靠 tooltip + is-asc 高亮交代。
-  const SORT_LABELS = { 'mtime-desc': '时间 · 最新在前', 'mtime-asc': '时间 · 最早在前' };
-  const syncSortMenu = () => {
-    if (!SORT_LABELS[commentarySort]) commentarySort = 'mtime-desc';  // 防御：旧值兜底
-    const lbl = SORT_LABELS[commentarySort];
-    if (!el.comSortBtn) return;
-    el.comSortBtn.title = '排序：' + lbl + '（点击切换）';
-    el.comSortBtn.setAttribute('aria-label', '排序：' + lbl);
-    el.comSortBtn.classList.toggle('is-asc', commentarySort === 'mtime-asc');
+  // 解说成片：排序切换（自定义弹出菜单，仿 macOS 原生菜单）
+  const SORT_LABELS = {
+    'mtime-desc': '时间：最新在前', 'mtime-asc': '时间：最早在前',
+    'size-desc': '大小：从大到小', 'size-asc': '大小：从小到大',
+    'name-asc': '名称：A-Z', 'name-desc': '名称：Z-A',
   };
-  if (el.comSortBtn) {
-    el.comSortBtn.addEventListener('click', () => {
-      commentarySort = commentarySort === 'mtime-asc' ? 'mtime-desc' : 'mtime-asc';
-      syncSortMenu();
-      renderCommentaryList();
-    });
-  }
+  const syncSortMenu = () => {
+    el.comSortLabel.textContent = SORT_LABELS[commentarySort] || commentarySort;
+    el.comSortMenu.querySelectorAll('li[data-value]').forEach((li) =>
+      li.classList.toggle('selected', li.dataset.value === commentarySort));
+  };
+  const closeSortMenu = () => {
+    el.comSortMenu.classList.remove('open');
+    el.comSortBtn.setAttribute('aria-expanded', 'false');
+  };
+  el.comSortBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = el.comSortMenu.classList.toggle('open');
+    el.comSortBtn.setAttribute('aria-expanded', String(open));
+  });
+  el.comSortMenu.addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-value]');
+    if (!li) return;
+    commentarySort = li.dataset.value;
+    syncSortMenu();
+    closeSortMenu();
+    renderCommentaryList();
+  });
+  document.addEventListener('click', (e) => {
+    if (!el.comSortMenu.contains(e.target) && !el.comSortBtn.contains(e.target)) closeSortMenu();
+  });
   syncSortMenu();
 
   // ------------------------------------------------------------------ 初始化
@@ -15585,27 +11280,6 @@ el.dwVidPlayer.hidden = true;
   el.subModal.addEventListener('click', (event) => {
     if (event.target === el.subModal) el.subModal.close();
   });
-
-  // ---- 桌面版导航护栏（2026-09-22）----
-  // WKWebView 里任何指向外站的 <a href> 点击都会把**整个应用界面**导航过去，且没有
-  // 后退按钮 —— 用户等于「丢了」App（本次「直接保存到本机 → 403 openresty 页」就是这个坑）。
-  // 这里在捕获阶段统一拦截：外站链接交系统默认浏览器打开，本机/同源链接放行
-  // （后端取件、保存到本机等仍走原路径）。已带 download 属性的同源链接也放行。
-  document.addEventListener('click', (ev) => {
-    if (!isDesktopShell()) return;
-    const target = ev.target;
-    const a = target && target.closest ? target.closest('a[href]') : null;
-    if (!a) return;
-    const href = a.getAttribute('href') || '';
-    if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
-    let abs;
-    try { abs = new URL(href, location.href); } catch (_) { return; }
-    if (abs.origin === location.origin) return;   // 同源（本机后端）资源放行
-    if (abs.protocol !== 'http:' && abs.protocol !== 'https:') return;
-    ev.preventDefault();
-    const api = window.pywebview && window.pywebview.api;
-    if (api && api.open_external) { try { api.open_external(abs.href); } catch (_) {} }
-  }, true);
   el.subApply.addEventListener('click', () => {
     const key = el.subInput.value.trim();
     const msg = el.subMsg;
@@ -15633,9 +11307,7 @@ el.dwVidPlayer.hidden = true;
     return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
   };
   const libThumbUrl = (id) => `/api/library/thumb/${encodeURIComponent(id)}`;
-  // ?play=1 = 内联播放（后端给正确 MIME）；不带参数是下载语义（octet-stream + attachment）。
-  // 本函数的两处调用点都是「播放/预览」，故一律带 play=1 —— 否则 WKWebView 解码不了。
-  const libFileUrl = (id) => `/api/library/file/${encodeURIComponent(id)}?play=1`;
+  const libFileUrl = (id) => `/api/library/file/${encodeURIComponent(id)}`;
   const libEncFileUrl = (id) => `/api/library/encfile/${encodeURIComponent(id)}`;
 
   function switchView(view) {
@@ -15649,8 +11321,6 @@ el.dwVidPlayer.hidden = true;
     const isImage = view === 'imageconvert';
     const isCp = view === 'compress';   // 高效压缩（2026-09-11 新增）
     const isSr = view === 'sr';         // 高清修复（2026-09-12 新增）
-    const isShare = view === 'share';   // 生成二维码（2026-09-20 新增）
-    const isPage = view === 'page';     // 生成网页（2026-09-30 新增）
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
@@ -15662,7 +11332,7 @@ el.dwVidPlayer.hidden = true;
     const isProfileAbout = view === 'profile_about';
     const isProfileSupport = view === 'profile_support';   // 客服消息工作台（仅超管）
     const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout || isProfileSupport;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isPage || isSt || isAppIntro || isBridge || isProfileGroup || isHome;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isSt || isAppIntro || isBridge || isProfileGroup || isHome;
     if (el.homeView) el.homeView.hidden = !isHome;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -15673,13 +11343,8 @@ el.dwVidPlayer.hidden = true;
     el.imageConvertView.hidden = !isImage;
     if (el.compressView) el.compressView.hidden = !isCp;
     if (el.srView) el.srView.hidden = !isSr;
-    if (el.shareView) el.shareView.hidden = !isShare;
-    if (el.pageView) el.pageView.hidden = !isPage;
     el.subtitleView.hidden = !isSt;
     el.dwView.hidden = !isDw;
-    // ★ 离开去水印视图时停掉所有播放器：只 hidden 不会 pause，切到别的页面声音还会继续。
-    // 保留 src（不 release），用户在 dw 之间来回切时結果还能接着播。
-    if (!isDw) dwStopAllVideos();
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
     if (el.profileView) el.profileView.hidden = !isProfileGroup;
@@ -15689,7 +11354,7 @@ el.dwVidPlayer.hidden = true;
     if (el.profileSecurityPanel) el.profileSecurityPanel.hidden = !isProfileSecurity;
     if (el.profileAboutPanel) el.profileAboutPanel.hidden = !isProfileAbout;
     if (el.profileSupportPanel) el.profileSupportPanel.hidden = !isProfileSupport;
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isBridge && !isProfileGroup);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isSt && !isBridge && !isProfileGroup);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -15699,15 +11364,13 @@ el.dwVidPlayer.hidden = true;
     if (el.tabImageConvert) el.tabImageConvert.classList.toggle('is-active', isImage);
     if (el.tabCompress) el.tabCompress.classList.toggle('is-active', isCp);
     if (el.tabSr) el.tabSr.classList.toggle('is-active', isSr);
-    if (el.tabShare) el.tabShare.classList.toggle('is-active', isShare);
-    if (el.tabPage) el.tabPage.classList.toggle('is-active', isPage);
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfileGroup);
     if (el.sTabSubtitle) el.sTabSubtitle.classList.toggle('is-active', isSt);
     if (el.tabHome) el.tabHome.classList.toggle('is-active', isHome);
     if (el.sTabHome) el.sTabHome.classList.toggle('is-active', isHome);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isAppIntro && !isBridge && !isProfileGroup && !isHome;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isSt && !isAppIntro && !isBridge && !isProfileGroup && !isHome;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -15718,8 +11381,6 @@ el.dwVidPlayer.hidden = true;
     if (el.sTabImageConvert) el.sTabImageConvert.classList.toggle('is-active', isImage);
     if (el.sTabCompress) el.sTabCompress.classList.toggle('is-active', isCp);
     if (el.sTabSr) el.sTabSr.classList.toggle('is-active', isSr);
-    if (el.sTabShare) el.sTabShare.classList.toggle('is-active', isShare);
-    if (el.sTabPage) el.sTabPage.classList.toggle('is-active', isPage);
     if (el.sTabProfile) el.sTabProfile.classList.toggle('is-active', isProfile);
     if (el.sTabProfilePurchases) el.sTabProfilePurchases.classList.toggle('is-active', isProfilePurchases);
     if (el.sTabProfileCredits) el.sTabProfileCredits.classList.toggle('is-active', isProfileCredits);
@@ -15733,17 +11394,7 @@ el.dwVidPlayer.hidden = true;
     if (el.sTabBridge) el.sTabBridge.classList.toggle('is-active', isBridge);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
-    if (isCom) {
-      loadCommentary();
-      // 解说页刚显示：只有此刻才量得到时间轴真实高度 → 补一次同步，
-      // 把 --com-tl-h 写给设置栏（max-height 让位，避免卡片被向右伸出的时间轴盖住）。
-      try { comTlSync(); } catch (_) {}
-    } else {
-      // 切出解说页时收起解说历史浮层：它是 fixed 定位、状态挂在 body 上，
-      // 不会随父级 hidden 自动复位 —— 不清理的话切回来会「莫名其妙还开着」。
-      // 这里直接改 class（不调 setHistOpen），避免依赖它在本文件中的初始化顺序。
-      document.body.classList.remove('com-hist-open');
-    }
+    if (isCom) loadCommentary();
     if (isUp) { el.ucStatus.textContent = ''; }
     if (isProfileGroup) loadProfile();
     if (isProfileAbout) loadAboutPanel();
@@ -16203,7 +11854,6 @@ el.dwVidPlayer.hidden = true;
   if (el.tabCompress) el.tabCompress.addEventListener('click', () => switchView('compress'));
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabSr) el.tabSr.addEventListener('click', () => switchView('sr'));
-  if (el.tabPage) el.tabPage.addEventListener('click', () => switchView('page'));   // 生成网页（2026-09-30）
 
 // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
   const _sidebarPairs = [
@@ -16223,8 +11873,6 @@ el.dwVidPlayer.hidden = true;
     [el.sTabImageConvert, 'imageconvert'],
     [el.sTabCompress, 'compress'],
     [el.sTabSr, 'sr'],
-    [el.sTabShare, 'share'],   // 生成二维码（2026-09-20 新增）
-    [el.sTabPage, 'page'],     // 生成网页（2026-09-30 新增）
     [el.sTabSubtitle, 'subtitle'],
     [el.sTabProfile, 'profile'],
     [el.sTabProfilePurchases, 'profile_purchases'],
@@ -16675,119 +12323,19 @@ el.dwVidPlayer.hidden = true;
     el.memberActMsg.hidden = !text;
     el.memberActMsg.style.color = isErr ? '#c0392b' : '#1d9e75';
   }
-  // ---- 秒杀/活动倒计时（2026-10-03）----
-  // 会员卡上的 `<div class="member-plan-count" data-until=...>` 由全局 1 秒定时器统一刷新，
-  // 不重渲染整张卡（避免输入/滚动被打断）；到点后刷新一次卡片，让价格与角标跟着回落。
-  function _fmtCountdown(sec) {
-    sec = Math.max(0, Math.floor(Number(sec) || 0));
-    const d = Math.floor(sec / 86400);
-    const h = Math.floor((sec % 86400) / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-    const p = (x) => String(x).padStart(2, '0');
-    return (d > 0 ? `${d}天 ` : '') + `${p(h)}:${p(m)}:${p(s)}`;
-  }
-  let _memberCdTimer = null;
-  let _memberCdRefreshedAt = 0;
-  function _tickMemberCountdowns() {
-    const nodes = document.querySelectorAll('.member-plan-count[data-until]');
-    if (!nodes.length) return;
-    const now = Date.now() / 1000;
-    let expired = false;
-    nodes.forEach((n) => {
-      const until = Number(n.dataset.until) || 0;
-      const val = n.querySelector('.member-count-val');
-      if (!val) return;
-      if (!until || until - now <= 0) {
-        val.textContent = '已结束';
-        n.classList.add('is-done');
-        expired = true;
-        return;
-      }
-      val.textContent = _fmtCountdown(until - now);
-    });
-    // 到点 → 拉一次最新状态（价格/角标/按钮态会变）；5 秒冷却防抖动
-    if (expired && Date.now() - _memberCdRefreshedAt > 5000) {
-      _memberCdRefreshedAt = Date.now();
-      setTimeout(() => { renderMemberPlans(); }, 900);
-    }
-  }
-  function _startMemberCountdowns() {
-    _tickMemberCountdowns();
-    if (!_memberCdTimer) _memberCdTimer = setInterval(_tickMemberCountdowns, 1000);
-  }
-  function _stopMemberCountdowns() {
-    if (_memberCdTimer) { clearInterval(_memberCdTimer); _memberCdTimer = null; }
-  }
-  // 卡片版式：标题行（名称 + 角标）/ 价格行（¥金额 + 单位小字）/ 可选说明行 / 底部通栏「购买」
-  // 相比旧版「全部纵向堆叠 + 绝对定位角标」，卡高约降 1/3，宽窄栅格里都能对齐。
   function _memberCard(plan, code, extra) {
-    extra = extra || {};
-    const st = plan.state || {};
-    // 售卖状态（2026-10-03）：下架隐藏；未开始/已结束/售罄置灰；秒杀中显示秒杀价+原价划线
-    if (st.on_sale === false) return '';
     const saving = plan.saving ? `<span class="member-badge member-badge-saving">省 ${Math.round(plan.saving * 100)}%</span>` : '';
-    const best = plan.best ? `<span class="member-badge member-badge-best">最受欢迎</span>` : '';
-    // 秒杀三态（2026-10-03）：进行中→现价+划线+「秒杀至 X」；未开始→「即将开抢」角标+开抢时间；已结束→恢复原价、收起秒杀角标
-    // 🔴 窗口过了必须收起一切秒杀元素：价格早已回原价，卡片却还挂着「限时秒杀」
-    //    角标和「秒杀至 …」，用户会误以为自己正在享受秒杀价。
-    // flash_phase 由后端 plan_sales_state 下发（单一真源）；老服务端没有该字段时
-    // 按 mode/flash_start/flash_end 自行推导，保证只热更前端也生效。
-    // ⚠️ 必须先算出 flashPhase 再用它（const 有 TDZ，写反顺序会抛 ReferenceError）
-    const _nowSec = Date.now() / 1000;
-    const _fs = Number(st.flash_start) || 0;
-    const _fe = Number(st.flash_end) || 0;
-    const flashPhase = st.flash_phase
-      || (st.mode === 'flash_sale' && Number(st.flash_price) > 0 && _fs && _fe
-        ? (_nowSec < _fs ? 'upcoming' : (_nowSec <= _fe ? 'active' : 'ended')) : 'none');
-    const flashSoon = flashPhase === 'upcoming';
-    const mkBadge = (st.badge && flashPhase !== 'ended')
-      ? `<span class="member-badge member-badge-flash">${escHtml(st.badge)}</span>` : '';
-    const outBadge = (!st.buyable && st.reason) ? `<span class="member-badge member-badge-off">${escHtml(st.reason)}</span>` : '';
-    const soonBadge = flashSoon ? '<span class="member-badge member-badge-flash">即将开抢</span>' : '';
-    const badges = (saving || best || mkBadge || soonBadge || outBadge)
-      ? `<span class="member-plan-badges">${mkBadge}${soonBadge}${saving}${best}${outBadge}</span>` : '';
-    const orig = (Number(plan.price_cny) || 0).toFixed(2);
-    const now = (Number(st.price) || Number(plan.price_cny) || 0).toFixed(2);
-    const flashLine = st.is_flash && Number(st.original_price) > Number(st.price)
-      ? `<span class="member-price-orig">¥${orig}</span>` : '';
-    const price = `${flashLine}<span class="member-price-now${st.is_flash ? ' is-flash' : ''}">${now}</span>`;
-    const unit = extra.unit ? `<span class="member-plan-per">${extra.unit}</span>` : '';
-    // 倒计时（秒杀优先）：秒杀中→距秒杀结束；秒杀未开始→距开抢；活动窗口→距开售/距结束
-    const _sa = Number(st.start_at) || 0;
-    const _ea = Number(st.end_at) || 0;
-    const _hasFlash = flashPhase === 'upcoming' || flashPhase === 'active';
-    let cdUntil = 0;
-    let cdLabel = '';
-    if (st.is_flash && _fe) { cdUntil = _fe; cdLabel = '距秒杀结束'; }
-    else if (_hasFlash && _fs && _nowSec < _fs) { cdUntil = _fs; cdLabel = '距开抢'; }
-    else if (_sa && _nowSec < _sa) { cdUntil = _sa; cdLabel = '距开售'; }
-    else if (st.buyable && _ea && _nowSec < _ea) { cdUntil = _ea; cdLabel = '距结束'; }
-    const countdown = cdUntil
-      ? `<div class="member-plan-count${st.is_flash ? ' is-flash' : ''}" data-until="${cdUntil}">` +
-        `<span class="member-count-label">${cdLabel}</span>` +
-        '<span class="member-count-val">--:--:--</span></div>'
-      : '';
-    // 活动时间 / 剩余名额
-    const fmtTs = (ts) => (ts ? _memberFmtDate(ts) : '');
-    const bits = [];
-    if (st.start_at || st.end_at) {
-      bits.push(`${st.start_at && !st.end_at ? `${fmtTs(st.start_at)} 开售` : (st.end_at && !st.start_at ? `截至 ${fmtTs(st.end_at)}` : `${fmtTs(st.start_at)} ~ ${fmtTs(st.end_at)}`)}`);
-    }
-    if (flashSoon) bits.push(`${fmtTs(_fs)} 开抢`);
-    else if (flashPhase === 'active' && _fe) bits.push(`秒杀至 ${fmtTs(_fe)}`);
-    if (st.remaining != null) bits.push(`限量剩余 ${st.remaining} 份`);
-    const meta = bits.length ? `<div class="member-plan-meta">${escHtml(bits.join(' · '))}</div>` : '';
-    const desc = st.desc ? `<div class="member-plan-desc">${escHtml(st.desc)}</div>` : '';
-    const foot = extra.foot ? `<div class="member-card-foot">${extra.foot}</div>` : '';
-    const disabled = st.buyable === false;
+    const best = plan.best ? `<span class="member-badge member-badge-best">最受双迎</span>` : '';
+    const price = (Number(plan.price_cny) || 0).toFixed(2);
+    const foot = extra && extra.foot ? `<div class="member-card-foot">${extra.foot}</div>` : '';
     return `
-      <div class="member-plan${plan.best ? ' member-plan-best' : ''}${disabled ? ' is-off' : ''}">
-        <div class="member-plan-top"><span class="member-plan-name">${escHtml(plan.label || code)}</span>${badges}</div>
-        <div class="member-plan-price"><span class="member-ccy">¥</span>${price}${unit}</div>
-        ${countdown}
-        ${meta}${desc}${foot}
-        <button type="button" class="btn btn-primary btn-sm member-buy" data-code="${code}"${disabled ? ' disabled title="' + escHtml(st.reason || '暂不可购买') + '"' : ''}>${disabled ? escHtml(st.reason || '暂不可购买') : '购买'}</button>
+      <div class="member-plan${plan.best ? ' member-plan-best' : ''}">
+        <div class="member-plan-head">${saving}${best}<div class="member-plan-name">${plan.label || code}</div>
+          <div class="member-plan-price"><span class="member-ccy">¥</span>${price}</div>
+          ${extra && extra.meta ? `<div class="member-plan-meta">${extra.meta}</div>` : ''}
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm member-buy" data-code="${code}">立即开通（测试期即时生效）</button>
+        ${foot}
       </div>`;
   }
   function switchMemberTab(key) {
@@ -16813,11 +12361,10 @@ el.dwVidPlayer.hidden = true;
         chips.push(`<span class="member-chip member-chip-dl">👑 下载会员${src} 至 ${_memberFmtDate(dl.expire_at)}</span>`);
       }
       if (ai.active) {
-        // 标注「到期清零」：AI 订阅积分随 AI 会员到期日一起失效，与永久积分区别开来
-        chips.push(`<span class="member-chip member-chip-ai">🤖 AI 会员 至 ${_memberFmtDate(ai.expire_at)} · 积分 ${ai.credits_left || 0}${ai.grant_credits ? '/' + ai.grant_credits : ''}（到期清零）</span>`);
+        chips.push(`<span class="member-chip member-chip-ai">🤖 AI 会员 至 ${_memberFmtDate(ai.expire_at)} · 积分 ${ai.credits_left || 0}${ai.grant_credits ? '/' + ai.grant_credits : ''}</span>`);
       }
       const perm = Number(s.permanent_credits || 0);
-      if (perm > 0) chips.push(`<span class="member-chip member-chip-perm">🎁 永久积分 ${perm}（不过期）</span>`);
+      if (perm > 0) chips.push(`<span class="member-chip member-chip-perm">🎁 永久积分 ${perm}</span>`);
       el.memberStatus.innerHTML = chips.length
         ? `<div class="member-status-inner">${chips.join('')}<span class="member-total">可用积分合计 ${Number(s.credits_total || 0)}</span></div>`
         : `<div class="member-status-inner member-status-empty">尚未开通会员 — 下方选择套餐（V1 测试期激活即时生效）</div>`;
@@ -16831,179 +12378,61 @@ el.dwVidPlayer.hidden = true;
       const aiPlans = (p.ai_member && p.ai_member.plans) || {};
       const packs = (p.credit_packs) || {};
       const dlBenefits = (p.download_member && p.download_member.benefits) || [];
-      // 下载会员（6 档：1/3/7 天体验 + 月/半年/年）+ 共享权益清单
+      // 下载会员（3 档）+ 共享权益清单
       const dlCards = Object.entries(dlPlans).map(([code, plan]) =>
-        _memberCard(plan, code, { unit: plan.days ? ` / ${plan.days} 天` : '' })).join('');
-      const dlList = dlBenefits.map(b => `<li>${escHtml(b.text)}</li>`).join('');
+        _memberCard(plan, code, { meta: plan.days ? `${plan.days} 天` : '' })).join('');
+      const dlList = dlBenefits.map(b => `<li>${b.text}</li>`).join('');
       el.memberPaneDl.innerHTML = `
-        ${dlList ? `<div class="member-benefits member-benefits-top"><ul class="member-benefits-list">${dlList}</ul></div>` : ''}
+        <div class="member-benefits member-benefits-top">${dlList ? `<ul class="member-benefits-list">${dlList}</ul>` : ''}</div>
         <div class="member-plans">${dlCards}</div>`;
       // AI 会员（2 档，捆绑下载权益）
-      // 2026-10-04：补上权益清单渲染 —— ai_member.features 一直在接口里，但前端
-      // 从没渲染过，AI 会员面板只有一行「包含下载会员全部权益」+ 两张卡（用户反馈
-      // 「AI 会员补充权益」）。复用下载会员那套 .member-benefits 样式，视觉一致。
-      const aiFeatures = (p.ai_member && p.ai_member.features) || [];
-      const aiList = aiFeatures.length
-        ? `<div class="member-benefits member-benefits-top"><ul class="member-benefits-list">${
-            aiFeatures.map(f => `<li>${escHtml(f)}</li>`).join('')}</ul></div>`
-        : '';
-      // bundle_note（🔗 包含下载会员全部权益）已在 features 里有一项，重复会显得啰嗦，
-      // 只有当 features 没提到时才保留这条兜底。
-      const aiNote = (p.ai_member && p.ai_member.bundle_note
-                      && !aiFeatures.some(f => String(f).includes('下载会员')))
-        ? `<div class="member-bundle-note">🔗 ${escHtml(p.ai_member.bundle_note)}</div>` : '';
+      const aiNote = p.ai_member && p.ai_member.bundle_note ? `<div class="member-bundle-note">🔗 ${p.ai_member.bundle_note}</div>` : '';
       const aiCards = Object.entries(aiPlans).map(([code, plan]) =>
         _memberCard(plan, code, {
-          unit: ' / 月',
-          foot: `月赠 ${plan.credits} 积分（30 天有效）· 含下载会员权益`,
+          meta: `月赠 ${plan.credits} 积分（30 天有效）`,
+          foot: `<div class="member-card-foot">含下载会员权益 · 积分 30 天有效</div>`,
         })).join('');
-      el.memberPaneAi.innerHTML = `${aiNote}${aiList}<div class="member-plans">${aiCards}</div>`;
+      el.memberPaneAi.innerHTML = `${aiNote}<div class="member-plans">${aiCards}</div>`;
       // 永久积分包
       const packCards = Object.entries(packs).map(([code, plan]) =>
-        _memberCard(plan, code, { foot: `一次性到账 ${plan.credits} 积分 · 永久有效，不随订阅过期` })).join('');
+        _memberCard(plan, code, { meta: `一次性到账 ${plan.credits} 积分`, foot: `<div class="member-card-foot">永久有效 · 不随订阅过期</div>` })).join('');
       el.memberPanePacks.innerHTML = `<div class="member-plans">${packCards}</div>`;
       // 卡片「开通」→ 激活
       el.memberModal.querySelectorAll('.member-buy').forEach((btn) => {
         btn.addEventListener('click', () => {
           const code = btn.getAttribute('data-code');
-          if (code) payCreate(code);
+          if (code) activateMember(code);
         });
       });
-      _startMemberCountdowns();     // 秒杀/活动倒计时（单例定时器）
     } catch (_) { /* 静默 */ }
   }
-  // 卡密通道已下线（2026-09-26）：activateMember 已移除，充值一律走 payCreate（支付宝/微信在线支付）
-  // ---- 支付宝购买（下单 → 二维码弹窗 → 轮询自动开通）----
-  let _payTimer = null;
-  async function payCreate(planCode) {
-    if (!el.memberModal) return;
-    _memberMsg('正在生成支付二维码…');
-    let r;
+  async function activateMember(code) {
+    if (!el.memberActivateBtn) return;
+    el.memberActivateBtn.disabled = true;
+    _memberMsg('激活中…');
     try {
-      r = await request('/api/cloud/pay/create', {
-        method: 'POST', body: JSON.stringify({ plan_code: planCode }) });
+      const r = await request('/api/member/activate', { method: 'POST', body: JSON.stringify({ code, via: 'ui_test' }) });
+      if (r && r.ok) {
+        showToast('会员激活成功');
+        _memberMsg('✅ 激活成功' + (r.kind ? `（${r.kind}）` : ''));
+        if (el.memberCode) el.memberCode.value = '';
+        await renderMemberStatus();
+        if (el.memberPaneDl && !el.memberPaneDl.hidden) await renderMemberPlans();
+      } else if (r && r.code === 'NO_AUTH') {
+        _memberMsg('请先登录账号后再激活（右上角登录/注册）', true);
+      } else {
+        _memberMsg('❌ ' + ((r && r.error) || '激活失败'), true);
+      }
     } catch (e) {
-      _memberMsg('❌ 下单失败：网络错误', true); return;
+      _memberMsg('❌ ' + ((e && (e.message || e.hint)) || '激活失败'), true);
+    } finally {
+      el.memberActivateBtn.disabled = false;
     }
-    if (!r || !r.ok) {
-      _memberMsg('❌ ' + ((r && r.error) || '下单失败'), true); return;
-    }
-    _memberMsg('');
-    openPayModal(r.order_id, r.qr_png, r.amount, r.plan_code);
-  }
-  function openPayModal(orderId, qrPng, amount, planCode) {
-    closePayModal();
-    const overlay = document.createElement('div');
-    overlay.className = 'vdl-pay-overlay';
-    overlay.innerHTML = `
-      <div class="vdl-pay-modal">
-        <div class="vdl-pay-title">扫码支付开通会员</div>
-        <div class="vdl-pay-amt">¥${(Number(amount) || 0).toFixed(2)} · ${planCode}</div>
-        <img class="vdl-pay-qr" src="${qrPng}" alt="支付宝支付二维码"/>
-        <div class="vdl-pay-tip">请使用支付宝扫码付款，支付成功后自动开通</div>
-        <div class="vdl-pay-status" id="vdlPayStatus">等待支付…</div>
-        <button type="button" class="btn btn-ghost vdl-pay-close" id="vdlPayClose">关闭</button>
-      </div>`;
-    document.body.appendChild(overlay);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) closePayModal(); });
-    overlay.querySelector('#vdlPayClose').addEventListener('click', closePayModal);
-    const statusEl = overlay.querySelector('#vdlPayStatus');
-    _payTimer = setInterval(async () => {
-      try {
-        const q = await request('/api/cloud/pay/query', {
-          method: 'POST', body: JSON.stringify({ order_id: orderId }) });
-        if (q && q.ok && q.status === 'PAID') {
-          clearInterval(_payTimer); _payTimer = null;
-          statusEl.textContent = '✅ 支付成功，已开通';
-          showToast('会员开通成功');
-          await renderMemberStatus();
-          await renderCloudAccount();
-          setTimeout(closePayModal, 1200);
-        }
-      } catch (_) { /* 轮询失败静默重试 */ }
-    }, 2500);
-  }
-  function closePayModal() {
-    if (_payTimer) { clearInterval(_payTimer); _payTimer = null; }
-    const o = document.querySelector('.vdl-pay-overlay');
-    if (o) o.remove();
-  }
-  // ---- 云端账号（会员归属 + 最多 2 台设备）----
-  function _fmtAgo(ts) {
-    if (!ts) return '';
-    const s = Math.max(0, Math.floor(Date.now() / 1000 - Number(ts)));
-    if (s < 60) return '刚刚';
-    if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
-    if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
-    return Math.floor(s / 86400) + ' 天前';
-  }
-  async function renderCloudAccount() {
-    if (!el.cloudAccountBox || !el.cloudLoginBox) return;
-    let st = null;
-    try { st = await request('/api/cloud/status'); } catch (_) { /* 离线可读，忽略 */ }
-    const acc = (st && st.account) || null;
-    const loggedIn = !!(acc && acc.logged_in);
-    if (loggedIn) {
-      el.cloudAccountBox.hidden = false;
-      el.cloudLoginBox.hidden = true;
-      if (el.cloudEmail) el.cloudEmail.textContent = acc.email || '—';
-      if (el.cloudDevices) {
-        const devs = (acc.devices || []);
-        const max = acc.max_devices || 2;
-        if (!devs.length) {
-          el.cloudDevices.innerHTML = '<p class="member-cloud-devhint">尚未记录设备</p>';
-        } else {
-          el.cloudDevices.innerHTML = devs.map((d) => {
-            const cur = d.current ? ' <span class="member-cloud-cur">本机</span>' : '';
-            const when = d.last_seen ? _fmtAgo(d.last_seen) : '';
-            const unbind = d.current ? '' :
-              `<button type="button" class="btn btn-ghost btn-xs cloud-unbind" data-fp="${escHtml(d.fp)}">下线</button>`;
-            const nm = escHtml(d.name || d.fp);
-            return `<div class="member-cloud-dev"><span class="member-cloud-name" title="${nm}">${nm}</span>${cur}<span class="member-cloud-when">${when}</span>${unbind}</div>`;
-          }).join('');
-          el.cloudDevices.insertAdjacentHTML('beforeend',
-            `<p class="member-cloud-devhint">已登录 ${devs.length} / ${max} 台设备（超出将自动挤下最久未活动的设备）</p>`);
-        }
-        el.cloudDevices.querySelectorAll('.cloud-unbind').forEach((b) => {
-          b.addEventListener('click', () => cloudUnbind(b.getAttribute('data-fp')));
-        });
-      }
-      if (el.cloudNotice) {
-        el.cloudNotice.hidden = !acc.evicted;
-        el.cloudNotice.textContent = acc.evicted ? '本机已被其他设备挤出，请重新登录以继续使用会员权益。' : '';
-      }
-    } else {
-      el.cloudAccountBox.hidden = true;
-      el.cloudLoginBox.hidden = false;
-      if (el.cloudNotice) { el.cloudNotice.hidden = true; el.cloudNotice.textContent = ''; }
-    }
-  }
-  async function cloudSyncAccount() {
-    // 后台静默同步：续期 + 拉新权益 + 检查设备名额（断网不动本地，fail-open）
-    try {
-      const r = await request('/api/cloud/sync', { method: 'POST' });
-      if (r && r.ok && el.cloudAccountBox && !el.cloudAccountBox.hidden) await renderCloudAccount();
-    } catch (_) { /* 忽略 */ }
-  }
-  async function cloudUnbind(fp) {
-    if (!fp) return;
-    try {
-      const r = await request('/api/cloud/unbind', { method: 'POST', body: JSON.stringify({ fp }) });
-      if (r && r.ok) { await renderCloudAccount(); _memberMsg('已将该设备下线'); }
-      else _memberMsg('❌ ' + ((r && r.error) || '操作失败'), true);
-    } catch (e) { _memberMsg('❌ 操作失败', true); }
-  }
-  async function cloudLogoutAccount() {
-    try { await request('/api/cloud/logout', { method: 'POST' }); } catch (_) {}
-    logoutAccount();
-    await renderCloudAccount();
   }
   // ---- 账号区（A1 本地账号：登录 / 注册 / 登出） ----
   let authMode = 'login';
   // 超级用户标记（后台管理面板可见性依据）：登录/me 后由后端 is_admin 写入
   let _vdlIsAdmin = false;
-  // 登录用户的头像 URL（个人资料/用户卡加载后写入，供头部「账号」按钮渲染头像）
-  let _vdlAvatarUrl = '';
   function updateAdminTabVisibility() {
     // 整个「🛡️ 后台」组随权限显隐：非超管连组标题都不露，避免空组占位。
     const show = !!(authToken() && _vdlIsAdmin);
@@ -17019,90 +12448,6 @@ el.dwVidPlayer.hidden = true;
       _psStopPoll();
       switchView('profile');
     }
-    // 「Cookie 池自动上传」按钮（App 端 desktop-app.js 提供，30min 后台自动同步不受影响）：
-    // 仅超管可见可点；普通用户维持 display:none 零痕迹。点击带结果弹窗。
-    try {
-      const _cs = window.VDL && window.VDL.cookieSync;
-      if (_cs) {
-        _cs.setVisible(show);
-        const _csBtn = document.getElementById('syncCookieBtn');
-        if (_csBtn && !_csBtn.dataset.adminWired) {
-          _csBtn.dataset.adminWired = '1';
-          _csBtn.addEventListener('click', () => _cs.run(true));
-        }
-      }
-    } catch (_) {}
-    // 授权中心异常告警轮询：仅超管登录时启动；普通用户零痕迹。
-    try { _licenseAlertWatch(show); } catch (_) {}
-  }
-
-  // ── 充值/权益异常告警（授权中心 → 本机代理）────────────────────────────────
-  // 60s 轮询 unseen 告警：有新增 → 顶部红横幅 + macOS 系统通知；点击横幅进运维看板。
-  // 已通知的告警 id 记 localStorage（防重复弹）；确认（ack）在看板里做。
-  let _laTimer = null;
-  let _laBanner = null;
-  function _licenseAlertWatch(start) {
-    if (!start) {                       // 登出/切普通账号：停轮询 + 撤横幅（零痕迹）
-      if (_laTimer) { clearInterval(_laTimer); _laTimer = null; }
-      if (_laBanner) { _laBanner.remove(); _laBanner = null; }
-      return;
-    }
-    if (_laTimer) return;               // 已在轮询
-    const _poll = async () => {
-      try {
-        const r = await fetch('/api/app/license-alerts?unseen_only=true&limit=50',
-                              { headers: { Authorization: 'Bearer ' + authToken() } });
-        if (!r.ok) return;
-        const d = await r.json();
-        const unseen = d.unseen || 0;
-        const alerts = d.alerts || [];
-        let seenIds = [];
-        try { seenIds = JSON.parse(localStorage.getItem('vdl_la_notified') || '[]'); } catch (_) {}
-        const fresh = alerts.filter(a => !seenIds.includes(a.id));
-        if (fresh.length) {
-          _laShowBanner(unseen);
-          // 系统通知（每条一条，最多合并 3 条防轰炸）
-          const head = fresh.slice(0, 3);
-          for (const a of head) {
-            const lv = a.level === 'critical' ? '🚨' : '⚠️';
-            fetch('/api/app/license-alerts/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + authToken() },
-              body: JSON.stringify({
-                title: '视频工坊·异常告警',
-                body: lv + (a.detail || a.kind) + (a.email ? ' · ' + a.email : ''),
-              }),
-            }).catch(() => {});
-          }
-          try {
-            seenIds = seenIds.concat(fresh.map(a => a.id)).slice(-200);
-            localStorage.setItem('vdl_la_notified', JSON.stringify(seenIds));
-          } catch (_) {}
-        } else if (unseen > 0) {
-          _laShowBanner(unseen);        // 通知过但未确认 → 只亮横幅
-        } else if (_laBanner) {
-          _laBanner.remove(); _laBanner = null;
-        }
-      } catch (_) {}
-    };
-    _poll();
-    _laTimer = setInterval(_poll, 60 * 1000);
-  }
-  function _laShowBanner(unseen) {
-    if (_laBanner) { _laBanner.textContent = `🚨 异常告警 ${unseen} 条未处理，点击查看`; return; }
-    const b = document.createElement('div');
-    b.id = 'licenseAlertBanner';
-    b.textContent = `🚨 异常告警 ${unseen} 条未处理，点击查看`;
-    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 16px;'
-      + 'background:#c0392b;color:#fff;font-size:13px;font-weight:600;text-align:center;'
-      + 'cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);';
-    // 2026-09-26：运维看板并入后台，横幅点击直达管理面板「运维监控」tab
-    b.addEventListener('click', () => {
-      if (window.VDL && typeof window.VDL.openAdminMonitor === 'function') { window.VDL.openAdminMonitor(); }
-      else { window.location.assign('/ops-board'); }
-    });
-    document.body.appendChild(b);
-    _laBanner = b;
   }
   function authToken() { try { return localStorage.getItem('vdl_auth_token') || sessionStorage.getItem('vdl_auth_token'); } catch (_) { return null; } }
   function _authMsg(text, isErr) {
@@ -17111,88 +12456,6 @@ el.dwVidPlayer.hidden = true;
     el.authMsg.hidden = !text;
     el.authMsg.style.color = isErr ? '#c0392b' : '#1d9e75';
   }
-  // ---- 功能级登录门禁（2026-09-26 用户要求「所有功能必须登录才能使用」）----
-  var _loginPromptAt = 0;      // 并发请求节流：3 秒内只弹一次登录框
-  var _pendingGatedId = '';    // 登录前想用的功能按钮 id，登录成功后自动补点一次
-
-  /** 统一登录提示：提示文案 + 拉起登录/注册框（登录成功后会补点原按钮）。 */
-  function _notifyNeedLogin(msg) {
-    const now = Date.now();
-    if (now - _loginPromptAt < 3000) return;
-    _loginPromptAt = now;
-    // 顺序很重要：openAuthModal() 内部会 _authMsg('') 清空提示；
-    // 先把弹窗拉起来、再写文案，否则用户看到的是一个「没有任何说明」的登录框。
-    try { openAuthModal(); } catch (_) { /* 忽略 */ }
-    try { _authMsg(msg || '请先登录或注册账号后使用该功能', true); } catch (_) { /* 忽略 */ }
-  }
-
-  /**
-   * 需要登录才能执行的功能入口（按钮 id → 中文名，用于提示文案）。
-   *
-   * 用 document **捕获阶段**的委托监听统一拦截：捕获阶段一定先于按钮自身的
-   * bubble 监听执行，因此在 document 上 stopPropagation() 就能整体阻断原有 handler，
-   * 不必逐个改 20 多处已有的 click 绑定，也不会因漏改一处而放行一个功能。
-   * 后端另有 NO_AUTH 兜底（见 request/_notifyNeedLogin），双保险。
-   */
-  var _LOGIN_GATED_ACTIONS = {
-    // 2026-09-27 用户要求：登录门禁只挂在「真正执行（会产出结果）」的按钮上。
-    // 前置步骤不弹登录 —— 解析链接（只拿清晰度/标题，不落盘）与「选择文件」
-    // （生成二维码的文件选择器，真正上传时才校验，见 shStart）已从这里移除。
-    batchBtn: '批量下载',
-    downloadBtn: '下载',
-    ucStartAllBtn: '视频格式转换',
-    musStartAllBtn: '音乐格式转换',
-    imgStartAllBtn: '图片格式转换',
-    cpStartAllBtn: '高效压缩',
-    srStartAllBtn: '高清修复',
-    mcMergeBtn: '视频/音频桥接',
-    dwImgBtn: '图片去水印',
-    dwPdfBtn: 'PDF 去水印',
-    dwVidBtn: '视频去水印',
-    matBtn: '一键抠图',
-    sbStartBtn: '本地字幕提取',
-    subExtract: '字幕提取',
-    subBurn: '字幕烧录',
-    comGenerateScript: '视频解说',
-    comScriptRender: '解说渲染成片',
-    // shareAddBtn 已移出：它是「选择文件」（前置步骤），上传动作由 shStart 校验登录
-    subAddBtn: '订阅追更',
-    torAddBtn: '种子下载',
-    processRun: '队列处理',
-    libBatchProcess: '媒体库批量处理',
-    libCommentary: '媒体库生成解说成片',
-    libCleanup: '媒体库自动清理',
-    cleanRun: '存储清理',
-  };
-  var _LOGIN_GATE_SELECTOR = Object.keys(_LOGIN_GATED_ACTIONS).map(function (id) { return '#' + id; }).join(',');
-  document.addEventListener('click', function (e) {
-    try {
-      const t = e.target;
-      if (!t || typeof t.closest !== 'function') return;
-      const hit = t.closest(_LOGIN_GATE_SELECTOR);
-      if (!hit) return;
-      if (authToken()) return;                 // 已登录：放行，走原有逻辑
-      const label = _LOGIN_GATED_ACTIONS[hit.id] || '该功能';
-      if (hit.id === 'downloadBtn') { try { window._pendingDownload = true; } catch (_) {} }
-      else if (hit.id === 'sbStartBtn') { try { window._pendingSubtitleExtract = true; } catch (_) {} }
-      else { _pendingGatedId = hit.id; }
-      e.preventDefault();
-      e.stopPropagation();                     // 阻断按钮自身的 click handler
-      _notifyNeedLogin('请先登录或注册账号，即可使用' + label);
-    } catch (_) { /* 守卫异常不阻塞页面 */ }
-  }, true);
-
-  /** 登录成功后自动补点一次之前被拦下的功能按钮（对齐下载的「登录后继续」体验）。 */
-  function _replayGatedAction() {
-    const id = _pendingGatedId;
-    _pendingGatedId = '';
-    if (!id || id === 'shareAddBtn') return;   // 选文件类按钮异步重放会被系统拦截
-    setTimeout(function () {
-      const node = document.getElementById(id);
-      if (node && !node.disabled) { try { node.click(); } catch (_) {} }
-    }, 150);
-  }
-
   function _renderAuthHeader() {
     if (!el.authHeaderBtn) return;
     const tok = authToken();
@@ -17202,19 +12465,7 @@ el.dwVidPlayer.hidden = true;
       el.authHeaderBtn.classList.remove('is-logged');
       return;
     }
-    // 2026-09-25 用户要求：登录后头部显示头像（有 avatar_url 时），无头像退回 👤 图标。
-    // 用 DOM API 构建，避免把 avatar_url 直接拼进 innerHTML。
-    el.authHeaderBtn.textContent = '';
-    if (_vdlAvatarUrl) {
-      const img = document.createElement('img');
-      img.className = 'hdr-avatar';
-      img.src = _vdlAvatarUrl;
-      img.alt = '';
-      el.authHeaderBtn.appendChild(img);
-      el.authHeaderBtn.appendChild(document.createTextNode('账号'));
-    } else {
-      el.authHeaderBtn.textContent = '👤 账号';
-    }
+    el.authHeaderBtn.textContent = '👤 账号';
     el.authHeaderBtn.title = '已登录，点击查看账号详情';
     el.authHeaderBtn.classList.add('is-logged');
   }
@@ -17230,7 +12481,6 @@ el.dwVidPlayer.hidden = true;
       updateAdminTabVisibility();
       _updateProfileSidebarLock();
       _chatRefresh();
-      cloudSyncAccount();   // 已登录：后台静默同步云端会员 + 设备名额
     } catch (_) {
       logoutAccount();
     }
@@ -17239,7 +12489,6 @@ el.dwVidPlayer.hidden = true;
     try { localStorage.removeItem('vdl_auth_token'); } catch (_) {}
     try { sessionStorage.removeItem('vdl_auth_token'); } catch (_) {}
     _vdlIsAdmin = false;
-    _vdlAvatarUrl = '';  // 头像随登出清空，防止下一个账号短暂显示上一位的头像
     updateAdminTabVisibility();
     _renderAuthHeader();
     _updateProfileSidebarLock();
@@ -17316,7 +12565,6 @@ el.dwVidPlayer.hidden = true;
     pollTimer: null,
     notifyTimer: null,
     notified: new Set(),// 已弹过通知的 (tid:updated_at) 集合，避免重复
-    img: null,          // 待发送图片（{mime, dataUrl}，2026-10-03）
   };
   function _chatEl(id) { return document.getElementById(id); }
   function _chatFmt(ts) {
@@ -17331,9 +12579,8 @@ el.dwVidPlayer.hidden = true;
   function _chatBubble(m) {
     const who = m.role === 'admin' ? 'admin' : 'user';
     const name = m.sender_identifier ? `（${escHtml(m.sender_identifier)}）` : '';
-    const body = (m.text ? `<div class="chat-bubble">${escHtml(m.text)}</div>` : '') + _chatImgTag(m);
     return `<div class="chat-msg ${who}">
-      <div class="chat-body-wrap">${body}</div>
+      <div class="chat-bubble">${escHtml(m.text)}</div>
       <div class="chat-meta">${esc(_chatFmt(m.ts))}${who === 'admin' ? name : ''}</div>
     </div>`;
   }
@@ -17495,21 +12742,16 @@ el.dwVidPlayer.hidden = true;
   async function _chatSend() {
     const input = _chatEl('chatInput');
     const sendBtn = _chatEl('chatSend');
-    const picked = _chat.img;
-    if (!input || !sendBtn || sendBtn.disabled) return;
-    if (!input.value.trim() && !picked) return;
+    if (!input || !input.value.trim() || !sendBtn || sendBtn.disabled) return;
     const text = input.value.trim();
     sendBtn.disabled = true;
     try {
-      let image = '';
-      if (picked) image = await _chatUploadImage(picked, _chat.activeThread || '');
       const r = await request('/api/support/message', {
-        method: 'POST', body: JSON.stringify({ text, thread_id: _chat.activeThread || '', image }),
+        method: 'POST', body: JSON.stringify({ text, thread_id: _chat.activeThread || '' }),
       });
       if (!r || !r.ok) throw new Error((r && r.error) || '发送失败');
       if (r.thread_id) { _chat.activeThread = r.thread_id; _chat.composing = false; }
       input.value = '';
-      _chatClearImage();
       await _chatRender();
     } catch (e) {
       const body = _chatEl('chatBody');
@@ -17571,39 +12813,6 @@ el.dwVidPlayer.hidden = true;
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); _chatSend(); }
       });
     }
-    // 图片消息（2026-10-03）：选图 → 预览 → 与文字一起发
-    const imgBtn = _chatEl('chatImgBtn');
-    const imgInput = _chatEl('chatImgInput');
-    const imgClear = _chatEl('chatAttachClear');
-    if (imgBtn && imgInput) {
-      imgBtn.onclick = () => imgInput.click();
-      imgInput.onchange = async () => {
-        try {
-          _chat.img = await _chatPickImage(imgInput.files && imgInput.files[0]);
-          const prev = _chatEl('chatAttachImg');
-          if (prev) prev.src = _chat.img.dataUrl;
-          const bar = _chatEl('chatAttachBar');
-          if (bar) bar.hidden = false;
-        } catch (e) {
-          const body = _chatEl('chatBody');
-          if (body) {
-            const tip = document.createElement('div');
-            tip.className = 'chat-meta';
-            tip.style.color = '#c0392b';
-            tip.textContent = '⚠️ ' + ((e && e.message) || '图片选择失败');
-            body.appendChild(tip);
-          }
-        }
-      };
-    }
-    if (imgClear) imgClear.onclick = _chatClearImage;
-    const chatBody = _chatEl('chatBody');
-    if (chatBody) {
-      chatBody.addEventListener('click', (e) => {
-        const t = e.target;
-        if (t && t.getAttribute && t.getAttribute('data-img-zoom')) _chatZoom(t.getAttribute('data-img-zoom'));
-      });
-    }
     // 后台轮询：即使面板关闭也更新红点 + 弹通知
     _chat.notifyTimer = setInterval(_chatNotifyPoll, 15000);
     _chatNotifyPoll();
@@ -17613,161 +12822,21 @@ el.dwVidPlayer.hidden = true;
   // 原「管理视角」在悬浮小窗里会话/消息挤在一起放不下，改为整页两栏：
   // 左列 = 全部用户会话列表，右列 = 完整聊天记录 + 回复框 + 状态切换。
   // 状态用 var 声明：switchView 里会调用 _psStopPoll()，需避免 const 的暂时性死区。
-  var _ps = { threads: [], active: null, timer: null, loading: false, img: null, hits: [] };
-
-  // ===== 图片消息（管理员 / 用户共用，2026-10-03）=====
-  // 「有些场景说不清楚，发截图一目了然」：图片走 JSON base64 上传（后端不引
-  // multipart 依赖），前端先把超大截图等比缩到长边 1600px 再传，避免卡在网络上。
-  const CHAT_IMG_MAX_BYTES = 4 * 1024 * 1024;
-  const CHAT_IMG_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
-
-  function _chatPickImage(file) {
-    return new Promise((resolve, reject) => {
-      if (!file) { reject(new Error('未选择图片')); return; }
-      if (CHAT_IMG_TYPES.indexOf(file.type) < 0) {
-        reject(new Error('只支持 PNG / JPEG / WebP / GIF 图片'));
-        return;
-      }
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error('图片读取失败'));
-      reader.onload = () => {
-        const img = new Image();
-        img.onerror = () => reject(new Error('图片解码失败，请换一张'));
-        img.onload = () => {
-          let { naturalWidth: w, naturalHeight: h } = img;
-          if (!w || !h) { reject(new Error('图片尺寸异常')); return; }
-          const scale = Math.min(1, 1600 / Math.max(w, h));
-          const cw = Math.max(1, Math.round(w * scale));
-          const ch = Math.max(1, Math.round(h * scale));
-          const cv = document.createElement('canvas');
-          cv.width = cw; cv.height = ch;
-          const ctx = cv.getContext('2d');
-          if (!ctx) { resolve({ mime: file.type, dataUrl: String(reader.result) }); return; }
-          ctx.drawImage(img, 0, 0, cw, ch);
-          let out = '';
-          try { out = cv.toDataURL('image/jpeg', 0.86); } catch (_) { out = ''; }
-          // 画布不可用或体积没降（本来就是小图）→ 用原图
-          if (!out || out.length > String(reader.result).length) {
-            out = String(reader.result);
-          }
-          resolve({ mime: out.startsWith('data:image/jpeg') ? 'image/jpeg' : file.type, dataUrl: out });
-        };
-        img.src = String(reader.result);
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  async function _chatUploadImage(picked, threadId) {
-    const dataUrl = String((picked || {}).dataUrl || '');
-    if (!dataUrl) throw new Error('图片为空');
-    if (dataUrl.length > CHAT_IMG_MAX_BYTES * 1.4) throw new Error('图片过大（≤4MB）');
-    const r = await request('/api/support/image', {
-      method: 'POST',
-      body: JSON.stringify({ mime: picked.mime, data_b64: dataUrl, thread_id: threadId || '' }),
-    });
-    if (!r || !r.ok || !r.image) throw new Error((r && r.error) || '图片上传失败');
-    return r.image;
-  }
-
-  /** 图片灯箱：点缩略图看原图（大图直接铺满，点任意处/ESC 关闭）。 */
-  function _chatZoom(src) {
-    if (!src) return;
-    // 打开前先记住滚动位置：关掉要「回到原处」，否则大图一关就跳位（用户反馈「没有返回」）
-    const log = el.psLog || el.profileSupportPanel;
-    const keep = { winY: window.scrollY || 0, logTop: (log && log.scrollTop) || 0 };
-    const box = document.createElement('div');
-    box.className = 'chat-zoom';
-    const img = document.createElement('img');
-    img.src = src;
-    img.alt = '查看大图';
-    img.onerror = () => {
-      const errTip = document.createElement('div');
-      errTip.className = 'chat-zoom-tip is-err';
-      errTip.textContent = '图片加载失败（可能已过期，重新打开会话即可）';
-      box.appendChild(errTip);
-    };
-    // 显式关闭入口：右上角大号 ×（之前只有「点任意处」这种隐性返回，用户找不到）
-    const x = document.createElement('button');
-    x.type = 'button';
-    x.className = 'chat-zoom-x';
-    x.title = '关闭 (ESC)';
-    x.setAttribute('aria-label', '关闭预览');
-    x.textContent = '×';
-    const tip = document.createElement('div');
-    tip.className = 'chat-zoom-tip';
-    tip.textContent = '点击任意处或按 ESC 返回';
-    box.append(img, x, tip);
-    const close = () => {
-      if (box.parentNode) box.parentNode.removeChild(box);
-      document.removeEventListener('keydown', onKey);
-      // 回到打开前的位置
-      try {
-        if (log && keep.logTop) log.scrollTop = keep.logTop;
-        if (keep.winY) window.scrollTo(0, keep.winY);
-      } catch (_) { /* 忽略 */ }
-    };
-    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
-    box.onclick = close;
-    x.onclick = (e) => { e.stopPropagation(); close(); };
-    document.addEventListener('keydown', onKey);
-    document.body.appendChild(box);
-  }
-
-  function _chatImgTag(nameOrMsg) {
-    // 优先用后端下发的签名 URL（`<img>` 直接请求不会带 Authorization 头，
-    // 裸路径会被鉴权挡掉 → 裂图，2026-10-03 实测）；没有则退回裸路径。
-    const msg = (nameOrMsg && typeof nameOrMsg === 'object') ? nameOrMsg : { image: nameOrMsg };
-    const name = msg.image;
-    if (!name) return '';
-    const src = msg.image_url || ('/api/support/image/' + encodeURIComponent(name));
-    return `<img class="chat-img" src="${esc(src)}" alt="图片消息" loading="lazy" data-img-zoom="${esc(src)}">`;
-  }
-
-  /** 清掉待发送图片（用户侧悬浮窗用；管理台用 _psClearImage）。 */
-  function _chatClearImage() {
-    _chat.img = null;
-    const bar = _chatEl('chatAttachBar');
-    const img = _chatEl('chatAttachImg');
-    const input = _chatEl('chatImgInput');
-    if (bar) bar.hidden = true;
-    if (img) img.removeAttribute('src');
-    if (input) input.value = '';
-  }
+  var _ps = { threads: [], active: null, timer: null, loading: false };
 
   function _psBubble(m) {
     // 管理台视角：客服（自己）的回复靠右，用户消息靠左，与用户侧悬浮窗相反，便于区分
     const mine = m.role === 'admin';
     const cls = mine ? 'user' : 'admin';
     const name = m.sender_identifier ? `（${escHtml(m.sender_identifier)}）` : '';
-    const body = (m.text ? `<div class="chat-bubble">${escHtml(m.text)}</div>` : '') + _chatImgTag(m);
-    return `<div class="chat-msg ${cls}" data-msg-idx="${Number(m.__idx) || 0}">
-      <div class="chat-body-wrap">${body}</div>
+    return `<div class="chat-msg ${cls}">
+      <div class="chat-bubble">${escHtml(m.text)}</div>
       <div class="chat-meta">${mine ? '客服' : '用户'}${mine ? name : ''} · ${esc(_chatFmt(m.ts))}</div>
     </div>`;
   }
   function _psSetFootEnabled(on) {
     if (el.psInput) { el.psInput.disabled = !on; if (!on) el.psInput.value = ''; }
     if (el.psSend) el.psSend.disabled = !on;
-    if (el.psImgBtn) el.psImgBtn.disabled = !on;
-    if (!on) _psClearImage();
-  }
-  function _psClearImage() {
-    _ps.img = null;
-    if (el.psAttachBar) el.psAttachBar.hidden = true;
-    if (el.psAttachImg) el.psAttachImg.removeAttribute('src');
-    if (el.psImgInput) el.psImgInput.value = '';
-  }
-  async function _psPickImage() {
-    if (!_ps.active) return;
-    try {
-      const picked = await _chatPickImage(el.psImgInput && el.psImgInput.files && el.psImgInput.files[0]);
-      _ps.img = picked;
-      if (el.psAttachImg) el.psAttachImg.src = picked.dataUrl;
-      if (el.psAttachBar) el.psAttachBar.hidden = false;
-    } catch (e) {
-      _psNote('⚠️ ' + ((e && e.message) || '图片选择失败'));
-    }
   }
   function _psNote(text) {
     const log = el.psLog;
@@ -17843,9 +12912,7 @@ el.dwVidPlayer.hidden = true;
         if (sb) sb.onclick = () => _psSetStatus(tid, resolved ? 'open' : 'resolved');
       }
       if (log) {
-        // 带上下标：搜索结果点击后能定位并高亮到那一条
-        const msgs = (t.messages || []).map((m, i) => Object.assign({}, m, { __idx: i }));
-        log.innerHTML = msgs.map(_psBubble).join('') || '<div class="chat-empty">暂无消息</div>';
+        log.innerHTML = (t.messages || []).map(_psBubble).join('') || '<div class="chat-empty">暂无消息</div>';
         log.scrollTop = log.scrollHeight;
       }
       _psSetFootEnabled(true);
@@ -17871,19 +12938,14 @@ el.dwVidPlayer.hidden = true;
     const btn = el.psSend;
     if (!input || !btn || btn.disabled || !_ps.active) return;
     const text = (input.value || '').trim();
-    const picked = _ps.img;
-    if (!text && !picked) return;
+    if (!text) return;
     btn.disabled = true;
     try {
-      // 有图先传图拿文件名，再连同文字一起发（后端允许「无文字只有图」）
-      let image = '';
-      if (picked) image = await _chatUploadImage(picked, _ps.active);
       const r = await request('/api/support/thread/' + _ps.active + '/reply', {
-        method: 'POST', body: JSON.stringify({ text, image }),
+        method: 'POST', body: JSON.stringify({ text }),
       });
       if (!r || !r.ok) throw new Error((r && r.error) || '回复失败');
       input.value = '';
-      _psClearImage();
       await _psOpenThread(_ps.active);
     } catch (e) {
       _psNote('⚠️ ' + ((e && e.message) || '回复失败'));
@@ -17893,49 +12955,6 @@ el.dwVidPlayer.hidden = true;
   }
   function _psStopPoll() {
     if (_ps && _ps.timer) { clearInterval(_ps.timer); _ps.timer = null; }
-  }
-  async function _psRunSearch() {
-    const box = el.psSearchResults;
-    if (!el.psSearch || !box) return;
-    const q = (el.psSearch.value || '').trim();
-    if (!q) { _ps.hits = []; box.hidden = true; box.innerHTML = ''; return; }
-    let r = null;
-    try { r = await request('/api/support/search?q=' + encodeURIComponent(q)); } catch (_) { r = null; }
-    const hits = (r && r.ok && r.results) || [];
-    _ps.hits = hits;
-    if (!hits.length) {
-      box.innerHTML = '<div class="ps-search-empty">没有找到包含「' + escHtml(q) + '」的消息</div>';
-      box.hidden = false;
-      return;
-    }
-    box.innerHTML = '<div class="ps-search-count">命中 ' + hits.length + ' 条消息</div>' + hits.map((h, i) => {
-      const who = h.user_identifier ? escHtml(h.user_identifier) : '未知用户';
-      const when = h.ts ? esc(_chatFmt(h.ts)) : '';
-      const by = h.role === 'admin' ? '客服' : '用户';
-      const img = h.has_image ? '🖼 ' : '';
-      return `<div class="ps-hit" data-hit="${i}">
-        <div class="ps-hit-top"><span class="ps-hit-who">${who}</span><span class="ps-hit-meta">${by} · ${when}</span></div>
-        <div class="ps-hit-text">${img}${escHtml(String(h.excerpt || ''))}</div>
-      </div>`;
-    }).join('');
-    box.hidden = false;
-    box.querySelectorAll('.ps-hit').forEach((row) => {
-      row.onclick = () => {
-        const hit = _ps.hits[Number(row.dataset.hit) || 0];
-        if (!hit) return;
-        _psOpenThread(hit.thread_id).then(() => _psFlashMsg(hit.index));
-      };
-    });
-  }
-  /** 定位并高亮命中的那条消息（搜索结果跳转后用）。 */
-  function _psFlashMsg(index) {
-    const log = el.psLog;
-    if (!log) return;
-    const node = log.querySelector('.chat-msg[data-msg-idx="' + Number(index) + '"]');
-    if (!node) return;
-    node.scrollIntoView({ block: 'center' });
-    node.classList.add('is-flash');
-    setTimeout(() => node.classList.remove('is-flash'), 2200);
   }
   async function loadSupportAdmin() {
     if (!el.profileSupportPanel) return;
@@ -17959,8 +12978,8 @@ el.dwVidPlayer.hidden = true;
         const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
         request('/api/support/thread/' + _ps.active).then((r) => {
           if (!r || !r.ok) return;
-          const msgs = ((r.thread || {}).messages || []).map((m, i) => Object.assign({}, m, { __idx: i }));
-          const html = msgs.map(_psBubble).join('') || '<div class="chat-empty">暂无消息</div>';
+          const html = ((r.thread || {}).messages || []).map(_psBubble).join('') ||
+            '<div class="chat-empty">暂无消息</div>';
           if (log.innerHTML !== html) {
             log.innerHTML = html;
             if (atBottom) log.scrollTop = log.scrollHeight;
@@ -17974,29 +12993,6 @@ el.dwVidPlayer.hidden = true;
       el.psRefresh.onclick = () => { _psLoadThreads(); if (_ps.active) _psOpenThread(_ps.active); };
     }
     if (el.psSend) el.psSend.onclick = _psSend;
-    if (el.psImgBtn && el.psImgInput) {
-      el.psImgBtn.onclick = () => el.psImgInput.click();
-      el.psImgInput.onchange = () => { _psPickImage(); };
-    }
-    if (el.psAttachClear) el.psAttachClear.onclick = () => _psClearImage();
-    // 气泡里的图片点击放大（事件委托，动态渲染也能生效）
-    if (el.psLog) {
-      el.psLog.addEventListener('click', (e) => {
-        const t = e.target;
-        if (t && t.getAttribute && t.getAttribute('data-img-zoom')) _chatZoom(t.getAttribute('data-img-zoom'));
-      });
-    }
-    // 历史消息搜索：输入即查（300ms 防抖），回车/点击结果跳到对应会话并高亮
-    if (el.psSearch) {
-      let timer = null;
-      el.psSearch.addEventListener('input', () => {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(_psRunSearch, 300);
-      });
-      el.psSearch.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); _psRunSearch(); }
-      });
-    }
     if (el.psInput) {
       el.psInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); _psSend(); }
@@ -18021,10 +13017,7 @@ el.dwVidPlayer.hidden = true;
       if (inProfile) switchView('home');
       return;
     }
-    // 默认收起（2026-10-03 用户要求）：已登录也先折叠，点标题展开；
-    // 进入个人中心子页时 switchView 会按激活项自动展开，不受影响。
-    const hasActiveSub = group.querySelector('.sidebar-item.is-active');
-    if (!hasActiveSub) group.classList.add('collapsed');
+    group.classList.remove('collapsed');
     delete group.dataset.locked;
   }
   function _isValidIdentifier(ident) {
@@ -18112,89 +13105,11 @@ el.dwVidPlayer.hidden = true;
       el.authActionBtn.textContent = isReg ? '创建中…' : '登录中…';
     }
     if (el.authModalClose) el.authModalClose.disabled = true;
-    // 文案说清在做什么（原来只写「处理中…」，用户不知道卡在哪一步）
-    _authMsg(isReg ? '正在创建账号…' : '正在登录…');
+    _authMsg('处理中…');
     try {
-      let localToken = null, cloudAccount = null, cloudNotice = '';
-      let cloudErrMsg = '', cloudErrCode = '';
-
-      // ── 阶段 1：本机账号（毫秒级）────────────────────────────────────────────
-      // 🔴 2026-09-22 用户报「怎么会显示处理中呢，直接登录了呀，加载太慢」：
-      //    旧流程把**云端登录串在登录路径最前面**，走 CF 一次往返 1~4 秒，
-      //    用户就得盯着「处理中…」干等 4 秒；而本机账号表登录只要 30 毫秒。
-      //    本机账号表同时是「账号是否存在 / 密码对不对」的权威，也是功能门禁
-      //    （下载/字幕/个人中心）唯一认的凭据 —— 所以它必须排第一、且立刻放行。
-      const localPromise = (async () => {
-        let r = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
-          method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
-        });
-        // 注册撞上「已注册」→ 本机已有同号账号，改按登录处理（老行为）
-        if (r && !r.ok && isReg && /已注册/.test(r.error || '')) {
-          r = await request('/api/auth/login', {
-            method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
-          });
-        }
-        return r;
-      })();
-
-      // ── 阶段 2：云端账号（会员归属 + 最多 2 台设备的真源，1~4 秒）──────────────
-      // 不再挡在登录路径上：**并发**发出，本机登录成功就先放行界面，
-      // 云端结果到了再用 toast 补报（成功=权益已同步；失败=本机账号可正常用，
-      // 但会员权益没跟账号走，换机/重装会丢，必须如实告诉用户）。
-      const cloudPromise = (async () => {
-        let c = await request(isReg ? '/api/cloud/register' : '/api/cloud/login', {
-          method: 'POST', body: JSON.stringify({ email: ident, password: pw }),
-        });
-        // 注册时云端早有同名账号（例如以前在网页版注册过）→ 用同一密码走云端登录，
-        // 否则这轮会员权益同步不上。
-        if (isReg && c && !c.ok && /已存在|已注册/.test(String(c.error || ''))) {
-          c = await request('/api/cloud/login', {
-            method: 'POST', body: JSON.stringify({ email: ident, password: pw }),
-          });
-        }
-        return c;
-      })().catch(() => null);
-
-      const lres = await localPromise;
-      if (lres && lres.ok && lres.token) localToken = lres.token;
-
-      if (!localToken) {
-        // 本机给不出结论（账号不在本机 / 密码不对）：云端还可能是该账号的唯一持有者
-        // （早年只在网页版注册过的邮箱账号，云端会自动补建本机账号）。这条兜底路径
-        // 必须等云端结果才能下结论 —— 用户本来就登不进去，等这一下不亏。
-        const cres = await cloudPromise;
-        if (cres && cres.ok && cres.local_token) {
-          localToken = cres.local_token;
-          cloudAccount = cres.account || null;
-          cloudNotice = cres.notice || '';
-        } else if (cres && !cres.ok) {
-          cloudErrMsg = String(cres.error || '');
-          cloudErrCode = String(cres.code || '');
-        } else {
-          // 请求抛出（断网/超时）→ 云端结论不可得，只能按「本机说了算」处理。
-          cloudErrCode = 'CLOUD_UNREACHABLE';
-          cloudErrMsg = '授权中心暂时不可达';
-        }
-      }
-      if (!localToken) {
-        // 🔴 2026-09-22 缺陷修复：此前这里用的是**云端**的错误文案（cres.error），
-        //    云端不认识只在本机注册的手机号账号 → 用户明明账号在、只是密码打错，
-        //    却被提示「账号不存在，请先注册」，与事实相反且把人引向重新注册。
-        //    本机账号表才决定账号是否存在，故本地错误优先，云端原因仅在没有本地
-        //    结论时兜底。
-        const lerr = String((lres && lres.error) || '');
-        const lcode = String((lres && lres.code) || '');
-        let msg = lerr || cloudErrMsg || (isReg ? '注册失败' : '登录失败');
-        if (!isReg && lcode === 'BAD_PASSWORD') msg += '（可点下方「忘记密码」重置）';
-        // 本机说「账号不存在」，但云端这轮根本没连上 → 结论不完整（该账号可能只在
-        // 云端），如实补一句，别让用户白跑一趟注册。
-        if (cloudErrCode === 'CLOUD_UNREACHABLE' && lcode === 'NO_ACCOUNT') {
-          msg += '（也可能是网络问题：授权中心暂时连不上，联网后请重试）';
-        }
-        _authMsg('❌ ' + msg, true);
-        return;
-      }
-      const r = { ok: true, token: localToken, is_admin: false };
+      const r = await request(isReg ? '/api/auth/register' : '/api/auth/login', {
+        method: 'POST', body: JSON.stringify({ identifier: ident, password: pw }),
+      });
       if (r && r.ok && r.token) {
         const remember = el.authRemember ? el.authRemember.checked : true;
         if (remember) {
@@ -18209,33 +13124,10 @@ el.dwVidPlayer.hidden = true;
         updateAdminTabVisibility();
         _renderAuthHeader();
         _updateProfileSidebarLock();
-        // 立刻放行：本机 token 到手就够了（功能门禁只认它）。会员状态/云端快照一律
-        // **后台刷新、不 await** —— /api/member/status 里带着一次云端心跳，await 它
-        // 等于又把刚省下的 4 秒还回去（这正是「处理中…」迟迟不消失的第二层原因）。
-        _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功')
-                 + (cloudNotice ? ' · ' + cloudNotice : ''), false);
+        _authMsg('✅ ' + (isReg ? '注册并登录成功' : '登录成功'));
         if (el.authPw) el.authPw.value = '';
         if (el.authTermsCheck) el.authTermsCheck.checked = false;
-        await renderAccount();          // 只打本机 /api/auth/me，毫秒级
-        renderMemberStatus();           // 后台刷新（不 await）
-        renderCloudAccount();           // 后台刷新（不 await）
-        if (!cloudAccount) {
-          // 云端这一轮还没出结果 → 等它回来后台刷新（不弹成功 toast，
-          // 🔴 2026-09-23 用户反馈「这个提示不要」：同步成功是本分，不必打扰）。
-          cloudPromise.then(async (cres) => {
-            if (cres && cres.ok) {
-              cloudNotice = cres.notice || '';
-              try { await renderMemberStatus(); } catch (_) {}
-              try { await renderCloudAccount(); } catch (_) {}
-            } else {
-              const why = (cres && cres.error) || cloudErrMsg || '未能连接授权中心';
-              const extra = (cres && cres.code === 'CLOUD_UNREACHABLE')
-                ? '联网后重新登录即可同步' : '重新登录时若仍失败请截图本提示';
-              showToast('⚠️ 本机登录成功，但云端未同步（' + why + '）——'
-                        + '会员权益暂无账号归属，' + extra + '。', 6000);
-            }
-          });
-        }
+        await renderMemberStatus();
         setTimeout(() => {
           try { el.authModal.close(); } catch (_) { el.authModal.removeAttribute('open'); }
           // 登录/注册前有点击下载的待办，成功后自动继续
@@ -18248,8 +13140,6 @@ el.dwVidPlayer.hidden = true;
             window._pendingSubtitleExtract = false;
             setTimeout(() => { try { sbStartExtract(); } catch (_) {} }, 120);
           }
-          // 其他被登录门禁拦下的功能（转换/压缩/去水印/抠图…）登录成功后补点一次
-          _replayGatedAction();
         }, 400);
       } else {
         _authMsg('❌ ' + ((r && r.error) || (isReg ? '注册失败' : '登录失败')), true);
@@ -18356,11 +13246,7 @@ el.dwVidPlayer.hidden = true;
         _forgetMsg('验证码已发送，请查收邮箱/手机');
         if (r.dev_code && el.forgetDevNote) {
           el.forgetDevNote.hidden = false;
-          // self_serve：手机号找回（短信通道未接入）→ 直接在本机显示；
-          // 否则是桌面调试用的 dev 模式回显。措辞别让用户以为功能是半成品。
-          el.forgetDevNote.textContent = r.self_serve
-            ? '验证码：' + r.dev_code + '（手机号暂不支持短信接收，已直接显示）'
-            : '（测试模式）验证码：' + r.dev_code + '（接入真实网关后将不再显示）';
+          el.forgetDevNote.textContent = '（测试模式）验证码：' + r.dev_code + '（接入真实网关后将不再显示）';
         }
         if (el.forgetCode) el.forgetCode.focus();
         _forgetStartCountdown((r.expires_in && r.expires_in > 60) ? 60 : 60);
@@ -18391,10 +13277,7 @@ el.dwVidPlayer.hidden = true;
         method: 'POST', body: JSON.stringify({ identifier: ident, code: code, password: pw }),
       });
       if (r && r.ok) {
-        const warned = r.cloud_sync_tried === true && r.cloud_synced === false;
-        _forgetMsg(warned
-          ? '✅ 本机密码已重置。⚠️ 云端账号未同步（多为断网）：在这台重新登录一次即可同步'
-          : '✅ 密码已重置，请用新密码登录');
+        _forgetMsg('✅ 密码已重置，请用新密码登录');
         if (el.forgetPw) el.forgetPw.value = '';
         if (el.forgetPw2) el.forgetPw2.value = '';
         if (el.forgetCode) el.forgetCode.value = '';
@@ -18417,13 +13300,9 @@ el.dwVidPlayer.hidden = true;
     try { el.memberModal.showModal(); } catch (_) { el.memberModal.setAttribute('open', ''); }
     switchMemberTab('dl');
     if (el.memberActMsg) el.memberActMsg.hidden = true;
-    await Promise.all([renderMemberStatus(), renderMemberPlans(), renderCloudAccount()]);
+    await Promise.all([renderMemberStatus(), renderMemberPlans()]);
   }
   if (el.sTabMember) el.sTabMember.addEventListener('click', openMemberCenter);
-  // 跨文件挂载点（2026-10-02）：桌面壳的「媒体嗅探」面板在 web/js/desktop-app.js，
-  // 它不在本闭包内，拿不到 openMemberCenter。免费用户从扩展/面板选 2K/4K 被后端拦下时，
-  // 必须由它把会员中心弹出来 —— 只靠 #memberBadge 的 click 代理太隐晦、也没有名字可测。
-  window.__vdlOpenMemberCenter = openMemberCenter;
   // 右上角「👑 会员中心」常驻按钮（所有视图可见，不参与 switchView 隐藏逻辑）
   if (el.memberBadge) el.memberBadge.addEventListener('click', openMemberCenter);
   // 右上角「👤 账号」常驻入口：未登录打开登录弹窗；已登录打开用户资料卡（不再直跳退出确认）
@@ -18463,9 +13342,7 @@ el.dwVidPlayer.hidden = true;
     }
     setTxt(el.userMenuName, me.identifier || '已登录');
     setTxt(el.userMenuUid, me.user_id || '—');
-    _vdlAvatarUrl = (prof && prof.avatar_url) || '';
     _renderAvatar(prof && prof.avatar_url);
-    _renderAuthHeader();
     // 角色标签（顶部 tag 唯一展示角色，不再单独一行）
     const isAdmin = !!me.is_admin;
     if (el.userMenuTag) {
@@ -18743,9 +13620,7 @@ el.dwVidPlayer.hidden = true;
     }
     setTxt(el.profName, me.identifier || '已登录');
     setTxt(el.profTag, me.is_admin ? '👑 超级管理员' : '普通用户');
-    _vdlAvatarUrl = (prof && prof.avatar_url) || '';
     _renderAvatar(prof && prof.avatar_url);
-    _renderAuthHeader();
     // 注册时间
     const ct = prof && prof.created_at ? prof.created_at : (me.created_at || 0);
     setTxt(el.profCreated, ct ? _memberFmtDate(ct, true) : '—');
@@ -18758,9 +13633,8 @@ el.dwVidPlayer.hidden = true;
       const dl = ms.download_member || {};
       const ai = ms.ai_member || {};
       const memberRows = [];
-      // 2026-10-03 改版：渐变会员卡行（盾牌图标 + 名称 + 有效期至 …），样式见 .pf-mrow
-      if (dl.active) memberRows.push(`<div class="pf-mrow"><span class="pf-mrow-ic is-dl">🛡</span><span class="pf-mrow-name">下载会员</span><span class="pf-mrow-exp">有效期至 ${esc(_memberFmtDate(dl.expire_at))}</span></div>`);
-      if (ai.active) memberRows.push(`<div class="pf-mrow"><span class="pf-mrow-ic is-ai">🛡</span><span class="pf-mrow-name">AI 会员</span><span class="pf-mrow-exp">有效期至 ${esc(_memberFmtDate(ai.expire_at))}</span></div>`);
+      if (dl.active) memberRows.push(`<div class="pf-row"><span>下载会员</span><span>${esc('至 ' + _memberFmtDate(dl.expire_at))}</span></div>`);
+      if (ai.active) memberRows.push(`<div class="pf-row"><span>AI 会员</span><span>${esc('至 ' + _memberFmtDate(ai.expire_at))}</span></div>`);
       if (memberRows.length) {
         if (el.profMemberList) { el.profMemberList.innerHTML = memberRows.join(''); el.profMemberList.hidden = false; }
         if (el.profMemberNone) el.profMemberNone.hidden = true;
@@ -18776,7 +13650,6 @@ el.dwVidPlayer.hidden = true;
       if (el.profCreditsTotal) el.profCreditsTotal.textContent = creditsTotal;
       if (el.profCreditsAi) el.profCreditsAi.textContent = aiLeft;
       if (el.profCreditsPerm) el.profCreditsPerm.textContent = perm;
-      _renderCreditNotes(ai, perm);
     } else {
       if (el.profMemberList) el.profMemberList.hidden = true;
       if (el.profMemberNone) el.profMemberNone.hidden = false;
@@ -18784,10 +13657,6 @@ el.dwVidPlayer.hidden = true;
       if (el.profCreditsTotal) el.profCreditsTotal.textContent = '—';
       if (el.profCreditsAi) el.profCreditsAi.textContent = '—';
       if (el.profCreditsPerm) el.profCreditsPerm.textContent = '—';
-      if (el.profCreditsAiNote) el.profCreditsAiNote.textContent = '◷ 有效期随 AI 会员到期日，到期清零';
-      if (el.profCreditsPermNote) el.profCreditsPermNote.textContent = '永不过期，长期有效';
-      var _alertNode = document.getElementById('profCreditsAlert');
-      if (_alertNode) _alertNode.hidden = true;
     }
     // 记录（即便 prof 请求失败也渲染空态表格，避免空白面板）
     const credits = (prof && prof.credit_history) || [];
@@ -18807,62 +13676,10 @@ el.dwVidPlayer.hidden = true;
     try { _renderUserCreditsLog(credits); } catch (e) { console.error('[profile] credits render failed', e); }
   }
 
-  /**
-   * 积分分池说明（2026-09-26 用户报「积分要分清楚过期时间和永久积分」）。
-   *
-   * 「当前可用」= AI 会员积分 + 永久积分，但两者有效期完全不同：
-   *   - AI 会员积分：随 AI 会员到期日一起清零（membership.status 惰性过期）；
-   *   - 永久积分  ：购买后永久有效，永不过期。
-   * 只显示一个总数会让用户误以为「积分一直有效、慢慢用就行」，到期白丢积分。
-   * 因此把到期日直接写在对应行下面，7 天内到期高亮预警。
-   */
-  function _renderCreditNotes(ai, perm) {
-    const aiNode = el.profCreditsAiNote;
-    const permNode = el.profCreditsPermNote;
-    // 2026-10-03 改版：hero 大数字下的橙色胶囊，仅 AI 积分临期（≤7 天）时出现
-    const alertNode = document.getElementById('profCreditsAlert');
-    let alertDays = 0;
-    if (aiNode) {
-      aiNode.classList.remove('is-warn', 'is-muted');
-      const left = Number((ai && ai.credits_left) || 0);
-      const exp = Number((ai && ai.expire_at) || 0);
-      const active = !!(ai && ai.active);
-      if (!active || !exp || left <= 0) {
-        aiNode.textContent = '◷ 开通 AI 会员后获得，有效期随会员到期日（到期清零）';
-        aiNode.classList.add('is-muted');
-      } else {
-        const days = Math.ceil((exp * 1000 - Date.now()) / 86400000);
-        const until = _memberFmtDate(exp);
-        if (days <= 7) {
-          aiNode.textContent = '⚠️ 有效期至 ' + until + '，仅剩 ' + days + ' 天，到期清零';
-          aiNode.classList.add('is-warn');
-          alertDays = days;
-        } else {
-          aiNode.textContent = '◷ 有期限，有效期至 ' + until + '，到期自动清零';
-        }
-      }
-    }
-    if (permNode) {
-      permNode.textContent = perm > 0
-        ? '◷ 永久不过期，长期有效'
-        : '◷ 永久不过期，购买积分包后长期有效';
-    }
-    if (alertNode) {
-      if (alertDays > 0) {
-        alertNode.textContent = '部分积分仅剩 ' + alertDays + ' 天，到期清零';
-        alertNode.hidden = false;
-      } else {
-        alertNode.hidden = true;
-      }
-    }
-  }
-
   // 个人中心：关于 / 版本 / 自动更新 / 错误上报
   let _aboutUpdatable = true;
   let _aboutLatest = null;
-  let _aboutUpdateAvail = false;   // 服务端 update_available：有更新才展示更新内容
   let _aboutCurrentVer = '';
-  let _aboutChangelog = null;
 
   async function loadAboutPanel() {
     if (!el.profileAboutPanel) return;
@@ -18875,8 +13692,6 @@ el.dwVidPlayer.hidden = true;
     if (el.profAboutBuild) el.profAboutBuild.textContent = build ? ('构建：' + build) : '';
     _aboutUpdatable = !!(info && info.updatable);
     await _checkForUpdate();
-    // 内置更新日志：与线上更新源无关，离线也能看到本机版本改了什么（2026-09-26）
-    await _loadAboutChangelog();
   }
 
   async function _checkForUpdate() {
@@ -18884,19 +13699,13 @@ el.dwVidPlayer.hidden = true;
     if (!_aboutUpdatable) { el.profUpdateBanner.hidden = true; return; }
     let data = null;
     try { data = await request('/api/system/latest'); } catch (_) { data = null; }
-    if (!data || !data.ok) {
+    if (!data || !data.ok || !data.update_available) {
       el.profUpdateBanner.hidden = true;
       return;
     }
     _aboutLatest = data.latest || {};
-    _aboutUpdateAvail = !!data.update_available;
-    if (!data.update_available) {
-      el.profUpdateBanner.hidden = true;
-      _renderChangelog();
-      return;
-    }
     if (el.profUpdateVer) el.profUpdateVer.textContent = _aboutLatest.version || '—';
-    if (el.profUpdateNotes) el.profUpdateNotes.textContent = _changelogSummary(_aboutLatest);
+    if (el.profUpdateNotes) el.profUpdateNotes.textContent = _aboutLatest.notes || '';
     // 增量更新提示：已装版本 == from_version 时走几 MB 差分，其余走全量
     if (el.profUpdateSize) {
       const inc = !!(_aboutLatest.patch_url && _aboutLatest.from_version && _aboutLatest.from_version === _aboutCurrentVer);
@@ -18909,87 +13718,6 @@ el.dwVidPlayer.hidden = true;
       }
     }
     el.profUpdateBanner.hidden = false;
-    _renderChangelog();   // 有更新时把「新版本这次改什么」显示出来
-  }
-
-  /** 把 latest.notes_list / notes 归一成字符串数组（兼容只有 notes 的旧清单）。 */
-  function _changelogItems(latest) {
-    const raw = (latest && latest.notes_list) || [];
-    let items = Array.isArray(raw) ? raw.map((x) => String(x).trim()).filter(Boolean) : [];
-    if (!items.length && latest && latest.notes) {
-      items = String(latest.notes).replace(/\r\n/g, '\n').split('\n').map((s) => s.trim()).filter(Boolean);
-    }
-    return items;
-  }
-
-  /** 更新横幅里的一行摘要（取前 3 条，超出标「等 N 项」）。 */
-  function _changelogSummary(latest) {
-    const items = _changelogItems(latest);
-    if (!items.length) return '性能优化与问题修复';
-    const head = items.slice(0, 3).join('；');
-    return items.length > 3 ? head + ' 等 ' + items.length + ' 项' : head;
-  }
-
-  /**
-   * 更新内容展示（2026-09-26 用户要求「更新加入更新内容」）。
-   *
-   * 三种场景与标题：
-   *   有新版本     → 「新版本 vX 更新内容」（配合上方更新横幅）
-   *   已是最新     → 「版本 vX 更新内容」（点检查更新也能看到改了什么）
-   *   刚更新完回来 → 「本次更新已完成（vX）」，优先展示更新时缓存下来的条目
-   */
-  async function _loadAboutChangelog() {
-    try {
-      _aboutChangelog = await request('/api/system/changelog');
-    } catch (_) {
-      _aboutChangelog = null;
-    }
-    _renderChangelog();
-  }
-
-  function _renderChangelog() {
-    const box = el.profChangelog;
-    const list = el.profChangelogList;
-    if (!box || !list) return;
-    const cur = _aboutCurrentVer || '';
-    const latestVer = (_aboutLatest && _aboutLatest.version) ? String(_aboutLatest.version) : '';
-    const data = _aboutChangelog || {};
-    const entries = Array.isArray(data.entries) ? data.entries : [];
-
-    // 2026-10-03 用户要求：**只在「有更新可用」时**展示新版本的更新内容，
-    // 更新完成（已是最新）就不再展示；历史版本更新记录整块去掉。
-    // 判据优先用服务端 update_available，版本号不等作兜底（离线/字段缺失时）。
-    const hasUpdate = _aboutUpdateAvail || (!!latestVer && !!cur && latestVer !== cur);
-    if (!hasUpdate) { box.hidden = true; return; }
-
-    // 优先用线上更新清单里的条目（= 这次点更新会装到的东西），退回内置日志同版本条目
-    let items = _changelogItems(_aboutLatest || {});
-    let dateText = _aboutLatest.published_at || '';
-    if (!items.length) {
-      const hit = entries.find((e) => e && e.version === latestVer) || null;
-      if (hit) {
-        items = Array.isArray(hit.items) ? hit.items.slice() : [];
-        dateText = dateText || hit.date || '';
-      }
-    }
-    if (!items.length) { box.hidden = true; return; }
-
-    if (el.profChangelogTitle) el.profChangelogTitle.textContent = 'v' + latestVer + ' 更新内容';
-    if (el.profChangelogDate) el.profChangelogDate.textContent = dateText;
-    list.replaceChildren(...items.map((t) => {
-      const li = document.createElement('li');
-      li.textContent = t;
-      return li;
-    }));
-    box.hidden = false;
-  }
-
-  /** 最近一次成功更新时缓存的更新内容（供更新完成后的提示使用）。 */
-  function _cachedUpdateNotes() {
-    try {
-      const raw = localStorage.getItem('vdl_update_notes');
-      return raw ? JSON.parse(raw) : null;
-    } catch (_) { return null; }
   }
 
   function _aboutMsg(txt, err) {
@@ -19052,13 +13780,6 @@ el.dwVidPlayer.hidden = true;
     try { status = await api.update_status(jobId); } catch (e) { status = null; }
     const s = status && status.status;
     if (s === 'ready') {
-      // 记住「这次更新了什么」：重启后关于面板能回看本次更新内容
-      try {
-        localStorage.setItem('vdl_update_notes', JSON.stringify({
-          version: (_aboutLatest && _aboutLatest.version) || '',
-          items: _changelogItems(_aboutLatest || {}),
-        }));
-      } catch (_) { /* localStorage 不可用就算了，不阻塞更新 */ }
       _aboutMsg('更新已就绪，应用即将重启…');
       const a = window.pywebview && window.pywebview.api;
       if (a && typeof a.quit_app === 'function') {
@@ -19140,10 +13861,9 @@ el.dwVidPlayer.hidden = true;
   if (el.profCheckUpdateBtn) el.profCheckUpdateBtn.addEventListener('click', async () => {
     _aboutMsg('正在检查更新…');
     await _checkForUpdate();
-    await _loadAboutChangelog();
-    if (el.profUpdateBanner && !el.profUpdateBanner.hidden) _aboutMsg('发现新版本，更新内容见下方');
-    else _aboutMsg('已是最新版本，更新内容见下方');
-    setTimeout(() => _aboutMsg(''), 3000);
+    if (el.profUpdateBanner && !el.profUpdateBanner.hidden) _aboutMsg('发现新版本！');
+    else _aboutMsg('已是最新版本');
+    setTimeout(() => _aboutMsg(''), 2500);
   });
   if (el.profUpdateNowBtn) el.profUpdateNowBtn.addEventListener('click', _doUpdate);
   if (el.profErrorReportBtn) el.profErrorReportBtn.addEventListener('click', () => {
@@ -19161,19 +13881,14 @@ el.dwVidPlayer.hidden = true;
     el.profReportSubmit.disabled = true;
     if (el.profReportMsg) { el.profReportMsg.textContent = '提交中…'; el.profReportMsg.hidden = false; el.profReportMsg.classList.remove('is-err'); }
     try {
-      let image = '';
-      if (_reportImg) image = await _chatUploadImage(_reportImg, '');
       const r = await request('/api/support/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, thread_id: '', image }),
+        body: JSON.stringify({ text, thread_id: '' }),
       });
       if (!r || !r.ok) throw new Error((r && r.error) || '上报失败');
       if (el.profReportModal) el.profReportModal.hidden = true;
       if (el.profReportText) el.profReportText.value = '';
-      _reportImg = null;
-      if (el.profReportImgInput) el.profReportImgInput.value = '';
-      if (el.profReportImgName) { el.profReportImgName.hidden = true; el.profReportImgName.textContent = ''; }
       _aboutMsg('✅ 已收到你的上报，我们会尽快处理');
       setTimeout(() => _aboutMsg(''), 3000);
     } catch (e) {
@@ -19182,30 +13897,6 @@ el.dwVidPlayer.hidden = true;
       el.profReportSubmit.disabled = false;
     }
   });
-
-  // 错误上报弹窗附图（2026-10-03）
-  let _reportImg = null;
-  if (el.profReportImgBtn && el.profReportImgInput) {
-    el.profReportImgBtn.addEventListener('click', () => el.profReportImgInput.click());
-    el.profReportImgInput.addEventListener('change', async () => {
-      try {
-        _reportImg = await _chatPickImage(el.profReportImgInput.files && el.profReportImgInput.files[0]);
-        if (el.profReportImgName) {
-          el.profReportImgName.textContent = '已附加 1 张截图（' +
-            Math.round(String(_reportImg.dataUrl).length / 1024) + ' KB）';
-          el.profReportImgName.hidden = false;
-        }
-      } catch (e) {
-        _reportImg = null;
-        if (el.profReportImgName) { el.profReportImgName.hidden = true; el.profReportImgName.textContent = ''; }
-        if (el.profReportMsg) {
-          el.profReportMsg.textContent = (e && e.message) || '图片选择失败';
-          el.profReportMsg.hidden = false;
-          el.profReportMsg.classList.add('is-err');
-        }
-      }
-    });
-  }
 
   // 账号安全：忘记密码 → 打开找回密码弹窗
   if (el.profForgotPwBtn) el.profForgotPwBtn.addEventListener('click', () => openForgetModal());
@@ -19246,16 +13937,11 @@ el.dwVidPlayer.hidden = true;
         body: JSON.stringify({ current_password: cur, new_password: np }),
       });
       if (r && r.ok) {
-        // 云端账号库同步结果如实说明：本机改了但云端没改，会导致「这台能登、换台说
-        // 密码错」，用户必须知道（一般是断网所致）。「没试过」不是失败，不提示。
-        const warned = r.cloud_sync_tried === true && r.cloud_synced === false;
-        msg(warned ? '✅ 本机密码已修改。⚠️ 云端账号未同步（多为断网），联网后重新登录会自动同步'
-                   : '✅ 密码已修改，下次登录请使用新密码',
-            false);
+        msg('✅ 密码已修改，下次登录请使用新密码', false);
         if (el.profCurPw) el.profCurPw.value = '';
         if (el.profNewPw) el.profNewPw.value = '';
         if (el.profNewPw2) el.profNewPw2.value = '';
-        setTimeout(() => _toggleChangePwForm(false), warned ? 3000 : 1200);
+        setTimeout(() => _toggleChangePwForm(false), 1200);
       } else {
         msg((r && r.error) || '修改失败，请重试', true);
       }
@@ -19326,15 +14012,9 @@ el.dwVidPlayer.hidden = true;
   if (el.forgetModalClose) el.forgetModalClose.addEventListener('click', () => { try { el.forgetModal.close(); } catch (_) {} });
   if (el.forgetModal) el.forgetModal.addEventListener('click', (e) => { if (e.target === el.forgetModal) { try { el.forgetModal.close(); } catch (_) {} } });
   function _authLoading() { return !!(el.authActionBtn && el.authActionBtn.classList.contains('is-loading')); }
-  /** 用户放弃登录（关闭弹窗）时清掉所有「待办动作」，避免下次登录后被莫名补点。 */
-  function _clearPendingActions() {
-    try { window._pendingDownload = false; } catch (_) {}
-    try { window._pendingSubtitleExtract = false; } catch (_) {}
-    _pendingGatedId = '';
-  }
-  if (el.authModalClose) el.authModalClose.addEventListener('click', () => { if (_authLoading()) return; try { _clearPendingActions(); el.authModal.close(); } catch (_) {} });
+  if (el.authModalClose) el.authModalClose.addEventListener('click', () => { if (_authLoading()) return; try { window._pendingDownload = false; el.authModal.close(); } catch (_) {} });
   if (el.authModal) {
-    el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { if (_authLoading()) return; try { _clearPendingActions(); el.authModal.close(); } catch (_) {} } });
+    el.authModal.addEventListener('click', (e) => { if (e.target === el.authModal) { if (_authLoading()) return; try { window._pendingDownload = false; el.authModal.close(); } catch (_) {} } });
     el.authModal.addEventListener('cancel', (e) => { if (_authLoading()) e.preventDefault(); });
   }
   // 法律条款弹窗（服务条款 / 隐私政策）
@@ -19359,14 +14039,15 @@ el.dwVidPlayer.hidden = true;
     });
   });
   if (el.memberModalClose) el.memberModalClose.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} });
-  // 弹窗关闭 → 停掉倒计时秒级定时器（避免后台空转）
-  if (el.memberModal) el.memberModal.addEventListener('close', _stopMemberCountdowns);
   if (el.memberModal) el.memberModal.addEventListener('click', (e) => { if (e.target === el.memberModal) { try { el.memberModal.close(); } catch (_) {} } });
   const _memberTabs = [[el.memberTabDl, 'dl'], [el.memberTabAi, 'ai'], [el.memberTabPacks, 'packs']];
   for (const [b, k] of _memberTabs) { if (b) b.addEventListener('click', () => switchMemberTab(k)); }
-  // 卡密输入/充值事件绑定已随卡密通道下线移除（2026-09-26）
-  if (el.cloudLoginBtn) el.cloudLoginBtn.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} openAuthModal(); });
-  if (el.cloudLogoutBtn) el.cloudLogoutBtn.addEventListener('click', () => { cloudLogoutAccount(); });
+  if (el.memberActivateBtn) el.memberActivateBtn.addEventListener('click', () => {
+    const code = (el.memberCode && el.memberCode.value || '').trim();
+    if (!code) { _memberMsg('请输入套餐 code 或激活码', true); return; }
+    activateMember(code);
+  });
+  if (el.memberCode) el.memberCode.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.memberActivateBtn) el.memberActivateBtn.click(); });
   // ============ /会员中心 ============
   el.libDelete.addEventListener('click', deleteLibItem);
   el.libSubtitle.addEventListener('click', toggleSubPanel);
@@ -19374,7 +14055,7 @@ el.dwVidPlayer.hidden = true;
   el.libCommentary.addEventListener('click', () => {
     if (!currentLibItem) return;
     // 预加载预览元数据，让「自动」画幅能拿到视频宽高判断横竖
-    setupComPreview(`/api/library/file/${encodeURIComponent(currentLibItem.id)}?play=1`, currentLibItem.name || currentLibItem.id);
+    setupComPreview(`/api/library/file/${encodeURIComponent(currentLibItem.id)}`, currentLibItem.name || currentLibItem.id);
     createCommentary(
       { fileId: currentLibItem.id },
       { commentary: el.libCommentary, commentaryStatus: el.libCommentaryStatus, commentaryFile: el.libCommentaryFile },
@@ -19462,11 +14143,9 @@ el.dwVidPlayer.hidden = true;
     } catch (e) { /* */ }
 
     // 档位说明：让用户在选之前就知道「会花钱吗、素材去哪」，而不是选完才发现
-    // v2 十八轮：说明压到「窄右栏（卡内 240px）一行」。此前 auto 那条 43 字会在面板里铺 3 行，
-    // 且与上方选项文案大量重复；现在选项给结论、note 只补「会不会花钱、什么时候转云端」。
     const ENGINE_NOTES = {
-      auto: '本机免费；不够时自动转云端，消耗额度。',
-      cloud: '全部走云端；每片消耗 1 次额度。',
+      auto: '本机够用时完全免费、素材不出本机；本机跑不动或质量不达标时自动改用云端（消耗云端额度）。',
+      cloud: '全部交给云端生成，质量最稳定；每部片子消耗 1 次云端额度。',
     };
     const refreshEngineNote = () => {
       if (!el.llmEngineNote) return;
@@ -19504,23 +14183,19 @@ el.dwVidPlayer.hidden = true;
         if (!m) return;
         if (gwOn) {
           // 走网关时本机本来就没有 Key，别再报「未配置」
-          // v2 十六轮：正常就绪不占位——✅ 行隐藏，只有异常（未配置）才放出提示。
-          el.llmManagedStatus.textContent = '✅ 解说引擎已就绪（云端网关）';
+          el.llmManagedStatus.textContent = '✅ 云端解说服务已就绪：由云端网关提供（由管理员统一配置）';
           el.llmManagedStatus.style.color = '';
-          el.llmManagedStatus.hidden = true;
           return;
         }
         const who = [m.provider_name, m.model].filter(Boolean).join(' · ') || '未指定';
         const from = m.source === 'managed' ? '（由管理员统一配置）'
           : (m.source === 'env' ? '（由运维统一配置）' : '');
         if (m.configured) {
-          el.llmManagedStatus.textContent = `✅ 解说引擎已就绪：${who}`;
+          el.llmManagedStatus.textContent = `✅ 云端解说服务已就绪${from}：${who}`;
           el.llmManagedStatus.style.color = '';
-          el.llmManagedStatus.hidden = true;
         } else {
-          el.llmManagedStatus.textContent = '⚠️ 云端解说服务尚未配置。';
+          el.llmManagedStatus.textContent = '⚠️ 云端解说服务尚未配置，请联系管理员。';
           el.llmManagedStatus.style.color = '#e67e22';
-          el.llmManagedStatus.hidden = false;
         }
       } catch (e) { /* 状态展示失败不影响其它功能 */ }
     };
@@ -19709,14 +14384,6 @@ el.dwVidPlayer.hidden = true;
       if (r && r.ok) platformStatus = r;
     } catch (e) { /* 忽略 */ }
 
-    // v2 十六轮：画面识别块里唯一的内容就是下面这条状态。
-    // 正常（走画面识别）时整块不显示，只有降级为音频检测时才放出来——
-    // 否则绿色 ✅ 常驻，既占地方又没信息量。
-    function syncVisionFold(abnormal) {
-      const fold = document.getElementById('comAiVisionFold');
-      if (fold) fold.hidden = !abnormal;
-    }
-
     // 根据当前选中的 provider + 本机状态，渲染一段友好提示
     function renderVisionRuntime(provider) {
       const rt = el.visionRuntime;
@@ -19729,20 +14396,17 @@ el.dwVidPlayer.hidden = true;
       const managedOn = mg.configured === 'true';
       if (managedOn) {
         const name = mg.name || '管理员已配置';
-        rt.textContent = `✅ 片头检测走画面识别（${name}）`;
+        rt.textContent = `✅ 视觉模型已由管理员配置（${name}），片头检测走画面识别。`;
         rt.style.color = '#27ae60';
-        syncVisionFold(false);
         return;
       }
       if (st.has_local_ocr) {
-        rt.textContent = '✅ 片头检测走画面识别（本机离线，免费）';
+        rt.textContent = '✅ 本机离线 OCR 可用：片头检测走画面识别，无需云端、不消耗额度。';
         rt.style.color = '#27ae60';
-        syncVisionFold(false);
         return;
       }
-      rt.textContent = 'ℹ️ 片头检测走音频检测（不影响出片）';
+      rt.textContent = 'ℹ️ 当前未启用画面识别，片头检测自动降级为音频检测，不影响解说生成；如需开启画面理解，请联系管理员开通。';
       rt.style.color = '#e67e22';
-      syncVisionFold(true);
     }
 
     // 根据选中的 provider，联动显示其免费额度申请链接（仅云端 provider 有 signup_url）
@@ -19781,7 +14445,7 @@ el.dwVidPlayer.hidden = true;
         if (r.configured && r.provider) {
           const who = r.provider_name || r.provider;
           const from = r.source === 'env' ? '（环境变量）' : '（管理员配置）';
-          box.textContent = `✅ 画面识别已就绪：${who}${r.model ? ' · ' + r.model : ''}`;
+          box.textContent = `✅ 云端视觉服务已就绪${from}：${who}${r.model ? ' · ' + r.model : ''}`;
           box.style.color = '#27ae60';
           mark(true, who + (r.model ? ' · ' + r.model : ''));
         } else {
@@ -19789,8 +14453,8 @@ el.dwVidPlayer.hidden = true;
           // 实际会降级到音频检测，说成 OCR 可用是假承诺。
           const st0 = platformStatus || {};
           box.textContent = st0.has_local_ocr
-            ? '片头检测走本机画面识别（离线免费）。'
-            : '未配置画面识别，片头检测走音频检测（不影响出片）。';
+            ? '使用本机离线 OCR（免费，无需任何 Key）；管理员配置云端视觉服务后自动启用。'
+            : '本机无离线 OCR，未配置云端视觉服务时片头检测降级为音频检测（不影响出片）；如需画面理解请联系管理员开通。';
           box.style.color = '';
           mark(false);
         }
@@ -19891,27 +14555,6 @@ el.dwVidPlayer.hidden = true;
         if (r && r.ok) show(r.ready ? '✅ 云端抠图已启用（说扣什么将走火山像素级）' : '✅ 已保存（云端未启用或无完整 AK/SK，仍走本地兜底）', false);
         else show('❌ 保存失败', true);
       } catch (e) { show('❌ 保存失败：' + (e.message || e), true); }
-    });
-  }
-
-  // 「启用云端抠图」开关即改即存（密钥输入区已对用户隐藏，AK/SK 走后端已有值合并，传空不覆盖）。
-  if (el.cloudMattingEnabled) {
-    el.cloudMattingEnabled.addEventListener('change', async () => {
-      try {
-        await request('/api/cloud-matting/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            access_key: el.cloudAk ? el.cloudAk.value.trim() : '',
-            secret_key: el.cloudSk ? el.cloudSk.value.trim() : '',
-            mediakit_api_key: el.cloudMk ? el.cloudMk.value.trim() : '',
-            enhance_version: (el.matEnhanceToggle && !el.matEnhanceToggle.checked) ? 'off' : (el.cloudEnhance ? el.cloudEnhance.value : ''),
-            mat_output_hd: el.matOutputHd ? el.matOutputHd.checked : false,
-            auto_vlm_classify: el.autoVlmClassify ? el.autoVlmClassify.checked : true,
-            enabled: el.cloudMattingEnabled.checked,
-          }),
-        });
-      } catch (_) { /* 静默：下次切换或保存按钮会再存 */ }
     });
   }
 
@@ -20682,8 +15325,6 @@ el.dwVidPlayer.hidden = true;
     const userTable = $('adminUserTable');
     const userCount = $('adminUserCount');
     const userSearch = $('adminUserSearch');
-    const userStatCards = $('adminUserStatCards');
-    const userStatusFilter = $('adminUserStatusFilter');
     const memberTable = $('adminMemberTable');
     const memberCount = $('adminMemberCount');
     const grantUserSel = $('adminGrantUser');
@@ -20699,7 +15340,6 @@ el.dwVidPlayer.hidden = true;
     const smtpCancelBtn = $('adminSmtpCancel');
     const smtpMsg = $('adminSmtpMsg');
     const plansBox = $('adminPlansBox');
-    const plansSeg = $('adminPlansSeg');
     const plansSaveBtn = $('adminPlansSave');
     const plansMsg = $('adminPlansMsg');
     let lastConfig = null;
@@ -20768,8 +15408,6 @@ el.dwVidPlayer.hidden = true;
       else if (name === 'members') loadMembers();
       else if (name === 'stats') loadStats();
       else if (name === 'config') loadConfig();
-      else if (name === 'aiaccounts') { loadAiAccounts(); loadAiCosts(); }
-      else if (name === 'monitor') loadMonitor();
     };
 
     const loadAll = () => {
@@ -20777,414 +15415,7 @@ el.dwVidPlayer.hidden = true;
       loadMembers();
       loadStats();
       loadConfig();
-      loadAiAccounts();
     };
-
-    // ---- 监控告警（2026-09-26）：异常告警 + 每日入账对账（从运维看板提权到管理后台）----
-    const _MON_ALERT_KINDS = {
-      recharge_burst: '🚨 连续充值', high_value_recharge: '⚠️ 大额充值',
-      redeem_bruteforce: '🚨 卡密爆破', negative_balance: '🚨 积分负余额',
-      recon_mismatch: '💸 资金对账差异',
-    };
-    const _MON_MISMATCH_KINDS = {
-      paid_no_grant: ['🚨 收款未发货', 'is-err'],
-      grant_no_pay: ['🚨 发货未收款', 'is-err'],
-      plan_amount_mismatch: ['⚠️ 金额与发货不符', 'is-warn'],
-    };
-    const loadMonitorAlerts = async () => {
-      const box = $('adminMonitorAlerts');
-      if (!box) return;
-      box.innerHTML = '<div class="admin-empty">加载中…</div>';
-      try {
-        const d = await adminRequest('/api/app/license-alerts?limit=100');
-        const alerts = (d && d.alerts) || [];
-        const crit = alerts.filter((a) => a.level === 'critical' && !a.seen).length;
-        const rows = alerts.map((a) => {
-          const kk = _MON_ALERT_KINDS[a.kind] || a.kind;
-          return `<tr style="${a.seen ? 'opacity:.55' : ''}">` +
-            `<td style="color:${a.level === 'critical' ? 'var(--admin-err,#e5484d)' : 'var(--admin-warn,#f5a623)'};font-weight:600">${esc(kk)}${a.count > 1 ? ` ×${a.count}` : ''}</td>` +
-            `<td>${esc(a.email || '')}</td><td>${esc(a.ip || '')}</td>` +
-            `<td>${esc(a.detail || '')}</td>` +
-            `<td>${a.at ? new Date(a.at * 1000).toLocaleString('zh-CN', { hour12: false }) : ''}</td>` +
-            (a.seen ? '<td></td>' : `<td><button type="button" class="admin-btn admin-btn-ghost admin-btn-sm" data-ack="${esc(a.id)}">确认</button></td>`) +
-            '</tr>';
-        }).join('');
-        const head = '<table class="admin-table"><thead><tr>' +
-          '<th>类型</th><th>账号</th><th>IP</th><th>详情</th><th>时间</th><th></th></tr></thead>';
-        box.innerHTML = `<div class="admin-count" style="margin-bottom:6px">未确认 <b style="color:${crit ? '#e5484d' : '#30a46c'}">${(d && d.unseen) || 0}</b> · 近 ${alerts.length} 条</div>` +
-          (alerts.length ? head + '<tbody>' + rows + '</tbody></table>' : '<div class="admin-empty">暂无告警 —— 一切正常</div>');
-        box.querySelectorAll('button[data-ack]').forEach((b) => {
-          b.addEventListener('click', () => ackMonitorAlerts([b.dataset.ack]));
-        });
-      } catch (e) {
-        box.innerHTML = `<div class="admin-empty">告警加载失败：${esc((e && (e.message || e.hint)) || e)}</div>`;
-      }
-    };
-    const ackMonitorAlerts = async (ids) => {
-      try {
-        await adminRequest('/api/app/license-alerts/ack', {
-          method: 'POST', body: JSON.stringify({ ids: ids || [] }),
-          headers: { 'Content-Type': 'application/json' } });
-        loadMonitorAlerts();
-      } catch (_) { /* 静默 */ }
-    };
-    const loadMonitorRecon = async () => {
-      const box = $('adminMonitorRecon');
-      const mis = $('adminMonitorMismatches');
-      if (!box) return;
-      box.innerHTML = '<div class="admin-empty">加载中…</div>';
-      try {
-        const d = await adminRequest('/api/app/license-recon', {
-          method: 'POST', body: JSON.stringify({ days: 7 }),
-          headers: { 'Content-Type': 'application/json' } });
-        const mismatches = (d && d.mismatches) || [];
-        const dayRows = (d && d.day_rows) || [];
-        const totalRedeems = dayRows.reduce((s, x) => s + (x.redeems || 0), 0);
-        const rows = dayRows.map((x) =>
-          `<tr><td>${esc(x.date)}</td><td>¥${(x.income_yuan || 0).toFixed(2)}</td>` +
-          `<td>${x.paid_orders || 0}</td>` +
-          `<td style="color:${x.grant_failed ? '#e5484d' : 'inherit'}">${x.grant_failed || 0}</td>` +
-          `<td>${x.auto_grants || 0}</td><td>${x.redeems || 0}</td>` +
-          `<td style="color:${x.mismatch ? '#e5484d' : '#30a46c'}">${x.mismatch || 0}</td></tr>`).join('');
-        box.innerHTML = `<div class="admin-count" style="margin-bottom:6px">近 7 天线上入账 <b>¥${(d && d.income_yuan_total || 0).toFixed(2)}</b> · 对账差异 <b style="color:${mismatches.length ? '#e5484d' : '#30a46c'}">${mismatches.length}</b> · 卡密核销（线下入账）${totalRedeems} 笔</div>` +
-          (dayRows.length ? '<table class="admin-table"><thead><tr><th>日期</th><th>线上入账</th><th>订单数</th><th>发货失败</th><th>自动发货</th><th>卡密核销</th><th>差异</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="admin-empty">近 7 天暂无账目</div>');
-        if (mis) mis.innerHTML = mismatches.map((m) => {
-          const kk = _MON_MISMATCH_KINDS[m.kind] || [m.kind, 'is-warn'];
-          return `<div class="admin-msg is-err" style="display:block;margin-top:6px"><b>${kk[0]}</b>` +
-            (m.email ? ` · 账号 ${esc(m.email)}` : '') + `：${esc(m.detail || '')}</div>`;
-        }).join('');
-      } catch (e) {
-        box.innerHTML = `<div class="admin-empty">对账加载失败：${esc((e && (e.message || e.hint)) || e)}</div>`;
-        if (mis) mis.innerHTML = '';
-      }
-    };
-    // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
-    let _monRange = 'day';
-    // 当前统计范围的可视提示：按钮高亮之外再给一行文字，避免「以为没生效」
-    const _monShowRangeLabel = (text) => {
-      const tip = document.getElementById('adminMonRangeTip');
-      if (tip) tip.textContent = text ? ('当前统计范围：' + text) : '';
-    };
-    // 热点路径转中文标签（用户要求不展示英文接口名）；原始路径保留在 title 悬浮提示里
-    const _monPathLabel = (p) => {
-      const path = String(p || '').split('?')[0];
-      const table = [
-        ['/api/admin/visits', '运维监控 · 访客统计'],
-        ['/api/admin/events', '运维监控 · 错误事件'],
-        ['/api/license-alerts/ack', '授权告警 · 确认已读'],
-        ['/api/license-alerts', '授权告警 · 轮询'],
-        ['/api/license-recon', '授权对账'],
-        ['/api/license/heartbeat', '授权心跳'],
-        ['/api/license', '授权接口'],
-        ['/api/tasks', '下载任务列表'],
-        ['/api/nodes', '下载节点列表'],
-        ['/api/version', '版本信息'],
-        ['/api/resolve', '视频解析'],
-        ['/api/cookie', 'Cookie 同步'],
-        ['/api/settings', '应用设置'],
-        ['/api/upload', '分享上传'],
-        ['/robots.txt', '爬虫规则文件'],
-        ['/', '网页首页'],
-      ];
-      for (const [pre, label] of table) {
-        if (path === pre || (pre !== '/' && path.startsWith(pre))) return label;
-      }
-      return path;
-    };
-    const _monStatusClass = (s) => (s >= 500 ? 'is-err' : s >= 400 ? 'is-warn' : 'is-ok');
-    // 真人页面路径 → 中文（原始路径留在 title 里；扫描器路径原样显示）
-    const _monHumanPageLabel = (p) => {
-      const path = String(p || '').split('?')[0];
-      const table = [
-        ['/', '网页首页'],
-        ['/download', '下载页'],
-        ['/member', '会员中心'],
-        ['/personal', '个人中心'],
-        ['/tools', '工具页'],
-        ['/convert', '格式转换'],
-        ['/robots.txt', '爬虫规则文件'],
-      ];
-      for (const [k, label] of table) {
-        if (path === k || (k !== '/' && path.startsWith(k + '/'))) return label;
-      }
-      return path;
-    };
-    const _monNginxTime = (t) => {
-      try { return new Date(t.replace(' ', 'T').replace(/\+0800$/, '+08:00')).toLocaleString('zh-CN', { hour12: false }); } catch (_) { return t; }
-    };
-    const loadMonitorVisits = async () => {
-      const st = $('adminMonitorVisitStats'), paths = $('adminMonitorVisitPaths'), rec = $('adminMonitorVisitRecent');
-      const hum = $('adminMonitorHumanStats'), humPages = $('adminMonitorHumanPages');
-      const byClient = $('adminMonitorByClient');
-      if (!st) return;
-      st.innerHTML = '加载中…';
-      if (hum) hum.innerHTML = '';
-      if (humPages) humPages.innerHTML = '';
-      if (byClient) byClient.innerHTML = '';
-      try {
-        const d = await adminRequest('/api/app/ops-visits?limit=100&range=' + encodeURIComponent(_monRange));
-        // 按客户端拆分（2026-10-03）：桌面 App / 网页页面 / 网页接口轮询 / 其它客户端
-        const bc = d.by_client || {};
-        if (byClient) {
-          const totalN = Math.max(1, Number(d.total) || 0);
-          const rows = [
-            ['desktop_app', '桌面 App（授权/任务等接口轮询）', bc.desktop_app || {}],
-            ['web_page', '网页 · 真人页面访问', bc.web_page || {}],
-            ['web_api', '网页 · 前端接口轮询', bc.web_api || {}],
-            ['other', '其它客户端（脚本/扫描器）', bc.other || {}],
-          ];
-          byClient.innerHTML =
-            '<table class="admin-table"><thead><tr><th>客户端</th><th>请求数</th><th>占比</th><th>独立 IP</th></tr></thead><tbody>' +
-            rows.map(([, label, v]) => {
-              const n = Number(v.requests) || 0;
-              const pct = ((n / totalN) * 100).toFixed(1);
-              const extra = v.uv ? ` · 访客 ${v.uv}` : '';
-              return `<tr><td>${esc(label)}${extra}</td><td>${n}</td><td>${pct}%</td><td>${Number(v.ips) || 0}</td></tr>`;
-            }).join('') +
-            `</tbody></table><div class="admin-human-note">${esc(bc.note || '')}</div>`;
-        }
-        // 真人访客口径（2026-10-03）：总请求里 ~90% 是接口 + 机器轮询，单独给出
-        // 「今天来了几个真人」——老板真正要看的数。
-        const h = d.human || {};
-        if (hum) {
-          hum.innerHTML = `
-            <div class="admin-stat-card"><b>${h.pv || 0}</b><span>真人页面访问 PV</span></div>
-            <div class="admin-stat-card"><b>${h.uv || 0}</b><span>独立访客（IP+设备）</span></div>
-            <div class="admin-stat-card"><b>${h.ips || 0}</b><span>独立访客 IP</span></div>
-            <div class="admin-stat-card"><b>${h.machine_requests || 0}</b><span>已排除的机器/接口请求</span></div>
-            <div class="admin-human-note">${esc(h.note || '')}</div>`;
-        }
-        if (humPages) {
-          humPages.innerHTML = (h.top_pages && h.top_pages.length)
-            ? '<table class="admin-table"><thead><tr><th>真人访问的页面</th><th>次数</th></tr></thead><tbody>' +
-              h.top_pages.map((p) => `<tr><td title="${esc(p.path)}">${esc(_monHumanPageLabel(p.path))}</td><td>${p.count}</td></tr>`).join('') +
-              '</tbody></table>'
-            : '<div class="admin-empty">该时间窗内没有真人页面访问</div>';
-        }
-        st.innerHTML = `全部请求 <b>${d.total || 0}</b> · 独立 IP <b>${d.unique_ips || 0}</b> · 状态码 ` +
-          Object.entries(d.by_status || {}).map(([k, v]) =>
-            `<span style="color:${_monStatusClass(+k) === 'is-err' ? '#e5484d' : _monStatusClass(+k) === 'is-warn' ? '#f5a623' : '#30a46c'}">${k}×${v}</span>`).join(' ') || '无';
-        paths.innerHTML = (d.top_paths && d.top_paths.length)
-          ? '<table class="admin-table"><thead><tr><th>热点路径</th><th>次数</th></tr></thead><tbody>' +
-            d.top_paths.map((p) => `<tr><td title="${esc(p.path)}">${esc(_monPathLabel(p.path))}</td><td>${p.count}</td></tr>`).join('') + '</tbody></table>'
-          : '<div class="admin-empty">无访问数据</div>';
-        const items = (d.recent || []).slice().reverse();
-        rec.innerHTML = items.length
-          ? items.map((x) => `<div style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px">` +
-              `<span style="opacity:.6">${esc(_monNginxTime(x.t))}</span> · <b>${esc(x.ip)}</b> · ` +
-              `<span style="color:${_monStatusClass(+x.s) === 'is-err' ? '#e5484d' : _monStatusClass(+x.s) === 'is-warn' ? '#f5a623' : '#30a46c'}">${esc(String(x.s))}</span> · ${esc(x.p)}</div>`).join('')
-          : '<div class="admin-empty">无最近访问</div>';
-      } catch (e) {
-        st.innerHTML = '';
-        paths.innerHTML = '';
-        rec.innerHTML = `<div class="admin-empty">访客加载失败：${esc((e && (e.message || e.hint)) || e)}</div>`;
-      }
-    };
-    const loadMonitorEvents = async () => {
-      const st = $('adminMonitorEventStats'), log = $('adminMonitorEventLog');
-      if (!st) return;
-      st.innerHTML = '加载中…';
-      try {
-        const d = await adminRequest('/api/app/ops-events?limit=200&range=' + encodeURIComponent(_monRange));
-        const events = (d && d.events) || [];
-        const errs = events.filter((x) => x.level === 'error').length;
-        st.innerHTML = `事件 <b>${d.count || 0}</b> 条 · 错误 <b style="color:#e5484d">${errs}</b> 条`;
-        log.innerHTML = events.length
-          ? events.map((x) => `<div style="padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px">` +
-              `<span style="color:${x.level === 'error' ? '#e5484d' : x.level === 'warn' ? '#f5a623' : '#30a46c'};font-weight:600">[${esc(x.level)}]</span> ` +
-              `<span style="opacity:.6">${x.ts ? new Date(x.ts * 1000).toLocaleString('zh-CN', { hour12: false }) : ''}</span><br>` +
-              `${esc(x.message || '')}` +
-              (x.extra && x.extra.url ? `<br><span style="opacity:.6">@ ${esc(x.extra.url)}</span>` : '') + '</div>').join('')
-          : '<div class="admin-empty">暂无事件</div>';
-      } catch (e) {
-        st.innerHTML = '';
-        log.innerHTML = `<div class="admin-empty">事件加载失败：${esc((e && (e.message || e.hint)) || e)}</div>`;
-      }
-    };
-    document.querySelectorAll('.admin-mon-range[data-mon-range]').forEach((b) => {
-      b.addEventListener('click', () => {
-        _monRange = b.dataset.monRange || 'day';
-        document.querySelectorAll('.admin-mon-range[data-mon-range]').forEach((x) => x.classList.toggle('is-active', x === b));
-        _monShowRangeLabel(b.textContent || '');
-        loadMonitorVisits();
-        loadMonitorEvents();
-      });
-    });
-    const loadMonitor = () => {
-      // 首次进入也把当前范围显示出来（与按钮高亮一致，避免「看不出在筛什么」）
-      const cur = document.querySelector('.admin-mon-range.is-active');
-      if (cur) _monShowRangeLabel(cur.textContent || '');
-      loadMonitorVisits(); loadMonitorEvents(); loadMonitorAlerts(); loadMonitorRecon();
-    };
-    // 2026-09-26：连点版本号 5 次 / 告警红横幅的直达入口——运维看板已并入后台，
-    // 统一改开管理面板并落在「运维监控」tab（openAdmin 自带登录+is_admin 门禁）。
-    window.VDL = Object.assign(window.VDL || {}, {
-      openAdminMonitor: () => { openAdmin(); switchAdminView('monitor'); },
-    });
-    const _adminViewMonitorEl = $('adminViewMonitor');
-    const _adminMonitorTimer = setInterval(() => {
-      // 仅当管理面板打开且停留在运维监控页时自动刷新
-      if (!overlay.hidden && !_adminViewMonitorEl.hidden) loadMonitorAlerts();
-    }, 30 * 1000);
-    if ($('adminMonitorRefresh')) $('adminMonitorRefresh').addEventListener('click', loadMonitor);
-    if ($('adminMonitorAckAll')) $('adminMonitorAckAll').addEventListener('click', () => ackMonitorAlerts([]));
-
-    // ---- AI 大模型账户 ----
-    const aiStatusLabel = (s) => ({
-      ok: ['正常', 'is-ok'], insufficient: ['余额不足', 'is-err'], error: ['查询失败', 'is-err'],
-      no_gateway: ['无网关', 'is-warn'], configured: ['已配置', 'is-ok'], not_configured: ['未配置', 'is-warn'],
-      enabled: ['已启用', 'is-ok'], disabled: ['已禁用', 'is-warn'], no_api_key: ['缺 Key', 'is-warn'],
-    }[s] || [s || '未知', '']);
-    const loadAiAccounts = async () => {
-      const box = $('adminAiAccounts');
-      if (box) box.innerHTML = '<div class="admin-empty">加载中…</div>';
-      try {
-        const r = await adminRequest('/api/admin/ai/accounts');
-        if (!r || !r.ok) { if (box) box.innerHTML = '<div class="admin-empty">加载失败</div>'; return; }
-        renderAiAccounts(r.accounts || []);
-      } catch (e) {
-        if (box) box.innerHTML = '<div class="admin-empty">网络错误</div>';
-      }
-    };
-    const _openExternal = (url) => {
-      const api = window.pywebview && window.pywebview.api;
-      if (api && api.open_external) { try { api.open_external(url); return; } catch (_) {} }
-      try { window.open(url, '_blank'); } catch (_) {}
-    };
-    const renderAiAccounts = (accounts) => {
-      const box = $('adminAiAccounts');
-      if (!box) return;
-      if (!accounts.length) { box.innerHTML = '<div class="admin-empty">暂无 AI 账户</div>'; return; }
-      box.innerHTML = accounts.map((a) => {
-        const [lbl, cls] = aiStatusLabel(a.status);
-        let balHtml;
-        if (a.balance_source === 'live') {
-          const b = (a.balance == null) ? '—' : a.balance;
-          const avail = a.is_available ? '<span class="ai-badge is-ok">可用</span>' : '<span class="ai-badge is-err">不可用</span>';
-          balHtml = `<div class="ai-acct-balance">${esc(b)} <small>${esc(a.currency || '')}</small> ${avail}</div>`;
-          (a.balances || []).forEach((x) => {
-            if (x.currency !== a.currency) balHtml += `<div class="ai-acct-sub">${esc(x.currency)}: ${esc(x.total)}</div>`;
-          });
-        } else if (a.balance_source === 'console') {
-          balHtml = '<div class="ai-acct-balance ai-muted">余额请登录控制台查看</div>';
-        } else {
-          balHtml = '<div class="ai-acct-balance ai-muted">—</div>';
-        }
-        const mods = (a.modules || []).map((m) => `<li>${esc(m)}</li>`).join('');
-        const rechargeBtn = a.recharge_url
-          ? `<button type="button" class="admin-btn admin-btn-primary admin-btn-sm" data-recharge="${esc(a.recharge_url)}">去充值</button>` : '';
-        const consoleBtn = a.console_url
-          ? `<button type="button" class="admin-btn admin-btn-sm" data-console="${esc(a.console_url)}">控制台</button>` : '';
-        return `<div class="ai-acct-card">
-          <div class="ai-acct-head">
-            <span class="ai-acct-name">${esc(a.name)}</span>
-            <span class="admin-tag ${cls}">${esc(lbl)}</span>
-          </div>
-          <div class="ai-acct-rows">
-            <div class="ai-acct-row"><span>模型</span><b>${esc(a.model || '—')}</b></div>
-            <div class="ai-acct-row"><span>使用模块</span><b><ul class="ai-acct-mods">${mods}</ul></b></div>
-            <div class="ai-acct-row"><span>账号标识</span><b>${esc(a.account || '—')}</b></div>
-            ${balHtml}
-          </div>
-          ${a.note ? `<div class="ai-acct-note">${esc(a.note)}</div>` : ''}
-          <div class="ai-acct-actions">${rechargeBtn}${consoleBtn}</div>
-        </div>`;
-      }).join('');
-      box.querySelectorAll('[data-recharge]').forEach((b) => { b.onclick = () => _openExternal(b.dataset.recharge); });
-      box.querySelectorAll('[data-console]').forEach((b) => { b.onclick = () => _openExternal(b.dataset.console); });
-    };
-    const aiRefreshBtn = $('adminAiRefresh');
-    if (aiRefreshBtn) aiRefreshBtn.onclick = () => loadAiAccounts();
-
-    // 🔴 AI 积分成本配置（2026-10-05）——用户定档「每个功能每次消耗多少积分要能在后台配」。
-    // 数据源 `/api/admin/ai/credit-costs`（GET 读生效价，POST 改价 / 恢复默认）。
-    // 状态存在 _aiCostRows：{op: {…服务端行, input: 当前输入值}}，保存时只提交「与默认不同」的项。
-    let _aiCostRows = [];
-    const aiCostBox = () => $('adminAiCostTable');
-
-    const renderAiCosts = (rows, policy) => {
-      const box = aiCostBox();
-      if (!box) return;
-      const pol = $('adminAiCostPolicy');
-      if (pol && policy) pol.textContent = `${policy.scope} · ${policy.granularity}`;
-      if (!rows || !rows.length) { box.innerHTML = '<div class="admin-empty">暂无计费项</div>'; return; }
-      box.innerHTML = `<table class="ai-cost-tbl"><thead><tr>
-          <th>功能</th><th>每次消耗（积分）</th><th>平台真实成本</th><th>代码默认</th><th>真实调用点</th><th>说明</th><th></th>
-        </tr></thead><tbody>${rows.map((r) => {
-          const val = r.effective;
-          const dirty = r.overridden;
-          return `<tr data-op="${esc(r.op)}" class="${r.orphan ? 'is-orphan' : ''}">
-            <td><b>${esc(r.name)}</b><br><small class="ai-cost-op">${esc(r.op)}</small></td>
-            <td><input class="ai-cost-input${dirty ? ' is-dirty' : ''}" type="number" min="0" step="1"
-                       value="${val}" data-op="${esc(r.op)}"></td>
-            <td class="ai-cost-real">${esc(r.real_cost || '—')}</td>
-            <td class="ai-cost-def">${r.default}</td>
-            <td class="ai-cost-where"><code>${esc(r.where || '—')}</code></td>
-            <td class="ai-cost-note">${esc(r.note || '')}</td>
-            <td>${dirty ? '<button type="button" class="admin-btn admin-btn-ghost admin-btn-sm ai-cost-reset" data-op="' + esc(r.op) + '">恢复默认</button>' : ''}</td>
-          </tr>`;
-        }).join('')}</tbody></table>`;
-      box.querySelectorAll('.ai-cost-reset').forEach((b) => {
-        b.onclick = () => { saveAiCosts({ reset: [b.dataset.op] }); };
-      });
-      box.querySelectorAll('.ai-cost-input').forEach((inp) => {
-        inp.oninput = () => inp.classList.toggle('is-dirty', inp.value !== String(_defaultOf(inp.dataset.op)));
-      });
-    };
-    const _defaultOf = (op) => {
-      const r = _aiCostRows.find((x) => x.op === op);
-      return r ? String(r.default) : '0';
-    };
-
-    const loadAiCosts = async () => {
-      const box = aiCostBox();
-      if (box) box.innerHTML = '<div class="admin-empty">加载中…</div>';
-      try {
-        const r = await adminRequest('/api/admin/ai/credit-costs');
-        if (!r || !r.ok) { if (box) box.innerHTML = `<div class="admin-empty">${esc((r && r.error) || '加载失败')}</div>`; return; }
-        _aiCostRows = r.costs || [];
-        renderAiCosts(_aiCostRows, r.policy);
-      } catch (e) {
-        if (box) box.innerHTML = '<div class="admin-empty">网络错误</div>';
-      }
-    };
-
-    const saveAiCosts = async (extra) => {
-      const box = aiCostBox();
-      // 只提交「与代码默认不同」的项，避免整表覆盖别人的改动
-      const costs = {};
-      (box ? box.querySelectorAll('.ai-cost-input') : []).forEach((inp) => {
-        const def = _defaultOf(inp.dataset.op);
-        if (String(inp.value) !== def) costs[inp.dataset.op] = parseInt(inp.value || '0', 10);
-      });
-      const payload = Object.assign({ costs }, extra || {});
-      if (!Object.keys(payload.costs).length && !(payload.reset || []).length) {
-        if (box) box.insertAdjacentHTML('afterbegin', '<div class="ai-cost-tip">没有改动</div>');
-        setTimeout(() => { const t = box && box.querySelector('.ai-cost-tip'); if (t) t.remove(); }, 1600);
-        return;
-      }
-      const btn = $('adminAiCostSave');
-      if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
-      try {
-        const r = await adminRequest('/api/admin/ai/credit-costs', { method: 'POST', body: JSON.stringify(payload) });
-        if (r && r.ok) {
-          _aiCostRows = r.costs || [];
-          renderAiCosts(_aiCostRows, null);
-          showToast('积分成本已保存并立即生效');
-        } else {
-          showToast('保存失败：' + ((r && r.error) || '未知错误'), 3200);
-        }
-      } catch (e) {
-        showToast('保存失败：网络错误', 3200);
-      } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '保存改动'; }
-      }
-    };
-
-    const aiCostReloadBtn = $('adminAiCostReload');
-    if (aiCostReloadBtn) aiCostReloadBtn.onclick = () => loadAiCosts();
-    const aiCostSaveBtn = $('adminAiCostSave');
-    if (aiCostSaveBtn) aiCostSaveBtn.onclick = () => saveAiCosts();
 
     // ---- 用户管理 ----
     const loadUsers = async () => {
@@ -21198,72 +15429,43 @@ el.dwVidPlayer.hidden = true;
     const renderUserTable = () => {
       if (!userTable) return;
       const q = (userSearch && userSearch.value || '').trim().toLowerCase();
-      const fv = (userStatusFilter && userStatusFilter.value) || '';
-      const _isMember = (u) => !!(u.membership && (u.membership.download_active || u.membership.ai_active));
-      // 顶部统计卡（对齐设计稿：总用户 / 免费会员 / 异常状态）
-      if (userStatCards) {
-        const total = lastUsers.length;
-        const freeN = lastUsers.filter((u) => !_isMember(u)).length;
-        const badN = lastUsers.filter((u) => u.disabled).length;
-        userStatCards.innerHTML =
-          `<div class="admin-ustat"><span class="admin-ustat-ic is-blue">👥</span><div class="admin-ustat-t"><i>总用户</i><b>${total}</b></div></div>`
-          + `<div class="admin-ustat"><span class="admin-ustat-ic is-amber">📄</span><div class="admin-ustat-t"><i>免费会员</i><b>${freeN}</b></div></div>`
-          + `<div class="admin-ustat"><span class="admin-ustat-ic is-blue">👤</span><div class="admin-ustat-t"><i>异常状态</i><b>${badN}</b></div></div>`;
-      }
-      const list = lastUsers.filter((u) => {
-        if (fv === 'disabled' && !u.disabled) return false;
-        if (fv === 'ok' && u.disabled) return false;
-        if (fv === 'free' && _isMember(u)) return false;
-        if (fv === 'member' && !_isMember(u)) return false;
-        if (!q) return true;
+      const list = !q ? lastUsers : lastUsers.filter((u) => {
         const m = u.membership || {};
         const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
         const identifier = esc(u.identifier).toLowerCase();
-        const uidStr = (u.user_id || '').toLowerCase();
         const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString().toLowerCase() : '';
         const memStr = mem.toLowerCase();
-        return identifier.includes(q) || uidStr.includes(q) || created.includes(q) || memStr.includes(q);
+        return identifier.includes(q) || created.includes(q) || memStr.includes(q);
       });
-      if (userCount) userCount.textContent = (q || fv) ? `匹配 ${list.length} / 共 ${lastUsers.length} 个用户` : `共 ${lastUsers.length} 个用户`;
-      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>超级用户</th><th>操作</th></tr></thead>';
+      if (userCount) userCount.textContent = q ? `匹配 ${list.length} / 共 ${lastUsers.length} 个用户` : `共 ${lastUsers.length} 个用户`;
+      const head = '<thead><tr><th>账号</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>超级用户</th><th>操作</th></tr></thead>';
       const rows = list.map((u) => {
         const m = u.membership || {};
+        const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
         const cred = (m.credits_total != null) ? m.credits_total : '—';
         const disabled = !!u.disabled;
         const isAdmin = !!u.is_admin;
         const self = u.user_id === _currentUid;
-        // 头像：对齐设计稿的人像圆片——按 uid 哈希交替男/女人像，底色随性别（蓝/粉）
-        const h = String(u.user_id || 'x').split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 100, 7);
-        const isFe = h % 2 === 1;
-        const ava = `<span class="admin-ava" style="background:${isFe ? '#fce7f3' : '#dbeafe'}">${isFe ? '👩' : '👨'}</span>`;
-        const memChip = m.download_active ? '<span class="admin-chip is-blue">下载会员</span>'
-          : (m.ai_active ? '<span class="admin-chip is-violet">AI会员</span>'
-          : '<span class="admin-chip is-gray">免费</span>');
-        // 状态列：设计稿为纯文字（正常深灰 / 已禁用红字）
-        const stText = disabled ? '<span class="admin-st-bad">已禁用</span>' : '正常';
         const adminOp = isAdmin
           ? (self ? '<span class="admin-tag admin-tag-ok">👑 当前账号</span>'
                   : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="unadmin">取消管理员</button>`)
           : `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="admin">设为管理员</button>`;
-        const ops = `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="usage">使用详情</button>`
-          + (disabled
+        const ops = disabled
           ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="enable">启用</button>`
-          : `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
-            + `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`
-            + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`));
+          : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
+            + `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`;
         return `<tr>
-          <td><span class="admin-ava-wrap">${ava}${esc(u.identifier)}</span></td>
-          <td><code class="admin-uid" data-copy="${esc(u.user_id || '')}" title="点击复制">${esc(u.user_id || '—')}</code></td>
+          <td>${esc(u.identifier)}</td>
           <td>${u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—'}</td>
-          <td>${memChip}</td>
+          <td>${mem}</td>
           <td>${cred}</td>
-          <td>${stText}</td>
-          <td>${isAdmin ? '是' : '否'}</td>
+          <td>${disabled ? '<span class="admin-tag admin-tag-warn">已禁用</span>' : '<span class="admin-tag admin-tag-ok">正常</span>'}</td>
+          <td>${isAdmin ? '<span class="admin-tag admin-tag-ok">👑 是</span>' : '否'}</td>
           <td class="admin-ops">${adminOp}${ops}</td>
         </tr>`;
       }).join('');
-      const emptyMsg = (q || fv) ? '无匹配用户' : '暂无用户';
-      userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="8" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
+      const emptyMsg = q ? '无匹配用户' : '暂无用户';
+      userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="7" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
     };
 
     // ---- 会员管理 ----
@@ -21279,14 +15481,13 @@ el.dwVidPlayer.hidden = true;
     };
     const renderMemberTable = () => {
       if (!memberTable) return;
-      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>下载会员</th><th>AI会员</th><th>AI积分</th><th>永久积分</th><th>合计</th><th>操作</th></tr></thead>';
+      const head = '<thead><tr><th>账号</th><th>下载会员</th><th>AI会员</th><th>AI积分</th><th>永久积分</th><th>合计</th><th>操作</th></tr></thead>';
       const rows = lastMembers.map((m) => {
         const dl = m.download_active ? `✅ ${esc(m.download_plan || '')}` : '—';
         const ai = m.ai_active ? `✅ ${esc(m.ai_plan || '')}` : '—';
         const ops = `<button class="admin-btn admin-btn-sm" data-uid="${esc(m.user_id)}" data-act="credit">调整积分</button>`;
         return `<tr>
           <td>${esc(m.identifier)}</td>
-          <td><code class="admin-uid" data-copy="${esc(m.user_id || '')}" title="点击复制">${esc(m.user_id || '—')}</code></td>
           <td>${dl}</td>
           <td>${ai}</td>
           <td>${m.ai_credits_left != null ? m.ai_credits_left : '—'}</td>
@@ -21295,241 +15496,7 @@ el.dwVidPlayer.hidden = true;
           <td class="admin-ops">${ops}</td>
         </tr>`;
       }).join('');
-      memberTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="8" class="admin-empty">暂无会员记录</td></tr>') + '</tbody>';
-    };
-    // 用户使用详情弹窗（2026-10-03）：用户反馈「用不了」时，管理员要能看到
-    // 他的真实权益 / 配额消耗 / 激活历史 / 客服原文，而不是靠猜。
-    let _usageDlg = null;
-    const _usageFmtDate = (ts) => ts ? new Date(Number(ts) * 1000).toLocaleString() : '—';
-    const _usageChip = (ok, yes, no) => ok
-      ? `<span class="admin-chip is-green">${esc(yes)}</span>`
-      : `<span class="admin-chip is-gray">${esc(no)}</span>`;
-    // 配额资源键 → 中文（与套餐配置里的口径一致）；放在 openUserUsage 之前，
-    // 避免 const 暂时性死区（虽然点击时已初始化完，但改顺序时容易踩）
-    const _USAGE_RES_LABELS = {
-      download: '下载任务', original: '原画解析', batch_material: '批量素材',
-      matting: '一键抠图', cloud: '云端算力', app_compute: '本地重算力',
-      subtitle_extract: '字幕提取', compress: '文件压缩', sr: '超分',
-    };
-    const _usageResLabel = (k) => _USAGE_RES_LABELS[k] || k;
-    const _USAGE_VIA_LABELS = { pay: '购买', grant: '后台赠送', admin: '后台操作', test: '测试', activate: '激活' };
-    const _usageViaLabel = (v) => _USAGE_VIA_LABELS[v] || (v || '—');
-    const _usageRows = (rows) => rows.map((r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td></tr>`).join('');
-
-    // 关闭用户使用详情弹窗：try close()（模态会还原焦点），
-    // 无论成功与否都摘掉 open —— 因为 .admin-usage-dlg 有 display:flex，
-    // 会盖过 UA 的 dialog:not([open]){display:none}，只 close 不摘属性会残留。
-    const closeUsageDlg = () => {
-      const d = _usageDlg;
-      if (!d) return;
-      try { if (typeof d.close === 'function') d.close(); } catch (_) { /* 忽略 */ }
-      d.removeAttribute('open');
-    };
-
-    const openUserUsage = async (uid) => {
-      if (!_usageDlg) {
-        _usageDlg = document.createElement('dialog');
-        _usageDlg.className = 'admin-usage-dlg';
-        _usageDlg.innerHTML = `
-          <h3>用户使用详情</h3>
-          <div class="aud-user"></div>
-          <div class="aud-body"><div class="admin-empty">加载中…</div></div>
-          <div class="aud-btns"><button class="admin-btn aud-close" type="button">关闭</button></div>`;
-        document.body.appendChild(_usageDlg);
-        // 关闭：close() 在部分 pywebview/WKWebView 上不生效（配了 display:flex 后
-        // 尤其容易残留），所以 close 后再显式摘掉 open 属性，双保险。
-        _usageDlg.querySelector('.aud-close').addEventListener('click', () => closeUsageDlg());
-        // 点遮罩空白处也关（用户直觉：点外面等于取消）
-        _usageDlg.addEventListener('click', (e) => { if (e.target === _usageDlg) closeUsageDlg(); });
-        // ESC 兜底（showModal 正常时浏览器会自己关；非 modal 打开时需要手动）
-        _usageDlg.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUsageDlg(); });
-      }
-      const dlg = _usageDlg;
-      dlg.dataset.uid = uid || '';
-      const body = dlg.querySelector('.aud-body');
-      body.innerHTML = '<div class="admin-empty">加载中…</div>';
-      if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
-      else dlg.setAttribute('open', '');
-      // 兜底：showModal 在 pywebview 下偶发不生效（弹窗不出现），强制补 open 属性
-      if (!dlg.hasAttribute('open')) dlg.setAttribute('open', '');
-      try {
-        const r = await adminRequest('/api/admin/users/' + encodeURIComponent(uid) + '/usage');
-        if (!r || !r.ok) throw new Error((r && r.error) || '查询失败');
-        const u = r.usage || {};
-        const m = u.membership || {};
-        const us0 = u.usage_summary || {};
-        // 全新账号确实什么都不该有 —— 但要讲清「为什么空」，而不是留一片空白
-        if (!us0.days && !us0.total && !(u.activations || []).length
-            && !(u.support || {}).total_threads && !m.permanent_credits
-            && !Number((m.ai_member || {}).credits_left || 0)) {
-          body.innerHTML = '<section class="aud-sec"><h4>这个账号还没有任何使用记录</h4>'
-            + '<div class="admin-empty">该账号'
-            + (u.created_at ? ' 于 ' + esc(_usageFmtDate(u.created_at)) + ' 注册，' : '')
-            + '之后没有用过任何功能（下载/抠图/去水印等都没有消耗记录），也没有购买或获赠过会员。<br>'
-            + '如果用户说「用不了」，多半是这个账号从未真正登录使用过 —— 可让其在 App 内登录并操作一次，'
-            + '再回来看这里的配额消耗与云端授权。</div></section>'
-            + '<section class="aud-sec"><h4>账号状态</h4><table class="admin-table"><tbody>'
-            + _usageRows([
-              ['下载会员', (m.download_member || {}).active ? '有效' : '无（免费账号）'],
-              ['AI 会员', (m.ai_member || {}).active ? '有效' : '无'],
-              ['积分', String(m.credits_total != null ? m.credits_total : 0)],
-              ['设备指纹', u.device_fp || '—（从未在本机登录）'],
-              ['云端授权', (u.cloud || {}).ok ? '云端有记录' : ((u.cloud || {}).reason || '未拉到')],
-            ]) + '</tbody></table></section>';
-          return;
-        }
-        dlg.querySelector('.aud-user').innerHTML =
-          `<b>${esc(u.identifier || uid)}</b><code class="admin-uid" data-copy="${esc(uid)}" title="点击复制">${esc(uid)}</code>`
-          + ` · 注册于 ${esc(_usageFmtDate(u.created_at))}`
-          + (u.disabled ? ' · <span class="admin-chip is-red">已禁用</span>' : '')
-          + (u.is_admin ? ' · <span class="admin-chip is-gold">超管</span>' : '');
-
-        // 会员与积分（字段名对齐 membership.status()：credits_left 在 ai_member 下，
-        // 永久积分是顶层 permanent_credits；device_locked 是一机一码锁，排障关键）
-        const dl = m.download_member || {}, ai = m.ai_member || {};
-        let h = '<section class="aud-sec"><h4>会员与权益</h4><table class="admin-table"><tbody>'
-          + _usageRows([
-            ['下载会员', dl.active ? _usageChip(true, '有效至 ' + _usageFmtDate(dl.expire_at), '无') : _usageChip(false, '', '无')],
-            ['会员来源', dl.source || '—'],
-            ['AI 会员', ai.active ? _usageChip(true, '有效至 ' + _usageFmtDate(ai.expire_at), '无') : _usageChip(false, '', '无')],
-            ['AI 订阅积分', `${Number(ai.credits_left || 0)}（随会员到期清零）`],
-            ['永久积分', `${Number(m.permanent_credits || 0)}（不过期）`],
-            ['积分合计', String(m.credits_total != null ? m.credits_total : 0)],
-            ['设备指纹', u.device_fp ? `<code>${esc(u.device_fp)}</code>` : '—'],
-            ['首次绑定', _usageFmtDate(u.account_bound_at)],
-          ])
-          + (m.device_locked
-            ? '<tr><td>设备锁</td><td><span class="admin-chip is-red">已锁定：' + esc(String(m.device_locked)) + '（一机一码不符，权益已冻结）</span></td></tr>'
-            : '')
-          + '</tbody></table></section>';
-
-        // 今日 + 近 N 天配额消耗
-        const us = u.usage_summary || {};
-        const today = u.today || {};
-        const dayRows = (u.usage_days || []).map((d) => {
-          const items = Object.keys(d.items || {})
-            .map((k) => `${_usageResLabel(k)} ${d.items[k]}`).join('、') || '未使用';
-          return `<tr><td>${esc(d.date)}</td><td>${d.total}</td><td class="aud-items">${esc(items)}</td></tr>`;
-        }).join('');
-        h += '<section class="aud-sec"><h4>配额消耗（近 '
-          + (us.days || 0) + ' 天，共 ' + (us.total || 0) + ' 次 / 活跃 ' + (us.active_days || 0) + ' 天）</h4>'
-          + '<div class="aud-today">今日 ' + (today.total || 0) + ' 次'
-          + (Object.keys(today.items || {}).length
-            ? '（' + esc(Object.keys(today.items).map((k) => _usageResLabel(k) + ' ' + today.items[k]).join('、')) + '）' : '')
-          + '</div>'
-          + (dayRows
-            ? '<div class="aud-table-wrap"><table class="admin-table"><thead><tr><th>日期</th><th>次数</th><th>明细</th></tr></thead><tbody>' + dayRows + '</tbody></table></div>'
-            : '<div class="admin-empty">近 ' + (us.days || 0) + ' 天没有任何使用记录</div>')
-          + '</section>';
-
-        // 激活 / 购买历史
-        const acts = u.activations || [];
-        h += '<section class="aud-sec"><h4>激活 / 购买历史（最近 ' + acts.length + ' 条）</h4>'
-          + (acts.length
-            ? '<table class="admin-table"><thead><tr><th>时间</th><th>套餐</th><th>方式</th></tr></thead><tbody>'
-              + acts.map((a) => `<tr><td>${esc(_usageFmtDate(a.at))}</td><td><code>${esc(a.code || '—')}</code></td><td>${esc(_usageViaLabel(a.via))}</td></tr>`).join('')
-              + '</tbody></table>'
-            : '<div class="admin-empty">暂无激活记录</div>')
-          + '</section>';
-
-        // 客服会话原文（排障关键）
-        const sp = u.support || {};
-        const ths = sp.threads || [];
-        h += '<section class="aud-sec"><h4>客服会话（' + (sp.total_threads || 0) + ' 个）</h4>'
-          + (ths.length
-            ? ths.map((t) => '<div class="aud-thread">'
-              + `<div class="aud-thread-h">${esc(_usageFmtDate(t.updated_at))} · ${t.msg_count} 条`
-              + (t.has_diagnostics ? ' · <span class="admin-chip is-gold">含诊断日志</span>' : '') + '</div>'
-              + `<div class="aud-thread-b">${esc(t.last_user_text || '（无文字）')}</div></div>`).join('')
-            : '<div class="admin-empty">该用户没有客服记录</div>')
-          + '</section>';
-
-        // 云端授权
-        const cl = u.cloud || {};
-        h += '<section class="aud-sec"><h4>云端授权</h4>'
-          + (cl.ok
-            ? '<pre class="aud-cloud">' + esc(JSON.stringify(cl.data, null, 2)) + '</pre>'
-            : '<div class="admin-empty">' + esc(cl.reason || '未拉到云端数据') + '</div>')
-          + '</section>';
-
-        body.innerHTML = h;
-      } catch (e) {
-        const msg = ((e && e.message) || '未知错误');
-        body.innerHTML = '<section class="aud-sec"><h4>没能取到该用户的使用数据</h4>'
-          + `<div class="admin-empty">原因：${esc(msg)}<br>`
-          + '若提示「用户不存在」，该账号可能已被删除（列表有缓存，重新打开用户管理即可刷新）。'
-          + `（查询用的用户 ID：${esc(uid)}）</div></section>`;
-      }
-    };
-
-    // 调整积分弹窗：AI 订阅积分 / 永久积分分开调，正=充值 负=扣减，留空=不动该池
-    let _creditDlg = null;
-    const openCreditDlg = (m) => {
-      if (!_creditDlg) {
-        _creditDlg = document.createElement('dialog');
-        _creditDlg.className = 'admin-credit-dlg';
-        _creditDlg.innerHTML = `
-          <h3>调整积分</h3>
-          <div class="acd-user"></div>
-          <div class="acd-balance"></div>
-          <label class="acd-field">AI 订阅积分（随会员过期清零）
-            <input class="admin-input acd-ai" type="number" step="1" placeholder="正=充值，负=扣减，留空不调整">
-          </label>
-          <label class="acd-field">永久积分（不过期）
-            <input class="admin-input acd-perm" type="number" step="1" placeholder="正=充值，负=扣减，留空不调整">
-          </label>
-          <div class="acd-err" hidden></div>
-          <div class="acd-btns">
-            <button class="admin-btn acd-cancel" type="button">取消</button>
-            <button class="admin-btn admin-btn-primary acd-ok" type="button">确定调整</button>
-          </div>`;
-        document.body.appendChild(_creditDlg);
-        _creditDlg.querySelector('.acd-cancel').addEventListener('click', () => _creditDlg.close());
-        _creditDlg.querySelector('.acd-ok').addEventListener('click', submitCreditDlg);
-      }
-      const dlg = _creditDlg;
-      dlg.dataset.uid = m.user_id || '';
-      dlg.querySelector('.acd-user').textContent = m.identifier || m.user_id || '';
-      const aiN = (m.ai_credits_left != null) ? m.ai_credits_left : 0;
-      const pmN = (m.permanent_credits != null) ? m.permanent_credits : 0;
-      dlg.querySelector('.acd-balance').textContent = `当前余额：AI 订阅积分 ${aiN} ｜ 永久积分 ${pmN} ｜ 合计 ${m.credits_total != null ? m.credits_total : aiN + pmN}`;
-      dlg.querySelector('.acd-ai').value = '';
-      dlg.querySelector('.acd-perm').value = '';
-      const errEl = dlg.querySelector('.acd-err');
-      errEl.hidden = true; errEl.textContent = '';
-      if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
-      else dlg.setAttribute('open', '');
-    };
-    const submitCreditDlg = async () => {
-      const dlg = _creditDlg;
-      if (!dlg) return;
-      const uid = dlg.dataset.uid;
-      const errEl = dlg.querySelector('.acd-err');
-      errEl.hidden = true; errEl.textContent = '';
-      const aiV = dlg.querySelector('.acd-ai').value.trim();
-      const pmV = dlg.querySelector('.acd-perm').value.trim();
-      if (aiV === '' && pmV === '') { errEl.textContent = '两个积分池至少填一个'; errEl.hidden = false; return; }
-      const jobs = [];
-      if (aiV !== '') {
-        const d = parseInt(aiV, 10);
-        if (isNaN(d)) { errEl.textContent = 'AI 订阅积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
-        jobs.push({ delta: d, pool: 'ai' });
-      }
-      if (pmV !== '') {
-        const d = parseInt(pmV, 10);
-        if (isNaN(d)) { errEl.textContent = '永久积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
-        jobs.push({ delta: d, pool: 'permanent' });
-      }
-      for (let i = 0; i < jobs.length; i++) {
-        try {
-          const r = await adminRequest('/api/admin/memberships/credits', {
-            method: 'POST', body: JSON.stringify({ user_id: uid, delta: jobs[i].delta, pool: jobs[i].pool }),
-          });
-          if (!r || !r.ok) { errEl.textContent = (r && r.error) || '调分失败'; errEl.hidden = false; return; }
-        } catch (e) { errEl.textContent = '调分失败：' + (e && e.message ? e.message : '网络错误'); errEl.hidden = false; return; }
-      }
-      dlg.close();
-      loadMembers();
+      memberTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="7" class="admin-empty">暂无会员记录</td></tr>') + '</tbody>';
     };
     const fillGrantSelects = () => {
       if (grantUserSel) {
@@ -21562,24 +15529,6 @@ el.dwVidPlayer.hidden = true;
       } catch (e) { /* 静默 */ }
     };
     const renderStats = (s) => {
-      // 功能 kind → 中文标签（不展示英文埋点名；原始 kind 留在 title 悬浮）
-      const _kindLabel = (k) => ({
-        download: '视频下载',
-        convert: '格式转换',
-        matting: '一键抠图（本地）',
-        matting_cloud: '一键抠图（云端）',
-        dewatermark: '图片去水印',
-        subtitle: '字幕提取',
-        compress: '文件压缩（完成）',
-        compress_submit: '文件压缩（提交）',
-        sr_video: '视频超分（完成）',
-        sr_submit: '视频超分（提交）',
-        register: '注册账号',
-        login: '登录',
-        change_pw: '修改密码',
-        reset_pw: '重置密码',
-        deactivate: '注销账号',
-      }[k] || k);
       if (statsSummary) {
         const total = s.total || 0;
         const first = s.first_at ? new Date(s.first_at * 1000).toLocaleString() : '—';
@@ -21593,221 +15542,12 @@ el.dwVidPlayer.hidden = true;
         const byKind = s.by_kind || {};
         const head = '<thead><tr><th>功能</th><th>次数</th></tr></thead>';
         const rows = Object.keys(byKind).sort((a, b) => byKind[b] - byKind[a]).map((k) =>
-          `<tr><td title="${esc(k)}">${esc(_kindLabel(k))}</td><td>${byKind[k]}</td></tr>`).join('');
+          `<tr><td>${esc(k)}</td><td>${byKind[k]}</td></tr>`).join('');
         statsTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="2" class="admin-empty">暂无统计数据</td></tr>') + '</tbody>';
       }
     };
 
     // ---- 系统配置 ----
-    // 套餐表单「未保存改动保护」：loadConfig 的重渲染会 innerHTML 整块重建，
-    // 用户改了一半的价格会被旧值静默抹掉（切页签回来/保存后刷新都会触发）。
-    // 因此：任何输入动作 → plansBox 标脏 → renderPlansForm 跳过重渲染，
-    // 保存成功后才清脏并刷新为服务端真值。
-    // 选什么模式就只显示该模式的参数（用户 2026-10-03 明确要求，最直观）。
-    // 此前在「全平铺」↔「全显+高亮」之间来回改了两版，是把「还没切模式」误当成 bug；
-    // 联动显示本来就是第一版设计，绕一圈又回来了。
-    // ⚠️ 模式 value 与分组标识不是同名（limited vs stock），必须走映射表 —— 曾直接
-    //    比较导致选「限量」什么都不显示。server/tests/test_plan_mkt_matrix.py 盯这条。
-    // 模式 → 需要展示的营销分组（数组：活动模式同时要「定时开售」+「数量」）
-    // 界面分段 id → 服务端真实表名。两者不是同名（dl ≠ download_plans），
-    // 混用会让「下架」端点报「未知套餐类别：dl」——曾因此整条下架链路不可用，
-    // 必须走映射。server/tests/test_plan_sale_table.py 钉这条。
-    const _CAT_TABLE = { dl: 'download_plans', ai: 'ai_plans', cp: 'credit_packs' };
-    // 云端下发失败原因是技术串（no_admin_token / error: <urlopen error…>），
-    // 直接甩给运营看不出该去改什么；统一翻成一句能照着做的中文。
-    const _cloudReasonLabel = (r) => {
-      const s = String(r || '');
-      if (!s) return '未知原因';
-      if (s === 'no_license_base') return '本机未配置授权中心地址';
-      if (s === 'no_admin_token') return '本机未配置授权中心管理员令牌';
-      if (s === 'cloud_rejected') return '授权中心拒绝了该配置';
-      if (s.indexOf('error:') === 0) return '网络不可达或超时';
-      return s;
-    };
-    const _MKT_BY_MODE = { flash_sale: ['flash'], limited: ['stock'], event: ['event', 'stock'], normal: [] };
-    const applyMktGroups = (item) => {
-      if (!item) return;
-      const sel = item.querySelector('.plan-mode');
-      const mode = (sel && sel.value) || 'normal';
-      const want = _MKT_BY_MODE[mode] || [];
-      item.querySelectorAll('.plan-mkt-group').forEach((g) => {
-        g.hidden = !want.includes(g.dataset.mkt);
-      });
-      // 自证：命中的组写进 data 属性，出问题时在 DevTools 里一眼能看出是
-      // 「模式值没读到」还是「映射没命中」，省掉一轮猜测
-      item.dataset.mktShown = want.join(',') || 'none';
-    };
-
-    if (plansBox) {
-      plansBox.addEventListener('input', () => { plansBox.dataset.dirty = '1'; });
-      // select 专用的 change 事件（click 在部分 WebView 不触发）
-      plansBox.addEventListener('change', (e) => {
-        const sel = e.target && e.target.closest ? e.target.closest('.plan-mode') : null;
-        if (sel) applyMktGroups(sel.closest('.admin-plan-item'));
-      });
-    // 营销面板展开/收起
-    plansBox.addEventListener('click', async (e) => {
-      const t = e.target;
-      if (!t || !t.closest) return;
-      // 切换售卖模式 → 移动「当前模式生效」角标
-      // ⚠️ select 的 change 在 WKWebView 下未必冒泡成 click，两路都挂上（双保险）
-      const modeSel = t.closest('.plan-mode');
-      if (modeSel) {
-        const item = modeSel.closest('.admin-plan-item');
-        if (item) applyMktGroups(item);
-        return;
-      }
-      const tgl = t.closest('.plan-mkt-toggle');
-        if (tgl) {
-          const code = tgl.dataset.plan;
-          const box = plansBox.querySelector(`.admin-plan-mkt[data-plan="${CSS.escape(code)}"]`);
-          if (box) box.hidden = !box.hidden;
-          // 展开时按当前模式刷新分组显隐，避免展开后里面空空如也
-          if (box && !box.hidden) applyMktGroups(tgl.closest('.admin-plan-item'));
-          return;
-        }
-        const sale = t.closest('.plan-sale-toggle');
-        if (sale) {
-          const code = sale.dataset.plan;
-          // 新增档位还没落盘（服务端没有这个 code），先在表单里切上架态，
-          // 由「保存套餐配置」一次性提交；直接调端点会 500/定位不到表。
-          if (sale.dataset.unsaved === '1') {
-            const box2 = sale.closest('.admin-plan-item');
-            const chk = box2 && box2.querySelector('.plan-onsale');
-            const now = !(chk && chk.checked);
-            if (chk) chk.checked = now;
-            sale.textContent = now ? '↓ 下架' : '↑ 上架';
-            sale.classList.toggle('admin-btn-soft', now);
-            sale.classList.toggle('admin-btn-primary', !now);
-            box2.classList.toggle('is-off', !now);
-            let chip = box2.querySelector('.admin-plan-sale-chip');
-            if (now && !chip) {
-              chip = document.createElement('span');
-              chip.className = 'admin-chip is-gray admin-plan-sale-chip';
-              chip.textContent = '已下架';
-              const nameEl = box2.querySelector('.admin-plan-name');
-              if (nameEl) nameEl.insertAdjacentElement('afterend', chip);
-            } else if (!now && chip) {
-              chip.remove();
-            }
-            plansBox.dataset.dirty = '1';
-            _adminMsg(plansMsg, `「${code}」已${now ? '下架' : '上架'}，点「保存套餐配置」生效`, false);
-            return;
-          }
-          // 按钮文案「↓ 下架」→ 目标 on_sale=false；「↑ 上架」→ true
-          const willOn = sale.textContent.indexOf('上架') > 0 && sale.textContent.indexOf('下架') === -1;
-          const label = (() => {
-            const n = sale.closest('.admin-plan-item');
-            const el2 = n && n.querySelector('.plan-label');
-            return (el2 && el2.value.trim()) || code;
-          })();
-          if (willOn) {
-            if (!(typeof confirm === 'function') || !confirm(`确定重新上架「${label}」？\n\n前台会重新展示该档并可正常购买。`)) return;
-          } else if (!(typeof confirm === 'function') || !confirm(`确定下架「${label}」？\n\n· 前台（桌面+网页）不再展示该档，无法再下单\n· 已购买用户的会员权益、积分完全不受影响\n· 随时可在这里点「上架」恢复`)) return;
-          sale.disabled = true;
-          const oldTxt = sale.textContent;
-          sale.textContent = '处理中…';
-          const saleUrl = '/api/admin/plans/' + encodeURIComponent(code) + '/sale';
-          const saleBody = JSON.stringify({ on_sale: willOn, table: sale.dataset.table || _CAT_TABLE[sale.dataset.cat] || '' });
-          // 云端同步失败 ≠ 无事发生：本地已改而授权中心没改，生效表又是「云端最高」，
-          // 前台可能根本看不到这次下架。本请求幂等，故对云端失败自动重试一次——
-          // 一次网络抖动不该变成「点了没反应」（2026-10-03 实测到过一次偶发失败）。
-          const pushSale = () => adminRequest(saleUrl, { method: 'POST', body: saleBody });
-          try {
-            let r = await pushSale();
-            if (!r || !r.ok) throw new Error((r && r.error) || '操作失败');
-            let cloud = r.cloud || {};
-            if (!cloud.ok) {
-              sale.textContent = '同步云端…';
-              await new Promise((res) => setTimeout(res, 800));
-              try {
-                const r2 = await pushSale();
-                if (r2 && r2.ok && (r2.cloud || {}).ok) { r = r2; cloud = r2.cloud; }
-                else if (r2 && r2.cloud) cloud = r2.cloud;
-              } catch (_) { /* 重试也失败：保留首次的失败原因 */ }
-            }
-            // 立即重载服务端真值：价格真源在云端，状态胶囊/剩余名额等以服务端为准
-            delete plansBox.dataset.dirty;
-            loadConfig();
-            _adminMsg(plansMsg, `${willOn ? '已上架' : '已下架'}「${label}」`
-              + (cloud.ok ? '，网页版同步生效'
-                : `（⚠️ 云端同步失败：${_cloudReasonLabel(cloud.reason)}，网页版暂未变更，请再点一次重试）`), !cloud.ok);
-          } catch (e) {
-            sale.disabled = false;
-            sale.textContent = oldTxt;
-            _adminMsg(plansMsg, '操作失败：' + ((e && e.message) || '网络错误'), true);
-          }
-          return;
-        }
-        const del = t.closest('.plan-del');
-        if (del) {
-          const code = del.dataset.plan;
-          if (!confirm(`确定删除档位「${code}」？\n删除后前台不再展示该档（已购买的用户权益不受影响）。`)) return;
-          del.closest('.admin-plan-item').remove();
-          plansBox.dataset.dirty = '1';
-          _adminMsg(plansMsg, `已删除「${code}」，点「保存套餐配置」生效`, false);
-          return;
-        }
-        const add = t.closest('.plan-add-btn');
-        if (add) {
-          const box = add.closest('.admin-plan-group');
-          const cat = box.dataset.cat;
-          const code = (box.querySelector('.plan-new-code') || {}).value?.trim();
-          const label = (box.querySelector('.plan-new-label') || {}).value?.trim();
-          const price = parseFloat((box.querySelector('.plan-new-price') || {}).value);
-          const amt = parseInt((box.querySelector('.plan-new-days') || {}).value, 10);
-          if (!code) { _adminMsg(plansMsg, '请填写档位 code（英文/数字/下划线）', true); return; }
-          if (!/^[A-Za-z0-9_]{2,40}$/.test(code)) { _adminMsg(plansMsg, 'code 只能字母/数字/下划线（2-40 位）', true); return; }
-          if (box.querySelector(`.admin-plan-item[data-plan="${CSS.escape(code)}"]`)) {
-            _adminMsg(plansMsg, `档位「${code}」已存在`, true); return;
-          }
-          if (!(price > 0) || !(amt > 0)) { _adminMsg(plansMsg, '请填写有效价格与天数/积分', true); return; }
-          const isDays = cat === 'dl';
-          const fields = ['label', 'mode', 'on_sale', 'badge', 'desc', 'flash_price', 'flash_start', 'flash_end', 'stock', 'sold', 'start_at', 'end_at', 'price_cny'];
-          let h = `<div class="admin-plan-item" data-plan="${esc(code)}"><div class="admin-plan-row">
-            <span class="admin-plan-name">${esc(label || code)} <code class="admin-plan-code">${esc(code)}</code></span>
-            <label>标题<input class="admin-input admin-input-sm plan-label" data-plan="${esc(code)}" value="${esc(label || code)}"></label>
-            <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(code)}" value="${price}" type="number" step="0.01"></label>
-            <label>${isDays ? '天数' : '积分'}<input class="admin-input admin-input-sm ${isDays ? 'plan-days' : 'plan-credits'}" data-plan="${esc(code)}" value="${amt}" type="number"></label>
-            <button type="button" class="admin-btn admin-btn-sm admin-btn-soft plan-sale-toggle" data-plan="${esc(code)}" data-cat="${esc(cat)}" data-table="${esc(_CAT_TABLE[cat] || cat)}" data-unsaved="1" title="新档默认上架；点此可先下架再点保存">↓ 下架</button>
-            <button type="button" class="admin-btn admin-btn-sm plan-mkt-toggle" data-plan="${esc(code)}">⚙ 营销</button>
-            <button type="button" class="admin-btn admin-btn-sm admin-btn-danger plan-del" data-plan="${esc(code)}">删除</button>
-          </div><div class="admin-plan-mkt" data-plan="${esc(code)}" hidden><div class="admin-plan-mkt-grid">
-            <label>售卖模式<select class="admin-input admin-input-sm plan-mode" data-plan="${esc(code)}">${PLAN_MODES.map(([v, t2]) => `<option value="${v}">${t2}</option>`).join('')}</select></label>
-            <label class="plan-on-sale"><input type="checkbox" class="plan-onsale" data-plan="${esc(code)}" checked> 上架中</label>
-            <label>角标<input class="admin-input admin-input-sm plan-badge" data-plan="${esc(code)}" placeholder="如：限时 5 折"></label>
-          </div>
-          <div class="plan-mkt-group" data-mkt="flash"><div class="plan-mkt-group-h">秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）</div><div class="admin-plan-mkt-grid">
-            <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(code)}" type="number" step="0.01" placeholder="留空=不用"></label>
-            <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(code)}" type="datetime-local"></label>
-            <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(code)}" type="datetime-local"></label>
-          </div></div>
-          <div class="plan-mkt-group" data-mkt="event"><div class="plan-mkt-group-h">定时开售（到点前「活动未开始」、到点后「活动已结束」，都不可下单）</div><div class="admin-plan-mkt-grid">
-            <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(code)}" type="datetime-local"></label>
-            <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(code)}" type="datetime-local"></label>
-          </div></div>
-          <div class="plan-mkt-group" data-mkt="stock"><div class="plan-mkt-group-h">数量（总共能卖多少份，售完自动置灰；两种模式通用）</div><div class="admin-plan-mkt-grid">
-            <label>总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(code)}" type="number" placeholder="0=不限"></label>
-            <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(code)}" value="0" type="number"></label>
-          </div></div>
-          <div class="admin-plan-mkt-grid">
-            <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(code)}" placeholder="显示在套餐卡片上"></label>
-          </div>
-          <p class="admin-plan-hint">「秒杀」只改价格不改能不能买；「定时开售」管的是这一档什么时候能买。两者可叠加。「数量」在限量与活动模式下都可填，填 0 = 不限。留空 = 不启用。</p></div></div>`;
-          const tmp = document.createElement('div');
-          tmp.innerHTML = h;
-          const node = tmp.firstElementChild;
-          box.insertBefore(node, box.querySelector('.admin-plan-add'));
-          applyMktGroups(node);
-          box.querySelector('.plan-new-code').value = '';
-          box.querySelector('.plan-new-label').value = '';
-          box.querySelector('.plan-new-price').value = '';
-          box.querySelector('.plan-new-days').value = '';
-          plansBox.dataset.dirty = '1';
-          _adminMsg(plansMsg, `已添加「${code}」，点「保存套餐配置」生效`, false);
-        }
-      });
-    }
     const loadConfig = async () => {
       try {
         const r = await adminRequest('/api/admin/config');
@@ -21837,9 +15577,7 @@ el.dwVidPlayer.hidden = true;
           <button class="admin-btn admin-btn-sm" data-smtp-del="${i}">删除</button>
         </td>
       </tr>`).join('');
-      // adminSmtpList 是 div：table 系标签必须包在 <table> 里，否则浏览器解析时直接丢弃，
-      // 只剩文字和按钮挤成一团（系统配置 SMTP 列表排版乱掉的根因）。
-      smtpList.innerHTML = '<table class="admin-table">' + head + '<tbody>' + rows + '</tbody></table>';
+      smtpList.innerHTML = head + '<tbody>' + rows + '</tbody>';
     };
 
     // SMTP 表单：idx=null 新增，否则编辑第 idx 个
@@ -21885,116 +15623,30 @@ el.dwVidPlayer.hidden = true;
     // 套餐与积分成本表单
     const renderPlansForm = (cfg) => {
       if (!plansBox) return;
-      // 有未保存的编辑 → 不重建表单（保住用户正在改的价格），只提示
-      if (plansBox.dataset.dirty) {
-        _adminMsg(plansMsg, '套餐有未保存的修改，已为你保留；点「保存套餐配置」生效。', false);
-        return;
-      }
       const plans = cfg.plans || {};
       const dl = (plans.download_member && plans.download_member.plans) || {};
       const ai = (plans.ai_member && plans.ai_member.plans) || {};
       const cp = plans.credit_packs || {};
       const costs = cfg.credit_costs || {};
-      // 时间戳 ↔ datetime-local 互转（营销活动时间用）
-      const _tsToLocal = (ts) => {
-        const n = Number(ts) || 0;
-        if (!n) return '';
-        try {
-          const d = new Date(n * 1000);
-          const p = (x) => String(x).padStart(2, '0');
-          return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-        } catch (_) { return ''; }
-      };
-      const _localToTs = (s) => {
-        if (!s) return 0;
-        const t = new Date(s).getTime();
-        return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
-      };
-      const PLAN_MODES = [
-        ['normal', '普通（无活动）'],
-        ['flash_sale', '秒杀（限时特价）'],
-        ['limited', '限量（总份数）'],
-        ['event', '活动（定时开售）'],
-      ];
-      const _modeLabel = (m) => (PLAN_MODES.find((x) => x[0] === m) || PLAN_MODES[0])[1];
-
-      const planBlock = (title, obj, kind, cat) => {
-        let h = `<div class="admin-plan-group" data-cat="${cat}"><h4>${title}</h4>`;
+      const planBlock = (title, obj, kind) => {
+        let h = `<div class="admin-plan-group"><h4>${title}</h4>`;
         Object.keys(obj).forEach((k) => {
           const p = obj[k] || {};
-          const st = p.state || {};
-          const off = p.on_sale === false;
           const extra = kind === 'days'
             ? `<label>天数<input class="admin-input admin-input-sm plan-days" data-plan="${esc(k)}" value="${esc(p.days)}" type="number"></label>`
             : `<label>积分<input class="admin-input admin-input-sm plan-credits" data-plan="${esc(k)}" value="${esc(p.credits)}" type="number"></label>`;
-          const statusChip = off
-            ? '<span class="admin-chip is-gray">已下架</span>'
-            : (st.buyable === false
-              ? `<span class="admin-chip is-red">${esc(st.reason || '不可购买')}</span>`
-              : (st.is_flash ? '<span class="admin-chip is-gold">秒杀中</span>' : ''));
-          const saleBtn = `<button type="button" class="admin-btn admin-btn-sm ${off ? 'admin-btn-primary' : 'admin-btn-soft'} plan-sale-toggle" data-plan="${esc(k)}" data-cat="${esc(cat)}" data-table="${esc(_CAT_TABLE[cat] || cat)}" title="${off ? '重新上架该档（不影响已购买用户权益）' : '立即下架该档：前台隐藏且无法下单，已购用户权益不受影响'}">${off ? '↑ 上架' : '↓ 下架'}</button>`;
-          h += `<div class="admin-plan-item${off ? ' is-off' : ''}" data-plan="${esc(k)}">
-            <div class="admin-plan-row">
-              <span class="admin-plan-name">${esc(p.label || k)} <code class="admin-plan-code">${esc(k)}</code></span>
-              ${statusChip}
-              <label>标题<input class="admin-input admin-input-sm plan-label" data-plan="${esc(k)}" value="${esc(p.label || k)}"></label>
-              <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(k)}" value="${esc(p.price_cny)}" type="number" step="0.01"></label>
-              ${extra}
-              ${saleBtn}
-              <button type="button" class="admin-btn admin-btn-sm plan-mkt-toggle" data-plan="${esc(k)}" title="展开营销设置">⚙ 营销</button>
-              <button type="button" class="admin-btn admin-btn-sm admin-btn-danger plan-del" data-plan="${esc(k)}" title="删除该档">删除</button>
-            </div>
-            <div class="admin-plan-mkt" data-plan="${esc(k)}" hidden>
-              <div class="admin-plan-mkt-grid">
-                <label>售卖模式<select class="admin-input admin-input-sm plan-mode" data-plan="${esc(k)}">
-                  ${PLAN_MODES.map(([v, t]) => `<option value="${v}"${(p.mode || 'normal') === v ? ' selected' : ''}>${t}</option>`).join('')}
-                </select></label>
-                <label class="plan-on-sale"><input type="checkbox" class="plan-onsale" data-plan="${esc(k)}"${p.on_sale === false ? '' : ' checked'}> 上架中</label>
-                <label>角标<input class="admin-input admin-input-sm plan-badge" data-plan="${esc(k)}" value="${esc(p.badge || '')}" placeholder="如：限时 5 折"></label>
-              </div>
-              <div class="plan-mkt-group" data-mkt="flash">
-                <div class="plan-mkt-group-h">秒杀（只在这段时间内用秒杀价，其它时间按原价正常卖）</div>
-                <div class="admin-plan-mkt-grid">
-                  <label>秒杀价¥<input class="admin-input admin-input-sm plan-flashprice" data-plan="${esc(k)}" value="${esc(p.flash_price || '')}" type="number" step="0.01" placeholder="留空=不用"></label>
-                  <label>秒杀开始<input class="admin-input admin-input-sm plan-flashstart" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_start)}"></label>
-                  <label>秒杀结束<input class="admin-input admin-input-sm plan-flashend" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.flash_end)}"></label>
-                </div>
-              </div>
-              <div class="plan-mkt-group" data-mkt="event">
-                <div class="plan-mkt-group-h">定时开售（到点前显示「活动未开始」，到点后显示「活动已结束」，都不可下单）</div>
-                <div class="admin-plan-mkt-grid">
-                  <label>开售时间<input class="admin-input admin-input-sm plan-startat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.start_at)}"></label>
-                  <label>结束时间<input class="admin-input admin-input-sm plan-endat" data-plan="${esc(k)}" type="datetime-local" value="${_tsToLocal(p.end_at)}"></label>
-                </div>
-              </div>
-              <div class="plan-mkt-group" data-mkt="stock">
-                <div class="plan-mkt-group-h">数量（总共能卖多少份，售完自动置灰；两种模式通用）</div>
-                <div class="admin-plan-mkt-grid">
-                  <label>总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(k)}" value="${esc(p.stock || '')}" type="number" placeholder="0=不限"></label>
-                  <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(k)}" value="${esc(p.sold || 0)}" type="number"></label>
-                </div>
-              </div>
-              <div class="admin-plan-mkt-grid">
-                <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(k)}" value="${esc(p.desc || '')}" placeholder="显示在套餐卡片上"></label>
-              </div>
-              <p class="admin-plan-hint">「秒杀」只改价格不改能不能买；「定时开售」管的是这一档什么时候能买。两者可叠加：例如 9/1-9/30 期间可买，其中 20:00-22:00 是秒杀价。「数量」在限量与活动模式下都可填，填 0 = 不限。留空 = 不启用。</p>
-            </div>
+          h += `<div class="admin-plan-row" data-plan="${esc(k)}">
+            <span class="admin-plan-name">${esc(p.label || k)}</span>
+            <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(k)}" value="${esc(p.price_cny)}" type="number" step="0.01"></label>
+            ${extra}
           </div>`;
         });
-        // 新增自定义档位（完全自定义：code 唯一即可）
-        h += `<div class="admin-plan-add">
-          <input class="admin-input admin-input-sm plan-new-code" placeholder="新档位 code（如 download_2day）" spellcheck="false">
-          <input class="admin-input admin-input-sm plan-new-label" placeholder="标题（如 下载会员·2天）">
-          <input class="admin-input admin-input-sm plan-new-price" type="number" step="0.01" placeholder="价格">
-          <input class="admin-input admin-input-sm plan-new-days" type="number" placeholder="${kind === 'days' ? '天数' : '积分'}">
-          <button type="button" class="admin-btn admin-btn-sm admin-btn-primary plan-add-btn">+ 新增档位</button>
-        </div>`;
         return h + '</div>';
       };
-      let html = planBlock('下载会员套餐', dl, 'days', 'dl');
-      html += planBlock('AI 会员套餐', ai, 'credits', 'ai');
-      html += planBlock('积分包', cp, 'credits', 'cp');
-      html += '<div class="admin-plan-group" data-cat="cost"><h4>AI 积分成本（每次操作消耗积分）</h4>';
+      let html = planBlock('下载会员套餐', dl, 'days');
+      html += planBlock('AI 会员套餐', ai, 'credits');
+      html += planBlock('积分包', cp, 'credits');
+      html += '<div class="admin-plan-group"><h4>AI 积分成本（每次操作消耗积分）</h4>';
       Object.keys(costs).forEach((k) => {
         html += `<div class="admin-plan-row" data-cost="${esc(k)}">
           <span class="admin-plan-name">${esc(k)}</span>
@@ -22003,81 +15655,20 @@ el.dwVidPlayer.hidden = true;
       });
       html += '</div>';
       plansBox.innerHTML = html;
-      applyPlansSeg();
-      // 渲染后立即给每档标好「当前模式生效」（否则角标要等用户动下拉才出现）
-      plansBox.querySelectorAll('.admin-plan-item').forEach((it) => applyMktGroups(it));
     };
-    // 分段切换：只显示选中分类的套餐组；AI 积分成本组（data-cat=cost）常驻显示
-    const applyPlansSeg = (cat) => {
-      if (!plansBox || !plansSeg) return;
-      const cur = cat || (plansSeg.querySelector('.admin-seg-btn.is-active') || {}).dataset?.cat || 'dl';
-      plansSeg.querySelectorAll('.admin-seg-btn').forEach((b) => {
-        const on = b.dataset.cat === cur;
-        b.classList.toggle('is-active', on);
-        b.setAttribute('aria-selected', on ? 'true' : 'false');
-      });
-      plansBox.querySelectorAll('.admin-plan-group[data-cat]').forEach((g) => {
-        const c = g.dataset.cat;
-        g.hidden = (c !== 'cost' && c !== cur);
-      });
-    };
-    if (plansSeg) {
-      plansSeg.addEventListener('click', (e) => {
-        const b = e.target.closest('.admin-seg-btn');
-        if (b) applyPlansSeg(b.dataset.cat);
-      });
-    }
-    let _plansSaving = false;      // 防重闸门：直接绑定 + 事件委托可能同时触发
     const savePlans = async () => {
-      if (_plansSaving) { console.log('[plans] 重复点击已忽略'); return; }
-      _plansSaving = true;
-      _adminMsg(plansMsg, '正在保存…', false);
-      // datetime-local 字符串 → 秒级时间戳（此前的定义在渲染闭包内，savePlans 拿不到，
-      // 导致保存时抛 Can't find variable: _localToTs —— 修为函数内自带）
-      const _localToTs = (s) => {
-        if (!s) return 0;
-        const t = new Date(s).getTime();
-        return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
-      };
-      try {
-        const cfg = lastConfig || {};
-        const plans = cfg.plans || {};
+      const cfg = lastConfig || {};
+      const plans = cfg.plans || {};
       const buildCat = (obj) => {
         const out = {};
         Object.keys(obj).forEach((k) => {
           out[k] = Object.assign({}, obj[k]);
-          delete out[k].state;              // state 是后端算出来的，不回写
-          const val = (sel) => plansBox.querySelector(`${sel}[data-plan="${k}"]`);
-          const priceEl = val('.plan-price');
-          const daysEl = val('.plan-days');
-          const creditsEl = val('.plan-credits');
-          const labelEl = val('.plan-label');
-          const modeEl = val('.plan-mode');
-          const onSaleEl = val('.plan-onsale');
-          const badgeEl = val('.plan-badge');
-          const fpEl = val('.plan-flashprice');
-          const fsEl = val('.plan-flashstart');
-          const feEl = val('.plan-flashend');
-          const stockEl = val('.plan-stock');
-          const soldEl = val('.plan-sold');
-          const saEl = val('.plan-startat');
-          const eaEl = val('.plan-endat');
-          const descEl = val('.plan-desc-input');
+          const priceEl = plansBox.querySelector(`.plan-price[data-plan="${k}"]`);
+          const daysEl = plansBox.querySelector(`.plan-days[data-plan="${k}"]`);
+          const creditsEl = plansBox.querySelector(`.plan-credits[data-plan="${k}"]`);
           if (priceEl) out[k].price_cny = parseFloat(priceEl.value) || 0;
           if (daysEl && out[k].days != null) out[k].days = parseInt(daysEl.value, 10) || 0;
           if (creditsEl && out[k].credits != null) out[k].credits = parseInt(creditsEl.value, 10) || 0;
-          if (labelEl) out[k].label = labelEl.value.trim() || out[k].label;
-          if (modeEl) out[k].mode = modeEl.value;
-          if (onSaleEl) out[k].on_sale = !!onSaleEl.checked;
-          if (badgeEl) out[k].badge = badgeEl.value.trim();
-          if (descEl) out[k].desc = descEl.value.trim();
-          if (fpEl) out[k].flash_price = parseFloat(fpEl.value) || 0;
-          if (fsEl) out[k].flash_start = _localToTs(fsEl.value);
-          if (feEl) out[k].flash_end = _localToTs(feEl.value);
-          if (stockEl) out[k].stock = parseInt(stockEl.value, 10) || 0;
-          if (soldEl) out[k].sold = parseInt(soldEl.value, 10) || 0;
-          if (saEl) out[k].start_at = _localToTs(saEl.value);
-          if (eaEl) out[k].end_at = _localToTs(eaEl.value);
         });
         return out;
       };
@@ -22090,35 +15681,13 @@ el.dwVidPlayer.hidden = true;
         costs[k] = el ? (parseInt(el.value, 10) || 0) : (cfg.credit_costs[k]);
       });
       const payload = { download_plans: dl, ai_plans: ai, credit_packs: cp, credit_costs: costs };
-      console.log('[plans] save payload 档位数 dl=%d ai=%d cp=%d', Object.keys(dl).length, Object.keys(ai).length, Object.keys(cp).length);
-      // 诊断期：把即将提交的档位数与是否找到表单元素直接显示出来，
-      // 这样不用看控制台也能判断「点了保存到底有没有走到这里」
-      _adminMsg(plansMsg, `正在保存…（下载 ${Object.keys(dl).length} 档 / AI ${Object.keys(ai).length} 档 / 积分包 ${Object.keys(cp).length} 档）`, false);
       try {
         const r = await adminRequest('/api/admin/config/plans', {
           method: 'POST', body: JSON.stringify(payload),
         });
-        console.log('[plans] save resp', JSON.stringify(r).slice(0, 300));
-        if (r && r.ok) {
-          _plansSaving = false;         // 成功也要释放闸门，否则保存一次后按钮永久失灵
-          delete plansBox.dataset.dirty; // 保存成功 → 允许 loadConfig 用服务端真值刷新表单
-          loadConfig();
-          // 价格唯一真源在授权中心：云端同步成功才算全端生效，未同步要明确告知
-          const cloud = r.cloud || {};
-          if (cloud.ok) _adminMsg(plansMsg, '套餐配置已保存，并已同步到云端（网页版同步生效）', false);
-          else _adminMsg(plansMsg, `套餐配置已保存到本机，但云端同步失败（${_cloudReasonLabel(cloud.reason)}）——网页版与实际扣款价暂未变更`, true);
-        }
+        if (r && r.ok) { loadConfig(); _adminMsg(plansMsg, '套餐配置已保存', false); }
         else _adminMsg(plansMsg, (r && r.error) || '保存失败', true);
-      } catch (e) {
-        _plansSaving = false;   // ⚠️ 必须释放，否则一次网络抖动后按钮永久失灵
-        _adminMsg(plansMsg, '保存失败：' + (e && e.message ? e.message : '网络错误'), true);
-      }
-      } catch (e) {
-        _plansSaving = false;
-        // 兜底：buildCat 阶段就抛错（例如模板里某个选择器找不到）也要给出可见提示
-        _adminMsg(plansMsg, '保存失败：' + ((e && e.message) || '表单读取异常'), true);
-        console.error('[plans] save failed', e);
-      }
+      } catch (e) { _adminMsg(plansMsg, '保存失败：' + (e && e.message ? e.message : '网络错误'), true); }
     };
 
     const _needLogin = (msg) => {
@@ -22128,26 +15697,6 @@ el.dwVidPlayer.hidden = true;
 
     // 表格操作（事件委托）
     const onTableClick = async (e) => {
-      // 点击用户 ID → 复制到剪贴板
-      const uidEl = e.target.closest('code.admin-uid[data-copy]');
-      if (uidEl && uidEl.dataset.copy) {
-        const v = uidEl.dataset.copy;
-        const done = () => {
-          const old = uidEl.textContent;
-          uidEl.textContent = '已复制 ✓';
-          setTimeout(() => { uidEl.textContent = old; }, 900);
-        };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(v).then(done).catch(() => {});
-        } else {
-          try {
-            const ta = document.createElement('textarea');
-            ta.value = v; document.body.appendChild(ta); ta.select();
-            document.execCommand('copy'); document.body.removeChild(ta); done();
-          } catch (_) {}
-        }
-        return;
-      }
       const btn = e.target.closest('button[data-uid]');
       if (!btn) return;
       const uid = btn.dataset.uid;
@@ -22172,18 +15721,16 @@ el.dwVidPlayer.hidden = true;
           });
           if (r && r.ok) { loadUsers(); }
           else alert((r && r.error) || '操作失败');
-        } else if (act === 'usage') {
-          openUserUsage(uid);
-        } else if (act === 'del') {
-          const u0 = (lastUsers || []).find((x) => x.user_id === uid) || {};
-          const label = u0.identifier || uid;
-          if (!(typeof confirm === 'function') || !confirm(`确定删除账号「${label}」？\n\n删除后该账号立即失效、无法登录，且该手机号/邮箱不能再注册。此操作不可恢复。`)) return;
-          const r = await adminRequest(`/api/admin/users/${uid}/delete`, { method: 'POST' });
-          if (r && r.ok) { loadUsers(); loadMembers(); }
-          else alert((r && r.error) || '删除失败');
         } else if (act === 'credit') {
-          const m = (lastMembers || []).find((x) => x.user_id === uid) || { user_id: uid };
-          openCreditDlg(m);
+          const d = (typeof prompt === 'function') ? prompt('调整积分（正=充值，负=扣减，如 100 / -50）：') : null;
+          if (d == null || d.trim() === '') return;
+          const delta = parseInt(d.trim(), 10);
+          if (isNaN(delta)) { alert('请输入整数'); return; }
+          const r = await adminRequest('/api/admin/memberships/credits', {
+            method: 'POST', body: JSON.stringify({ user_id: uid, delta }),
+          });
+          if (r && r.ok) { loadMembers(); }
+          else alert((r && r.error) || '调分失败');
         }
       } catch (err) {
         alert('操作失败：' + (err && err.message ? err.message : '网络错误'));
@@ -22192,45 +15739,10 @@ el.dwVidPlayer.hidden = true;
     if (userTable) userTable.addEventListener('click', onTableClick);
     if (memberTable) memberTable.addEventListener('click', onTableClick);
     if (userSearch) userSearch.addEventListener('input', renderUserTable);
-    if (userStatusFilter) userStatusFilter.addEventListener('change', renderUserTable);
 
     // 赠送会员
-    // 可搜索账号选择器（2026-10-03）：原生 select 无法搜索，改为输入过滤下拉；
-    // 隐藏的 adminGrantUser 仍由 fillGrantSelects 同步数据，作为兜底数据源。
-    let _grantPickedUid = '';
-    const grantInput = $('adminGrantUserSearch');
-    const grantList = $('adminGrantUserList');
-    const _grantPick = (m) => {
-      _grantPickedUid = m.user_id;
-      if (grantUserSel) grantUserSel.value = m.user_id;
-      if (grantInput) grantInput.value = m.identifier;
-      if (grantList) { grantList.innerHTML = ''; grantList.hidden = true; }
-    };
-    if (grantInput && grantList) {
-      const renderGrantList = () => {
-        const q = grantInput.value.trim().toLowerCase();
-        const items = lastMembers.filter((m) => !q
-          || String(m.identifier || '').toLowerCase().includes(q)
-          || String(m.user_id || '').toLowerCase().includes(q));
-        grantList.innerHTML = items.slice(0, 60).map((m) =>
-          `<div class="admin-grant-opt${m.user_id === _grantPickedUid ? ' is-active' : ''}" data-uid="${esc(m.user_id)}">`
-          + `<span>${esc(m.identifier)}</span><span class="admin-grant-uid">${esc(m.user_id)}</span></div>`).join('')
-          || '<div class="admin-grant-empty">无匹配账号</div>';
-        grantList.hidden = false;
-      };
-      grantInput.addEventListener('input', () => { _grantPickedUid = ''; renderGrantList(); });
-      grantInput.addEventListener('focus', renderGrantList);
-      grantInput.addEventListener('blur', () => { setTimeout(() => { grantList.hidden = true; }, 160); });
-      grantList.addEventListener('mousedown', (e) => {
-        const opt = e.target.closest('.admin-grant-opt');
-        if (!opt) return;
-        e.preventDefault();
-        const m = lastMembers.find((x) => x.user_id === opt.dataset.uid);
-        if (m) _grantPick(m);
-      });
-    }
     if (grantBtn) grantBtn.addEventListener('click', async () => {
-      const uid = _grantPickedUid || (grantUserSel && grantUserSel.value);
+      const uid = grantUserSel && grantUserSel.value;
       const code = grantCodeSel && grantCodeSel.value;
       if (!uid || !code) return;
       try {
@@ -22270,24 +15782,7 @@ el.dwVidPlayer.hidden = true;
     if (smtpAddBtn) smtpAddBtn.addEventListener('click', () => showSmtpForm(null));
     if (smtpSaveBtn) smtpSaveBtn.addEventListener('click', saveSmtp);
     if (smtpCancelBtn) smtpCancelBtn.addEventListener('click', () => { if (smtpForm) smtpForm.hidden = true; });
-    if (plansSaveBtn) {
-      plansSaveBtn.addEventListener('click', savePlans);
-      // 诊断：capture 阶段先记一笔。若这里都不触发，说明点击根本没到按钮
-      // （overlay 拦截 / pointer-events:none / 元素被替换），那就与 savePlans 无关。
-      plansSaveBtn.addEventListener('click', () => {
-        console.log('[plans] 保存按钮被点击');
-        plansSaveBtn.setAttribute('data-last-click', String(Date.now()));
-      }, true);
-    } else {
-      console.error('[plans] 找不到保存按钮 #adminPlansSave');
-    }
-
-    // 自愈绑定：用事件委托保证「保存套餐配置」一定点得动。
-    // 起因：若启动时 $('adminPlansSave') 拿到 null，上面的直接绑定会全部落空且无报错。
-    document.addEventListener('click', (e) => {
-      const t = e.target;
-      if (t && t.closest && t.closest('#adminPlansSave')) savePlans();
-    });
+    if (plansSaveBtn) plansSaveBtn.addEventListener('click', savePlans);
     if (smtpList) smtpList.addEventListener('click', async (e) => {
       const editBtn = e.target.closest('[data-smtp-edit]');
       const delBtn = e.target.closest('[data-smtp-del]');
@@ -22302,7 +15797,6 @@ el.dwVidPlayer.hidden = true;
           if (r && r.ok) { loadConfig(); _adminMsg(smtpMsg, '已删除', false); }
           else _adminMsg(smtpMsg, (r && r.error) || '删除失败', true);
         } catch (err) { _adminMsg(smtpMsg, '删除失败：' + (err && err.message ? err.message : '网络错误'), true); }
-
       }
     });
 
@@ -22320,390 +15814,6 @@ el.dwVidPlayer.hidden = true;
     request,
     showError,
     createTaskCard,
-    trackTask,
     switchView,
   });
-})();
-
-/* ==== v2 四轮（2026-09-17）：三栏拖动分隔条 + 侧栏收起（宽度/状态存 localStorage） ==== */
-(function () {
-  const root = document.getElementById('commentaryView');
-  if (!root) return;
-  const v2 = root.querySelector('.com-v2');
-  if (!v2) return;
-  const colL = v2.querySelector('.com-left');
-  const colR = v2.querySelector('.com-right');
-
-  // 恢复上次宽度/收起状态
-  try {
-    const lw = parseInt(localStorage.getItem('com_left_w'), 10);
-    const rw = parseInt(localStorage.getItem('com_right_w'), 10);
-    if (lw >= 170 && lw <= 480) root.style.setProperty('--com-left-w', lw + 'px');
-    if (rw >= 160 && rw <= 520) root.style.setProperty('--com-right-w', rw + 'px');
-    if (localStorage.getItem('com_left_off') === '1') root.classList.add('com-left-off');
-    if (localStorage.getItem('com_right_off') === '1') root.classList.add('com-right-off');
-  } catch (e) { /* 隐私模式等忽略 */ }
-
-  // 拖动分隔条
-  function bindSplit(handle, panel, side) {
-    if (!handle || !panel) return;
-    let startX = 0, startW = 0, dragging = false;
-    handle.addEventListener('pointerdown', (e) => {
-      dragging = true; startX = e.clientX;
-      startW = panel.getBoundingClientRect().width;
-      handle.classList.add('dragging');
-      handle.setPointerCapture(e.pointerId);
-      document.body.style.userSelect = 'none';
-      e.preventDefault();
-    });
-    handle.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const delta = side === 'l' ? (e.clientX - startX) : (startX - e.clientX);
-      // 右栏下限 200→160：用户想把中栏（时间轴）往右边拉长，右栏要能再让一截
-      const min = side === 'l' ? 170 : 160, max = side === 'l' ? 480 : 520;
-      const w = Math.min(max, Math.max(min, startW + delta));
-      root.style.setProperty(side === 'l' ? '--com-left-w' : '--com-right-w', w + 'px');
-    });
-    const done = () => {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove('dragging');
-      document.body.style.userSelect = '';
-      try {
-        localStorage.setItem(side === 'l' ? 'com_left_w' : 'com_right_w',
-          String(Math.round(panel.getBoundingClientRect().width)));
-      } catch (err) { /* ignore */ }
-    };
-    handle.addEventListener('pointerup', done);
-    handle.addEventListener('pointercancel', done);
-    // 双击分隔条复位：清掉记忆宽度与内联变量 → 回落到 CSS 默认（中档窗口的媒体查询值）。
-    // 用途：用户拖宽过侧栏导致中栏被挤窄时，双击即可拿回「时间轴更长」的默认布局。
-    handle.addEventListener('dblclick', () => {
-      const varName = side === 'l' ? '--com-left-w' : '--com-right-w';
-      root.style.removeProperty(varName);
-      try { localStorage.removeItem(side === 'l' ? 'com_left_w' : 'com_right_w'); } catch (err) { /* ignore */ }
-    });
-  }
-  bindSplit(v2.querySelector('#comSplitL'), colL, 'l');
-  bindSplit(v2.querySelector('#comSplitR'), colR, 'r');
-
-  // 侧栏收起/展开
-  function bindTab(tabId, cls, storeKey) {
-    const tab = document.getElementById(tabId);
-    if (!tab) return;
-    tab.addEventListener('click', () => {
-      root.classList.toggle(cls);
-      try { localStorage.setItem(storeKey, root.classList.contains(cls) ? '1' : '0'); } catch (e) { /* ignore */ }
-    });
-  }
-  bindTab('comLeftTab', 'com-left-off', 'com_left_off');
-  bindTab('comRightTab', 'com-right-off', 'com_right_off');
-})();
-
-// ===== 界面主题切换（个人中心「界面主题」：浅色 / 深色 / 跟随系统）=====
-// 防闪烁的 class 应用已在 index.html <head> 内联脚本完成；此处负责 UI 联动与持久化。
-(function () {
-  var KEY = 'vdl-theme';
-  var root = document.documentElement;
-  function mql() { return window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null; }
-  function effective(choice) {
-    if (choice === 'dark') return true;
-    if (choice === 'light') return false;
-    var m = mql();
-    return !!(m && m.matches);
-  }
-  function current() {
-    try { return localStorage.getItem(KEY) || 'light'; } catch (e) { return 'light'; }
-  }
-  function apply(choice) {
-    var dark = effective(choice);
-    root.classList.toggle('theme-dark', dark);
-    try { localStorage.setItem(KEY, choice); } catch (e) { /* ignore */ }
-    var seg = document.getElementById('profThemeSeg');
-    if (seg) {
-      var btns = seg.querySelectorAll('.theme-seg-btn');
-      for (var i = 0; i < btns.length; i++) {
-        btns[i].classList.toggle('is-active', btns[i].getAttribute('data-theme') === choice);
-      }
-    }
-  }
-  // 初始同步 UI 高亮（class 已由 head 脚本就绪）
-  apply(current());
-  var seg = document.getElementById('profThemeSeg');
-  if (seg) {
-    var btns = seg.querySelectorAll('.theme-seg-btn');
-    for (var j = 0; j < btns.length; j++) {
-      btns[j].addEventListener('click', function () { apply(this.getAttribute('data-theme')); });
-    }
-  }
-  // 「跟随系统」时，系统外观变化实时响应
-  var m = mql();
-  if (m && m.addEventListener) {
-    m.addEventListener('change', function () { if (current() === 'system') apply('system'); });
-  }
-})();
-
-/* ======================================================================
-   AI 引擎空闲自动释放开关（2026-09-30）
-   抠图 / 去水印用完 3 分钟没再操作 → 自动卸载 onnx 会话，回收模型权重占用的内存
-   （为内存吃紧的用户，典型是 8GB 机型）。开关与「立即释放」都走 /api/engine/idle。
-   ⚠️ 释放只删字典引用：正在推理的栈仍持有引用，任务会安全跑完，不会被打断。
-   ====================================================================== */
-(function () {
-  var toggle = document.getElementById('profIdleToggle');
-  var label = document.getElementById('profIdleLabel');
-  var state = document.getElementById('profIdleState');
-  var btn = document.getElementById('profIdleReleaseNow');
-  if (!toggle) return;
-  var base = window.VDL_API_BASE || '';
-
-  function engName(n) {
-    if (n === 'matting') return '抠图';
-    if (n === 'dewatermark') return '去水印';
-    return n;
-  }
-
-  function render(data) {
-    if (!data || !data.ok) { if (state) state.textContent = '—'; return; }
-    toggle.checked = !!data.enabled;
-    if (label) label.textContent = data.enabled ? '已开启' : '已关闭';
-    if (!state) return;
-    var loaded = (data.engines || []).filter(function (e) { return e.loaded > 0; });
-    if (!loaded.length) {
-      state.textContent = '当前无已加载模型（未用过 AI 功能，或已自动释放）';
-      return;
-    }
-    var parts = loaded.map(function (e) {
-      var tail = (e.releases_in == null) ? '' : ('，约 ' + Math.ceil(e.releases_in) + ' 秒后释放');
-      return engName(e.name) + ' ' + e.loaded + ' 个会话' + tail;
-    });
-    state.textContent = '已加载：' + parts.join('、');
-  }
-
-  function post(body, cb) {
-    fetch(base + '/api/engine/idle', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {})
-    }).then(function (r) { return r.json(); })
-      .then(function (d) { if (cb) cb(d); render(d); })
-      .catch(function () { /* 设置失败不打扰用户 */ });
-  }
-
-  function refresh() {
-    // 个人中心没打开就不轮询，零额外开销
-    var pv = document.getElementById('profileView');
-    if (pv && pv.hidden) return;
-    fetch(base + '/api/engine/idle').then(function (r) { return r.json(); })
-      .then(render).catch(function () {});
-  }
-
-  toggle.addEventListener('change', function () { post({ enabled: toggle.checked }); });
-  if (btn) {
-    btn.addEventListener('click', function () {
-      post({ release_now: true }, function (d) {
-        if (d && d.ok && state) {
-          state.textContent = d.freed ? ('已释放 ' + d.freed + ' 个引擎') : '当前没有已加载的模型';
-        }
-      });
-    });
-  }
-  setInterval(refresh, 15000);
-  refresh();
-})();
-
-/* ======================================================================
-   YouTube 下载代理设置（2026-10-02，A4 分流）
-   写 ~/.video-downloader/proxy.json 的 "youtube" 键；服务端仅桌面版
-   （回环直连）可读写，云端网页版会 403 —— 此时隐藏整个设置卡片。
-   ====================================================================== */
-(function () {
-  var input = document.getElementById('profYtProxyInput');
-  var btn = document.getElementById('profYtProxySave');
-  var state = document.getElementById('profYtProxyState');
-  var sec = document.getElementById('profYtProxySec');
-  if (!input || !btn) return;
-  var base = window.VDL_API_BASE || '';
-
-  function render(d) {
-    if (!d || d.ok !== true) {
-      if (sec) sec.hidden = true; // 云端版 / 未登录等场景：不显示桌面专属设置
-      return;
-    }
-    if (sec) sec.hidden = false;
-    if (document.activeElement !== input) input.value = d.youtube || '';
-    if (!state) return;
-    if (d.source === 'env') {
-      state.textContent = '当前由环境变量 VDL_PROXY_YT 指定（优先于下方输入框）';
-      input.disabled = true;
-      if (btn) btn.disabled = true;
-    } else {
-      state.textContent = d.youtube
-        ? ('已配置：' + d.youtube + '（仅 YouTube 流量生效）')
-        : '未配置（直连）。下载 YouTube 报 403 / 请登录 时再填';
-    }
-  }
-
-  function refresh() {
-    fetch(base + '/api/settings/proxy').then(function (r) {
-      if (r.status === 403) return { ok: false, forbidden: true };
-      return r.json();
-    }).then(render).catch(function () { if (sec) sec.hidden = true; });
-  }
-
-  btn.addEventListener('click', function () {
-    var val = (input.value || '').trim();
-    state.textContent = '保存中…';
-    fetch(base + '/api/settings/proxy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ youtube: val })
-    }).then(function (r) { return r.json().catch(function () { return { ok: false }; }); })
-      .then(function (d) {
-        if (d && d.ok) {
-          state.textContent = val ? ('已保存：' + val) : '已清除，下一次 YouTube 下载直连';
-        } else {
-          state.textContent = '保存失败：' + ((d && d.detail) || '未知错误');
-        }
-        refresh();
-      })
-      .catch(function () { state.textContent = '保存失败：网络错误'; });
-  });
-
-  refresh();
-})();
-
-/* ======================================================================
-   播放模块（2026-09-17 晚）：把播放条从画面里搬出来，独立成一条
-   ----------------------------------------------------------------------
-   背景：#comPreview 原来用浏览器原生 controls —— 它是**压在画面底部**的浮层
-   （WKWebView 下就是一条深色圆角浮条，会盖住画面下沿）。用户要求「把这个播放模块
-   移到视频预览下方、生成脚本上方」→ video 去掉 controls，改由 #comPlayerBar 驱动；
-   DOM 位置就在 .com-preview-stage 与 .com-actionbar 之间。
-   · 不碰既有逻辑：羽化实时预览 / 字幕预览层 / 舞台高度自适应 都挂在 video 自身的事件
-     与 el.comPreview 上，这里只是额外接一套控件。
-   · 无素材 → 整条加 .is-idle 并 disable 各控件（置灰、不隐藏，避免一闪一现）。
-   · 中栏多出这一条后，comSyncStageSize() 会把它自动算进「同栏其他卡片高度」，
-     舞台高度随之收一点，无需另做处理。
-   ====================================================================== */
-(function initComPlayerBar() {
-  var v = document.getElementById('comPreview');
-  var bar = document.getElementById('comPlayerBar');
-  if (!v || !bar) return;
-  var icoPlay = document.getElementById('comPbPlayIco');
-  var btnPlay = document.getElementById('comPbPlay');
-  var btnBack = document.getElementById('comPbBack');
-  var btnFwd = document.getElementById('comPbFwd');
-  var btnMute = document.getElementById('comPbMute');
-  var btnFull = document.getElementById('comPbFull');
-  var elCur = document.getElementById('comPbCur');
-  var elDur = document.getElementById('comPbDur');
-  var seek = document.getElementById('comPbSeek');
-  var vol = document.getElementById('comPbVol');
-  var SKIP = 15;
-  var dragging = false;
-  var widgets = [btnPlay, btnBack, btnFwd, btnMute, seek, vol];
-
-  function fmt(sec) {
-    var s = Number(sec);
-    if (!isFinite(s) || s < 0) s = 0;
-    s = Math.floor(s);
-    var mm = Math.floor(s / 60), ss = s % 60;
-    return (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
-  }
-  // 有 src 且已元数据就绪才算「有素材」；此时才让控件可点
-  function hasMedia() {
-    return !!v.getAttribute('src') && v.readyState > 0 && isFinite(v.duration) && v.duration > 0;
-  }
-  function syncIcon() { if (icoPlay) icoPlay.textContent = v.paused ? '▶' : '❚❚'; }
-  function syncTime() {
-    if (dragging) return;
-    elCur.textContent = fmt(v.currentTime);
-    var d = hasMedia() ? v.duration : 0;
-    elDur.textContent = d ? fmt(d) : '--:--';
-    if (d) seek.value = String(Math.round((v.currentTime / d) * 1000));
-  }
-  function syncIdle() {
-    var idle = !hasMedia();
-    bar.classList.toggle('is-idle', idle);
-    for (var i = 0; i < widgets.length; i++) { if (widgets[i]) widgets[i].disabled = idle; }
-    if (idle) { elCur.textContent = '00:00'; elDur.textContent = '--:--'; seek.value = '0'; }
-    syncIcon();
-  }
-  function toggle() {
-    if (!hasMedia()) return;
-    if (v.paused) { var p = v.play(); if (p && p.catch) p.catch(function () { /* 自动播放被拒等：静默 */ }); }
-    else v.pause();
-  }
-
-  if (btnPlay) btnPlay.addEventListener('click', toggle);
-  // 去掉原生 controls 后，点画面播放/暂停要自己补上（原先是原生控件的默认行为）
-  v.addEventListener('click', toggle);
-  if (btnBack) btnBack.addEventListener('click', function () {
-    if (hasMedia()) v.currentTime = Math.max(0, v.currentTime - SKIP);
-  });
-  if (btnFwd) btnFwd.addEventListener('click', function () {
-    if (hasMedia()) v.currentTime = Math.min(v.duration, v.currentTime + SKIP);
-  });
-
-  if (seek) {
-    seek.addEventListener('input', function () {
-      dragging = true;
-      if (!hasMedia()) return;
-      v.currentTime = (Number(seek.value) / 1000) * (v.duration || 0);
-      elCur.textContent = fmt(v.currentTime);   // 拖动时时间码跟手，不等 timeupdate
-    });
-    seek.addEventListener('change', function () { dragging = false; syncTime(); });
-  }
-
-  if (vol) {
-    vol.addEventListener('input', function () {
-      var val = Number(vol.value);
-      v.volume = val;
-      v.muted = val === 0;
-    });
-  }
-  if (btnMute) {
-    btnMute.addEventListener('click', function () {
-      v.muted = !v.muted;
-      if (!v.muted && v.volume === 0) v.volume = 1;
-    });
-  }
-  v.addEventListener('volumechange', function () {
-    if (vol) vol.value = String(v.muted ? 0 : v.volume);
-    if (btnMute) btnMute.textContent = (v.muted || v.volume === 0) ? '🔇' : '🔊';
-  });
-
-  // 全屏 = 自研「剧场模式」（把舞台提升为整窗口画面 + 控制条贴窗口底）。
-  // 🔴 不用标准 Fullscreen API：App 的 WKWebView 把它禁了（实测 requestFullscreen 与
-  //    document.fullscreenEnabled 都是 undefined，只剩 iOS 遗留的 webkitEnterFullscreen，
-  //    macOS 下不可靠）。去掉原生 controls 不能因此丢全屏，故用纯 CSS 覆盖层等价替代。
-  //    Esc 或再点一次退出（退出后内联高度/叠加层都会自行恢复，羽化与字幕层由各自的
-  //    ResizeObserver 跟随 #comPreview 重绘）。
-  function applyTheater(on) {
-    document.documentElement.classList.toggle('com-theater', on);
-    if (btnFull) btnFull.title = on ? '退出全屏（Esc）' : '全屏';
-  }
-  if (btnFull) {
-    btnFull.addEventListener('click', function () {
-      applyTheater(!document.documentElement.classList.contains('com-theater'));
-    });
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && document.documentElement.classList.contains('com-theater')) applyTheater(false);
-    });
-  }
-
-  v.addEventListener('play', syncIcon);
-  v.addEventListener('pause', syncIcon);
-  v.addEventListener('ended', syncIcon);
-  v.addEventListener('timeupdate', syncTime);
-  v.addEventListener('seeked', syncTime);
-  v.addEventListener('durationchange', function () { syncIdle(); syncTime(); });
-  v.addEventListener('loadedmetadata', function () { syncIdle(); syncTime(); });
-  v.addEventListener('emptied', function () { syncIdle(); });
-
-  if (vol) vol.value = String(v.volume);
-  syncIdle();
-  syncTime();
-  syncIcon();
 })();

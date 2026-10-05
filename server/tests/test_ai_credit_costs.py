@@ -187,8 +187,15 @@ def test_e_cost_table_for_admin() -> None:
             check(f"{r['op']} 含 {f}", f in r)
         check(f"{r['op']} 生效价非负", int(r["effective"]) >= 0)
     blob = json.dumps(tbl, ensure_ascii=False)
-    for bad in ("api_key", "token", "secret", "access_key"):
+    # 🔴 判据必须避「token」一词 —— `real_cost` 字段里会写「3518+6474 token」这种
+    #    计价依据（这恰恰是我们要的：改价前能看到真实用量），与「凭据泄漏」无关。
+    #    真要防的是**凭据字段**（api_key / token 的值），不是所有含 token 的文本。
+    for bad in ("api_key", "access_key", "secret_key", "Bearer", "sk-"):
         check(f"表里不含凭据字段 {bad}", bad not in blob)
+    check("real_cost 计价依据已随表返回（改价时要看）",
+          any("token" in (r.get("real_cost") or "") or "¥" in (r.get("real_cost") or "")
+              for r in tbl),
+          "缺 real_cost ⇒ 管理员改价时看不到平台真实成本")
 
 
 if __name__ == "__main__":

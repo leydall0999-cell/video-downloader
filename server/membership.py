@@ -144,73 +144,95 @@ MATTING_CLOUD_CREDIT_COST: int = 50   # 保留旧名，兼容既有引用
 
 AI_CREDIT_COSTS: dict[str, dict[str, Any]] = {
     # ── 云端算力（真实花钱：平台承担上游费用）──────────────────────────────
+    # 🔴 定价依据（2026-10-05）：按「ECS 上 144 次真实调用的 token 记录 × 厂商公开单价」
+    #    测出平台真实成本，再按约 200 倍成本上限定价。`real_cost` 字段是测算依据，
+    #    **调价时先看它**（后台表格也展示）。上游涨价时要重新测算。
     "matting_cloud": {
         "name": "云端一键抠图",
         "where": "server/routers/matting.py:321 → matting_ai.py → cloud_matting_mediakit.py",
         "cost": 50,
-        "note": "火山 MediaKit remove-image-background。含场景重试（1~2 次）成本。",
+        "real_cost": "¥0.02~0.24/次（火山按次计费；一次操作内部 remove-bg 1~2 次 + enhance 0~2 次）",
+        "note": "火山 MediaKit remove-image-background，含场景重试成本。⚠️ 图像能力单价未公开，"
+                "此为按实测推的区间，建议在火山控制台核对。",
     },
     "matting_cloud_enhance": {
         "name": "AI 画质增强",
         "where": "server/cloud_matting_mediakit.py:607 enhance-image",
-        "cost": 30,
-        "note": "火山生成式 enhance-image（豆包），人像场景默认 professional。独立计费 API。",
+        "cost": 15,
+        "real_cost": "¥0.037~0.075/次（代码内实测 ~0.037 元/张）",
+        "note": "火山生成式 enhance-image（豆包），人像场景默认 professional。独立计费 API，"
+                "不包含在云端抠图价内。",
     },
     "matting_vision": {
         "name": "AI 视觉定位 / 图像理解",
         "where": "server/vision_client.py:261/501/547/636/701（qwen-vl-max）",
-        "cost": 8,
+        "cost": 5,
+        "real_cost": "≈¥0.01/次（qwen-vl-max 输入 3 元/百万、输出 9 元/百万，单图约 1300 token）",
         "note": "「说扣什么」定位 + 连通域选择 + 文字块检测。失败自动回退本地。",
     },
     "commentary_llm": {
         "name": "自动解说（大模型写稿）",
         "where": "commentary-pipeline/scripts/llm_script.py:1646/2541/1111（云端网关）",
-        "cost": 200,
-        "note": "剧情分析 + 脚本生成 + 修复重试，一次任务一份。走 ECS 网关，真实 Key 不在本机。",
+        "cost": 40,
+        "real_cost": "¥0.04~0.19/次（实测：story 3518+317 token、script 3742+6474、tail 3949+4554；"
+                     "DeepSeek V4-Flash 峰谷价，闲时 1.5/4.5、高峰 3/9 元每百万 token）",
+        "note": "剧情分析 + 脚本生成 + 修复重试，一次任务一份（2~4 次调用）。走 ECS 网关，"
+                "真实 Key 不在本机。⚠️ DeepSeek 2026-08-17 已涨价 50%~125%，涨价要重算。",
     },
     "commentary_vision": {
         "name": "解说画面理解",
         "where": "commentary-pipeline/scripts/vision_analysis.py:157（多模态模型）",
-        "cost": 40,
-        "note": "抽帧最多 5 批 + 1 次总结，一次任务一份。",
+        "cost": 50,
+        "real_cost": "≈¥0.24/次（抽 40 帧 ÷ 每批 8 帧 = 5 批 + 1 次总结 = 6 次调用）",
+        "note": "本表里**单次最贵**的一项（把 40 张图全过一遍多模态模型）。默认关闭，"
+                "用户主动开 --vision 才计。",
     },
     "subtitle_translate": {
         "name": "字幕翻译",
         "where": "server/subtitles.py:266（OpenAI 兼容，按 chunk 分片）",
-        "cost": 10,
+        "cost": 5,
+        "real_cost": "≈¥0.005/次（按小片段 1200+800 token 估）",
         "note": "长字幕会分多片，按一次操作一份计。",
     },
-    # ── 本机重算力（2026-10-05 新增：用户机器上真实吃 CPU/GPU）──────────────
+    # ── 本机重算力（用户机器上真实吃 CPU/GPU，平台成本≈0）──────────────────
     "subtitle_asr": {
         "name": "本地字幕提取",
         "where": "server/routers/subtitle.py:546/718（faster-whisper CPU int8）",
         "cost": 5,
+        "real_cost": "¥0（只占用户机器）",
         "note": "含 SenseVoice 预识别。另有日配额（免费 2/日、会员无限）。",
     },
     "dewatermark_ai": {
         "name": "AI 去水印",
         "where": "server/dewatermark_ai.py（LaMa ONNX，onnxruntime 子进程）",
         "cost": 10,
+        "real_cost": "¥0（占 1.5~2GB 内存 + 长时间 CPU）",
         "note": "🔴 原先**连日配额都没有**，等于白用本机 CPU（Explore 2026-10-05 实测）。",
     },
     "local_matting_ai": {
         "name": "本地 AI 抠图（BiRefNet / MODNet）",
         "where": "server/matting_ai.py（onnxruntime，本机）",
-        "cost": 15,
+        "cost": 10,
+        "real_cost": "¥0（只占用户机器）",
         "note": "另有日配额（免费 8/日、会员 500/日）。",
     },
     "commentary_local_mlx": {
         "name": "本机大模型解说",
         "where": "commentary-pipeline/scripts/llm_script.py:1221/1243（MLX 权重）",
-        "cost": 120,
-        "note": "与云端解说**同价**：否则用户会一律选本机、把成本转嫁给算力最低的机器。"
-                "长视频会自动转云端（llm_script.py:2364）。",
+        "cost": 40,
+        "real_cost": "¥0（MLX 跑在用户机器；但长片会退化——llm_script.py:1167 实测本机 3B-4bit "
+                     "在 45 分钟片上会变复读机，同一句解说词重复 147 次）",
+        "note": "⚠️ 定 40 而非 0：定 0 用户会一律选本机，把成本转嫁给算力最差的机器、"
+                "并换来更差的出片质量。定与云端同价（40）让「本机优先、云端兜底」这条路由"
+                "（llm_script.py:2364）自然生效 —— 长片自动转云端不额外加价。"
+                "若你更看重防套利，可上调至 120。",
     },
     "voice_clone": {
         "name": "声音克隆配音",
         "where": "server/app.py:2907 → voice_studio_client.py:98/113（Qwen3-TTS）",
         "cost": 30,
-        "note": "每句一次推理，本机 7871 服务长驻。",
+        "real_cost": "¥0（每句一次推理，但一次任务几十句 ⇒ 占用户机器较久）",
+        "note": "每句一次推理，本机 7871 服务长驻。一条视频通常几十句 ⇒ 单次任务总占用可观。",
     },
 }
 
@@ -630,6 +652,9 @@ def credit_cost_table() -> list[dict[str, Any]]:
             "name": str(row.get("name") or op),
             "where": str(row.get("where") or ""),
             "note": str(row.get("note") or ""),
+            # 🔴 2026-10-05：平台真实成本（按实测 token × 厂商公开单价测算）。
+            #    后台改价前先看它 —— 上游涨价时凭这个重算，别只按感觉调。
+            "real_cost": str(row.get("real_cost") or ""),
             "default": default,
             "effective": eff,
             "overridden": eff != default,

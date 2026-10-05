@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频工坊 · 解说模块改版 v2（剪映式单屏 · 全功能合并版）</title>
+<style>
+/* ===== 设计令牌（源自设计稿 PDF + 现有品牌色） ===== */
+:root{
+  --brand:#4F46E5; --brand-strong:#4338CA; --brand-grad:linear-gradient(135deg,#4F46E5,#6366F1);
+  --ink:#1D1F1F; --ink-2:#232527;            /* 深色顶栏/副栏 */
+  --media:#18181A; --timeline:#1F1F21;       /* 深色媒体区 */
+  --parchment:#F5F5F7; --card:#FFFFFF; --hairline:#E0E0E0;
+  --text:#1D1F1F; --text-mute:#8A8F98; --ok:#16A34A; --warn:#D97706;
+  --r-lg:11px; --r-md:8px; --r-sm:6px; --r-pill:999px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;background:var(--parchment);color:var(--text);font-size:13px}
+button{font-family:inherit;cursor:pointer;border:none;background:none}
+input,select{font-family:inherit;font-size:12px}
+
+/* ===== 原型工具条（非设计内容） ===== */
+.proto-bar{position:fixed;left:12px;bottom:12px;z-index:99;background:#111827;color:#fff;border-radius:var(--r-pill);padding:6px 8px 6px 14px;display:flex;gap:8px;align-items:center;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.proto-bar button{color:#fff;background:rgba(255,255,255,.14);border-radius:var(--r-pill);padding:4px 12px;font-size:12px}
+.proto-bar button.on{background:var(--brand)}
+
+/* ===== 应用外壳 ===== */
+.app{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+/* ---- 顶栏（深色） ---- */
+.topbar{height:40px;background:var(--ink);color:#E5E7EB;display:flex;align-items:center;padding:0 14px;gap:14px;flex:none}
+.topbar .logo{font-weight:700;font-size:14px;color:#fff}
+.topbar .crumb{color:#9CA3AF;font-size:12px}
+.topbar .crumb b{color:#fff;font-weight:600}
+.topbar .spacer{flex:1}
+.chip{display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.1);border-radius:var(--r-pill);padding:3px 10px;font-size:11.5px;color:#D1D5DB}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+.chip.quota b{color:#fff}
+.avatar{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#6366F1,#A78BFA);flex:none}
+/* ---- 副栏（深色） ---- */
+.subbar{height:34px;background:var(--ink-2);color:#D1D5DB;display:flex;align-items:center;padding:0 14px;gap:10px;font-size:12px;flex:none}
+.subbar .entry{padding:3px 10px;border-radius:var(--r-sm);color:#9CA3AF}
+.subbar .entry.on{background:rgba(255,255,255,.14);color:#fff}
+.subbar .fileinfo b{color:#fff;font-weight:600}
+.subbar .fileinfo span{color:#9CA3AF}
+.subbar .link{color:#8AB4FF;font-size:12px}
+.subbar .spacer{flex:1}
+.btn-history{background:rgba(255,255,255,.12);color:#fff;border-radius:var(--r-sm);padding:4px 12px;font-size:12px}
+.btn-history:hover{background:rgba(255,255,255,.2)}
+
+/* ---- 主体三栏 ---- */
+.main{flex:1;display:flex;min-height:0}
+/* 左栏 248 */
+.left{width:248px;flex:none;background:var(--card);border-right:1px solid var(--hairline);display:flex;flex-direction:column;min-height:0}
+.left-tabs{display:flex;padding:8px 8px 0;gap:4px}
+.left-tab{flex:1;text-align:center;padding:6px 0;border-radius:var(--r-md) var(--r-md) 0 0;color:var(--text-mute);font-size:12.5px;border-bottom:2px solid transparent}
+.left-tab.on{color:var(--brand);border-bottom-color:var(--brand);font-weight:600}
+.left-search{margin:8px 10px;padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--r-md);color:var(--text-mute);font-size:12px;background:var(--parchment)}
+.left-label{padding:6px 12px 4px;font-size:11px;color:var(--text-mute)}
+.mat-list{flex:1;overflow:auto;padding:0 8px;min-height:0}
+.mat{display:flex;gap:8px;padding:7px;border:1.5px solid transparent;border-radius:var(--r-md);align-items:center}
+.mat.on{border-color:var(--brand);background:#F8F8FF}
+.mat .thumb{width:52px;height:30px;border-radius:4px;background:#2A2C30;flex:none}
+.mat .t{flex:1;min-width:0}
+.mat .name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mat .meta{font-size:10.5px;color:var(--text-mute)}
+.mat .meta .done{color:var(--ok)}
+/* 正剧范围卡（含滑块 + 保留/剪掉） */
+.range-card{margin:8px 10px;border:1px solid var(--hairline);border-radius:var(--r-md);padding:9px 10px;background:var(--card)}
+.range-card .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.range-card .head b{font-size:12.5px}
+.range-card .head .auto{font-size:11px;color:var(--brand)}
+.range-line{display:flex;align-items:center;gap:7px;margin:5px 0}
+.range-line .lb{font-size:11px;color:var(--text-mute);width:24px;flex:none}
+.range-line input[type=range]{flex:1;accent-color:var(--brand);height:3px}
+.range-line .val{font-size:11px;font-variant-numeric:tabular-nums;color:var(--text);width:66px;text-align:right}
+.range-mode{margin-top:7px;padding-top:7px;border-top:1px dashed var(--hairline)}
+.range-mode .t{font-size:11px;color:var(--text-mute);margin-bottom:4px}
+.radio-row{display:flex;gap:5px}
+.radio-row label{flex:1;display:flex;align-items:center;gap:4px;font-size:11px;border:1px solid var(--hairline);border-radius:var(--r-sm);padding:4px 6px}
+.radio-row label.on{border-color:var(--brand);color:var(--brand);background:#F8F8FF}
+.range-clear{margin-top:7px;width:100%;text-align:center;font-size:11.5px;color:var(--text-mute);border:1px solid var(--hairline);border-radius:var(--r-sm);padding:4px 0}
+.btn-import{margin:8px 10px 10px;border:1.5px dashed var(--hairline);border-radius:var(--r-md);padding:8px 0;text-align:center;color:var(--text-mute);font-size:12.5px;flex:none}
+
+/* 中栏 */
+.center{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--parchment)}
+.player{flex:1;background:var(--media);position:relative;display:flex;align-items:center;justify-content:center;min-height:0;margin:10px 10px 0;border-radius:var(--r-lg);overflow:hidden}
+.player .ph{color:#3A3D42;font-size:34px;font-weight:700;letter-spacing:8px}
+.player .feather{position:absolute;left:12%;right:12%;height:56px;bottom:22%;background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(0,0,0,.55),rgba(255,255,255,.02));border-radius:6px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:10px}
+.player .sub{color:#fff;font-size:17px;font-weight:600;text-shadow:0 1px 4px rgba(0,0,0,.7)}
+.player .feather-tag{position:absolute;left:12%;top:2px;font-size:9.5px;color:rgba(255,255,255,.35)}
+.pbar{height:22px;display:flex;align-items:center;gap:8px;padding:0 18px;background:var(--media);margin:0 10px;font-size:10.5px;color:#9CA3AF}
+.pbar .track{flex:1;height:3px;background:#33363B;border-radius:2px;position:relative}
+.pbar .track i{position:absolute;left:0;top:0;bottom:0;width:17%;background:#8AB4FF;border-radius:2px}
+/* 操作条：生成脚本 + 解说长度 + 重新生成（主操作住中栏） */
+.actionbar{display:flex;align-items:center;gap:10px;padding:8px 10px 6px}
+.btn-gen{flex:1;background:var(--brand-grad);color:#fff;font-weight:700;font-size:14px;padding:10px 0;border-radius:var(--r-md);box-shadow:0 6px 16px rgba(79,70,229,.28)}
+.btn-regen{border:1px solid var(--hairline);background:var(--card);color:var(--text-mute);border-radius:var(--r-md);padding:10px 14px;font-size:12.5px}
+.len-box{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--hairline);border-radius:var(--r-md);padding:8px 12px;font-size:11.5px;color:var(--text-mute)}
+.len-box input[type=range]{width:80px;accent-color:var(--brand)}
+.len-box b{color:var(--text);min-width:52px;text-align:right;font-variant-numeric:tabular-nums}
+/* 时间轴 */
+.timeline{flex:none;background:var(--timeline);margin:0 10px 10px;border-radius:var(--r-lg);padding:8px 12px 10px;color:#9CA3AF}
+.tl-head{display:flex;align-items:center;gap:10px;font-size:11px;margin-bottom:7px}
+.tl-head .range b{color:#fff;font-weight:600}
+.tl-head .cut{color:#F59E0B}
+.tl-head .spacer{flex:1}
+.tl-progress{color:#8AB4FF;text-decoration:underline dotted;cursor:pointer}
+.tl-zoom{background:#2A2C30;border-radius:var(--r-pill);padding:2px 9px;color:#D1D5DB}
+.track{display:flex;align-items:center;gap:8px;margin:4px 0}
+.track .lb{width:28px;font-size:10px;color:#6B7280;flex:none;text-align:right}
+.track .lane{flex:1;height:18px;background:#26282C;border-radius:4px;position:relative;overflow:hidden}
+.track .lane i{position:absolute;top:2px;bottom:2px;border-radius:3px;background:#3B82F6;opacity:.9}
+.track .lane.os i{background:#4B5563}
+.track .lane.st i{background:#6366F1}
+.tl-scale{display:flex;justify-content:space-between;font-size:9.5px;color:#4B5563;margin-top:5px}
+
+/* 右栏检查器 300 */
+.inspector{width:300px;flex:none;background:var(--card);border-left:1px solid var(--hairline);display:flex;flex-direction:column;min-height:0}
+.insp-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px 8px;flex:none}
+.insp-head b{font-size:13.5px}
+.insp-head .reset{font-size:11.5px;color:var(--brand)}
+.insp-body{flex:1;overflow:auto;padding:0 12px 12px;min-height:0}
+.grp{border:1px solid var(--hairline);border-radius:var(--r-md);margin-bottom:8px;overflow:hidden}
+.grp>.head{display:flex;align-items:center;gap:6px;padding:8px 10px;background:#FAFAFC;font-size:12px;font-weight:600}
+.grp>.head .idx{width:16px;height:16px;border-radius:50%;background:var(--parchment);color:var(--text-mute);font-size:10px;display:flex;align-items:center;justify-content:center;font-weight:600}
+.grp>.head .arrow{margin-left:auto;color:var(--text-mute);font-size:10px}
+.grp .body{padding:2px 10px 9px}
+.row{display:flex;align-items:center;justify-content:space-between;padding:5px 0;gap:8px}
+.row .lb{font-size:12px;color:var(--text);flex:none}
+.row .hint{font-size:10.5px;color:var(--text-mute);margin-top:1px}
+.seg{display:flex;background:var(--parchment);border-radius:var(--r-sm);padding:2px;gap:2px}
+.seg span{padding:3px 9px;border-radius:4px;font-size:11px;color:var(--text-mute)}
+.seg span.on{background:#fff;color:var(--brand);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.pill-opt{display:flex;flex-direction:column;gap:4px}
+.pill-opt label{display:flex;align-items:center;gap:6px;border:1px solid var(--hairline);border-radius:var(--r-sm);padding:5px 8px;font-size:11.5px}
+.pill-opt label.on{border-color:var(--brand);background:#F8F8FF;color:var(--brand);font-weight:600}
+.row input[type=text],.row select{border:1px solid var(--hairline);border-radius:var(--r-sm);padding:4px 8px;font-size:11.5px;color:var(--text);background:#fff;max-width:150px}
+.switch{width:30px;height:17px;border-radius:var(--r-pill);background:#D1D5DB;position:relative;flex:none}
+.switch.on{background:var(--brand)}
+.switch i{position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;transition:.15s}
+.switch.on i{left:15px}
+.subhead{font-size:10.5px;color:var(--text-mute);margin:7px 0 3px;padding-top:6px;border-top:1px dashed var(--hairline)}
+
+/* ===== 覆盖层：解说词审核（中栏覆盖层，而非左栏） ===== */
+.overlay{position:fixed;inset:0;background:rgba(20,22,26,.45);z-index:50;display:none}
+.overlay.show{display:block}
+.review{position:absolute;top:40px;bottom:0;left:248px;width:560px;background:var(--card);box-shadow:8px 0 40px rgba(0,0,0,.18);display:flex;flex-direction:column}
+.review .head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--hairline)}
+.review .head b{font-size:14px}
+.review .head select{margin-left:auto;border:1px solid var(--hairline);border-radius:var(--r-sm);padding:4px 8px;font-size:11.5px}
+.review .head .mini{border:1px solid var(--hairline);border-radius:var(--r-sm);padding:4px 10px;font-size:11.5px;color:var(--text-mute)}
+.review .list{flex:1;overflow:auto;padding:8px 16px}
+.seg-item{display:flex;gap:10px;padding:9px 10px;border:1px solid var(--hairline);border-radius:var(--r-md);margin-bottom:7px}
+.seg-item .no{width:22px;height:22px;border-radius:50%;background:var(--parchment);color:var(--text-mute);font-size:11px;display:flex;align-items:center;justify-content:center;flex:none}
+.seg-item .tc{font-size:10.5px;color:var(--text-mute);font-variant-numeric:tabular-nums;flex:none;width:88px;padding-top:3px}
+.seg-item .txt{flex:1;font-size:12.5px;line-height:1.6}
+.seg-item .ops{display:flex;flex-direction:column;gap:4px;flex:none}
+.seg-item .ops button{font-size:10.5px;color:var(--brand);border:1px solid var(--hairline);border-radius:var(--r-sm);padding:2px 7px}
+.review .foot{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--hairline);flex-wrap:wrap}
+.review .foot .btn{border-radius:var(--r-md);padding:9px 14px;font-size:12.5px;border:1px solid var(--hairline);background:var(--card)}
+.review .foot .primary{background:var(--brand-grad);color:#fff;border:none;font-weight:700;flex:1}
+.review .foot .ghost{color:var(--text-mute)}
+/* ===== 覆盖层：解说历史抽屉（顶栏呼出） ===== */
+.hist{position:absolute;top:40px;right:0;bottom:0;width:720px;background:var(--card);box-shadow:-8px 0 40px rgba(0,0,0,.18);display:none;flex-direction:column}
+.hist.show{display:flex}
+.hist .head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--hairline)}
+.hist .head b{font-size:14px}
+.hist .head .views{margin-left:auto;display:flex;gap:4px}
+.hist .head .views button{border:1px solid var(--hairline);border-radius:var(--r-sm);padding:3px 10px;font-size:11.5px;color:var(--text-mute)}
+.hist .head .views button.on{color:var(--brand);border-color:var(--brand)}
+.hist .grid{flex:1;overflow:auto;padding:14px 16px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;align-content:start}
+.hist .card{border:1px solid var(--hairline);border-radius:var(--r-md);overflow:hidden}
+.hist .card .th{height:88px;background:linear-gradient(135deg,#2A2C30,#3B3D44);display:flex;align-items:center;justify-content:center;color:#6B7280;font-size:11px}
+.hist .card .info{padding:8px 10px}
+.hist .card .n{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hist .card .m{font-size:10.5px;color:var(--text-mute);margin-top:2px}
+/* ===== 覆盖层：步骤日志浮层（点时间轴进度行呼出） ===== */
+.steps{position:absolute;right:320px;top:96px;width:400px;background:#232527;color:#D1D5DB;border-radius:var(--r-lg);box-shadow:0 12px 40px rgba(0,0,0,.4);display:none;padding:12px 14px;z-index:60}
+.steps.show{display:block}
+.steps .h{font-size:12px;color:#fff;font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between}
+.steps .h span{color:#6B7280;font-weight:400;cursor:pointer}
+.step{display:flex;gap:8px;font-size:11.5px;padding:4px 0;align-items:flex-start}
+.step .st{width:14px;flex:none;text-align:center}
+.step.done .st{color:var(--ok)} .step.doing .st{color:#8AB4FF}
+.step.doing{color:#fff}
+.steps .log{margin-top:8px;border-top:1px solid #33363B;padding-top:7px;font-family:ui-monospace,monospace;font-size:10px;color:#6B7280;max-height:110px;overflow:auto;line-height:1.7}
+
+/* ===== 窄窗口（<1280）：右栏收成抽屉 ===== */
+.app.narrow .inspector{position:fixed;right:0;top:74px;bottom:0;z-index:40;transform:translateX(100%);transition:.2s;box-shadow:-8px 0 30px rgba(0,0,0,.15);width:300px}
+.app.narrow .inspector.open{transform:none}
+.narrow-only{display:none}
+.app.narrow .narrow-only{display:flex}
+.insp-toggle{position:absolute;right:12px;top:56px;z-index:41;background:var(--brand-grad);color:#fff;border-radius:var(--r-pill);padding:6px 14px;font-size:12px;font-weight:600;box-shadow:0 6px 16px rgba(79,70,229,.3)}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ① 顶栏 -->
+  <div class="topbar">
+    <span class="logo">视频工坊</span>
+    <span class="crumb">视频解说 / <b>少帅 S02E01 · 悬疑</b></span>
+    <span class="spacer"></span>
+    <span class="chip"><span class="dot"></span>转写已就绪 · 24 段</span>
+    <span class="chip quota">额度：今日 <b>1/1</b> · 终身 <b>2/3</b></span>
+    <span class="avatar"></span>
+  </div>
+
+  <!-- ② 副栏 -->
+  <div class="subbar">
+    <span class="entry on">下载历史库</span>
+    <span class="entry">本地文件</span>
+    <span class="fileinfo"><b>少帅 S02E01.mp4</b> <span>1920×1080 · 24:36 · 2.1 GB</span></span>
+    <span class="link">更换素材</span>
+    <span class="spacer"></span>
+    <button class="btn-history" onclick="toggle('hist',this)">🎬 解说历史 · 12</button>
+  </div>
+
+  <!-- ③ 主体 -->
+  <div class="main">
+    <!-- 左栏：素材库 / 解说稿 -->
+    <div class="left">
+      <div class="left-tabs">
+        <span class="left-tab on">素材库</span>
+        <span class="left-tab" onclick="alert('解说稿 tab：序号+时间码+摘要列表；点击段落在中栏覆盖层展开编辑（248px 放不下长句编辑）')">解说稿 · 24</span>
+      </div>
+      <div class="left-search">🔍 搜索素材</div>
+      <div class="left-label">下载历史库 · 24 个素材</div>
+      <div class="mat-list">
+        <div class="mat on"><div class="thumb"></div><div class="t"><div class="name">少帅 S02E01.mp4</div><div class="meta">24:36 · <span class="done">已转写</span></div></div></div>
+        <div class="mat"><div class="thumb"></div><div class="t"><div class="name">少帅 S02E02.mp4</div><div class="meta">26:12 · <span class="done">已转写</span></div></div></div>
+        <div class="mat"><div class="thumb"></div><div class="t"><div class="name">老宅档案 03.mp4</div><div class="meta">15:04 · 待转写</div></div></div>
+        <div class="mat"><div class="thumb"></div><div class="t"><div class="name">城市夜行 01.mp4</div><div class="meta">12:48 · <span class="done">已转写</span></div></div></div>
+        <div class="mat"><div class="thumb"></div><div class="t"><div class="name">巷口旧事 07.mp4</div><div class="meta">21:35 · 待转写</div></div></div>
+      </div>
+      <!-- 正剧范围：滑块（保留用户要求的交互）+ 保留/剪掉模式（补回 #3） -->
+      <div class="range-card">
+        <div class="head"><b>✂️ 预览与正剧范围</b><span class="auto">自动检测</span></div>
+        <div class="range-line"><span class="lb">起点</span><input type="range" min="0" max="100" value="8"><span class="val">00:12:04</span></div>
+        <div class="range-line"><span class="lb">终点</span><input type="range" min="0" max="100" value="92"><span class="val">00:22:31</span></div>
+        <div class="range-mode">
+          <div class="t">片头片尾处理（补回原「固定选择项」）</div>
+          <div class="radio-row">
+            <label class="on"><input type="radio" name="iom" checked>保留·不解说</label>
+            <label><input type="radio" name="iom">自动检测后剪掉</label>
+          </div>
+        </div>
+        <div class="range-clear">清空（回到自动检测）</div>
+      </div>
+      <div class="btn-import">＋ 导入本地文件</div>
+    </div>
+
+    <!-- 中栏：预览 + 时间轴 -->
+    <div class="center">
+      <div class="player">
+        <span class="ph">视频画面预览</span>
+        <div class="feather"><span class="feather-tag">羽化带预览（随原字幕逐段 · 支持 dy/dh 手动微调）</span><span class="sub">这地方的风，比人还记得仇。</span></div>
+      </div>
+      <div class="pbar"><span>04:12</span><div class="track"><i></i></div><span>24:36</span></div>
+      <!-- 操作条：主操作回中栏（不再沉底/不在右栏） -->
+      <div class="actionbar">
+        <button class="btn-gen">生成脚本（可审核修改）</button>
+        <button class="btn-regen" onclick="alert('重新生成脚本：与审核面板内按钮同逻辑，带二次确认')">↻ 重新生成</button>
+        <div class="len-box">字数上限 <input type="range" min="0" max="3000" step="100" value="0" oninput="this.parentNode.querySelector('b').textContent=this.value==0?'不限':this.value"><b>不限</b></div>
+      </div>
+      <!-- 时间轴：三轨（本期只做 UI 骨架，轨道段数据需管线暴露时间码，分期接） -->
+      <div class="timeline">
+        <div class="tl-head">
+          <span class="range">正剧 <b>12:04 – 22:31</b></span>
+          <span class="cut">剪掉 3 段</span>
+          <span class="spacer"></span>
+          <span class="tl-progress" onclick="toggle('steps',this)">第 3/5 步 · 解说词生成 18/24 ▾</span>
+          <span class="tl-zoom">缩放 100%</span>
+        </div>
+        <div class="track"><span class="lb">原声</span><div class="lane os"><i style="left:0;width:33%"></i><i style="left:36%;width:40%"></i><i style="left:79%;width:21%"></i></div></div>
+        <div class="track"><span class="lb">旁白</span><div class="lane"><i style="left:8%;width:12%"></i><i style="left:24%;width:9%"></i><i style="left:37%;width:14%"></i><i style="left:55%;width:10%"></i><i style="left:69%;width:13%"></i><i style="left:85%;width:9%"></i></div></div>
+        <div class="track"><span class="lb">字幕</span><div class="lane st"><i style="left:8%;width:12%"></i><i style="left:24%;width:9%"></i><i style="left:37%;width:14%"></i><i style="left:55%;width:10%"></i><i style="left:69%;width:13%"></i><i style="left:85%;width:9%"></i></div></div>
+        <div class="tl-scale"><span>00:00</span><span>06:12</span><span>12:24</span><span>18:36</span><span>24:36</span></div>
+      </div>
+    </div>
+
+    <!-- 右栏：解说设置检查器（5 组，补回全部原参数） -->
+    <div class="inspector" id="insp">
+      <div class="insp-head"><b>解说设置</b><span class="reset">恢复默认</span></div>
+      <div class="insp-body">
+        <!-- ① 解说类型 + 风格（补回 #1：两组维度共存） -->
+        <div class="grp">
+          <div class="head"><span class="idx">1</span>解说类型与风格<span class="arrow">▾</span></div>
+          <div class="body">
+            <div class="pill-opt">
+              <label class="on">◉ 高光叠加深度解说</label>
+              <label>○ 高光分段普速解说</label>
+              <label>○ 全片普速解说</label>
+              <label>○ 全片深入解说</label>
+            </div>
+            <div class="subhead">解说风格（原 5 选 1 · 保留）</div>
+            <div class="seg"><span>悬疑</span><span class="on">治愈</span><span>毒舌</span><span>短剧</span><span>影视</span></div>
+            <div class="subhead">高光</div>
+            <div class="row"><span class="lb">片头插入精彩片段<div class="hint">最精彩一段剪到开头当钩子</div></span><span class="switch on"><i></i></span></div>
+          </div>
+        </div>
+        <!-- ② 配音（补回 #2：引擎选择置顶） -->
+        <div class="grp">
+          <div class="head"><span class="idx">2</span>配音与音量<span class="arrow">▾</span></div>
+          <div class="body">
+            <div class="row"><span class="lb">配音引擎</span><select><option>Qwen3-TTS 本地克隆 · 免费</option><option>微软 edge-tts · 免费</option><option>IndexTTS-MLX · 本地</option></select></div>
+            <div class="row"><span class="lb">音色</span><select><option>晓晓 · 女声</option><option>云希 · 男声</option></select></div>
+            <div class="row"><span class="lb">语速</span><span class="seg"><span>0.8×</span><span class="on">1.0×</span><span>1.2×</span></span></div>
+            <div class="row"><span class="lb">旁白音量</span><span style="font-size:11.5px">-14 LUFS</span></div>
+            <div class="row"><span class="lb">原声比例</span><span class="seg"><span>5%</span><span class="on">10%</span><span>20%</span></span></div>
+          </div>
+        </div>
+        <!-- ③ 画幅与输出（补回「自动」；剪映草稿标注 Beta） -->
+        <div class="grp">
+          <div class="head"><span class="idx">3</span>画幅与输出<span class="arrow">▾</span></div>
+          <div class="body">
+            <div class="row"><span class="lb">画幅</span><span class="seg"><span class="on">自动</span><span>9:16</span><span>16:9</span><span>1:1</span></span></div>
+            <div class="row"><span class="lb">分辨率</span><span class="seg"><span class="on">1080p</span><span>720p</span></span></div>
+            <div class="row"><span class="lb">导出</span><select><option>成片 MP4</option><option>剪映草稿（Beta）</option></select></div>
+          </div>
+        </div>
+        <!-- ④ 字幕样式（保留现有「倍率」口径 + 描边/颜色） -->
+        <div class="grp">
+          <div class="head"><span class="idx">4</span>字幕样式<span class="arrow">▾</span></div>
+          <div class="body">
+            <div class="row"><span class="lb">字号倍率<div class="hint">1.00 = 跟随管线默认 44px 基准</div></span><span style="font-size:11.5px">1.00</span></div>
+            <div class="row"><span class="lb">位置</span><span class="seg"><span class="on">底部居中</span><span>下方 1/4</span></span></div>
+            <div class="row"><span class="lb">描边</span><span style="font-size:11.5px">1.0</span></div>
+            <div class="row"><span class="lb">颜色</span><span style="width:16px;height:16px;border-radius:4px;background:#fff;border:1px solid var(--hairline);display:inline-block"></span></div>
+          </div>
+        </div>
+        <!-- ⑤ 高级设置（补回 AI 引擎/密钥、羽化微调、视觉理解、ASR） -->
+        <div class="grp">
+          <div class="head"><span class="idx">5</span>高级设置<span class="arrow">▾</span></div>
+          <div class="body">
+            <div class="row"><span class="lb">AI 引擎</span><select><option>auto（自动路由）</option><option>cloud（云端优先）</option></select></div>
+            <div class="row"><span class="lb">模型 / 密钥</span><button style="font-size:11px;color:var(--brand);border:1px solid var(--hairline);border-radius:var(--r-sm);padding:3px 8px">⚙ AI 能力与密钥配置</button></div>
+            <div class="row"><span class="lb">羽化</span><span class="seg"><span class="on">自动</span><span>手动微调</span></span></div>
+            <div class="row"><span class="lb">羽化偏移 dy / dh<div class="hint">带顶 ±10% / 带高 −10%~+20%</div></span><span style="font-size:11px;color:var(--text-mute)">0 / 0</span></div>
+            <div class="row"><span class="lb">视觉理解</span><span class="switch on"><i></i></span></div>
+            <div class="row"><span class="lb">转写稿 ASR 校正<div class="hint">默认恒开</div></span><span class="switch on"><i></i></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <button class="insp-toggle narrow-only" onclick="document.getElementById('insp').classList.toggle('open')">⚙ 解说设置</button>
+  </div>
+
+  <!-- 覆盖层：解说词审核（中栏覆盖层设计） -->
+  <div class="overlay" id="review" onclick="if(event.target===this)toggle('review')">
+    <div class="review">
+      <div class="head"><b>✏️ 解说词审核 · 24 段</b><select><option>全局配音：晓晓 · 女声</option><option>全局配音：云希 · 男声</option></select><button class="mini">▶ 预览全部</button><button class="mini" onclick="toggle('review')">✕</button></div>
+      <div class="list">
+        <div class="seg-item"><span class="no">1</span><span class="tc">00:12:04–00:12:19</span><div class="txt">1931 年的奉天城，风比人先醒。这座大帅府里，没有人睡得踏实。</div><div class="ops"><button>▶ 试听</button><button>↻ 重写</button></div></div>
+        <div class="seg-item"><span class="no">2</span><span class="tc">00:12:19–00:12:36</span><div class="txt">张学良接手的，不是一个东北，而是一盘已经被掀过一次的棋局。</div><div class="ops"><button>▶ 试听</button><button>↻ 重写</button></div></div>
+        <div class="seg-item"><span class="no">3</span><span class="tc">00:12:36–00:12:55</span><div class="txt">而棋盘的另一侧，日本人已经在满铁沿线，磨了整整四年的刀。</div><div class="ops"><button>▶ 试听</button><button>↻ 重写</button></div></div>
+      </div>
+      <div class="foot">
+        <button class="btn">💾 保存修改</button>
+        <button class="btn ghost">⬇ 保存到本机</button>
+        <button class="btn ghost" onclick="alert('重新生成脚本，二次确认防误触')">↻ 重新生成脚本</button>
+        <button class="btn primary">🎬 生成成片</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 覆盖层：解说历史抽屉 -->
+  <div class="overlay" id="hist" onclick="if(event.target===this)toggle('hist')">
+    <div class="hist">
+      <div class="head"><b>📂 解说历史 · 12</b><div class="views"><button class="on">网格</button><button>列表</button><button onclick="alert('时间线视图：现有只有列表/网格，时间线是新功能，是否要做待定')">时间线?</button></div><button class="mini" style="border:1px solid var(--hairline);border-radius:6px;padding:3px 10px" onclick="toggle('hist')">✕</button></div>
+      <div class="grid">
+        <div class="card"><div class="th">封面</div><div class="info"><div class="n">少帅 S02E01 · 悬疑解说</div><div class="m">09-16 · 04:12 · 1080p</div></div></div>
+        <div class="card"><div class="th">封面</div><div class="info"><div class="n">少帅 S02E02 · 悬疑解说</div><div class="m">09-15 · 04:48 · 1080p</div></div></div>
+        <div class="card"><div class="th">封面</div><div class="info"><div class="n">城市夜行 01 · 治愈解说</div><div class="m">09-14 · 03:26 · 1080p</div></div></div>
+        <div class="card"><div class="th">封面</div><div class="info"><div class="n">巷口旧事 07 · 毒舌解说</div><div class="m">09-13 · 05:02 · 1080p</div></div></div>
+        <div class="card"><div class="th">封面</div><div class="info"><div class="n">追迹 02 · 短剧解说</div><div class="m">09-12 · 02:58 · 1080p</div></div></div>
+        <div class="card"><div class="th">封面</div><div class="info"><div class="n">旧城纪事 04 · 影视深度</div><div class="m">09-11 · 06:15 · 1080p</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 浮层：步骤日志 -->
+  <div class="steps" id="steps">
+    <div class="h">运行进度<span onclick="toggle('steps')">✕ 收起</span></div>
+    <div class="step done"><span class="st">✓</span>① 提取转写稿（Whisper）</div>
+    <div class="step done"><span class="st">✓</span>② 智能挑高光 + 正剧边界检测</div>
+    <div class="step doing"><span class="st">●</span>③ 解说词生成 18/24 段</div>
+    <div class="step"><span class="st">○</span>④ 解说词审核 → TTS 配音预览</div>
+    <div class="step"><span class="st">○</span>⑤ 剪辑渲染成片（自适应画质）</div>
+    <div class="log">[11:52:03] 段落 18/24 生成完成 (deepseek-v4-pro)<br>[11:52:01] 段落 17/24 生成完成<br>[11:51:58] 重写 2 段：与转写稿重合度过高，触发回炉修复</div>
+  </div>
+
+</div>
+
+<!-- 原型工具条（非设计内容） -->
+<div class="proto-bar">
+  窗口模拟：
+  <button class="on" id="w1440" onclick="setW(false,this)">1440（单屏完整）</button>
+  <button id="w1100" onclick="setW(true,this)">1100（右栏收抽屉）</button>
+  <button onclick="toggle('review')">演示：解说词审核</button>
+  <button onclick="toggle('steps')">演示：运行进度</button>
+</div>
+
+<script>
+function toggle(id){document.getElementById(id).classList.toggle('show')}
+function setW(narrow,btn){
+  document.getElementById('app').classList.toggle('narrow',narrow);
+  document.getElementById('w1440').classList.toggle('on',!narrow);
+  document.getElementById('w1100').classList.toggle('on',narrow);
+  if(!narrow)document.getElementById('insp').classList.remove('open');
+}
+/* 让原型铺满视口 */
+document.querySelector('.app').style.height='100vh';
+document.body.style.margin='0';
+</script>
+</body>
+</html>
