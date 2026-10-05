@@ -18,6 +18,13 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.41",
+        "date": "2026-10-05",
+        "items": [
+            "修复「AI 视觉定位」总是提示未配置视觉服务的问题（管理员配置后本应自动生效）",
+        ],
+    },
+    {
         "version": "1.0.40",
         "date": "2026-10-05",
         "items": [
