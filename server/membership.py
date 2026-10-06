@@ -78,18 +78,28 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     "download": 1000,         # 下载任务 / 日（会员）
     "matting": 500,           # 本地一键抠图 / 日（会员）；云端火山抠图走积分不计此配额
     "cloud": 200,             # 网页版在线处理 / 日（会员）—— 旧总池，2026-10-06 拆池后无写入点，仅存量归集
-    # 🔴 2026-10-06 拆池：4 个云端功能各自独立「每日免费次数」键（会员档）
+    # 🔴 2026-10-06 拆池：8 个云端功能各自独立「每日免费次数」键（会员档）
     "cloud_commentary": 200,   # 视频解说 / 日（会员）
-    "cloud_convert": 200,      # 在线转码/拼接 / 日（会员）
-    "cloud_dewatermark": 200,  # 在线去水印 / 日（会员）
-    "cloud_subtitle": 200,     # 在线字幕处理 / 日（会员）
+    "cloud_convert": 200,      # 在线转码 / 日（会员）
+    "cloud_dewatermark": 200,  # 在线去水印（图片）/ 日（会员）
+    "cloud_subtitle": 200,     # 在线字幕提取 / 日（会员）
+    # 🔴 2026-10-06 第二轮：4 个此前塞在旧键里的功能各自独立
+    "cloud_concat": 200,            # 在线拼接 / 日（会员）
+    "cloud_dewatermark_pdf": 200,   # 在线去水印（PDF）/ 日（会员）
+    "cloud_subtitle_burn": 200,     # 字幕烧录 / 日（会员）
+    "cloud_subtitle_translate": 200,  # 字幕翻译 / 日（会员）
     # ── 以下 6 个是 2026-10-06 从 app_compute 拆出的独立键 ──────────────
-    "convert_video": 200,     # 视频格式转换 / 视频拼接（会员）
-    "convert_audio": 200,     # 音乐（音频）转换 / 音频拼接（会员）
+    "convert_video": 200,     # 视频格式转换（会员）
+    "convert_audio": 200,     # 音乐（音频）转换（会员）
     "convert_image": 200,     # 图片格式转换（会员）
     "compress": 200,          # 高效压缩（会员）
-    "sr": 200,                # 高清修复 / AI 超分（会员）
+    "sr": 200,                # 高清修复（图片）（会员）
     "bridge": 200,            # 音视频桥接（合成 / 替换）
+    # 🔴 2026-10-06 第二轮拆池：上一轮 6 键内部还塞着多个功能（拼接混在转换、
+    #    视频超分混在高清修复），本轮各拆一个独立键 —— 一个键 = 一个用户可见功能。
+    "sr_video": 200,          # 视频超分（会员）
+    "concat_video": 200,      # 视频拼接（会员）
+    "concat_audio": 200,      # 音频拼接（会员）
     # 老键：仅用于存量归集与后台对照，不再有写入点
     "app_compute": 200,
 }
@@ -99,18 +109,27 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "matting": 8,             # 免费本地抠图 8 次/日
     "cloud": 3,               # 网页版在线处理 3 次/日（旧总池，保留向后兼容）
     "subtitle": 2,            # 免费字幕提取 2 次/日（faster-whisper 本地推理）；会员无限
-    # 🔴 2026-10-06 拆池：4 个云端功能各自独立「每日免费次数」（默认各 3 次/日）
+    # 🔴 2026-10-06 拆池：云端功能各自独立「每日免费次数」（默认各 3 次/日）
     "cloud_commentary": 3,    # 视频解说 3 次/日
-    "cloud_convert": 3,       # 在线转码/拼接 3 次/日
-    "cloud_dewatermark": 3,   # 在线去水印 3 次/日
-    "cloud_subtitle": 3,      # 在线字幕处理 3 次/日
+    "cloud_convert": 3,       # 在线转码 3 次/日
+    "cloud_dewatermark": 3,   # 在线去水印（图片）3 次/日
+    "cloud_subtitle": 3,      # 在线字幕提取 3 次/日
+    # 🔴 2026-10-06 第二轮：每个云端功能彻底独立（一个键 = 一个用户可见功能）
+    "cloud_concat": 3,            # 在线拼接 3 次/日
+    "cloud_dewatermark_pdf": 3,   # 在线去水印（PDF）3 次/日
+    "cloud_subtitle_burn": 3,     # 字幕烧录 3 次/日
+    "cloud_subtitle_translate": 3,  # 字幕翻译 3 次/日
     # ── 6 个独立键（2026-10-06）─────────────────────────────────────
     "convert_video": 5,       # 视频格式转换 5 次/日
     "convert_audio": 5,       # 音乐转换 5 次/日
     "convert_image": 5,       # 图片转换 5 次/日
     "compress": 5,            # 高效压缩 5 次/日
-    "sr": 5,                  # 高清修复 5 次/日
+    "sr": 5,                  # 高清修复（图片）5 次/日
     "bridge": 5,              # 音视频桥接 5 次/日
+    # ── 第二轮新增 3 个（2026-10-06）──────────────────────────────
+    "sr_video": 5,            # 视频超分 5 次/日
+    "concat_video": 5,        # 视频拼接 5 次/日
+    "concat_audio": 5,        # 音频拼接 5 次/日
     # 老键：存量归集用
     "app_compute": 5,
 }
@@ -236,11 +255,14 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     # ⚠️ 名称不带「本地」：用户 2026-10-04 定档「会员权益文案不得出现 云端/算力/AI/本地」，
     # 当时把「本地一键抠图」改成「一键抠图」；这里同理（守卫 test_membership_benefits）。
     {"key": "subtitle_extract", "name": "字幕提取",     "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 0},
-    {"key": "convert_video",    "name": "视频格式转换", "resource": "convert_video", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "含视频拼接（按目标格式判定）"},
-    {"key": "convert_audio",    "name": "音乐转换",     "resource": "convert_audio", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "音频格式互转 / 音频拼接"},
+    {"key": "convert_video",    "name": "视频格式转换", "resource": "convert_video", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "只含格式转换；视频拼接已独立计次"},
+    {"key": "concat_video",     "name": "视频拼接",     "resource": "concat_video",  "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "多段视频合并为一条（独立额度）"},
+    {"key": "convert_audio",    "name": "音乐转换",     "resource": "convert_audio", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "音频格式互转；音频拼接已独立计次"},
+    {"key": "concat_audio",     "name": "音频拼接",     "resource": "concat_audio",  "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "多段音频合并为一条（独立额度）"},
     {"key": "convert_image",    "name": "图片转换",     "resource": "convert_image", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "png/jpg/webp/bmp/tiff/gif 等"},
     {"key": "compress",         "name": "高效压缩",     "resource": "compress",    "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "独立额度（此前与转换/修复共用）"},
-    {"key": "sr",               "name": "高清修复",     "resource": "sr",          "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "独立额度（此前与转换/压缩共用）"},
+    {"key": "sr",               "name": "高清修复",     "resource": "sr",          "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "图片修复；视频超分已独立计次"},
+    {"key": "sr_video",         "name": "视频超分",     "resource": "sr_video",    "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "视频放大重建细节（独立额度）"},
     {"key": "bridge",           "name": "音视频桥接",   "resource": "bridge",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "合成 / 替换（此前无任何配额，现独立计）"},
     {"key": "local_matting",    "name": "一键抠图",     "resource": "matting",     "unit": "次", "free_limit": 8,  "member_limit": 500,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机跑；选云端抠图时按 AI 积分计费（云端抠图 50 积分）"},
     # 🔴 下面三行是**网页版**的云端功能（跑在服务器上），与桌面端「视频解说」一起
@@ -251,9 +273,13 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     #   · 真实拦截点在 web-dev 的 convert/dewatermark/subtitle/subtitles 四个 router
     #     （cloud_quota_gate 按 resource 调 use_daily + 授权中心终身额度），桌面端
     #     视频解说走 quota.py 的终身额度 + 这里 use_daily(cloud_commentary)。
-    {"key": "cloud_convert",    "name": "在线转码/拼接", "resource": "cloud_convert",   "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：上传到服务器处理（免重传重转）"},
-    {"key": "cloud_dewatermark","name": "在线去水印",   "resource": "cloud_dewatermark", "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：图片/PDF 框选去水印（另按 AI 积分计费）"},
-    {"key": "cloud_subtitle",   "name": "在线字幕处理", "resource": "cloud_subtitle",   "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕识别/烧录/翻译"},
+    {"key": "cloud_convert",    "name": "在线转码",     "resource": "cloud_convert",   "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：上传到服务器转码（免重传重转）"},
+    {"key": "cloud_concat",     "name": "在线拼接",     "resource": "cloud_concat",    "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：多片段合并为一条（独立额度）"},
+    {"key": "cloud_dewatermark","name": "图片去水印",   "resource": "cloud_dewatermark", "unit": "次", "free_limit": 3,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：图片框选去水印（另按 AI 积分计费）"},
+    {"key": "cloud_dewatermark_pdf", "name": "PDF 去水印", "resource": "cloud_dewatermark_pdf", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：PDF 框选去水印（独立额度）"},
+    {"key": "cloud_subtitle",   "name": "字幕提取",     "resource": "cloud_subtitle",   "unit": "次", "free_limit": 3,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕识别 / 提取"},
+    {"key": "cloud_subtitle_burn", "name": "字幕烧录",   "resource": "cloud_subtitle_burn", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕压进画面（独立额度）"},
+    {"key": "cloud_subtitle_translate", "name": "字幕翻译", "resource": "cloud_subtitle_translate", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕翻译（另按 AI 积分计费）"},
 ]
 
 # --------------------------------------------------------------------------- #
@@ -1061,14 +1087,21 @@ _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("matting", "一键抠图 {v} 次/日"),
     # 🔴 2026-10-06 拆池：4 个云端功能各自独立权益（此前共用「在线处理」一条）
     ("cloud_commentary", "视频解说 {v} 次/日"),
-    ("cloud_convert", "在线转码 / 拼接 {v} 次/日"),
-    ("cloud_dewatermark", "在线去水印 {v} 次/日"),
-    ("cloud_subtitle", "在线字幕处理 {v} 次/日"),
-    ("convert_video", "视频格式转换 / 拼接 {v} 次/日"),
+    ("cloud_convert", "在线转码 {v} 次/日"),
+    ("cloud_concat", "在线拼接 {v} 次/日"),
+    ("cloud_dewatermark", "图片去水印 {v} 次/日"),
+    ("cloud_dewatermark_pdf", "PDF 去水印 {v} 次/日"),
+    ("cloud_subtitle", "字幕提取 {v} 次/日"),
+    ("cloud_subtitle_burn", "字幕烧录 {v} 次/日"),
+    ("cloud_subtitle_translate", "字幕翻译 {v} 次/日"),
+    ("convert_video", "视频格式转换 {v} 次/日"),
+    ("concat_video", "视频拼接 {v} 次/日"),
     ("convert_audio", "音乐转换 {v} 次/日"),
+    ("concat_audio", "音频拼接 {v} 次/日"),
     ("convert_image", "图片转换 {v} 次/日"),
     ("compress", "高效压缩 {v} 次/日"),
     ("sr", "高清修复 {v} 次/日"),
+    ("sr_video", "视频超分 {v} 次/日"),
     ("bridge", "音视频桥接（合成 / 替换）{v} 次/日"),
     # 老键：仅存量归集用，不作为对外权益展示（否则用户看到「视频处理」会以为
     # 转换/压缩/超分还共用一份额度 —— 拆键后已不共用）

@@ -126,10 +126,14 @@ DEFAULT_BASE_DIR = Path(os.path.expanduser("~/.video-downloader"))
 # （本地、按天）；终身次数走本模块 per-resource + 授权中心跨端共享。
 # 默认值：每个功能各给一份「终身 3 次」（与旧总池默认数一致，只是按功能各一份）。
 CLOUD_RESOURCES: tuple[str, ...] = (
-    "cloud_commentary",    # 视频解说
-    "cloud_convert",       # 在线转码/拼接
-    "cloud_dewatermark",   # 在线去水印
-    "cloud_subtitle",      # 在线字幕处理
+    "cloud_commentary",         # 视频解说
+    "cloud_convert",            # 在线转码
+    "cloud_concat",             # 在线拼接
+    "cloud_dewatermark",        # 在线去水印（图片）
+    "cloud_dewatermark_pdf",    # 在线去水印（PDF）
+    "cloud_subtitle",           # 字幕提取
+    "cloud_subtitle_burn",      # 字幕烧录
+    "cloud_subtitle_translate", # 字幕翻译
 )
 
 # 默认 resource（向后兼容：无参调用 = 视频解说，旧测试/旧调用方都落在这一项）

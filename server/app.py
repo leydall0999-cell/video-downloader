@@ -773,12 +773,20 @@ _APP_COMPUTE_QUOTA_OFF = os.environ.get("VDL_APP_COMPUTE_QUOTA_OFF", "false").st
 # `resource` 决定记到哪一份额度；传入的 `label` 只用于给人话提示。
 # ⚠️ 不含 `commentary`：视频解说走 `quota.py` 的终身云端额度 + AI 积分，
 #    **不走日配额**（守卫 test_feature_usage_gate 会红 —— 别把它配成日配额键）。
+# 🔴 2026-10-06 第二轮「剩下没拆的全部拆开」：上一轮把 6 键拆开了，但每键内部
+#    还塞着多个用户可见功能 —— 视频拼接混在 convert_video、音频拼接混在
+#    convert_audio、视频超分混在 sr。本轮各拆一个独立键，**一个键 = 一个功能**：
+#      concat_video  视频拼接（多片段合并成视频）
+#      concat_audio  音频拼接（多片段合并成音频）
+#      sr_video      视频超分（视频高清修复，与图片「高清修复」分开）
 _APP_COMPUTE_KEYS = ("convert_video", "convert_audio", "convert_image",
-                    "compress", "sr", "bridge")
+                    "compress", "sr", "sr_video", "bridge",
+                    "concat_video", "concat_audio")
 _APP_COMPUTE_LABELS = {
     "convert_video": "视频格式转换", "convert_audio": "音乐转换",
     "convert_image": "图片转换", "compress": "高效压缩",
-    "sr": "高清修复", "bridge": "音视频桥接",
+    "sr": "高清修复", "sr_video": "视频超分", "bridge": "音视频桥接",
+    "concat_video": "视频拼接", "concat_audio": "音频拼接",
 }
 
 

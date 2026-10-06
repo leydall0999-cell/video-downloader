@@ -69,13 +69,17 @@ def _business_sources() -> list[tuple[str, str]]:
 # 网页端读不到（未 clone / 无 git）时该资源判为无拦截点 ⇒ 守卫照样会红，
 # 不会因为「环境缺 git」而静默放过。
 CROSS_END_RESOURCES: dict[str, str] = {
-    # 🔴 2026-10-06 拆池：旧总池键 "cloud" 拆为 3 个独立键（cloud_commentary
+    # 🔴 2026-10-06 拆池：旧总池键 "cloud" 拆为独立功能键（cloud_commentary
     # 的拦截点在桌面端 routers/quota.py 本地，不在此表）。网页端的预检统一走
     # app.cloud_quota_gate(request, resource="X")（routers 显式传键），
     # 下面的映射指向**真有该字面量**的网页端文件。
     "cloud_convert": "web-dev:server/routers/convert.py",
+    "cloud_concat": "web-dev:server/routers/convert.py",
     "cloud_dewatermark": "web-dev:server/routers/dewatermark.py",
+    "cloud_dewatermark_pdf": "web-dev:server/routers/dewatermark.py",
     "cloud_subtitle": "web-dev:server/routers/subtitle.py",
+    "cloud_subtitle_burn": "web-dev:server/routers/subtitles.py",
+    "cloud_subtitle_translate": "web-dev:server/routers/subtitles.py",
 }
 
 
@@ -115,6 +119,15 @@ def _web_dev_source(rel_path: str) -> str:
         ).stdout.decode("utf-8", "ignore")
     except Exception:
         return ""
+
+
+def _app_compute_keys() -> set[str]:
+    """app.py 里 `_APP_COMPUTE_KEYS` 白名单（闸门只认这些键）。"""
+    app_src = (_SERVER / "app.py").read_text(encoding="utf-8")
+    m = re.search(r"_APP_COMPUTE_KEYS[^=]*=\s*\((.*?)\n\)", app_src, re.S)
+    if not m:
+        return set()
+    return set(re.findall(r'"([a-z0-9_]+)"', m.group(1)))
 
 
 def _parse_rows() -> list[dict]:
@@ -170,6 +183,16 @@ def test_rows_have_real_gate() -> None:
             ck = [f for f, s2 in srcs if "convert_quota_key(" in s2]
             if ck and res in ("convert_video", "convert_audio", "convert_image"):
                 hit = ck
+        if not hit:
+            # 🔴 2026-10-06 第二轮拆池：拼接类键的形态 —— 资源名先以**字面量**
+            #    出现在三元/条件表达式里，赋给变量再传给 `app_compute_gate`
+            #    （`app_compute_gate(request, _ckey, _clabel)`）。
+            #    判据：① app.py 的 `_APP_COMPUTE_KEYS` 白名单含该键（闸门认它），
+            #    ② 业务代码里该字面量确实出现在赋值语句右侧（证明它会被传进闸门）。
+            if res in _app_compute_keys():
+                # 覆盖两种写法：`X = "键" if cond else "键2"` 与 `X = "键"`。
+                lit = re.compile(r'["\']' + res + r'["\']')
+                hit = [f for f, s2 in srcs if lit.search(s2)]
         if hit:
             check(f'[{r["key"]}] use_daily/quota_state("{r["resource"]}") 有拦截点',
                   True, "")

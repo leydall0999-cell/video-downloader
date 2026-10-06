@@ -21312,9 +21312,14 @@ el.dwVidPlayer.hidden = true;
       // 覆盖值存 free_quota.cloud_lifetime 字典 {resource: n}；后端也接受整数
       // （= 全部功能同一值，向后兼容旧配置）。
       const clpr = (fq.limits?.cloud_lifetime_per_resource)
-        || { cloud_commentary: 3, cloud_convert: 3, cloud_dewatermark: 3, cloud_subtitle: 3 };
-      const CL_NAMES = { cloud_commentary: '视频解说', cloud_convert: '在线转码/拼接',
-                         cloud_dewatermark: '在线去水印', cloud_subtitle: '在线字幕处理' };
+        || { cloud_commentary: 3, cloud_convert: 3, cloud_concat: 3,
+             cloud_dewatermark: 3, cloud_dewatermark_pdf: 3, cloud_subtitle: 3,
+             cloud_subtitle_burn: 3, cloud_subtitle_translate: 3 };
+      const CL_NAMES = { cloud_commentary: '视频解说', cloud_convert: '在线转码',
+                         cloud_concat: '在线拼接',
+                         cloud_dewatermark: '图片去水印', cloud_dewatermark_pdf: 'PDF 去水印',
+                         cloud_subtitle: '字幕提取', cloud_subtitle_burn: '字幕烧录',
+                         cloud_subtitle_translate: '字幕翻译' };
       Object.entries(clpr).forEach(([res, val]) => {
         h += `<div class="admin-plan-row" data-fq="cloud" data-key="cloud_lifetime_${esc(res)}">
         <span class="admin-plan-name">${esc(CL_NAMES[res] || res)}终身免费 <code class="admin-plan-code">${esc(res)}</code></span>

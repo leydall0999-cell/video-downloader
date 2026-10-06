@@ -322,8 +322,12 @@ def test_convert_target_routing():
     # 业务侧必须真的调用它（不能只定义了不用）
     cv = (pathlib.Path(_SERVER) / "routers" / "convert.py").read_text(encoding="utf-8")
     check("app.convert_quota_key(" in cv, "convert.py 真的调用 convert_quota_key")
-    check(cv.count("app.convert_quota_key(") >= 4,
-          "4 个调用点都改用类型判定", f"实际 {cv.count('app.convert_quota_key(')} 处")
+    # 🔴 2026-10-06 第二轮拆池：拼接已拆成独立键（concat_video/concat_audio），
+    #    不再走 convert_quota_key ⇒ 调用点从 4 变 3，其余仍必须按类型判定。
+    check(cv.count("app.convert_quota_key(") >= 3,
+          "3 个格式转换调用点都改用类型判定", f"实际 {cv.count('app.convert_quota_key(')} 处")
+    check('"concat_video"' in cv and '"concat_audio"' in cv,
+          "拼接走独立键 concat_video / concat_audio（不再混进格式转换）")
     check('app_compute_gate(request, "convert"' not in cv,
           "没有残留写死的 convert 键（否则又变共用）")
 

@@ -636,9 +636,12 @@ def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library, 
 
 def _create_concat_job(segs, out_format, out_name, to_library, audio_only, request):
     """为 /api/concat 与 /api/concat/local 共用的 job 创建逻辑（含本地算力配额）。"""
-    # 拼接：全音频素材时归「音乐转换」，否则归「视频格式转换」
-    _ckey, _clabel = app.convert_quota_key(
-        out_format, is_image=bool(audio_only))
+    # 🔴 2026-10-06 第二轮拆池：拼接是**独立功能**，不再按输出格式记到
+    # convert_video / convert_audio（那会让「视频拼接」和「视频格式转换」共用一份，
+    # 用户想拼 3 段视频就把格式转换的额度用光了）。音频拼接同理独立。
+    # 判据：显式 audio_only，或输出格式是音频类 → 音频拼接；否则视频拼接。
+    _ckey = "concat_audio" if (audio_only or str(out_format or "").lower().lstrip(".") in app._CONVERT_AUDIO_TARGETS) else "concat_video"
+    _clabel = app._APP_COMPUTE_LABELS.get(_ckey, "拼接")
     _gate = app.app_compute_gate(request, _ckey, _clabel)   # 免费 5 次/日
     if len(segs) < 2:
         raise app.HTTPException(status_code=400, detail="至少需要 2 个片段")
