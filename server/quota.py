@@ -373,7 +373,13 @@ class QuotaManager:
                 # 以云端（北京）日切日期为准：本机 _roll_daily 按本机时区算，
                 # 与云端可能差一天，差值会让「每日 auto」在错误的边界重置。
                 st["daily_date"] = cdate
-            self._persist(st)
+                # 🔴 2026-10-07：`daily_date_src` 记下「这个日期是中心给的」，
+                # 读侧日切凭它判断该不该信任（详见 _cloud_day_fresh）。没有它，
+                # 回灌的计数会在下一次 _state() 被本机日切抹掉。
+                st["daily_date_src"] = cdate
+            # 🔴 roll=False：云端是日切的真源，这里再按本机时区 roll 一次会把
+            # 刚回灌的「中心当天已用次数」清零（跨时区用户必现）。详见 _persist。
+            self._persist(st, roll=False)
             return True
         except Exception:
             return False
@@ -449,19 +455,57 @@ class QuotaManager:
     def _today(self) -> str:
         return time.strftime("%Y-%m-%d", time.localtime(self._now()))
 
+    def _cloud_day_fresh(self, st: dict, today: str, cur: str) -> bool:
+        """盘上的日切日期是不是「中心刚给的、且还没过期」。
+
+        中心按**北京时间**日切，本机 `_today()` 按**本机时区**算 —— 境外用户
+        （或系统时区非 UTC+8）两边会差一天。若一律按本机日期 roll，中心刚回灌的
+        「今天已用几次」就会被清掉，本机显示「还剩 1 次」而中心其实已用满。
+
+        判定：盘上日期 == 中心最近下发的日期（`daily_date_src`，由回灌写入），
+        且与本机今天相差 ≤1 天（跨时区最多差一天）。超过一天说明是很久以前的
+        云端快照（长期断网），此时不再信任 —— 否则日切永不触发会把用户卡死。
+        """
+        src = str(st.get("daily_date_src") or "")
+        if not src or src != cur:
+            return False
+        try:
+            from datetime import date as _date
+            gap = abs((_date.fromisoformat(src) - _date.fromisoformat(today)).days)
+        except (ValueError, TypeError):
+            return False
+        return gap <= 1
+
     def _roll_daily(self, st: dict) -> None:
         today = self._today()
-        if st.get("daily_date") != today:
-            st["daily_date"] = today
-            st["daily_auto_used"] = 0
+        cur = str(st.get("daily_date") or "")
+        if cur == today:
+            return
+        # 🔴 2026-10-07：云端日界优先。详见 _cloud_day_fresh。
+        if self._cloud_day_fresh(st, today, cur):
+            return
+        st["daily_date"] = today
+        st["daily_auto_used"] = 0
 
     def _state(self) -> dict:
         st = self._load()
         self._roll_daily(st)
         return st
 
-    def _persist(self, st: dict) -> None:
-        self._roll_daily(st)
+    def _persist(self, st: dict, roll: bool = True) -> None:
+        """写盘。`roll=False` 用于**云端回灌**路径 —— 见下方说明。
+
+        🔴 2026-10-07 实测抓到：回灌（`_apply_cloud_view`）写入的每日计数会被
+        这里的 `_roll_daily` 当场抹掉，导致回灌形同没做过。
+        触发条件：中心日切日期 ≠ 本机 `_today()` —— 中心按**北京时间**日切，
+        本机的「今天」由**本机时区**决定，用户在境外（或系统时区非 UTC+8）时
+        两者会差一天。后果：本机显示「今天还剩 1 次」而中心其实已用满。
+
+        修法：日切只在**读侧**（`_state()`）做就够了 —— 所有扣减路径都先读
+        （已 roll），写盘再 roll 一次属重复且有害。回灌路径显式关闭。
+        """
+        if roll:
+            self._roll_daily(st)
         self._save(st)
 
     # ── 查询 ────────────────────────────────────────────────────────────── #

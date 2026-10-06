@@ -287,6 +287,22 @@ def main() -> None:
           "def is_download_active" not in mem,
           "若网页版已加该方法，可简化 _is_member_any")
 
+    print("\n[F] 云端每日额度回灌不得被本机日切抹掉（2026-10-07 实测抓到的 bug）")
+    # 中心按北京时间日切、本机按本机时区算今天，两边差一天时（境外用户 / 系统时区
+    # 非 UTC+8），回灌的「中心当天已用次数」会被 `_persist` 与 `_state()` 的日切
+    # 连抹两次 ⇒ 本机谎报「还剩 1 次」。修法是两层，缺一不可（各有变异测试钉住）。
+    qsrc = (_SERVER / "quota.py").read_text(encoding="utf-8")
+    check("回灌路径写盘时关闭本机日切（roll=False）",
+          "self._persist(st, roll=False)" in qsrc,
+          "缺这一层：写盘侧日切会把刚回灌的计数清零")
+    check("回灌记下「日期是中心给的」（daily_date_src）",
+          'st["daily_date_src"]' in qsrc,
+          "缺这一层：读侧日切不认识云端日界，下次读取仍会被抹")
+    check("读侧日切信任未过期的云端日界（_cloud_day_fresh）",
+          "def _cloud_day_fresh" in qsrc
+          and "_cloud_day_fresh(st, today, cur)" in qsrc,
+          "缺这一层：跨时区用户回灌的计数活不过下一次读取")
+
     print()
     if FAILS:
         print(f"❌ 失败 {len(FAILS)} 项：")
