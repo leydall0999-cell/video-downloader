@@ -775,7 +775,8 @@ def cloud_quota_gate(request, need: int = 1, resource: str = "cloud_commentary")
         if _is_member_any(store):
             return {"mode": "local", "store": store, "remaining": None}   # 会员不限
         # 免费用户：向中心问「该功能还有没有额度」（只查不扣，扣在 cloud_quota_count）
-        rem = _cloud_quota_remaining(store, resource)
+        _got = _cloud_quota_remaining(store, resource)
+        rem, center_limit = (_got if isinstance(_got, tuple) else (None, None))
         if rem is None:
             # 拿不到权威结果（未登录云端 / 断网）→ 退回每日配额口径（fail-open）
             q = store.quota_state(resource)
@@ -790,10 +791,15 @@ def cloud_quota_gate(request, need: int = 1, resource: str = "cloud_commentary")
             return {"mode": "local", "store": store, "remaining": rem,
                     "resource": resource}
         _res_name = _CLOUD_RESOURCE_NAMES.get(resource, "该功能")
+        # 🔴 2026-10-06 用中心给的生效上限（管理员可在桌面后台改），不写死常量；
+        #   旧中心不返回该字段时退回本地常量。文案里的「每个功能」是错的 ——
+        #   拆池后额度是**按功能各一份**，说的是本功能的次数。
+        _lim_txt = center_limit if isinstance(center_limit, int) and center_limit > 0 \
+            else _cloud_quota_limits()[0]
         raise HTTPException(
             status_code=402,
-            detail=f"「{_res_name}」的免费额度（每个功能终身 {_cloud_quota_limits()[0]} 次）"
-                   f"已用完。开通会员即可解锁无限使用。")
+            detail=f"「{_res_name}」的免费额度（终身 {_lim_txt} 次）已用完。"
+                   f"开通会员即可解锁无限使用。")
     except HTTPException:
         raise
     except Exception:  # noqa: BLE001 — 会员引擎异常 fail-open
@@ -833,12 +839,16 @@ def _cloud_quota_limits() -> tuple[int, int]:
 
 
 def _cloud_quota_remaining(store, resource: str = "cloud_commentary"):
-    """问中心「该 resource 的终身额度还剩几次」；None = 拿不到权威结果（fail-open）。
+    """问中心「该 resource 的终身额度还剩几次」→ `(remaining, limit)`；None = 拿不到。
+
+    `limit` 是中心的**生效上限**（后台可覆盖），用于 402 文案报真数字；
+    旧中心不返回该字段时为 None，文案退回本地常量。
 
     🔴 兼容两种中心返回：新中心 `lifetime_remaining` 是 **per-resource dict**；
     旧中心是 **int**（4 个功能共用的总池）→ 直接当该 resource 的余量用
     （旧中心本来就只记一份总数，语义等价于旧总池口径，不放大也不缩小）。
     """
+    _lim = None
     try:
         import license_client
         tok = _cloud_quota_token(store)
@@ -850,14 +860,22 @@ def _cloud_quota_remaining(store, resource: str = "cloud_commentary"):
         cq = r.get("cloud_quota")
         if not isinstance(cq, dict):
             return None
+        # 🔴 2026-10-06 取中心给的**生效上限**（管理员可覆盖）。写死 3 会在管理员
+        #   改过次数后报错数字（用户看到「终身 3 次已用完」但实际配的是 5）。
+        lims = cq.get("lifetime_limits")
+        if isinstance(lims, dict):
+            try:
+                _lim = max(0, int(lims.get(resource) or 0))
+            except (TypeError, ValueError):
+                _lim = None
         rem = cq.get("lifetime_remaining")
         if isinstance(rem, dict):
             try:
-                return max(0, int(rem.get(resource) or 0))
+                return max(0, int(rem.get(resource) or 0)), _lim
             except (TypeError, ValueError):
                 return None
         try:
-            return max(0, int(rem or 0))
+            return max(0, int(rem or 0)), _lim
         except (TypeError, ValueError):
             return None
     except Exception:

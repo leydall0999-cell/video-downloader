@@ -142,7 +142,20 @@ def admin_config_smtp(payload: dict[str, Any] = Body(...), request: Request = No
 @router.post("/api/admin/config/plans")
 def admin_config_plans(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     require_admin(request)
-    return save_plan_overrides(payload or {})
+    out = save_plan_overrides(payload or {})
+    # 🔴 2026-10-06 诚实回报：云端终身免费次数的**放行判定在授权中心**，而中心写入
+    #   端点 /api/license/free_quota_set 要求**桌面端的 license_admin 令牌** ——
+    #   网页版没有这套令牌（只有本站 superuser），因此这里**无法**下发覆盖。
+    #   与其静默返回 ok 让管理员以为改了两端，不如如实说明「只改了本机缓存」。
+    #   要改云端放行上限，请到桌面端 App 后台保存（那里会下发中心）。
+    if isinstance(payload, dict) and "free_quota" in payload:
+        out = dict(out)
+        out["cloud_free_quota"] = {
+            "ok": False,
+            "reason": "web_admin_cannot_push_center",
+            "hint": "云端放行上限以授权中心为准，请在桌面端 App 后台修改并保存",
+        }
+    return out
 
 
 # ── AI 积分成本 / 免费试用策略（2026-10-05 与桌面端拉齐）─────────────────────
