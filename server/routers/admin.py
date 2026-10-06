@@ -388,7 +388,15 @@ def admin_config_smtp(payload: dict[str, Any] = Body(...), request: Request = No
 @router.post("/api/admin/config/plans")
 def admin_config_plans(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     require_admin(request)
-    return save_plan_overrides(payload or {})
+    out = save_plan_overrides(payload or {})
+    # 🔴 2026-10-06 终身免费次数下发中心：放行判定在云端，本机 plans.json 只是缓存。
+    #   保存 free_quota（含 cloud_lifetime）后立刻下发，两端口径一致。
+    #   失败**不回滚保存**（云端不可达时本机仍应记住管理员意图），只在响应里如实回报。
+    if isinstance(payload, dict) and "free_quota" in payload:
+        import membership as _M
+        out = dict(out)
+        out["cloud_free_quota"] = _M.push_free_quota_to_cloud()
+    return out
 
 
 # ── AI 积分成本配置（2026-10-05 新增）────────────────────────────────────────

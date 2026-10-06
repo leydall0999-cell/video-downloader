@@ -5176,7 +5176,7 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-plan-row[data-fq="cloud"] input {
   width: 4.2rem; text-align: right; font-variant-numeric: tabular-nums;
 }
-.fq-hint-warn { color: #b45309; font-weight: 600; }
+.fq-hint-ok { color: #15803d; font-weight: 600; }
 /* 终身次数：改动只影响本机预检，中心才是放行上限（避免"改了没生效"的困惑） */
 .admin-plan-row[data-fq="cloud"] .admin-plan-hint {
   grid-column: 1 / -1; font-size: .72rem; color: var(--text-mute, #64748b);

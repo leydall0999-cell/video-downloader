@@ -587,6 +587,41 @@ def push_plans_to_cloud() -> dict[str, Any]:
         return {"ok": False, "reason": f"error: {e}"}
 
 
+def push_free_quota_to_cloud() -> dict[str, Any]:
+    """把本机 `free_quota.cloud_lifetime` 覆盖下发授权中心（后台保存后调用）。
+
+    🔴 2026-10-06：终身免费次数的**放行判定在云端**，本机 plans.json 只是缓存。
+    此前后台保存只写本机 ⇒ 改了不生效（自查发现，承诺了做不到）。现在与套餐价格
+    同一套路：保存即下发，云端按覆盖值判定，两端口径一致。
+    返回同步状态，**绝不抛出**（云端不可达时后台仍应保存成功，只是云端未同步）。
+    """
+    url = _license_api("/api/license/free_quota_set")
+    if not url:
+        return {"ok": False, "reason": "no_license_base"}
+    try:
+        import admin_store
+        token = admin_store._license_admin_token()  # noqa: SLF001 — 复用既有令牌读取
+    except Exception:  # noqa: BLE001
+        token = ""
+    if not token:
+        return {"ok": False, "reason": "no_admin_token"}
+    try:
+        fq = (load_plan_overrides().get("free_quota") or {})
+        # 键**不存在** = 管理员没配过覆盖 → 不要去动云端（避免把别的机器配的覆盖抹掉）；
+        # 键存在但为 null = 显式「恢复默认」→ 下发 null 让中心清除覆盖。
+        has_key = "cloud_lifetime" in fq
+        if not has_key:
+            return {"ok": True, "reason": "no_override", "effective": {}}
+        import license_client
+        r = license_client.free_quota_set_remote(
+            token, cloud_lifetime=(fq.get("cloud_lifetime") if has_key else None))
+        if isinstance(r, dict) and r.get("ok"):
+            return {"ok": True, "effective": r.get("effective_cloud_limits") or {}}
+        return {"ok": False, "reason": str((r or {}).get("error") or "cloud_rejected")}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "reason": f"error: {e}"}
+
+
 def effective_plans() -> dict[str, dict[str, Any]]:
     """生效套餐表：代码常量 ← 本机 plans.json 覆盖层 ← 授权中心覆盖（云端最高）。
 

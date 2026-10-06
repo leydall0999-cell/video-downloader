@@ -244,6 +244,19 @@ def test_frontend_groups_by_resource():
     check(".fq-block-fns" in css, "有 fq-block-fns 样式")
 
 
+def test_lifetime_change_reaches_center():
+    """🔴 2026-10-06：终身次数必须真的下发中心（否则改了不生效）。"""
+    srv = (_SERVER / "license_client.py").read_text(encoding="utf-8")
+    mem = (_SERVER / "membership.py").read_text(encoding="utf-8")
+    adm = (_SERVER / "routers" / "admin.py").read_text(encoding="utf-8")
+    check("license_client 有 free_quota_set_remote", "def free_quota_set_remote" in srv)
+    check("它打的是 /api/license/free_quota_set", "/api/license/free_quota_set" in srv)
+    check("membership 有 push_free_quota_to_cloud", "def push_free_quota_to_cloud" in mem)
+    check("后台保存 free_quota 时会调用下发", "push_free_quota_to_cloud()" in adm)
+    check("下发失败不回滚保存（云端不可达时本机仍记住意图）",
+          "cloud_free_quota" in adm and "out = dict(out)" in adm)
+
+
 def test_hint_text_matches_reality():
     """🔴 提示文案不许与实际配额结构矛盾（用户 2026-10-06 16:55 截图发现）。
 
@@ -650,10 +663,10 @@ def test_lifetime_input_is_honest_about_center():
     在中心接上覆盖之前，界面必须写明「只影响本机预检，云端上限以授权中心为准」。
     """
     js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
-    check("终身次数行写明「云端放行上限以授权中心为准」",
-          "云端放行上限仍以授权中心为准" in js,
-          "输入框实际不生效（中心才是真源），UI 不得承诺可改云端上限")
-    check("提示同时说明记账主体是授权中心", "由授权中心按账号记账" in js)
+    check("终身次数行写明「保存即下发授权中心」",
+          "保存即下发授权中心" in js,
+          "放行判定在云端，UI 必须说明保存会下发，否则管理员以为只改本机")
+    check("提示说明两端按同一份判定", "App 与网页版按同一份判定" in js)
 
 
 def main():
@@ -663,6 +676,7 @@ def main():
         test_daily_feature_rows_mark_shared,
         test_frontend_groups_by_resource,
         test_lifetime_input_is_honest_about_center,
+        test_lifetime_change_reaches_center,
         test_hint_text_matches_reality,
         test_legacy_key_hidden_from_admin_table,
         test_convert_target_routing,

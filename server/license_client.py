@@ -205,6 +205,21 @@ def cloud_quota_remote(token: str, lifetime: int = 0, daily: int = 0,
                  base_url, timeout, opener)
 
 
+def free_quota_set_remote(token: str, cloud_lifetime: Any = None,
+                         base_url: Optional[str] = None,
+                         timeout: float = 10.0) -> dict[str, Any]:
+    """管理员下发「免费额度」覆盖到授权中心（2026-10-06）。
+
+    🔴 为什么单独一个端点：套餐价格走 `/api/license/plans_set`，那份契约要求每档
+    都含 `price_cny`（还会 round(2)），额度是 `{resource: 次数}` 形状，塞进去会被
+    价格校验拒掉。中心的放行/拒绝判定在云端，客户端本机 plans.json 只是缓存 ——
+    不下发的话后台改了不生效。
+    """
+    return _post("/api/license/free_quota_set",
+                 {"token": token, "cloud_lifetime": cloud_lifetime},
+                 base_url, timeout)
+
+
 def set_password_remote(email: str, new_password: str, old_password: str = "",
                         token: str = "", base_url: Optional[str] = None,
                         timeout: float = 12.0,
