@@ -5113,16 +5113,73 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
   border: 1px solid var(--line, #cbd5e1); border-left: 3px solid #7f77dd;
   border-radius: 8px; background: var(--bg, #fbfbfd);
 }
-.fq-block-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
-.fq-block-head .admin-plan-name { display: inline-flex; align-items: center; gap: .3rem; }
-.fq-num { display: inline-flex; align-items: center; gap: .35rem; font-size: .74rem; color: var(--text-mute, #64748b); }
-.fq-num .admin-input { width: 84px; }
-/* 块内功能名列表：这是管理员最需要的信息，放在最显眼位置 */
-.fq-block-fns {
-  margin-top: .4rem; padding-top: .4rem;
-  border-top: 1px dashed var(--line, #cbd5e1);
-  font-size: .82rem; color: var(--text, #1e293b); line-height: 1.6; word-break: break-all;
+/* 🔴 2026-10-06 排版优化（用户截图）：左「功能名 + 键名 chip」右「两个数字框」。
+   关键改动：
+     ① grid 而非 flex-wrap —— 每个块的两个输入框落在**同一列宽**上，20 多个块
+        竖着扫时数字列自动对齐（原来每块独立 flex，宽度随标签长度漂移）；
+     ② 功能名升级为主标题（管理员第一眼要看到「这条管什么功能」），
+        技术键 download/convert_video 降级为灰 chip，只作对照用；
+     ③ 去掉块内虚线分隔 —— 一个额度被虚线切成两段，看起来像两条内容；
+     ④ 数字右对齐 + 隐藏 spinner 需 hover 才显示的视觉噪声（保留点击可用）。 */
+.fq-block-head {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: .5rem 1rem;
 }
+.fq-block-id { display: flex; align-items: baseline; gap: .4rem; min-width: 0; flex-wrap: wrap; }
+.fq-block-fn {
+  font-size: .86rem; font-weight: 600; color: var(--text, #1e293b);
+  line-height: 1.5; word-break: break-word;
+}
+.fq-sep { color: var(--text-mute, #94a3b8); font-weight: 400; }
+/* 技术键 chip：可对照 plans.json，但不抢主标题 */
+.fq-block-res {
+  font-size: .68rem; color: var(--text-mute, #94a3b8);
+  background: rgba(148, 163, 184, .12); border: 0;
+  padding: .05rem .3rem; border-radius: 5px; white-space: nowrap;
+}
+.fq-block-nums {
+  /* 固定列宽（不能用 1fr：外层是 auto 列，1fr 会按 max-content 撑开，
+     输入框会变得很宽、两个数字框离标题越来越远）—— 固定宽度才能让 20 多个块
+     的数字列竖着对齐。 */
+  display: grid; grid-template-columns: 8.4rem 8.4rem;
+  gap: .35rem .6rem; justify-content: end;
+}
+.fq-num {
+  display: inline-flex; align-items: center; gap: .3rem;
+  font-size: .72rem; color: var(--text-mute, #64748b); white-space: nowrap;
+}
+.fq-num .admin-input { width: 100%; min-width: 0; text-align: right; font-variant-numeric: tabular-nums; }
+/* 块内说明：单行灰字，不再画分隔线 */
+.fq-block-fns {
+  margin-top: .3rem; font-size: .74rem; color: var(--text-mute, #64748b);
+  line-height: 1.55;
+}
+/* 「终身免费次数」区（云端 8 键）复用上面每日区的视觉规范：左标题+键 chip、
+   右固定列宽数字框，两个区并排看也是一套排版。 */
+.admin-plan-row[data-fq="cloud"] {
+  display: grid; grid-template-columns: minmax(0, 1fr) 9.6rem auto;
+  align-items: center; gap: .4rem .8rem;
+  padding: .45rem .6rem; margin: 0 0 .35rem;
+  border: 1px solid var(--line, #cbd5e1); border-left: 3px solid #7f77dd;
+  border-radius: 8px; background: var(--bg, #fbfbfd);
+}
+.admin-plan-row[data-fq="cloud"] .admin-plan-name { font-size: .86rem; font-weight: 600; }
+.admin-plan-row[data-fq="cloud"] .admin-plan-name .admin-plan-code {
+  font-size: .68rem; font-weight: 400; color: var(--text-mute, #94a3b8);
+  background: rgba(148, 163, 184, .12); border: 0; padding: .05rem .3rem;
+  border-radius: 5px; margin-left: .3rem;
+}
+.admin-plan-row[data-fq="cloud"] label {
+  display: inline-flex; align-items: center; gap: .3rem; justify-content: flex-end;
+  font-size: .72rem; color: var(--text-mute, #64748b); white-space: nowrap;
+}
+.admin-plan-row[data-fq="cloud"] input {
+  width: 4.2rem; text-align: right; font-variant-numeric: tabular-nums;
+}
+.admin-plan-row[data-fq="cloud"] .admin-plan-hint {
+  grid-column: 1 / -1; font-size: .72rem; color: var(--text-mute, #64748b);
+}
+
 .admin-plan-add {
   display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
   margin-top: .6rem; padding: .5rem .6rem; border: 1px dashed var(--line, #cbd5e1); border-radius: 10px;

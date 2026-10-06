@@ -21299,17 +21299,30 @@ el.dwVidPlayer.hidden = true;
         const vFree = (cf === undefined ? f0.free_limit : cf);
         const vMem = (cm === undefined ? f0.member_limit : cm);
         // 块内功能名：单功能直接显示；多功能并列成一行标签
-        const names = group.map((f) => esc(f.name)).join('、');
-        const note = f0.shared_note ? `<span class="admin-plan-hint">${esc(f0.shared_note)}</span>` : '';
+        // 多功能共用一份额度时用「/」并列，读起来是一组（顿号太散）
+        const names = group.map((f) => esc(f.name)).join(' <span class="fq-sep">/</span> ');
+        // 说明文字收进块内（class 保持 fq-block-fns，守卫钉着它），样式改成
+        // 一行灰字、不再画虚线分隔 —— 虚线会让一个额度看起来像两段内容。
+        const note = f0.shared_note ? `<div class="fq-block-fns">${esc(f0.shared_note)}</div>` : '';
+        // 🔴 2026-10-06 排版优化（用户截图）：原来**技术键名当标题**、功能名被挤到
+        //   虚线下面的小字，管理员第一眼看到的不是「这条额度管什么功能」。
+        //   改为：左边功能名做主标题（用户可见名，多功能用「/」并列），技术键降级为
+        //   灰色小 chip 只作对照；右边两个数字框固定两列对齐，所有块竖着扫也能对齐。
         h += `<div class="fq-block" data-res="${esc(r)}">
           <div class="fq-block-head">
-            <span class="admin-plan-name"><code class="admin-plan-code">${esc(r)}</code></span>
-            <label class="fq-num">每日免费次数<input class="admin-input admin-input-sm fq-free" data-key="${esc(r)}"
+            <div class="fq-block-id">
+              <span class="fq-block-fn">${names}</span>
+              <code class="admin-plan-code fq-block-res" title="配额键（写入 plans.json 的 free_quota.daily_*_limits）">${esc(r)}</code>
+            </div>
+            <div class="fq-block-nums">
+              <label class="fq-num" title="免费用户每日可用次数">每日免费
+                <input class="admin-input admin-input-sm fq-free" data-key="${esc(r)}"
                    value="${esc(vFree)}" type="number" min="0"></label>
-            <label class="fq-num">会员每日次数<input class="admin-input admin-input-sm fq-member" data-key="${esc(r)}"
+              <label class="fq-num" title="会员每日可用次数，-1 = 不限">会员每日
+                <input class="admin-input admin-input-sm fq-member" data-key="${esc(r)}"
                    value="${esc(vMem)}" type="number" min="-1"></label>
+            </div>
           </div>
-          <div class="fq-block-fns">${names}</div>
           ${note}
         </div>`;
       });
@@ -21333,7 +21346,7 @@ el.dwVidPlayer.hidden = true;
                          cloud_subtitle_translate: '字幕翻译' };
       Object.entries(clpr).forEach(([res, val]) => {
         h += `<div class="admin-plan-row" data-fq="cloud" data-key="cloud_lifetime_${esc(res)}">
-        <span class="admin-plan-name">${esc(CL_NAMES[res] || res)}终身免费 <code class="admin-plan-code">${esc(res)}</code></span>
+        <span class="admin-plan-name">${esc(CL_NAMES[res] || res)} <code class="admin-plan-code">${esc(res)}</code></span>
         <label>终身免费次数<input class="admin-input admin-input-sm fq-cloud" data-key="cloud_lifetime" data-res="${esc(res)}"
                value="${esc(Number(val) || 0)}" type="number" min="0"></label>
         <span class="admin-plan-hint">该功能独立一份（与其它功能互不挤占），由授权中心按账号记账</span>
