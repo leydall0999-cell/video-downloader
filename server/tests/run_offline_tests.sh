@@ -100,6 +100,7 @@ run_node test_web_route_retry.js
 run_node test_convert_poll_lifecycle.mjs   # 音乐/图片转换轮询定时器自杀停表回归（2026-09-29 线上卡 30% 事故）
 run_node test_dw_preview_zoom.mjs          # 去水印捏合缩放(只放大图片)+结果预览灯箱+重新加工（2026-09-29 用户反馈）
 run_node test_view_top_gap.mjs             # 顶层视图卡片与吸顶顶栏间距：main > .panel 3rem，防「顶栏+卡片」粘连（2026-10-04 用户反馈）
+run_node test_mobile_header_tabs.mjs       # 手机网页版顶栏功能导航：≤760px 换行让 tabs 不被挤成 0 宽而整排消失（2026-10-07 用户反馈）
 run_node test_activate_gate.mjs            # 激活码通道收口：/api/member/activate 仅超管 + 前端入口已移除（2026-10-04 白嫖后门）
 run_node test_feature_usage_gate.mjs        # 「今日使用」功能配额表逐行须有真实 use_daily 拦截点（2026-10-04 清占位行）
 run_node test_deploy_surface_parity.mjs     # cn/hk 双部署面：activate 超管门禁必须两端同步（2026-10-04 hk 实测被白嫖）
