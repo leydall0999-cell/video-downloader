@@ -225,8 +225,17 @@ def _daily_feature_rows() -> list[dict[str, Any]]:
         })
 
     # 兜底：配额表里有、但没登记功能行的 resource（技术名显示，标 known=false）
+    # 🔴 2026-10-06 拆键：跳过「老键」（LEGACY_QUOTA_KEYS，如 app_compute）。
+    # 它只用于存量用量归集，业务已不再写入 —— 出现在配置表里会让管理员以为
+    # 「转换/压缩/修复/桥接还共用这一份」，与拆键后的事实相反。
+    legacy = set()
+    try:
+        from membership import LEGACY_QUOTA_KEYS
+        legacy = set(LEGACY_QUOTA_KEYS)
+    except Exception:
+        pass
     for r, free_v in free_limits.items():
-        if r in seen:
+        if r in seen or r in legacy:
             continue
         rows.append({
             "key": r, "name": r, "resource": r, "unit": "次",

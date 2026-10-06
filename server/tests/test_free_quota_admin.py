@@ -225,12 +225,64 @@ def test_frontend_groups_by_resource():
     check("const _byRes = {}" in js, "按 resource 聚合（_byRes）")
     check('class="fq-block"' in js, "用 fq-block 分块渲染")
     check('class="fq-block-fns"' in js, "块内渲染功能名列表")
-    check("共用同一份次数" in js, "提示共用额度（避免误以为每功能独立）")
+    # 🔴 2026-10-06 拆键后提示以「独立计数」为主，只对同类功能说「共用」。
+    check("独立计数" in js or "共用同一份次数" in js,
+          "提示额度是独立还是共用（避免误判）")
     # 输入框仍以 resource 为键（改任一功能行都改同一份）
     check('class="admin-input admin-input-sm fq-free" data-key="${esc(r)}"' in js,
           "输入框按 resource 提交（共用同一份额度）")
     css = (_SERVER.parent / "web" / "styles.css").read_text(encoding="utf-8")
     check(".fq-block-fns" in css, "有 fq-block-fns 样式")
+
+
+def test_hint_text_matches_reality():
+    """🔴 提示文案不许与实际配额结构矛盾（用户 2026-10-06 16:55 截图发现）。
+
+    实测事故：拆键后 `compress` / `sr` / `bridge` 已各自独立，但页面提示仍写
+    「高效压缩 / 高清修复都走本地算力，用掉一次就少一次」—— **文字在骗人**，
+    管理员据此以为没拆开。**改了数据结构必须同步改文案**。
+    """
+    js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
+    import re as _re
+    import membership as M
+    import admin as A
+    rows = A._daily_feature_rows()
+    # 共用同一 resource 的功能组（文案里若提「共用」必须是真的）
+    by_res = {}
+    for r in rows:
+        by_res.setdefault(r["resource"], []).append(r["name"])
+    # 已独立的功能：文案不得再说它们共用
+    for key in ("compress", "sr", "bridge"):
+        grp = by_res.get(key) or []
+        check(len(grp) <= 1, f"{key} 组只有 1 个功能（真独立）", f"实际 {grp}")
+        if len(grp) <= 1:
+            # 前端不得把「高效压缩」「高清修复」写进「共用」那句里
+            # 🔴 只取**真正渲染给用户的那句**：源码里 `h += '<p class="admin-hint">…'`
+            #    的字面量。按 `<p class="admin-hint">` 到 `</p>` 精确截取 ——
+            #    早先按「① 之后 1200 字 + 剔注释」仍在误报/漏报（注释里也含
+            #    「高效压缩…共用」这类字样，边界判断靠不住）。
+            _m = _re.search(r'<p class="admin-hint">(.*?)</p>', js, _re.S)
+            check(_m is not None, "找到提示文案（admin-hint）")
+            hint = _m.group(1) if _m else ""
+            for name in ("高效压缩", "高清修复", "音视频桥接"):
+                # 已独立的功能名若出现在「共用」语境里 ⇒ 文案说谎
+                bad_ctx = [sent.strip()
+                           for sent in _re.split(r"。|？|！", hint)
+                           if name in sent and "共用" in sent]
+                check(not bad_ctx, f"「{name}」没被说成共用",
+                      f"文案与拆键后事实矛盾：{bad_ctx[0][:60] if bad_ctx else ''}")
+    check("独立计数" in js, "提示文案里有「独立计数」表述",
+          "应明确告知每个额度框独立计数")
+
+
+def test_legacy_key_hidden_from_admin_table():
+    """老键（app_compute）不得出现在后台配置表（会让人以为仍共用一份）。"""
+    import membership as M
+    import admin as A
+    rows = A._daily_feature_rows()
+    legacy = set(M.LEGACY_QUOTA_KEYS)
+    shown = {r["resource"] for r in rows}
+    check(not (shown & legacy), f"老键未出现在配置表：{sorted(shown & legacy)}")
 
 
 def test_unknown_resource_keys_are_ignored():
@@ -299,9 +351,13 @@ def test_free_quota_panel_covers_every_quota_key():
     import admin as A
     rows = A._daily_feature_rows()
     got = {r["resource"] for r in rows}
-    want = set(M.FREE_DAILY_LIMITS) | set(M.DAILY_QUOTA_LIMITS)
+    # 🔴 老键（LEGACY_QUOTA_KEYS，如 app_compute）只用于存量归集，**故意不出现**
+    #    在后台配置表（显示它会让人以为转换/压缩/修复/桥接仍共用一份）。
+    want = (set(M.FREE_DAILY_LIMITS) | set(M.DAILY_QUOTA_LIMITS)) - set(M.LEGACY_QUOTA_KEYS)
     missing = want - got
-    check(not missing, "配额表所有键都在后台页面出现", f"缺: {sorted(missing)}")
+    check(not missing, "配额表所有真配额键都在后台页面出现", f"缺: {sorted(missing)}")
+    legacy_shown = got & set(M.LEGACY_QUOTA_KEYS)
+    check(not legacy_shown, "老键未出现在后台配置表", f"不该显示: {sorted(legacy_shown)}")
     check("cloud" in got, "云端算力（cloud）已列出（此前漏项）")
     # 展示值必须是**生效值**（叠加后台覆盖），不能是写死的默认
     by_res = {r["resource"]: r for r in rows}
@@ -539,6 +595,8 @@ def main():
         test_quota_rows_use_function_names,
         test_daily_feature_rows_mark_shared,
         test_frontend_groups_by_resource,
+        test_hint_text_matches_reality,
+        test_legacy_key_hidden_from_admin_table,
         test_unknown_resource_keys_are_ignored,
         test_cloud_quota_limits_are_configurable,
         test_frontend_can_edit_cloud_quota,
