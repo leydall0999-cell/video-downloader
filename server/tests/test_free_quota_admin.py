@@ -183,14 +183,17 @@ def test_daily_feature_rows_mark_shared():
     # 🔴 2026-10-06 用户定档「每个功能独立配置」后，原本共用 app_compute 的
     # 6 个重活已拆成 **4 个独立键**：convert / compress / sr / bridge。
     # （commentary 不在内：视频解说走 quota.py 终身云端 + AI 积分，不走日配额。）
-    for key in ("convert", "compress", "sr", "bridge"):
+    for key in ("convert_video", "convert_audio", "convert_image",
+                "compress", "sr", "bridge"):
         ks = [r for r in rows if r["resource"] == key]
         check(f"独立额度键 {key} 存在", bool(ks), "拆键后该功能应有独立额度")
     # 5 个旧键仍共用（下载与追更同一份；转换三兄弟同一份；字幕/抠图/在线各自独立）
     check(len([r for r in rows if r["resource"] == "download"]) == 2,
           "视频下载/订阅追更共用 download（同一类）")
-    check(len([r for r in rows if r["resource"] == "convert"]) == 3,
-          "视频/音乐/图片转换共用 convert（同一类）")
+    # 🔴 2026-10-06 17:11 用户「几个分开不要几个放一起」⇒ 转换三兄弟也拆开
+    for k in ("convert_video", "convert_audio", "convert_image"):
+        check(f"转换类 {k} 恰好 1 个功能行（真独立）",
+              len([r for r in rows if r["resource"] == k]) == 1)
     check(all(r["known"] for r in rows if r["resource"] in
               ("convert", "compress", "sr", "bridge")),
           "拆出的 4 个独立键都 known=true")
@@ -283,6 +286,40 @@ def test_legacy_key_hidden_from_admin_table():
     legacy = set(M.LEGACY_QUOTA_KEYS)
     shown = {r["resource"] for r in rows}
     check(not (shown & legacy), f"老键未出现在配置表：{sorted(shown & legacy)}")
+
+
+def test_convert_target_routing():
+    """🔴 转换必须按 `target` 判类型（视频/音乐/图片各自独立额度）。
+
+    2026-10-06 17:11 用户要求「几个分开不要几个放一起」。视频/音乐/图片转换走
+    **同一个端点**，靠 `target` 扩展名区分 ⇒ 必须验证 `convert_quota_key` 判对，
+    否则用户转 5 次 mp3 会占掉视频的额度（判错）。
+    """
+    import re as _re
+    import pathlib
+    src = (pathlib.Path(_SERVER) / "app.py").read_text(encoding="utf-8")
+    i = src.index("_CONVERT_AUDIO_TARGETS = {")
+    j = src.index("def app_compute_gate")
+    ns = {}
+    exec(compile(src[i:j], "<f>", "exec"), ns)
+    f = ns["convert_quota_key"]
+    check(f("mp4") == ("convert_video", "视频格式转换"), "mp4 → 视频额度")
+    check(f("mkv")[0] == "convert_video", "mkv → 视频额度")
+    check(f("mp3") == ("convert_audio", "音乐转换"), "mp3 → 音乐额度")
+    check(f("flac")[0] == "convert_audio", "flac → 音乐额度")
+    check(f("png") == ("convert_image", "图片转换"), "png → 图片额度")
+    check(f("webp")[0] == "convert_image", "webp → 图片额度")
+    check(f("mp3", is_image=True)[0] == "convert_image",
+          "is_image=True 时图片优先（上传转码路径）")
+    # 🔴 未知格式必须保守落视频（不放行、不落空）
+    check(f("xyz")[0] == "convert_video", "未知格式保守落视频（不多放行）")
+    # 业务侧必须真的调用它（不能只定义了不用）
+    cv = (pathlib.Path(_SERVER) / "routers" / "convert.py").read_text(encoding="utf-8")
+    check("app.convert_quota_key(" in cv, "convert.py 真的调用 convert_quota_key")
+    check(cv.count("app.convert_quota_key(") >= 4,
+          "4 个调用点都改用类型判定", f"实际 {cv.count('app.convert_quota_key(')} 处")
+    check('app_compute_gate(request, "convert"' not in cv,
+          "没有残留写死的 convert 键（否则又变共用）")
 
 
 def test_unknown_resource_keys_are_ignored():
@@ -597,6 +634,7 @@ def main():
         test_frontend_groups_by_resource,
         test_hint_text_matches_reality,
         test_legacy_key_hidden_from_admin_table,
+        test_convert_target_routing,
         test_unknown_resource_keys_are_ignored,
         test_cloud_quota_limits_are_configurable,
         test_frontend_can_edit_cloud_quota,

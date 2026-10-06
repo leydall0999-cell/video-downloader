@@ -773,11 +773,43 @@ _APP_COMPUTE_QUOTA_OFF = os.environ.get("VDL_APP_COMPUTE_QUOTA_OFF", "false").st
 # `resource` 决定记到哪一份额度；传入的 `label` 只用于给人话提示。
 # ⚠️ 不含 `commentary`：视频解说走 `quota.py` 的终身云端额度 + AI 积分，
 #    **不走日配额**（守卫 test_feature_usage_gate 会红 —— 别把它配成日配额键）。
-_APP_COMPUTE_KEYS = ("convert", "compress", "sr", "bridge")
+_APP_COMPUTE_KEYS = ("convert_video", "convert_audio", "convert_image",
+                    "compress", "sr", "bridge")
 _APP_COMPUTE_LABELS = {
-    "convert": "格式转换", "compress": "高效压缩", "sr": "高清修复",
-    "bridge": "音视频桥接",
+    "convert_video": "视频格式转换", "convert_audio": "音乐转换",
+    "convert_image": "图片转换", "compress": "高效压缩",
+    "sr": "高清修复", "bridge": "音视频桥接",
 }
+
+
+# 🔴 2026-10-06 用户要求「几个分开、不要几个放一起」：视频 / 音乐 / 图片转换
+# 虽走同一个端点，但按 `target` 扩展名可判定类型，故拆成三个独立额度键。
+_CONVERT_AUDIO_TARGETS = {
+    "mp3", "m4a", "wav", "flac", "aac", "opus", "wma", "mp2",
+}
+_CONVERT_IMAGE_TARGETS = {
+    "gif", "png", "jpg", "jpeg", "webp", "bmp", "tiff",
+}
+
+
+def convert_quota_key(target: str, is_image: bool = False) -> tuple[str, str]:
+    """按转换目标格式判定该记哪一份额度。
+
+    返回 `(resource, label)`：
+      · 视频 → `convert_video`
+      · 音频 → `convert_audio`（音乐转换）
+      · 图片 → `convert_image`
+    `is_image=True` 时优先判为图片（上传转码路径已显式知道源是图片）。
+
+    ⚠️ 未知格式一律落 `convert_video`（不放行）—— 判错就记成视频，
+    这是**最保守**的选择：多记一次而非少记。
+    """
+    t = str(target or "").strip().lower().lstrip(".")
+    if is_image or t in _CONVERT_IMAGE_TARGETS:
+        return "convert_image", "图片转换"
+    if t in _CONVERT_AUDIO_TARGETS:
+        return "convert_audio", "音乐转换"
+    return "convert_video", "视频格式转换"
 
 
 def app_compute_gate(request: Request, resource: str = "convert",
@@ -790,7 +822,7 @@ def app_compute_gate(request: Request, resource: str = "convert",
     if _APP_COMPUTE_QUOTA_OFF:
         return {"mode": "off"}
     # 未知键一律回落到 convert（而不是放行）—— 传错键时不该变成不限次
-    res = resource if resource in _APP_COMPUTE_KEYS else "convert"
+    res = resource if resource in _APP_COMPUTE_KEYS else "convert_video"
     name = label or _APP_COMPUTE_LABELS.get(res, "本地处理")
     try:
         from user_membership import current_member_store  # 局部导入，避免 import 顺序问题
@@ -820,7 +852,7 @@ def app_compute_count(request: Request, gate: dict, n: int = 1) -> None:
             from user_membership import current_member_store
             store = current_member_store(request)
         # 记到 gate 里带的那个独立键（2026-10-06 拆键）
-        store.use_daily(gate.get("resource") or "convert", n=n)
+        store.use_daily(gate.get("resource") or "convert_video", n=n)
     except Exception as e:  # noqa: BLE001 — 计数失败绝不回滚已创建的任务
         try:
             logger.warning("[app-compute-quota] 计数失败（忽略）: %s", str(e)[:160])

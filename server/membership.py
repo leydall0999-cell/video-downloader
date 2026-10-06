@@ -79,7 +79,9 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     "matting": 500,           # 本地一键抠图 / 日（会员）；云端火山抠图走积分不计此配额
     "cloud": 200,             # 网页版在线处理 / 日（会员）
     # ── 以下 6 个是 2026-10-06 从 app_compute 拆出的独立键 ──────────────
-    "convert": 200,           # 视频/音频/图片格式转换、拼接（会员）
+    "convert_video": 200,     # 视频格式转换 / 视频拼接（会员）
+    "convert_audio": 200,     # 音乐（音频）转换 / 音频拼接（会员）
+    "convert_image": 200,     # 图片格式转换（会员）
     "compress": 200,          # 高效压缩（会员）
     "sr": 200,                # 高清修复 / AI 超分（会员）
     "bridge": 200,            # 音视频桥接（合成 / 替换）
@@ -93,7 +95,9 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "cloud": 3,               # 网页版在线处理 3 次/日（账号级两端共享）
     "subtitle": 2,            # 免费字幕提取 2 次/日（faster-whisper 本地推理）；会员无限
     # ── 6 个独立键（2026-10-06）─────────────────────────────────────
-    "convert": 5,             # 格式转换 5 次/日
+    "convert_video": 5,       # 视频格式转换 5 次/日
+    "convert_audio": 5,       # 音乐转换 5 次/日
+    "convert_image": 5,       # 图片转换 5 次/日
     "compress": 5,            # 高效压缩 5 次/日
     "sr": 5,                  # 高清修复 5 次/日
     "bridge": 5,              # 音视频桥接 5 次/日
@@ -167,7 +171,8 @@ def migrate_legacy_usage(usage: dict[str, Any]) -> dict[str, Any]:
         return usage
     if legacy <= 0:
         return usage
-    for k in ("convert", "compress", "sr", "bridge"):
+    for k in ("convert_video", "convert_audio", "convert_image",
+              "compress", "sr", "bridge"):
         try:
             if int(usage.get(k) or 0) <= 0:
                 usage[k] = legacy          # 新键尚无记录 → 以老键的量起算
@@ -221,9 +226,9 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     # ⚠️ 名称不带「本地」：用户 2026-10-04 定档「会员权益文案不得出现 云端/算力/AI/本地」，
     # 当时把「本地一键抠图」改成「一键抠图」；这里同理（守卫 test_membership_benefits）。
     {"key": "subtitle_extract", "name": "字幕提取",     "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 0},
-    {"key": "convert_video",    "name": "视频格式转换", "resource": "convert",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "含视频/音频/图片格式互转、拼接（同一类重活）"},
-    {"key": "convert_audio",    "name": "音乐转换",     "resource": "convert",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "与「视频格式转换」共用同一份额度"},
-    {"key": "convert_image",    "name": "图片转换",     "resource": "convert",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "与「视频格式转换」共用同一份额度"},
+    {"key": "convert_video",    "name": "视频格式转换", "resource": "convert_video", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "含视频拼接（按目标格式判定）"},
+    {"key": "convert_audio",    "name": "音乐转换",     "resource": "convert_audio", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "音频格式互转 / 音频拼接"},
+    {"key": "convert_image",    "name": "图片转换",     "resource": "convert_image", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "png/jpg/webp/bmp/tiff/gif 等"},
     {"key": "compress",         "name": "高效压缩",     "resource": "compress",    "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "独立额度（此前与转换/修复共用）"},
     {"key": "sr",               "name": "高清修复",     "resource": "sr",          "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "独立额度（此前与转换/压缩共用）"},
     {"key": "bridge",           "name": "音视频桥接",   "resource": "bridge",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "合成 / 替换（此前无任何配额，现独立计）"},
@@ -1037,7 +1042,9 @@ _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("download", "下载任务 {v} 次/日"),
     ("matting", "一键抠图 {v} 次/日"),
     ("cloud", "在线处理（转码 / 拼接 / 去水印 / 字幕）{v} 次/日"),
-    ("convert", "格式转换（视频 / 音频 / 图片）{v} 次/日"),
+    ("convert_video", "视频格式转换 / 拼接 {v} 次/日"),
+    ("convert_audio", "音乐转换 {v} 次/日"),
+    ("convert_image", "图片转换 {v} 次/日"),
     ("compress", "高效压缩 {v} 次/日"),
     ("sr", "高清修复 {v} 次/日"),
     ("bridge", "音视频桥接（合成 / 替换）{v} 次/日"),

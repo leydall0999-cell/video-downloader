@@ -153,40 +153,44 @@ def test_free_quota_10_then_blocked():
     # 2026-10-04：原画/批量两条占位配额已下线（原画是清晰度档位门而非次数配额），
     # 这里改为钉住真实存在的免费档上限 + 未接线资源必须 fail-open 放行。
     assert st.quota_state("matting")["limit"] == 8
-    # 🔴 2026-10-06 拆键：重活已拆成 convert/compress/sr/bridge 四个独立键，
-    # 免费各 5 次/日。老键 app_compute 仅用于存量归集，不再是业务写入点。
-    for _k in ("convert", "compress", "sr", "bridge"):
+    # 🔴 2026-10-06 拆键：重活已拆成 6 个独立键（转换三兄弟也拆开 —— 用户
+    # 17:11 要求「几个分开不要几个放一起」），免费各 5 次/日。
+    # 老键 app_compute 仅用于存量归集，不再是业务写入点。
+    for _k in ("convert_video", "convert_audio", "convert_image",
+              "compress", "sr", "bridge"):
         assert st.quota_state(_k)["limit"] == 5, f"{_k} 免费档应仍为 5/日"
     assert st.quota_state("original")["unknown"] is True, "已下线资源不应再被当配额拦"
     assert st.quota_state("original")["allowed"] is True
     print("✅ 免费档 download 10/日，超限带 MEMBER_QUOTA；matting 8 / 重活各 5；未知资源 fail-open")
 
 def test_app_compute_quota_free5_member200():
-    """convert（格式转换，2026-10-06 从 app_compute 拆出）：免费 5/日、会员 200/日、跨日重置。"""
+    """convert_video（视频格式转换，2026-10-06 从 app_compute 拆出）：免费 5/日、会员 200/日、跨日重置。"""
     cur = [T0]
     st = _mkstore(tempfile.mkdtemp(), cur)
-    # 🔴 2026-10-06 拆键：重活已拆成 convert/compress/sr/bridge 四个独立键，
-    # 免费各 5 次/日。老键 app_compute 仅用于存量归集，不再是业务写入点。
-    for _k in ("convert", "compress", "sr", "bridge"):
+    # 🔴 2026-10-06 拆键：重活已拆成 6 个独立键（转换三兄弟也拆开 —— 用户
+    # 17:11 要求「几个分开不要几个放一起」），免费各 5 次/日。
+    # 老键 app_compute 仅用于存量归集，不再是业务写入点。
+    for _k in ("convert_video", "convert_audio", "convert_image",
+              "compress", "sr", "bridge"):
         assert st.quota_state(_k)["limit"] == 5, f"{_k} 免费档应仍为 5/日"
     # 🔴 用 `convert`（拆键后的独立键），不用老键 app_compute ——
     #    老键的已用量会被 migrate_legacy_usage 归集进来，用它测会得到假计数。
     for i in range(5):
-        assert st.use_daily("convert")["ok"] is True, f"第 {i+1} 次应放行"
-    r = st.use_daily("convert")
+        assert st.use_daily("convert_video")["ok"] is True, f"第 {i+1} 次应放行"
+    r = st.use_daily("convert_video")
     assert r["ok"] is False and r.get("code") == "MEMBER_QUOTA"
     assert "免费" in r["error"] and "开通会员" in r["error"]
     # 🔴 独立性：转换用满不影响其它重活（2026-10-06 拆键的核心诉求）
-    for other in ("compress", "sr", "bridge"):
+    for other in ("convert_audio", "convert_image", "compress", "sr", "bridge"):
         assert st.quota_state(other)["used"] == 0, f"{other} 不该被 convert 的用量占"
     # 会员档 200/日（当日已用计数延续）
     st.activate("download_month")
-    q = st.quota_state("convert")
+    q = st.quota_state("convert_video")
     assert q["tier"] == "member" and q["limit"] == 200 and q["used"] == 5
-    assert st.use_daily("convert")["ok"] is True
+    assert st.use_daily("convert_video")["ok"] is True
     # 跨日惰性重置
     cur[0] = T0 + 86400
-    assert st.quota_state("convert")["used"] == 0
+    assert st.quota_state("convert_video")["used"] == 0
     print("✅ convert 免费 5/日超限拒、会员 200/日、跨日重置、且不占其它重活额度")
 
 
@@ -199,14 +203,14 @@ def test_new_quota_keys_roll_over_daily():
     """
     cur = [T0]
     st = _mkstore(tempfile.mkdtemp(), cur)
-    for k in ("convert", "compress", "sr", "bridge", "download", "subtitle"):
+    for k in ("convert_video", "compress", "sr", "bridge", "download", "subtitle"):
         st.use_daily(k, 1)
     # 全部都有记录
-    for k in ("convert", "compress", "sr", "bridge"):
+    for k in ("convert_video", "compress", "sr", "bridge"):
         assert st.quota_state(k)["used"] >= 1, f"{k} 应已计入用量"
     # 跨日 → 全部归零（含拆键新增的四个）
     cur[0] = T0 + 86400
-    for k in ("convert", "compress", "sr", "bridge", "download", "subtitle"):
+    for k in ("convert_video", "compress", "sr", "bridge", "download", "subtitle"):
         assert st.quota_state(k)["used"] == 0, f"{k} 跨日未重置（写死键名漏了新键）"
     print("✅ 拆键后的 4 个新键跨日均重置")
 

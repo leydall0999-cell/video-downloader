@@ -129,6 +129,15 @@ def test_rows_have_real_gate() -> None:
         if not hit:
             argpat = re.compile(r'app_compute_gate\(\s*[^,]+,\s*["\']' + res + r'["\']')
             hit = [f for f, s2 in srcs if argpat.search(s2)]
+        if not hit:
+            # 🔴 2026-10-06 转换类键的形态：资源名由 `convert_quota_key(target)`
+            #    **返回值**传入（`app_compute_gate(request, _ckey, _clabel)`），
+            #    因为视频/音乐/图片转换走同一个端点、只能按 target 动态判定。
+            #    判据：业务代码里出现 `convert_quota_key(`，且 app.py 里该函数
+            #    返回值确实可能等于本资源（直接查常量表里的字面量）。
+            ck = [f for f, s2 in srcs if "convert_quota_key(" in s2]
+            if ck and res in ("convert_video", "convert_audio", "convert_image"):
+                hit = ck
         if hit:
             check(f'[{r["key"]}] use_daily/quota_state("{r["resource"]}") 有拦截点',
                   True, "")
