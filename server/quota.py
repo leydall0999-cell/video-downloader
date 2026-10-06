@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 import subprocess
 import sys
 import threading
@@ -64,14 +65,32 @@ def _keychain_service() -> str:
     return _KEYCHAIN_SERVICE
 
 
-def _keychain_read() -> Optional[dict[str, int]]:
+def _keychain_account(base_dir: Any = None) -> str:
+    """影子条目的 account 名：**按数据目录分桶**。
+
+    🔴 为什么按 base_dir 而不是全局一份（2026-10-06 修）：全局一份会让
+    同一台机器上「不同数据目录 = 不同用户/不同实例」互相污染额度 —— 最典型的是
+    离线测试用固定时间戳跑 `now=1000.0`，而影子里的终身计数是上一次别的用例
+    留下的（实测把 test_quota 的跨日重置用例打成 deny）。按 base_dir 分桶后，
+    每个数据目录一份影子，互不干扰，测试也天然隔离。
+    """
+    if base_dir is None:
+        return _KEYCHAIN_ACCOUNT
+    try:
+        h = hashlib.sha256(str(Path(base_dir).resolve()).encode("utf-8")).hexdigest()[:16]
+        return f"{_KEYCHAIN_ACCOUNT}.{h}"
+    except Exception:
+        return _KEYCHAIN_ACCOUNT
+
+
+def _keychain_read(account: str) -> Optional[dict[str, Any]]:
     """读影子计数；读不到（非 macOS / 条目不存在 / 被拒）返回 None。"""
     if sys.platform != "darwin":
         return None
     try:
         r = subprocess.run(
             ["security", "find-generic-password", "-s", _keychain_service(),
-             "-a", _KEYCHAIN_ACCOUNT, "-w"],
+             "-a", account, "-w"],
             capture_output=True, timeout=_KEYCHAIN_TIMEOUT)
     except Exception:
         return None
@@ -95,10 +114,11 @@ def _keychain_read() -> Optional[dict[str, int]]:
             out[k] = max(0, int(data.get(k) or 0))
         except (TypeError, ValueError):
             out[k] = 0
+    out["daily_date"] = str(data.get("daily_date") or "")
     return out
 
 
-def _keychain_write(state: dict[str, Any]) -> None:
+def _keychain_write(state: dict[str, Any], today: str, account: str) -> None:
     """写影子计数；失败静默（加固是可选的，不阻断主流程）。"""
     if sys.platform != "darwin":
         return
@@ -108,41 +128,59 @@ def _keychain_write(state: dict[str, Any]) -> None:
             payload[k] = max(0, int(state.get(k) or 0))
         except (TypeError, ValueError):
             payload[k] = 0
+    # 日配额必须带日期：否则次日读到的还是「昨天用尽」的计数（跨日不重置）
+    payload["daily_date"] = today or str(state.get("daily_date") or "")
     try:
         data = json.dumps(payload, ensure_ascii=False)
         # delete 先行：已存在时 add 会报错；不存在时忽略错误继续 add
         subprocess.run(["security", "delete-generic-password", "-s",
-                        _keychain_service(), "-a", _KEYCHAIN_ACCOUNT],
+                        _keychain_service(), "-a", account],
                        capture_output=True, timeout=_KEYCHAIN_TIMEOUT)
         subprocess.run(["security", "add-generic-password", "-U", "-s",
-                        _keychain_service(), "-a", _KEYCHAIN_ACCOUNT,
+                        _keychain_service(), "-a", account,
                         "-w", data],
                        capture_output=True, timeout=_KEYCHAIN_TIMEOUT)
     except Exception:
         pass
 
 
-def _shadow_merge(state: dict[str, Any]) -> dict[str, Any]:
-    """把影子计数**合并进** state：逐键取较大值。
+def _shadow_merge(state: dict[str, Any], today: str = "",
+                  account: str = "") -> dict[str, Any]:
+    """把影子计数**合并进** state：终身取 max，日配额按日期取。
 
     取 max 而非信任文件 —— 文件可能被用户手改小，也可能在 Keychain 不可用
     时是唯一来源。max 保证「已经用掉的额度不会因为任一侧丢失而复原」。
+
+    🔴 日配额必须**带日期**参与比较（2026-10-06 修）：影子只存一个数字的话，
+    次日读到的还是昨天用尽的计数，用户一上来就看到「今天已用满」。
+    日配额本身按自然日重置，所以只在**同一天**才取 max，跨日忽略影子。
+
+    `today` 由调用方按注入的 `now_fn` 算出（不读真实系统时间）—— 否则
+    用固定时间戳的测试会与影子日期错位。
     """
-    sh = _keychain_read()
+    sh = _keychain_read(account or _KEYCHAIN_ACCOUNT)
     if not sh:
         return state
-    for k in ("lifetime_cloud_used", "daily_auto_used"):
+    try:
+        cur_life = int(state.get("lifetime_cloud_used") or 0)
+    except (TypeError, ValueError):
+        cur_life = 0
+    state["lifetime_cloud_used"] = max(cur_life, int(sh.get("lifetime_cloud_used") or 0))
+    day = today or str(state.get("daily_date") or "")
+    sdate = str(sh.get("daily_date") or "")
+    if day and sdate == day:
         try:
-            cur = int(state.get(k) or 0)
+            cur_daily = int(state.get("daily_auto_used") or 0)
         except (TypeError, ValueError):
-            cur = 0
-        state[k] = max(cur, int(sh.get(k) or 0))
+            cur_daily = 0
+        state["daily_auto_used"] = max(cur_daily, int(sh.get("daily_auto_used") or 0))
     return state
 
 
-def _shadow_write(state: dict[str, Any]) -> None:
+def _shadow_write(state: dict[str, Any], today: str = "",
+                   account: str = "") -> None:
     """把当前计数同步进影子（每次成功计数后调用）。"""
-    _keychain_write(state)
+    _keychain_write(state, today, account or _KEYCHAIN_ACCOUNT)
 
 # ── 落盘：唯一临时名原子写 + 「载入 → 改 → 写回」临界区 ───────────────────── #
 # 为什么（2026-09-16 同类隐患清查）：quota.json 有**两个进程**的写者 —— 子进程
@@ -279,6 +317,8 @@ class QuotaManager:
         # 🔴 2026-10-06 跨端记账：取云端账号 token。注入而非 import，是为了不把
         # quota.py（及其管线同源副本）绑死在 membership/app 上，也便于测试。
         self._token = token_fn or (lambda: "")
+        # 影子条目按数据目录分桶：不同用户/实例互不污染（见 _keychain_account）
+        self._shadow_acct = _keychain_account(self.base_dir)
 
     # ── 云端记账（跨端唯一真源；断网 fail-open 降级到本机计数）───────────── #
     def _cloud(self, lifetime: int = 0, daily: int = 0,
@@ -364,24 +404,27 @@ class QuotaManager:
         3 次终身云端额度。改为唯一临时名原子写之后「读到半截」这条路径已不存在，
         所以**不要**把 `_save` 改回就地 write_text。
 
-        🔴 2026-10-06：读到之后合并 Keychain 影子计数（取较大值）。否则
-        「联网用满 → 断网 → 删 quota.json」会把计数归零，白嫖 3 次。
+        🔴 2026-10-06：读到之后合并 Keychain 影子计数（终身取 max、日配额按日期
+        取 max）。否则「联网用满 → 断网 → 删 quota.json」会把计数归零，白嫖 3 次。
         """
+        today = self._today()
         if self.path.exists():
             try:
-                return _shadow_merge(json.loads(self.path.read_text(encoding="utf-8") or "{}"))
+                return _shadow_merge(
+                    json.loads(self.path.read_text(encoding="utf-8") or "{}"),
+                    today, self._shadow_acct)
             except Exception:
                 return {}
         # 文件不存在（重装/删文件）：仍要读影子，否则删文件就等于清零额度
         try:
-            return _shadow_merge({})
+            return _shadow_merge({}, today, self._shadow_acct)
         except Exception:
             return {}
 
     def _save(self, st: dict) -> None:
         _write_atomic(self.path, json.dumps(st, ensure_ascii=False, indent=2))
         # 影子同步到系统 Keychain：让「删掉 quota.json」不再是重置手段
-        _shadow_write(st)
+        _shadow_write(st, self._today(), self._shadow_acct)
 
     @contextmanager
     def _mutation(self) -> Iterator[None]:
