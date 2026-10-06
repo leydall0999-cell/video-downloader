@@ -37,6 +37,17 @@ import quota  # noqa: E402  (路径插入后导入，读取 DEFAULT_CLOUD_RESOUR
 os.environ["VDL_DATA_DIR"] = tempfile.mkdtemp(prefix="vdl_cq_datadir_")
 
 
+def _today_local() -> str:
+    """本机当天（与 quota.QuotaManager._today() 同口径：本机时区）。"""
+    import time as _t
+    return _t.strftime("%Y-%m-%d", _t.localtime())
+
+
+def _tomorrow_local() -> str:
+    import datetime as _dt
+    return (_dt.date.today() + _dt.timedelta(days=1)).isoformat()
+
+
 class FakeCenter:
     """授权中心 cloud_quota 端点的内存替身。
 
@@ -50,9 +61,13 @@ class FakeCenter:
     LIFETIME_LIMIT = 3
     DAILY_LIMIT = 1
 
-    def __init__(self, day: str = "2026-10-06"):
+    def __init__(self, day: str | None = None):
         self.users: dict[str, dict] = {}
-        self.day = day
+        # 🔴 2026-10-07：day 原先写死 "2026-10-06"，跨过那一天后用例就开始
+        # 假红/假绿（中心的「今天」与客户端 `_today()` 差一天，日切语义全乱）。
+        # 默认跟本机当天一致 —— 中心按北京日切、客户端按本机时区，测试里两者
+        # 必须同源，否则测的是时区错配而不是业务逻辑。
+        self.day = day or _today_local()
         self.calls = 0
 
     def _acct(self, tok: str) -> dict:
@@ -288,13 +303,46 @@ def test_daily_auto_shared_and_rolls_over():
     # 换日：中心日切 → 恢复放行。
     # ⚠️ 必须用**同一个 q2**（本机缓存里存着昨天的 daily_date），才能验证
     # 「本机惰性日切」与「中心日切」不打架。
-    CENTER.day = "2026-10-07"
+    CENTER.day = _tomorrow_local()
     assert q2.consume_daily_auto() is True, "次日恢复"
     assert CENTER.users[TOK["A"]]["daily"] == 1, "中心次日重置后记 1 次"
-    # 本机以「云端下发的日切日期」为准重置：计数回到 0（当日第 1 次还没在本机记）。
-    # 断言 remaining 而不是绝对计数 —— 本机时区与云端北京日界可能差一天，
-    # 记的绝对值会在 0/1 间跳，但「今日可用」这个语义恒为 1。
-    assert q2.daily_auto_remaining() == 1, "次日本机显示今日可用 1 次"
+    # 🔴 2026-10-07 修正口径：这一行原先断言 remaining == 1，那是**回灌被抹掉**
+    # 之后的假象（本机 daily 被本机日切清零，看起来「还剩 1 次」，中心其实已扣）。
+    # 回灌修好之后本机与中心一致：当天这 1 次刚被用掉 → 剩余 0。
+    assert _used(d2)[1] == 1, "次日本机计数与中心一致（=1，不是被抹成 0）"
+    assert q2.daily_auto_remaining() == 0, "刚用掉当天唯一 1 次 → 剩余 0"
+
+
+def test_cloud_daily_backfill_survives_day_gap():
+    """🔴 钉住 2026-10-07 实测抓到的 bug：回灌的每日计数被本机日切抹掉。
+
+    中心按**北京时间**日切，本机按**本机时区**算今天 —— 两者差一天时（境外用户、
+    或系统时区非 UTC+8），回灌写下的 `daily_date` 不是本机 `_today()`，于是：
+      · `_persist` 里的日切当场把计数清零（写盘前抹一次）
+      · 下一次 `_state()` 读侧日切再抹一次
+    两次之后本机显示「今天还剩 1 次」，而中心其实已经用满 ⇒ 用户点了当场被拒，
+    而代码注释还宣称「以云端日切日期为准」。
+
+    本用例让中心的日界领先本机一天（跨时区最典型的形态），验证回灌能活下来。
+    """
+    d = _fresh()
+    q = _mgr(d)
+    assert q.consume_daily_auto() is True, "当天第 1 次放行"
+
+    # 中心换日（领先本机一天），另一端继续用
+    d2 = tempfile.mkdtemp(prefix="vdl_cq_daygap_")
+    q2 = _mgr(d2)
+    CENTER.day = _tomorrow_local()
+    assert q2.consume_daily_auto() is True, "中心日切后放行"
+
+    st = json.loads((Path(d2) / "quota.json").read_text(encoding="utf-8"))
+    assert st.get("daily_date") == _tomorrow_local(), "落盘保留中心日界（不是被改成本机今天）"
+    assert int((st.get("daily_auto") or {}).get(quota.DEFAULT_CLOUD_RESOURCE, 0)) == 1, \
+        "回灌的每日计数没被写盘侧日切抹掉"
+
+    # 再次读取（下次启动 / 下次查询）后仍必须与中心一致
+    assert q2.daily_auto_remaining() == 0, "重新读取后仍与中心一致（不会谎报还剩 1 次）"
+    assert _used(d2)[1] == 1, "本机缓存保持中心真值"
 
 
 def test_member_bypasses_center():
@@ -368,7 +416,7 @@ def test_stale_local_cache_never_falsely_denies():
     st2["daily_date"] = "2026-10-05"
     st2["daily_auto_used"] = 1
     Path(d2, "quota.json").write_text(json.dumps(st2), encoding="utf-8")
-    CENTER.day = "2026-10-07"
+    CENTER.day = _tomorrow_local()
     assert q2.consume_daily_auto() is True, "跨日脏缓存不得造成假拒"
 
 
@@ -481,6 +529,7 @@ def main():
         test_refund_goes_to_center,
         test_accounts_isolated,
         test_daily_auto_shared_and_rolls_over,
+        test_cloud_daily_backfill_survives_day_gap,
         test_daily_auto_is_per_resource_and_stable,
         test_center_limit_override_corrects_false_reject,
         test_member_bypasses_center,
