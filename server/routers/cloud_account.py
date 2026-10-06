@@ -235,6 +235,14 @@ def _after_login(store, email: str, resp: dict[str, Any], fp: str, name: str) ->
     acct = resp.get("account") or {}
     store.save_account(email, resp.get("token", ""), acct, fp=fp, name=name)
     _apply_account_state(store, acct)
+    # 🔴 2026-10-06 跨端云端额度回灌：登录后用云端余额覆盖本机 quota.json 缓存。
+    # 不做这步的话，用户在另一台机器/网页用掉的额度本机看不见，面板会显示
+    # 「还剩 3 次」→ 体验上等于没修。失败静默（记账路径另有 fail-open）。
+    try:
+        from quota import QuotaManager
+        QuotaManager(token_fn=lambda: str(store._cloud_token() or "")).sync_from_cloud()
+    except Exception:
+        pass
 
 
 # ---- 积分扣减上云（防破解：本地余额只是缓存，消耗流水以云端为准）------------

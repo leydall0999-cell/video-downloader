@@ -161,12 +161,92 @@ class QuotaManager:
         base_dir: Optional[Path | str] = None,
         now_fn: Optional[Callable[[], float]] = None,
         is_member_fn: Optional[Callable[[], bool]] = None,
+        token_fn: Optional[Callable[[], str]] = None,
     ) -> None:
         self.base_dir = Path(base_dir) if base_dir else DEFAULT_BASE_DIR
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.base_dir / "quota.json"
         self._now = now_fn or time.time
         self._is_member = is_member_fn or (lambda: False)
+        # 🔴 2026-10-06 跨端记账：取云端账号 token。注入而非 import，是为了不把
+        # quota.py（及其管线同源副本）绑死在 membership/app 上，也便于测试。
+        self._token = token_fn or (lambda: "")
+
+    # ── 云端记账（跨端唯一真源；断网 fail-open 降级到本机计数）───────────── #
+    def _cloud(self, lifetime: int = 0, daily: int = 0,
+               refund: bool = False) -> Optional[dict]:
+        """调授权中心原子扣减/退还/查询。**返回 None 表示「没拿到权威结果」**。
+
+        三种 None 情形一律 fail-open（沿用本机 quota.json 计数）：
+          · 没登录云端账号（token 为空）→ 本机专属用户，不该被云端拦
+          · 网络异常 / 中心不可达
+          · 中心返回体异常
+        ⚠️ 绝不因为「查不到」就当成「额度已用尽」——那会把断网用户和免费用户
+        一起误伤，且旧口径下断网本来是放行的。
+        """
+        try:
+            import license_client
+        except Exception:
+            return None
+        try:
+            tok = str(self._token() or "").strip()
+        except Exception:
+            return None
+        if not tok:
+            return None
+        try:
+            r = license_client.cloud_quota_remote(tok, lifetime=lifetime,
+                                                  daily=daily, refund=refund)
+        except Exception:
+            return None
+        if not isinstance(r, dict) or not r.get("ok"):
+            return None
+        return r
+
+    def _apply_cloud_view(self, cq: Any) -> bool:
+        """把云端快照**覆盖**写回本机 quota.json（计数 + 日切日期）。
+
+        🔴 `daily_date` 必须一起写（2026-10-06 修）：只写 `daily_auto_used` 会
+        留下「计数是新的、日期还是旧的」的不一致状态 —— 次日本机惰性日切按旧日期
+        重置后算出 remaining=0，在中心已经放行的情况下**本地反而拒绝**（实测
+        「次日恢复」用例挂）。故日期与计数必须同源落下。
+
+        用覆盖而非 max：云端是唯一真源，本机计数在中心可达时一律以云端为准
+        （否则「重装系统 → 本机归零 → 又变 3 次」的口子会重新出现）。
+        """
+        if not isinstance(cq, dict):
+            return False
+        try:
+            st = self._state()
+            st["lifetime_cloud_used"] = max(0, int(cq.get("lifetime_used") or 0))
+            st["daily_auto_used"] = max(0, int(cq.get("daily_auto_used") or 0))
+            cdate = str(cq.get("date") or "").strip()
+            if cdate:
+                # 以云端（北京）日切日期为准：本机 _roll_daily 按本机时区算，
+                # 与云端可能差一天，差值会让「每日 auto」在错误的边界重置。
+                st["daily_date"] = cdate
+            self._persist(st)
+            return True
+        except Exception:
+            return False
+
+    def _sync_from_cloud(self) -> Optional[dict]:
+        """把云端余额**覆盖**写回本机 quota.json（登录/心跳后回灌）。"""
+        r = self._cloud()
+        cq = (r or {}).get("cloud_quota")
+        if not self._apply_cloud_view(cq):
+            return None
+        return cq
+
+    def _consume_cloud(self, lifetime: int = 0, daily: int = 0,
+                       refund: bool = False) -> Optional[bool]:
+        """中心原子扣减。返回 True=已扣、False=中心明确拒绝、None=拿不到结果。"""
+        r = self._cloud(lifetime=lifetime, daily=daily, refund=refund)
+        if r is None:
+            return None
+        # 回灌本机（计数 + 云端日切日期），保证两端显示与日切边界一致
+        self._apply_cloud_view(r.get("cloud_quota"))
+        return bool(r.get("allowed"))
 
     # ── 持久化 ──────────────────────────────────────────────────────────── #
     def _load(self) -> dict:
@@ -268,9 +348,22 @@ class QuotaManager:
 
     # ── 变更 ────────────────────────────────────────────────────────────── #
     def consume_cloud_event(self) -> bool:
-        """扣 1 次终身云端事件。额度不足返回 False。"""
+        """扣 1 次终身云端事件。额度不足返回 False。
+
+        🔴 2026-10-06：先问授权中心（账号级原子扣减，跨端共享）。中心明确拒绝
+        （allowed=False）即**真的没有额度了** → 返回 False，堵住「换电脑重置」
+        的漏洞。中心拿不到结果（未登录 / 断网 / 中心异常）→ 降级用本机计数，
+        保持旧口径不误伤（fail-open）。
+
+        ⚠️ 顺序：必须**先问中心再看本机**。开头的本地前置检查会造成假拒 ——
+        本机缓存可能比中心旧（另一台机器刚用掉额度，本机还显示有余额，反之亦然），
+        本地判定等于用缓存覆盖真源。本地判定只作中心不可达时的兜底。
+        """
         if self.is_member():
             return True
+        remote = self._consume_cloud(lifetime=1)
+        if remote is not None:
+            return remote
         with self._mutation():
             st = self._state()
             if self.lifetime_cloud_remaining() <= 0:
@@ -295,10 +388,17 @@ class QuotaManager:
         终身额度，若之后整条任务失败（网络、超时、模型返回空内容），用户既没
         拿到成片、又少了 1 次机会——体感等同「花了钱买失败」。故在父进程侧按
         实际增量退还，绝不少扣也绝不超退（clamp 到 0）。
+
+        🔴 2026-10-06：退还也要同步到中心，否则「任务失败退还」只退本机，
+        云端计数不变 → 用户换台电脑后额度已被扣光却从未退过。先试中心，
+        拿不到结果才退回纯本机退还。
         """
         if self.is_member():
             return self.snapshot()
         if lifetime <= 0 and daily <= 0:
+            return self.snapshot()
+        remote = self._consume_cloud(lifetime=lifetime, daily=daily, refund=True)
+        if remote is not None:
             return self.snapshot()
         with self._mutation():
             st = self._state()
@@ -314,9 +414,21 @@ class QuotaManager:
             return self.snapshot()
 
     def consume_daily_auto(self) -> bool:
-        """扣 1 次每日 auto 额度。额度不足返回 False。"""
+        """扣 1 次每日 auto 额度。额度不足返回 False。
+
+        🔴 2026-10-06 顺序铁律：**先问中心，再看本机**。
+        早先放在函数开头的 `if self.daily_auto_remaining() <= 0: return False`
+        会在中心可达时造成假拒 —— 本机缓存可能停留在昨天（计数 1、日切日期也
+        停在昨天），次日真实额度已恢复，本机却算出 remaining=0 直接拒绝，
+        中心根本没被问到（实测「次日恢复」用例挂）。本机计数是缓存，中心才是
+        真源，故本地判定只能作为**中心不可达时**的兜底。
+        """
         if self.is_member():
             return True
+        remote = self._consume_cloud(daily=1)
+        if remote is not None:
+            return remote
+        # fail-open 兜底：断网 / 未登录云端账号 → 沿用本机计数
         with self._mutation():
             st = self._state()
             if self.daily_auto_remaining() <= 0:
@@ -447,6 +559,13 @@ class QuotaManager:
             "free_max_duration_sec": FREE_MAX_DURATION_SEC,
         }
 
+    def sync_from_cloud(self) -> Optional[dict]:
+        """登录/心跳成功后调用：把云端余额覆盖回本机，使两端显示一致。
+
+        失败静默返回 None —— 展示类回灌不值得打断流程（记账路径另有 fail-open）。
+        """
+        return self._sync_from_cloud()
+
 
 # 模块级单例（默认非会员；is_member 由调用方或 server 端注入）
 _default_manager: Optional[QuotaManager] = None
@@ -466,3 +585,18 @@ def set_member_fn(fn: Callable[[], bool]) -> None:
         _default_manager = QuotaManager(is_member_fn=fn)
     else:
         _default_manager._is_member = fn  # type: ignore[assignment]
+
+
+def set_token_fn(fn: Callable[[], str]) -> None:
+    """注入云端账号 token 取值（server 端 / 管线 env 注入后调用）。
+
+    🔴 2026-10-06 跨端云端额度记账：没有它，QuotaManager 拿不到云端身份 →
+    只能 fail-open 用本机计数 → 「换电脑重置额度」的口子照旧存在。
+    server 端经 `routers.quota.get_quota_manager` 构造时直接传 token_fn；
+    管线侧是独立进程，改用 `VDL_CLOUD_TOKEN` 环境变量（见 llm_script.py）。
+    """
+    global _default_manager
+    if _default_manager is None:
+        _default_manager = QuotaManager(token_fn=fn)
+    else:
+        _default_manager._token = fn  # type: ignore[assignment]

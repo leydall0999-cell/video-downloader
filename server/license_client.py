@@ -173,6 +173,34 @@ def trial_claim_remote(token: str, op: str, mode: str = "once",
                  base_url, timeout, opener)
 
 
+def cloud_quota_remote(token: str, lifetime: int = 0, daily: int = 0,
+                       refund: bool = False,
+                       base_url: Optional[str] = None,
+                       timeout: float = 8.0,
+                       opener: Optional[Callable] = None) -> dict[str, Any]:
+    """免费云端额度跨端原子扣减 / 退还 / 查询（2026-10-06）。
+
+    🔴 这个端点存在的理由：桌面端原先把「终身 3 次云端额度」记在**本机**
+    `~/.video-downloader/quota.json`，授权中心不知道 → 重装系统/换电脑计数归零 →
+    免费用户可无限白嫖真实云端大模型调用。改为账号级中心记账后，两端共用一份。
+
+    参数三态（服务端语义）：
+      · lifetime/daily > 0 → 扣减
+      · refund=True       → 退还（任务失败补偿）
+      · 都不传             → 只查询余额（冷启动/心跳回灌用）
+
+    返回 {ok, allowed, reason, applied, cloud_quota:{lifetime_used,
+    lifetime_remaining, daily_auto_used, daily_auto_remaining, ...}}。
+    allowed=False 表示额度已用尽（reason=lifetime_exhausted / daily_auto_exhausted），
+    此时**不落账**。网络异常抛 LicenseCloudError —— 调用方按 fail-open 处理
+    （沿用本机计数，绝不因断网把已付费会员拦在门外）。
+    """
+    return _post("/api/license/cloud_quota",
+                 {"token": token, "lifetime": int(lifetime or 0),
+                  "daily": int(daily or 0), "refund": bool(refund)},
+                 base_url, timeout, opener)
+
+
 def set_password_remote(email: str, new_password: str, old_password: str = "",
                         token: str = "", base_url: Optional[str] = None,
                         timeout: float = 12.0,

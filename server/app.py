@@ -1683,6 +1683,16 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                 run_env["VDL_IS_MEMBER"] = "1"
         except Exception:
             pass
+        # 云端账号 token 下传子进程（2026-10-06 跨端云端额度记账）：
+        # 管线是独立进程，拿不到 python 对象，只能走 env。没有 token 时 quota.py
+        # 会 fail-open 沿用本机计数（旧口径），故未登录云端账号也不影响本地用户。
+        try:
+            from routers.quota import _cloud_token
+            _ctok = _cloud_token(None)
+            if _ctok:
+                run_env["VDL_CLOUD_TOKEN"] = _ctok
+        except Exception:
+            pass
 
         # Popen 实时读取 stdout/stderr，按行追加到 commentary_jobs[job_id]['progress']，
         # 前端轮询时把进度条回显给用户，避免「30 分钟黑屏焦虑」。

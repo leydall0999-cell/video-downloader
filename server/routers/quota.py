@@ -32,10 +32,31 @@ def _is_member(request: Optional[Request] = None) -> bool:
         return False
 
 
+def _cloud_token(request: Optional[Request] = None) -> str:
+    """取当前用户的云端账号 token（供 QuotaManager 做跨端原子记账）。
+
+    🔴 2026-10-06：免费云端额度改为账号级中心记账后，这里是「本机身份 → 云端
+    身份」的桥。拿不到 token（未登录云端 / 本机专属账号）时返回空串，
+    QuotaManager 会 fail-open 沿用本机计数 —— 与旧口径一致，不误伤。
+
+    必须用 `current_member_store(request)` 而不是全局 `app.member_store`：
+    已登录本地账号时前者返回 per-user store（带该用户云端 token），
+    后者是云端账号写入的全局 store（可能是别人的身份）。参见
+    `membership.MembershipStore._cloud_token` 的同源回落逻辑。
+    """
+    try:
+        import app as _app
+        store = _app.current_member_store(request) if request is not None else _app.member_store
+        return str(store._cloud_token() or "")
+    except Exception:
+        return ""
+
+
 def get_quota_manager(request: Optional[Request] = None):
-    """构造注入会员判定的 QuotaManager。"""
+    """构造注入会员判定 + 云端 token 的 QuotaManager。"""
     from quota import QuotaManager
-    return QuotaManager(is_member_fn=lambda: _is_member(request))
+    return QuotaManager(is_member_fn=lambda: _is_member(request),
+                        token_fn=lambda: _cloud_token(request))
 
 
 # ── 本机引擎就绪探测（预检要用）──────────────────────────────────────── #
