@@ -18936,6 +18936,29 @@ el.dwVidPlayer.hidden = true;
     _renderChangelog();   // 有更新时把「新版本这次改什么」显示出来
   }
 
+  /**
+   * 版本号比较：a 是否比 b **新**（逐段数字比较，'v1.0.43' 与 '1.0.43' 等价）。
+   *
+   * 🔴 2026-10-07 新增。此前判定「有没有更新」用的是 `latestVer !== cur`（只要
+   * 不相等就算有更新），于是当**发布源比本机旧**时（本机抢先升级 / 源还没同步，
+   * 实测线上源停在 1.0.39 而本机已 1.0.43），会把旧版本当成新版本，
+   * 「关于」页就显示了 v1.0.39 的更新内容 —— 内容和版本对不上。
+   */
+  function _verNewer(a, b) {
+    const seg = (v) => String(v == null ? '' : v).trim().replace(/^v/i, '')
+      .split(/[.\-+_\s]+/).map((x) => parseInt(x, 10)).filter((n) => !isNaN(n));
+    const pa = seg(a);
+    const pb = seg(b);
+    if (!pa.length || !pb.length) return false;
+    const n = Math.max(pa.length, pb.length);
+    for (let i = 0; i < n; i += 1) {
+      const x = pa[i] || 0;
+      const y = pb[i] || 0;
+      if (x !== y) return x > y;
+    }
+    return false;
+  }
+
   /** 把 latest.notes_list / notes 归一成字符串数组（兼容只有 notes 的旧清单）。 */
   function _changelogItems(latest) {
     const raw = (latest && latest.notes_list) || [];
@@ -18957,10 +18980,11 @@ el.dwVidPlayer.hidden = true;
   /**
    * 更新内容展示（2026-09-26 用户要求「更新加入更新内容」）。
    *
-   * 三种场景与标题：
-   *   有新版本     → 「新版本 vX 更新内容」（配合上方更新横幅）
-   *   已是最新     → 「版本 vX 更新内容」（点检查更新也能看到改了什么）
-   *   刚更新完回来 → 「本次更新已完成（vX）」，优先展示更新时缓存下来的条目
+   * 展示口径（2026-10-07 统一定档，核心是**标题版本与内容必须同源**）：
+   *   发布源比本机新 → 「v{新版本} 更新内容」+ 该新版本的条目（点更新会装到什么）
+   *   本机不比源旧   → 「v{本机版本} 更新内容」+ 本机这版的条目
+   *                    （优先用更新时缓存的条目，退回内置 changelog 同版本条目）
+   *   找不到条目     → 整块隐藏（绝不拿别的版本的内容充数）
    */
   async function _loadAboutChangelog() {
     try {
@@ -18980,25 +19004,49 @@ el.dwVidPlayer.hidden = true;
     const data = _aboutChangelog || {};
     const entries = Array.isArray(data.entries) ? data.entries : [];
 
-    // 2026-10-03 用户要求：**只在「有更新可用」时**展示新版本的更新内容，
-    // 更新完成（已是最新）就不再展示；历史版本更新记录整块去掉。
-    // 判据优先用服务端 update_available，版本号不等作兜底（离线/字段缺失时）。
-    const hasUpdate = _aboutUpdateAvail || (!!latestVer && !!cur && latestVer !== cur);
-    if (!hasUpdate) { box.hidden = true; return; }
+    const pickBuiltin = (ver) => (ver
+      ? (entries.find((e) => e && String(e.version) === String(ver)) || null) : null);
 
-    // 优先用线上更新清单里的条目（= 这次点更新会装到的东西），退回内置日志同版本条目
-    let items = _changelogItems(_aboutLatest || {});
-    let dateText = _aboutLatest.published_at || '';
-    if (!items.length) {
-      const hit = entries.find((e) => e && e.version === latestVer) || null;
-      if (hit) {
-        items = Array.isArray(hit.items) ? hit.items.slice() : [];
-        dateText = dateText || hit.date || '';
+    // 🔴 2026-10-07 修（用户实测反馈：本机 1.0.43 却显示 1.0.39 的更新内容）：
+    // 展示的版本必须 **≥ 当前版本**，两者必须同源同版本。
+    //   ① 发布源比本机新 → 展示那个新版本的更新内容（= 点更新会装到什么）
+    //   ② 本机不比源旧（抢先升级 / 刚更新完 / 源还没同步 / 本就最新）→ 展示
+    //      **本机这一版**改了什么（更新时缓存下来的、退回内置日志同版本条目）
+    // 历史版本的整块列表依旧不展示（沿用 2026-10-03 的要求）。
+    const hasNewer = !!latestVer
+      && ((_aboutUpdateAvail) || !cur || _verNewer(latestVer, cur));
+
+    let title = '';
+    let items = [];
+    let dateText = '';
+    if (hasNewer) {
+      items = _changelogItems(_aboutLatest || {});
+      dateText = (_aboutLatest && _aboutLatest.published_at) || '';
+      title = 'v' + latestVer + ' 更新内容';
+      if (!items.length) {                       // 线上清单没带条目 → 退回内置同版本
+        const hit = pickBuiltin(latestVer);
+        if (hit) {
+          items = Array.isArray(hit.items) ? hit.items.slice() : [];
+          dateText = dateText || hit.date || '';
+        }
       }
+    } else if (cur) {
+      const cached = _cachedUpdateNotes();
+      if (cached && String(cached.version) === String(cur)
+          && Array.isArray(cached.items) && cached.items.length) {
+        items = cached.items.slice();            // 本次更新装到的条目（最贴近真实）
+      } else {
+        const hit = pickBuiltin(cur);
+        if (hit) {
+          items = Array.isArray(hit.items) ? hit.items.slice() : [];
+          dateText = hit.date || '';
+        }
+      }
+      title = 'v' + cur + ' 更新内容';
     }
     if (!items.length) { box.hidden = true; return; }
 
-    if (el.profChangelogTitle) el.profChangelogTitle.textContent = 'v' + latestVer + ' 更新内容';
+    if (el.profChangelogTitle) el.profChangelogTitle.textContent = title;
     if (el.profChangelogDate) el.profChangelogDate.textContent = dateText;
     list.replaceChildren(...items.map((t) => {
       const li = document.createElement('li');

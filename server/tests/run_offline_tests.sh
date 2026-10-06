@@ -144,6 +144,12 @@ run_one test_page_link_wiring.py
 #                              图片转换/视频音频桥接。守卫钉住「卡片 data-view 必须是侧栏真实视图名」
 #                              （拼错=点了没反应）与「侧栏主功能必须都在首页有入口」（防加了功能忘了首页）。
 run_one test_home_entries.py
+#  11e. test_update_notes_version.py —— 「关于」页更新内容的版本对齐守卫（2026-10-07 用户实测反馈）：
+#                               本机 1.0.43 却显示「v1.0.39 更新内容」。根因是前端兜底判据写成
+#                               「版本号不相等」（源比本机旧时把旧版本当新版本），且
+#                               `_cachedUpdateNotes()` 是死代码。守卫钉住：判定必须比大小
+#                               （`_verNewer`）、标题版本与内容必须同源、找不到条目就隐藏。
+run_one test_update_notes_version.py
 run_one test_sr.py
 run_one test_selfupdate.py
 run_one test_llm_local_priority.py
