@@ -532,6 +532,19 @@ run_one test_ai_credit_costs.py
 #      ⚠️ 需带 venv 跑（app.py 顶层 import requests）。
 run_one test_ai_free_trial.py
 
+#  42. test_free_quota_admin.py —— 后台「免费额度」栏（2026-10-06）：
+#      覆盖生效与字段级合并、脏值收敛、has_cost_gate 与真实代码一致、
+#      4 个解说入口都传 vision、免费额度与 AI 积分成本同区块左右分栏、
+#      **配额表每个键都必须出现在后台页面**（防再次漏项，如当时的 cloud）。
+run_one test_free_quota_admin.py
+
+#  43. test_web_quota_single_source.py —— 网页端「双配额」守卫（2026-10-06）：
+#      网页端历史上存在两套每日配额 —— 旧的按 IP 计数（开源版遗留，换 IP 即重置）
+#      与现行账号级（cloud_quota_gate + hk 回派 cn 为权威）。两者同时开会**双重
+#      计数**。本守卫钉住：旧 IP 墙开关默认 false、账号级墙真接了配额引擎、
+#      hk 回派链路完整。线上 cn/hk 实测均未开启旧墙（走代码默认）。
+run_one test_web_quota_single_source.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
