@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -35,6 +37,112 @@ DAILY_AUTO_RUNS = 1                # 每日 auto 运行额度（自然日重置�
 FREE_MAX_DURATION_SEC = 30 * 60    # 免费用户单条视频时长上限（秒）
 
 DEFAULT_BASE_DIR = Path(os.path.expanduser("~/.video-downloader"))
+
+# ── Keychain 影子计数（2026-10-06）───────────────────────────────────────── #
+# 🔴 为什么需要：`quota.json` 是**可删的普通文件**。实测的口子 ——
+#   联网把 3 次用满（中心记 3）→ 断网 → 删掉 quota.json → 计数归零 → 又白嫖 3 次。
+# 断网时本机没有中心可问，只能读本地文件；文件可删就等于计数可重置。
+# 修法：在 macOS Keychain 里另存一份**删不掉**的影子计数（系统级 ACL 保护，
+# 其他进程读不到、删不掉），断网时取「文件与影子的**较大值**」。
+#
+# 设计原则（与 credential_store 一致）：**fail-safe 优先于加固** ——
+# Keychain 不可用（非 macOS / security 命令缺失 / 被拒）时静默回落到纯文件口径，
+# 绝不让「加固失败」变成「用户用不了」。
+_KEYCHAIN_SERVICE = "com.videodownloader.desktop"
+_KEYCHAIN_ACCOUNT = "cloud_quota_shadow"
+_KEYCHAIN_TIMEOUT = 3
+
+
+def _keychain_service() -> str:
+    """Keychain service 名；测试隔离时切独立命名空间。
+
+    ⚠️ 与 credential_store._service() 同理：Keychain 是**系统级**的，不受
+    VDL_DATA_DIR 隔离 —— 测试桩会覆盖真实条目。测试环境必须换 service。
+    """
+    if os.environ.get("VDL_DATA_DIR", "").strip() or os.environ.get("VDL_KEYCHAIN_STUB"):
+        return _KEYCHAIN_SERVICE + ".test"
+    return _KEYCHAIN_SERVICE
+
+
+def _keychain_read() -> Optional[dict[str, int]]:
+    """读影子计数；读不到（非 macOS / 条目不存在 / 被拒）返回 None。"""
+    if sys.platform != "darwin":
+        return None
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-s", _keychain_service(),
+             "-a", _KEYCHAIN_ACCOUNT, "-w"],
+            capture_output=True, timeout=_KEYCHAIN_TIMEOUT)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        raw = (r.stdout or b"").decode("utf-8").strip()
+        data = json.loads(raw) if raw.startswith("{") else json.loads(
+            (r.stdout or b"").decode("utf-8"))
+    except Exception:
+        # 旧版可能只存了一个纯数字（早期只影子终身计数）
+        try:
+            return {"lifetime_cloud_used": int((r.stdout or b"").decode("utf-8").strip())}
+        except Exception:
+            return None
+    if not isinstance(data, dict):
+        return None
+    out = {}
+    for k in ("lifetime_cloud_used", "daily_auto_used"):
+        try:
+            out[k] = max(0, int(data.get(k) or 0))
+        except (TypeError, ValueError):
+            out[k] = 0
+    return out
+
+
+def _keychain_write(state: dict[str, Any]) -> None:
+    """写影子计数；失败静默（加固是可选的，不阻断主流程）。"""
+    if sys.platform != "darwin":
+        return
+    payload = {}
+    for k in ("lifetime_cloud_used", "daily_auto_used"):
+        try:
+            payload[k] = max(0, int(state.get(k) or 0))
+        except (TypeError, ValueError):
+            payload[k] = 0
+    try:
+        data = json.dumps(payload, ensure_ascii=False)
+        # delete 先行：已存在时 add 会报错；不存在时忽略错误继续 add
+        subprocess.run(["security", "delete-generic-password", "-s",
+                        _keychain_service(), "-a", _KEYCHAIN_ACCOUNT],
+                       capture_output=True, timeout=_KEYCHAIN_TIMEOUT)
+        subprocess.run(["security", "add-generic-password", "-U", "-s",
+                        _keychain_service(), "-a", _KEYCHAIN_ACCOUNT,
+                        "-w", data],
+                       capture_output=True, timeout=_KEYCHAIN_TIMEOUT)
+    except Exception:
+        pass
+
+
+def _shadow_merge(state: dict[str, Any]) -> dict[str, Any]:
+    """把影子计数**合并进** state：逐键取较大值。
+
+    取 max 而非信任文件 —— 文件可能被用户手改小，也可能在 Keychain 不可用
+    时是唯一来源。max 保证「已经用掉的额度不会因为任一侧丢失而复原」。
+    """
+    sh = _keychain_read()
+    if not sh:
+        return state
+    for k in ("lifetime_cloud_used", "daily_auto_used"):
+        try:
+            cur = int(state.get(k) or 0)
+        except (TypeError, ValueError):
+            cur = 0
+        state[k] = max(cur, int(sh.get(k) or 0))
+    return state
+
+
+def _shadow_write(state: dict[str, Any]) -> None:
+    """把当前计数同步进影子（每次成功计数后调用）。"""
+    _keychain_write(state)
 
 # ── 落盘：唯一临时名原子写 + 「载入 → 改 → 写回」临界区 ───────────────────── #
 # 为什么（2026-09-16 同类隐患清查）：quota.json 有**两个进程**的写者 —— 子进程
@@ -255,16 +363,25 @@ class QuotaManager:
         ⚠️ 这个兜底看着无害，其实很贵：只要文件出现半截内容，用户就会白拿回
         3 次终身云端额度。改为唯一临时名原子写之后「读到半截」这条路径已不存在，
         所以**不要**把 `_save` 改回就地 write_text。
+
+        🔴 2026-10-06：读到之后合并 Keychain 影子计数（取较大值）。否则
+        「联网用满 → 断网 → 删 quota.json」会把计数归零，白嫖 3 次。
         """
         if self.path.exists():
             try:
-                return json.loads(self.path.read_text(encoding="utf-8") or "{}")
+                return _shadow_merge(json.loads(self.path.read_text(encoding="utf-8") or "{}"))
             except Exception:
                 return {}
-        return {}
+        # 文件不存在（重装/删文件）：仍要读影子，否则删文件就等于清零额度
+        try:
+            return _shadow_merge({})
+        except Exception:
+            return {}
 
     def _save(self, st: dict) -> None:
         _write_atomic(self.path, json.dumps(st, ensure_ascii=False, indent=2))
+        # 影子同步到系统 Keychain：让「删掉 quota.json」不再是重置手段
+        _shadow_write(st)
 
     @contextmanager
     def _mutation(self) -> Iterator[None]:

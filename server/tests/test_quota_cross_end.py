@@ -109,9 +109,15 @@ TOK = {"A": "TOK-A", "B": "TOK-B"}
 
 
 def _fresh() -> str:
-    """干净的 base_dir + 全新中心状态。"""
+    """干净的 base_dir + 全新中心状态。
+
+    🔴 必须同时清 Keychain 影子：它是**系统级**的、不随临时目录销毁，
+    会跨用例泄漏（上一用例用满 3 次 → 下一用例一开始就 remaining=0）。
+    这与 credential_store 当年把真实账号 token 写进 Keychain 是同一类事故。
+    """
     global CENTER
     CENTER = FakeCenter()
+    _cleanup_keychain()
     d = tempfile.mkdtemp(prefix="vdl_cq_")
     _mgr(d)                                  # 触发 monkeypatch 绑定到新 CENTER
     return d
@@ -128,6 +134,21 @@ def _used(d: str) -> tuple[int, int]:
         return 0, 0
     st = json.loads(p.read_text(encoding="utf-8"))
     return int(st.get("lifetime_cloud_used", 0)), int(st.get("daily_auto_used", 0))
+
+
+def _cleanup_keychain():
+    """删掉本测试写入的 Keychain 影子条目（service 带 .test 后缀）。
+
+    Keychain 是**系统级**的，不随临时目录销毁 —— 不清理会污染后续测试，
+    也会在用户机器上留垃圾条目。
+    """
+    import subprocess as _sp
+    import quota as _Q
+    try:
+        _sp.run(["security", "delete-generic-password", "-s", _Q._keychain_service(),
+                 "-a", _Q._KEYCHAIN_ACCOUNT], capture_output=True, timeout=5)
+    except Exception:
+        pass
 
 
 # ── 用例 ───────────────────────────────────────────────────────────────── #
@@ -336,6 +357,70 @@ def test_stale_local_cache_never_falsely_denies():
     assert q2.consume_daily_auto() is True, "跨日脏缓存不得造成假拒"
 
 
+def test_shadow_count_survives_file_deletion():
+    """🔴 防「删文件重置」：Keychain 影子计数必须让 quota.json 可删也不可重置。
+
+    实测过的口子（修复前）：联网把 3 次用满（中心记 3）→ 断网 → 删掉
+    quota.json → 计数归零 → 又白嫖 3 次。断网时没有中心可问，本机文件是
+    唯一依据，而它是**可删的普通文件**。
+
+    本用例用真实 Keychain（service 带 .test 后缀，与真实条目隔离）跑完整链路：
+    用满 → 删文件 → 断网 → 仍必须拒绝。
+    """
+    d = _fresh()
+    q = _mgr(d)
+    for _ in range(3):
+        assert q.consume_cloud_event() is True
+    assert q.lifetime_cloud_remaining() == 0
+
+    # 断网 + 删掉 quota.json（模拟重装系统 / 手动清理）
+    import license_client
+
+    def _boom(*a, **k):
+        raise OSError("network down")
+    license_client.cloud_quota_remote = _boom
+    os.remove(os.path.join(d, "quota.json"))
+    assert not os.path.exists(os.path.join(d, "quota.json")), "文件确已删除"
+
+    q2 = _mgr(d)
+    assert q2.lifetime_cloud_remaining() == 0, "影子计数应让 remaining 仍为 0"
+    assert q2.consume_cloud_event() is False, "删文件 + 断网也不得放行（白嫖口子已堵）"
+    _cleanup_keychain()
+
+
+def test_shadow_uses_max_not_trust():
+    """影子与文件取**较大值**：手改小文件不能把已用额度改回来。"""
+    d = _fresh()
+    q = _mgr(d)
+    for _ in range(2):
+        assert q.consume_cloud_event() is True
+    # 手动把本机改小（篡改尝试）
+    p = os.path.join(d, "quota.json")
+    st = json.loads(open(p, encoding="utf-8").read())
+    st["lifetime_cloud_used"] = 0
+    open(p, "w", encoding="utf-8").write(json.dumps(st))
+    q2 = _mgr(d)
+    assert q2.lifetime_cloud_remaining() == 1, "取较大值：仍认已用 2 次，不被改回 3"
+    _cleanup_keychain()
+
+
+def test_keychain_unavailable_is_soft():
+    """Keychain 不可用时**静默回退**纯文件口径，绝不让加固失败变成功能不可用。"""
+    d = _fresh()
+    import quota as Q
+    orig_read, orig_write = Q._keychain_read, Q._keychain_write
+    try:
+        Q._keychain_read = lambda: None      # 模拟非 macOS / 条目不存在
+        Q._keychain_write = lambda st: None
+        q = _mgr(d)
+        for i in range(3):
+            assert q.consume_cloud_event() is True, f"回退模式下第{i+1}次应放行"
+        assert q.consume_cloud_event() is False, "回退模式下仍受本机 3 次限制"
+    finally:
+        Q._keychain_read, Q._keychain_write = orig_read, orig_write
+        _cleanup_keychain()
+
+
 def test_both_copies_byte_identical():
     """server/quota.py 与管线 scripts/quota.py 必须逐字节同源。
 
@@ -384,6 +469,9 @@ def main():
         test_member_bypasses_center,
         test_concurrent_consume_never_exceeds_limit,
         test_stale_local_cache_never_falsely_denies,
+        test_shadow_count_survives_file_deletion,
+        test_shadow_uses_max_not_trust,
+        test_keychain_unavailable_is_soft,
         test_both_copies_byte_identical,
         test_pipeline_injects_cloud_token,
         test_login_syncs_cloud_balance,
