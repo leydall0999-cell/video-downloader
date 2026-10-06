@@ -144,6 +144,11 @@ def _empty_cloud_lifetime() -> dict[str, int]:
     """每个云端功能各自的终身已用量（默认 0）。"""
     return {r: 0 for r in CLOUD_RESOURCES}
 
+
+def _empty_cloud_daily() -> dict[str, int]:
+    """每日 auto 护栏的 per-resource 空态（键集合与终身池一致）。"""
+    return {r: 0 for r in CLOUD_RESOURCES}
+
 # ── Keychain 影子计数（2026-10-06）───────────────────────────────────────── #
 # 🔴 为什么需要：`quota.json` 是**可删的普通文件**。实测的口子 ——
 #   联网把 3 次用满（中心记 3）→ 断网 → 删掉 quota.json → 计数归零 → 又白嫖 3 次。
@@ -214,7 +219,14 @@ def _keychain_read(account: str) -> Optional[dict[str, Any]]:
             return None
     if not isinstance(data, dict):
         return None
-    out: dict[str, Any] = {"cloud_lifetime": {}, "daily_date": ""}
+    out: dict[str, Any] = {"cloud_lifetime": {}, "daily_auto": {}, "daily_date": ""}
+    _da = data.get("daily_auto")
+    if isinstance(_da, dict):
+        for r in CLOUD_RESOURCES:
+            try:
+                out["daily_auto"][r] = max(0, int(_da.get(r) or 0))
+            except (TypeError, ValueError):
+                out["daily_auto"][r] = 0
     cl = data.get("cloud_lifetime")
     # 兼容两种历史格式：① 嵌套 {cloud_lifetime:{...}}（当前）② 扁平 {cloud_commentary: n, ...}（早期）
     if isinstance(cl, dict):
@@ -235,12 +247,19 @@ def _keychain_write(state: dict[str, Any], today: str, account: str) -> None:
     if sys.platform != "darwin":
         return
     cl = state.get("cloud_lifetime") or {}
-    payload = {"cloud_lifetime": {}, "daily_date": ""}
+    da = state.get("daily_auto") or {}
+    payload = {"cloud_lifetime": {}, "daily_auto": {}, "daily_date": ""}
     for r in CLOUD_RESOURCES:
         try:
             payload["cloud_lifetime"][r] = max(0, int(cl.get(r) or 0))
         except (TypeError, ValueError):
             payload["cloud_lifetime"][r] = 0
+        # 🔴 daily_auto 也进影子（per-resource）：否则影子只兜得住终身额度，
+        #   删文件后每日 auto 计数仍可归零（与终身不同步的漏洞）。
+        try:
+            payload["daily_auto"][r] = max(0, int(da.get(r) or 0))
+        except (TypeError, ValueError):
+            payload["daily_auto"][r] = 0
     # 日配额必须带日期：否则次日读到的还是「昨天用尽」的计数（跨日不重置）
     payload["daily_date"] = today or str(state.get("daily_date") or "")
     try:
@@ -285,15 +304,17 @@ def _shadow_merge(state: dict[str, Any], today: str = "",
     day = today or str(state.get("daily_date") or "")
     sdate = str(sh.get("daily_date") or "")
     if day and sdate == day:
-        try:
-            cur_daily = int(state.get("daily_auto_used") or 0)
-        except (TypeError, ValueError):
-            cur_daily = 0
-        try:
-            sh_daily = int(0)  # 每日 auto 已是死值（0），无需与影子合并
-        except (TypeError, ValueError):
-            sh_daily = 0
-        state["daily_auto_used"] = max(cur_daily, sh_daily)
+        # 每日 auto 现在是 per-resource 字典：逐键与影子取 max（影子是防删文件的
+        # 兜底计数，与 lifetime 同样处理）。
+        da = state.setdefault("daily_auto", _empty_cloud_daily())
+        sh_da = sh.get("daily_auto") or {}
+        if isinstance(sh_da, dict):
+            for r in CLOUD_RESOURCES:
+                try:
+                    da[r] = max(int(da.get(r) or 0), int(sh_da.get(r) or 0))
+                except (TypeError, ValueError):
+                    pass
+        state["daily_auto_used"] = sum(int(v or 0) for v in da.values())
     return state
 
 
@@ -513,11 +534,20 @@ class QuotaManager:
                 # 以云端（北京）日切日期为准：本机 _roll_daily 按本机时区算，
                 # 与云端可能差一天，差值会让「每日」在错误的边界重置。
                 st["daily_date"] = cdate
-            # 每日 auto 护栏：新中心与旧中心都回 `daily_auto_used`（单池，非 per-resource），
-            # 一律覆盖回本机，保证跨端每日额度同步（被拒时也要回灌中心当前值）。
-            da = cq.get("daily_auto_used")
-            if isinstance(da, int) and da >= 0:
-                st["daily_auto_used"] = da
+            # 每日 auto 护栏：中心已改 per-resource（回 `daily` 字典），按 resource
+            # 覆盖回灌；旧中心只回标量 `daily_auto_used`（总池）→ 归到默认键。
+            cda = cq.get("daily")
+            if isinstance(cda, dict):
+                for r in CLOUD_RESOURCES:
+                    try:
+                        st["daily_auto"][r] = max(0, int(cda.get(r) or 0))
+                    except (TypeError, ValueError, KeyError):
+                        pass
+            else:
+                da = cq.get("daily_auto_used")
+                if isinstance(da, int) and da >= 0:
+                    st["daily_auto"][DEFAULT_CLOUD_RESOURCE] = da
+            st["daily_auto_used"] = sum(st["daily_auto"].values())
             self._persist(st)
             return True
         except Exception:
@@ -581,7 +611,22 @@ class QuotaManager:
         # 补齐缺失的功能键
         for r in CLOUD_RESOURCES:
             cl.setdefault(r, 0)
-        raw.setdefault("daily_auto_used", 0)
+        # 🔴 2026-10-06 自查修复：daily_auto 也改 per-resource 字典。
+        #   中心已按 resource 记 daily（回 `daily` 字典），本机若仍存标量就会把
+        #   「8 个功能的总和」当成「某一个功能今天用了几次」⇒ 管理员把 daily_auto
+        #   配成 ≥1 时，**任一**功能用过一次就会让所有功能假拒（实测复现）。
+        # ⚠️ 字典优先：`daily_auto_used` 现在是**派生总和**（每次写盘都会更新），
+        #   若拿它去迁移会把「8 个键的和」灌进 cloud_commentary 一个键，把刚写好的
+        #   per-resource 字典冲掉（自查时实测踩到：转码用 1 次后重读文件，
+        #   cloud_commentary 变成 1，解说被误判用尽）。标量只作**旧文件**回退。
+        _da_dict = raw.get("daily_auto")
+        if isinstance(_da_dict, dict):
+            raw["daily_auto"] = {r: max(0, int(_da_dict.get(r) or 0)) for r in CLOUD_RESOURCES}
+        else:
+            _legacy_da = max(0, int(raw.get("daily_auto_used") or 0))
+            raw["daily_auto"] = {r: (_legacy_da if r == DEFAULT_CLOUD_RESOURCE else 0)
+                                 for r in CLOUD_RESOURCES}
+        raw["daily_auto_used"] = sum(raw["daily_auto"].values())   # 旧字段保留为总和（兼容旧读方）
         raw.setdefault("daily_date", "")
         return _shadow_merge(raw, today, self._shadow_acct)
 
@@ -617,6 +662,7 @@ class QuotaManager:
         today = self._today()
         if st.get("daily_date") != today:
             st["daily_date"] = today
+            st["daily_auto"] = _empty_cloud_daily()
             st["daily_auto_used"] = 0
 
     def _state(self) -> dict:
@@ -660,11 +706,13 @@ class QuotaManager:
         cl = (self._state().get("cloud_lifetime") or {})
         return max(0, _lim - int(cl.get(resource) or 0))
 
-    def daily_auto_remaining(self) -> int:
+    def daily_auto_remaining(self, resource: str = DEFAULT_CLOUD_RESOURCE) -> int:
+        """该功能今天还剩几次「每日 auto」额度（per-resource）。"""
         if self.is_member():
             return 10 ** 9
         _life, _daily = cloud_quota_limits()
-        return max(0, _daily - int(self._state().get("daily_auto_used", 0)))
+        da = self._state().get("daily_auto") or {}
+        return max(0, _daily - int(da.get(resource) or 0))
 
     def can_upload_video(self, duration_sec: float) -> bool:
         """免费用户单条视频 ≤ 30 分钟才放行；会员 / 时长未知(≤0) 不拦（前端主拦，服务端兜底宽松）。"""
@@ -746,17 +794,19 @@ class QuotaManager:
             # 每日 auto 护栏（共享单池，非 per-resource）：同样要退，否则「失败任务」
             # 把当天的每日额度也白吃掉。
             if daily > 0:
-                cur_day = int(st.get("daily_auto_used", 0))
+                da = st.setdefault("daily_auto", _empty_cloud_daily())
+                cur_day = int(da.get(resource) or 0)
                 new_day = max(0, cur_day - int(daily))
                 if new_day != cur_day:
-                    st["daily_auto_used"] = new_day
+                    da[resource] = new_day
+                    st["daily_auto_used"] = sum(da.values())
                     changed = True
             if not changed:
                 return self.snapshot()   # 无变化不落盘：避免无谓写文件与 mtime 抖动
             self._persist(st)
             return self.snapshot()
 
-    def consume_daily_auto(self) -> bool:
+    def consume_daily_auto(self, resource: str = DEFAULT_CLOUD_RESOURCE) -> bool:
         """扣 1 次每日 auto 额度。额度不足返回 False。
 
         🔴 2026-10-06 顺序铁律：**先问中心，再看本机**。
@@ -774,9 +824,11 @@ class QuotaManager:
         # fail-open 兜底：断网 / 未登录云端账号 → 沿用本机计数
         with self._mutation():
             st = self._state()
-            if self.daily_auto_remaining() <= 0:
+            if self.daily_auto_remaining(resource) <= 0:
                 return False
-            st["daily_auto_used"] = int(st.get("daily_auto_used", 0)) + 1
+            da = st.setdefault("daily_auto", _empty_cloud_daily())
+            da[resource] = int(da.get(resource) or 0) + 1
+            st["daily_auto_used"] = sum(da.values())
             self._persist(st)
             return True
 
@@ -885,8 +937,8 @@ class QuotaManager:
             return "deny"          # 该功能的终身云端额度耗尽
         if mode == "cloud_only":
             return "allow"         # 显式选云端：不检查也不消耗每日 auto 额度
-        if self.daily_auto_remaining() <= 0:
-            return "deny"          # 当日 auto 已用满 → 强制 local_only
+        if self.daily_auto_remaining(resource) <= 0:
+            return "deny"          # 该功能当日 auto 已用满 → 强制 local_only
         return "allow"
 
     def status(self) -> dict:
@@ -907,8 +959,11 @@ class QuotaManager:
             "lifetime_cloud_remaining": self.lifetime_cloud_remaining(),
             "lifetime_cloud_limits": {r: _limits.get(r, int(LIFETIME_CLOUD_EVENTS)) for r in CLOUD_RESOURCES},
             "daily_auto_used": 0 if member else int(st.get("daily_auto_used", 0)),
+            "daily_auto": {r: 0 for r in CLOUD_RESOURCES} if member else dict(st.get("daily_auto") or {}),
             "daily_auto_limit": cloud_quota_limits()[1],
-            "daily_auto_remaining": self.daily_auto_remaining(),
+            "daily_auto_remaining": {
+                r: (10 ** 9 if member else self.daily_auto_remaining(r))
+                for r in CLOUD_RESOURCES},
             "cloud_lifetime": {r: 0 if member else int(cl.get(r) or 0) for r in CLOUD_RESOURCES},
             "cloud_lifetime_remaining": cloud_lifetime_remaining,
             "free_max_duration_sec": FREE_MAX_DURATION_SEC,

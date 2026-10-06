@@ -641,12 +641,28 @@ def test_no_hardcoded_pipeline_path():
     check("VDL_PIPELINE_DIR" in src, "管线路径走环境变量")
 
 
+def test_lifetime_input_is_honest_about_center():
+    """🔴 2026-10-06 自查：终身次数输入框**实际不生效**，UI 必须说实话。
+
+    实测：桌面后台保存只写本机 plans.json（`save_plan_overrides`），而**真正的
+    放行/拒绝发生在授权中心**（`CLOUD_LIFETIME_LIMITS` 是中心里的硬编码常量）。
+    于是「终身免费次数」输入框改成 5，实际云端仍按 3 拒绝 —— 承诺了做不到。
+    在中心接上覆盖之前，界面必须写明「只影响本机预检，云端上限以授权中心为准」。
+    """
+    js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
+    check("终身次数行写明「云端放行上限以授权中心为准」",
+          "云端放行上限仍以授权中心为准" in js,
+          "输入框实际不生效（中心才是真源），UI 不得承诺可改云端上限")
+    check("提示同时说明记账主体是授权中心", "由授权中心按账号记账" in js)
+
+
 def main():
     tests = [
         test_effective_limits_default_unchanged,
         test_quota_rows_use_function_names,
         test_daily_feature_rows_mark_shared,
         test_frontend_groups_by_resource,
+        test_lifetime_input_is_honest_about_center,
         test_hint_text_matches_reality,
         test_legacy_key_hidden_from_admin_table,
         test_convert_target_routing,

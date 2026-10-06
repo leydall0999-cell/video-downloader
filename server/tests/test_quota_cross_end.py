@@ -481,6 +481,7 @@ def main():
         test_refund_goes_to_center,
         test_accounts_isolated,
         test_daily_auto_shared_and_rolls_over,
+        test_daily_auto_is_per_resource_and_stable,
         test_member_bypasses_center,
         test_concurrent_consume_never_exceeds_limit,
         test_stale_local_cache_never_falsely_denies,
@@ -495,6 +496,33 @@ def main():
         t()
         print(f"  ✅ {t.__name__}")
     print(f"✅ 跨端云端额度守卫全过（{len(tests)} 项）")
+
+
+def test_daily_auto_is_per_resource_and_stable():
+    """🔴 2026-10-06 自查：daily_auto 必须 per-resource，且**反复重读不漂移**。
+
+    背景：中心把每日 auto 改成 per-resource 后，客户端若仍存标量，就会把
+    「8 个键的总和」当成「某一个功能今天用了几次」⇒ 管理员把 daily_auto 配成
+    ≥1 时，任一功能用过一次就会让**所有**功能假拒（实测复现）。
+    另一个已踩的坑：`daily_auto_used` 是派生总和，若拿它做迁移会反过来冲掉刚写好的
+    per-resource 字典（转码用 1 次后重读，cloud_commentary 变成 1）。
+    """
+    q = _mgr(_fresh())
+    import time as _t
+    import quota as _q
+    today = _t.strftime("%Y-%m-%d")
+    # 中心回灌：两个功能各用 1 次
+    view = {"daily": {"cloud_convert": 1, "cloud_subtitle_burn": 1},
+            "daily_auto_used": 2, "date": today,
+            "lifetime": {r: 0 for r in _q.CLOUD_RESOURCES}}
+    assert q._apply_cloud_view(view, "cloud_convert")
+    da = q._state()["daily_auto"]
+    assert da["cloud_convert"] == 1 and da["cloud_subtitle_burn"] == 1, da
+    assert da["cloud_commentary"] == 0, f"未使用的功能不该有计数: {da}"
+    # 反复重读必须稳定（迁移优先级：字典 > 标量）
+    for i in range(5):
+        assert q._state()["daily_auto"] == da, f"第 {i + 1} 次重读漂移"
+    print("✅ daily_auto per-resource，反复重读不漂移")
 
 
 if __name__ == "__main__":

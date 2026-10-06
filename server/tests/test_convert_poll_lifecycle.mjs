@@ -113,6 +113,8 @@ async function runScenario({ uploadMs, finishMs }) {
     },
     // 分片上传：延迟 uploadMs（> 一个 tick）后才 resolve，复刻「上传期间 tick 先到」
     ucUploadChunk: () => new Promise(res => clock.setTimeout(res, uploadMs)),
+    // 产品 app.js:10 的登录 token 读取（沙箱无登录态 → 空串，与线上一致）
+    authBearerToken: () => '',
     request: (path) => {
       if (path.startsWith('/api/convert/')) {
         convertGets.push({ at: clock.now, path });
@@ -131,10 +133,11 @@ async function runScenario({ uploadMs, finishMs }) {
 
   // eslint-disable-next-line no-new-func
   new Function('el', 'UC_POLL_INTERVAL', 'deviceId', 'window', 'FormData', 'fetch',
-    'XMLHttpRequest', 'ucUploadChunk', 'request', 'setInterval', 'clearInterval',
+    'XMLHttpRequest', 'ucUploadChunk', 'request', 'authBearerToken', 'setInterval', 'clearInterval',
     'setTimeout', 'clearTimeout', 'console', `"use strict";\n${musBlock}`)(
     sandbox.el, sandbox.UC_POLL_INTERVAL, sandbox.deviceId, sandbox.window, sandbox.FormData,
     sandbox.fetch, sandbox.XMLHttpRequest, sandbox.ucUploadChunk, sandbox.request,
+    sandbox.authBearerToken,
     sandbox.setInterval, sandbox.clearInterval, sandbox.setTimeout, sandbox.clearTimeout,
     sandbox.console);
 

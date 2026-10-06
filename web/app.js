@@ -21349,7 +21349,8 @@ el.dwVidPlayer.hidden = true;
         <span class="admin-plan-name">${esc(CL_NAMES[res] || res)} <code class="admin-plan-code">${esc(res)}</code></span>
         <label>终身免费次数<input class="admin-input admin-input-sm fq-cloud" data-key="cloud_lifetime" data-res="${esc(res)}"
                value="${esc(Number(val) || 0)}" type="number" min="0"></label>
-        <span class="admin-plan-hint">该功能独立一份（与其它功能互不挤占），由授权中心按账号记账</span>
+        <span class="admin-plan-hint">该功能独立一份（与其它功能互不挤占），由授权中心按账号记账；
+          <b class="fq-hint-warn">改动只影响本机预检，云端放行上限仍以授权中心为准</b></span>
       </div>`;
       });
       h += `<div class="admin-plan-row" data-fq="cloud" data-key="cloud_daily_auto">

@@ -178,6 +178,14 @@ run_one test_llm_config_save.py
 run_one test_vision_managed_config.py
 run_one test_gateway_config.py
 run_one test_quota_refund.py
+# 跨端云端额度守卫（per-resource 记账 / 中心权威 / fail-open / Keychain 影子 /
+# 旧数据迁移 / daily_auto per-resource）—— 🔴 此前**漏登记**，17 项从未进过
+# 构建自验证，等于这批财务守卫只在手动单跑时生效。
+run_one test_quota_cross_end.py
+# 以下三个此前也漏登记（写完从未进过构建自验证），单跑均通过
+run_one test_license_base.py
+run_one test_membership_device.py
+run_one test_pagetool.py
 run_one test_commentary_output_naming.py
 run_one test_commentary_precheck.py
 run_one test_subtitle_band.py
@@ -439,6 +447,23 @@ else
 fi
 
 echo ""
+# 两个**用户实测事故**的回归守卫（此前未登记，且沙箱符号腐化导致长期失效，
+# 2026-10-06 修：产品给上传/轮询请求加 Authorization 头时用 authBearerToken()，
+# 沙箱未提供 → eval 直接 ReferenceError，断言"轮询 0 次"长期假红/假绿）
+echo "=== server/tests/test_concat_flow.mjs（拼接面板状态机：防重复结果/停表/清源片段） ==="
+if "$NODE_BIN" "$SERVER/tests/test_concat_flow.mjs"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
+echo "=== server/tests/test_convert_poll_lifecycle.mjs（音乐转换轮询不被上传期停表） ==="
+if "$NODE_BIN" "$SERVER/tests/test_convert_poll_lifecycle.mjs"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
 echo "=== server/tests/test_platform_count_label.mjs（平台数对外口径：两端统一 116→100+） ==="
 if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$SERVER/tests/test_platform_count_label.mjs"; then
