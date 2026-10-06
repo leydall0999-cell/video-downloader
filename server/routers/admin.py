@@ -12,12 +12,32 @@
 """
 from __future__ import annotations
 
+import os
+import re
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Request
 
 router = APIRouter()
+
+# 静态扫描用：server/ 根目录与解说管线 scripts/ 目录（不在则跳过该根）。
+# 🔴 绝不在源码里硬编码某台机器的绝对路径：开发机跑得通、部署到 ECS 就找不到
+# （构建产物里也没有 WorkBuddy/问问题 这层目录）。优先读环境变量
+# VDL_PIPELINE_DIR（build_mac.sh 用的就是 COMMENTARY_PIPELINE_DIR），其次找
+# 同级 ../commentary-pipeline/scripts（源码仓布局）。
+_SERVER_DIR = str(Path(__file__).resolve().parent.parent)
+_PIPELINE_DIR = ""
+for _c in (os.environ.get("VDL_PIPELINE_DIR", "").strip(),
+           os.environ.get("COMMENTARY_PIPELINE_DIR", "").strip()):
+    if _c and Path(_c).is_dir():
+        _PIPELINE_DIR = str(Path(_c).resolve())
+        break
+if not _PIPELINE_DIR:
+    _guess = Path(_SERVER_DIR).parent / "commentary-pipeline" / "scripts"
+    if _guess.is_dir():
+        _PIPELINE_DIR = str(_guess)
 
 from admin_store import (
     list_users,
@@ -47,6 +67,72 @@ def require_admin(request: Request) -> None:
 # 凭据来源的中文说法（面板展示用；2026-10-05 探测式改造引入）。
 # env=环境变量下发 / managed=管理员受管配置 / user=用户自己填的（我们已不再要求）
 _SOURCE_CN = {"env": "环境变量", "managed": "管理员下发", "user": "本机文件"}
+
+
+# 🔴 2026-10-06：后台「免费额度」分栏要用它标出「配了价但根本没扣费」的功能。
+# 起因是盘点时发现 `commentary_vision`（单次真实成本 ¥0.24，全表最贵）、
+# `voice_clone`、`matting_cloud_enhance` 三项在业务代码里只有后台能配价、
+# 没有任何地方真正调 gate —— 也就是**现在完全免费、随便用**，属财务漏洞。
+# 前端据此打「⚠ 未接入」角标，避免管理员以为配了价就等于在收钱。
+# 判定不靠人工维护清单（会过期），而是每次请求时静态扫一遍真实调用点。
+# 真正出现「op 作为计费参数」的调用形态（_credit_gate / gate_message / spend_for）
+# 🔴 判定「这个 op 真在扣费」的实现（2026-10-06 两次返工后定稿）：
+#
+# 前两次都栽在正则上 —— ① 只认 `_credit_gate(op)`，把 `_cb("op")` 回调和
+# `return "op"` 误判成「没接入」；② 放宽成多行匹配后，`[^)]{0,200}?` 又在
+# `gate_message(\n  store,\n  "op",\n)` 这种多行实参上失配，把明明在扣费的
+# matting_vision / subtitle_asr / local_matting_ai 误判成「没接入」。
+# **误报成财务漏洞比不报更坏**（会去改本来正确的代码），所以彻底不用正则。
+#
+# 现在只做一件事：在**业务源码**里找该 op 的字符串字面量出现位置，记为
+# 「候选调用点」；是否真扣费由 `_COST_GATE_SITES` 里人工登记的文件名确认。
+# 人工登记的那张表由守卫测试 test_ai_credit_costs.py 双向核对（新登记的 op
+# 必须真有调用点，成本表里新增却没登记的会红），不会静默腐烂。
+_COST_GATE_SITES: dict[str, tuple[str, ...]] = {
+    # 有真实扣费拦截点的 op → 出现该字面量的业务文件
+    "matting_cloud": ("routers/matting.py",),
+    "matting_vision": ("routers/matting.py",),
+    "local_matting_ai": ("routers/matting.py",),
+    "commentary_llm": ("routers/quota.py",),
+    "commentary_local_mlx": ("routers/quota.py",),
+    "subtitle_asr": ("routers/subtitle.py",),
+    "subtitle_translate": ("routers/subtitles.py",),
+    "dewatermark_ai": ("routers/dewatermark.py",),
+    # ⚠️ 下面三项**故意不登记**：全仓搜索连注释都搜不到 op 字面量，
+    # 说明它们只有后台能配价、业务代码从不扣费 ⇒ 现在完全免费随便用。
+    # 前端会据此打「⚠ 未接入扣费」角标。补上拦截点后从这里删掉并加进上面那张表。
+    # "matting_cloud_enhance": (),
+    # "commentary_vision": (),
+    # "voice_clone": (),
+}
+def _has_cost_gate(op: str) -> bool:
+    """该 op 是否真有扣费拦截点。
+
+    查 `_COST_GATE_SITES` 登记表，并**顺带校验**登记的文件里确实出现了该 op 的
+    字面量 —— 双重保险：登记表过期（功能挪了文件）会退化成 False，而不是继续
+    报一个假的「在扣费」。
+    """
+    sites = _COST_GATE_SITES.get(op)
+    if not sites:
+        return False
+    for rel in sites:
+        p = os.path.join(_SERVER_DIR, rel)
+        try:
+            with open(p, encoding="utf-8", errors="ignore") as fh:
+                if f'"{op}"' in fh.read() or f"'{op}'" in fh.read():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _cloud_quota_limits() -> tuple[int, int]:
+    """云端免费额度上限（终身 / 每日 auto），读 quota.py 的常量做单一真源。"""
+    try:
+        from quota import LIFETIME_CLOUD_EVENTS, DAILY_AUTO_RUNS
+        return int(LIFETIME_CLOUD_EVENTS), int(DAILY_AUTO_RUNS)
+    except Exception:
+        return 3, 1
 
 
 @router.get("/api/admin/users")
@@ -163,12 +249,44 @@ def admin_config_plans(payload: dict[str, Any] = Body(...), request: Request = N
 def admin_ai_credit_costs(request: Request = None) -> dict[str, Any]:
     """超级管理员：读取 AI 积分成本表（生效价 + 代码默认价 + 真实调用点）。"""
     require_admin(request)
-    from membership import AI_CREDIT_COSTS, credit_cost_table, free_trial_policy
+    from membership import (AI_CREDIT_COSTS, FEATURE_USAGE_DEFS,
+                            credit_cost_table, free_trial_policy)
     pol = free_trial_policy()
+    try:
+        from membership import load_plan_overrides
+        ov = (load_plan_overrides().get("free_quota") or {})
+    except Exception:
+        ov = {}
     return {
         "ok": True,
         "costs": credit_cost_table(),
         "registered": len(AI_CREDIT_COSTS),
+        # 🔴 2026-10-06 用户要求「所有功能都列出来（含纯免费的）」：这里是后台
+        # 「系统配置 → 套餐与积分成本 → 免费额度」分栏的数据源。把两套东西
+        # 一起返回，前端分两组渲染：
+        #   · 纯免费功能（FEATURE_USAGE_DEFS）：不消耗积分，走**日配额**（免费 N 次/日）
+        #   · 消耗积分的功能（AI_CREDIT_COSTS）：扣积分，可用**首次体验**免费名额
+        # 两者口径不同，混在一起会让人以为「下载 10/日」和「首次体验 1 次」是一回事。
+        "free_quota": {
+            "daily_features": [dict(x) for x in FEATURE_USAGE_DEFS],
+            "credit_features": [
+                {
+                    "op": op,
+                    "name": cfg.get("name") or op,
+                    "where": cfg.get("where") or "",
+                    "real_cost": cfg.get("real_cost") or "",
+                    "note": cfg.get("note") or "",
+                    # 有没有真实的计费拦截点（无 = 现在完全免费随便用，属财务漏洞）
+                    "has_gate": _has_cost_gate(op),
+                }
+                for op, cfg in AI_CREDIT_COSTS.items()
+            ],
+            "overrides": ov if isinstance(ov, dict) else {},
+            "limits": {
+                "cloud_lifetime": _cloud_quota_limits()[0],
+                "cloud_daily_auto": _cloud_quota_limits()[1],
+            },
+        },
         # 免费用户「首次体验」策略（2026-10-05 晚用户定档：账号首次使用免费一次）。
         # 与 `credit_costs` 同处 plans.json 覆盖层，改完即时生效、不需要重新打包。
         "free_trial": pol,

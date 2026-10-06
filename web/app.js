@@ -21880,6 +21880,14 @@ el.dwVidPlayer.hidden = true;
       try {
         const r = await adminRequest('/api/admin/config');
         if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
+        // 🔴 2026-10-06「免费额度」分栏：数据在 /api/admin/ai/credit-costs
+        // （与 credit_costs 同一个后端视图）。这里并行取一次再合并进 cfg，
+        // 让 renderPlansForm 一处渲染，不必改动套餐表单的整体数据流。
+        // 失败不阻断套餐面板 —— 免费额度是附加信息，取不到就不渲染该栏。
+        try {
+          const cr = await adminRequest('/api/admin/ai/credit-costs');
+          if (cr && cr.ok) r.free_quota = cr.free_quota || null;
+        } catch (e) { /* 静默：附加信息，取不到就不显示该栏 */ }
         lastConfig = r;
         renderSmtpList(r);
         renderPlansForm(r);
@@ -21963,6 +21971,7 @@ el.dwVidPlayer.hidden = true;
       const ai = (plans.ai_member && plans.ai_member.plans) || {};
       const cp = plans.credit_packs || {};
       const costs = cfg.credit_costs || {};
+      const FQ = cfg.free_quota || null;
       // 时间戳 ↔ datetime-local 互转（营销活动时间用）
       const _tsToLocal = (ts) => {
         const n = Number(ts) || 0;
@@ -21985,6 +21994,50 @@ el.dwVidPlayer.hidden = true;
         ['event', '活动（定时开售）'],
       ];
       const _modeLabel = (m) => (PLAN_MODES.find((x) => x[0] === m) || PLAN_MODES[0])[1];
+
+      // 🔴 2026-10-06 用户要求「所有功能都列出来（含纯免费的），方便后期调整」。
+      // 这里渲染「免费额度」分栏：把两套口径分开展示，绝不混在一张表里 ——
+      //   ① 纯免费功能：不消耗积分，靠**日配额**（免费 N 次/日，会员 N 次/日）
+      //   ② 消耗积分的功能：按「次」扣积分，可用**首次体验**免费名额
+      // 混在一起会让人以为「下载 10/日」和「首次体验 1 次」是同一个东西。
+      const freeQuotaBlock = (fq) => {
+        if (!fq) return '';
+        const ov = fq.overrides || {};
+        let h = `<div class="admin-plan-group" data-cat="fq"><h4>免费额度（所有功能）</h4>`;
+        h += `<p class="admin-plan-hint">左侧是<b>纯免费功能</b>：不扣积分，只按「每日次数」限制；
+              下方是<b>消耗积分的功能</b>：按次扣积分，另受「首次体验」免费名额保护。
+              云端免费额度（终身 ${esc(fq.limits?.cloud_lifetime ?? 3)} 次、每日 auto ${esc(fq.limits?.cloud_daily_auto ?? 1)} 次）
+              由授权中心跨端记账，<b>换电脑/换网页不会重置</b>。</p>`;
+
+        h += `<div class="fq-sub">① 纯免费功能（走每日配额，不扣积分）</div>`;
+        (fq.daily_features || []).forEach((f) => {
+          const cur = (ov.daily_free_limits || {})[f.key];
+          const free = cur === undefined ? f.free_limit : cur;
+          const mem = (ov.daily_member_limits || {})[f.key];
+          h += `<div class="admin-plan-row" data-fq="daily" data-key="${esc(f.key)}">
+            <span class="admin-plan-name">${esc(f.name)} <code class="admin-plan-code">${esc(f.key)}</code></span>
+            <label>每日免费次数<input class="admin-input admin-input-sm fq-free" data-fq="daily" data-key="${esc(f.key)}"
+                   value="${esc(free)}" type="number" min="0"></label>
+            <label>会员每日次数<input class="admin-input admin-input-sm fq-member" data-fq="daily" data-key="${esc(f.key)}"
+                   value="${esc(mem === undefined ? f.member_limit : mem)}" type="number" min="-1"></label>
+            <span class="admin-plan-hint">会员填 -1 = 不限</span>
+          </div>`;
+        });
+
+        h += `<div class="fq-sub">② 消耗积分的功能（按次扣积分，可享首次体验免费名额）</div>`;
+        (fq.credit_features || []).forEach((f) => {
+          const ex = (fq.defaults?.trial_exclude || []).includes(f.op);
+          h += `<div class="admin-plan-row" data-fq="credit" data-key="${esc(f.op)}">
+            <span class="admin-plan-name">${esc(f.name)} <code class="admin-plan-code">${esc(f.op)}</code>
+              ${f.has_gate ? '' : '<span class="fq-warn" title="业务代码里没有任何地方扣这项的分：配了价也不会真收钱，等于完全免费">⚠ 未接入扣费</span>'}</span>
+            <label>平台真实成本<input class="admin-input fq-cost" value="${esc(f.real_cost)}" readonly></label>
+            <label class="plan-on-sale"><input type="checkbox" class="fq-trial" data-op="${esc(f.op)}"${ex ? '' : ' checked'}> 参与首次体验</label>
+            <span class="admin-plan-hint">${esc(f.note || '')}</span>
+          </div>`;
+        });
+        h += `</div>`;
+        return h;
+      };
 
       const planBlock = (title, obj, kind, cat) => {
         let h = `<div class="admin-plan-group" data-cat="${cat}"><h4>${title}</h4>`;
@@ -22062,6 +22115,7 @@ el.dwVidPlayer.hidden = true;
       let html = planBlock('下载会员套餐', dl, 'days', 'dl');
       html += planBlock('AI 会员套餐', ai, 'credits', 'ai');
       html += planBlock('积分包', cp, 'credits', 'cp');
+      html += freeQuotaBlock(FQ);
       html += '<div class="admin-plan-group" data-cat="cost"><h4>AI 积分成本（每次操作消耗积分）</h4>';
       Object.keys(costs).forEach((k) => {
         html += `<div class="admin-plan-row" data-cost="${esc(k)}">
@@ -22157,7 +22211,22 @@ el.dwVidPlayer.hidden = true;
         const el = plansBox.querySelector(`.cost-val[data-cost="${k}"]`);
         costs[k] = el ? (parseInt(el.value, 10) || 0) : (cfg.credit_costs[k]);
       });
+      // 🔴 2026-10-06「免费额度」分栏：一并收集，跟套餐同一个保存按钮提交。
+      // 两类都只提交「页面上真实存在的行」——分栏没渲染出来就不产生 key，
+      // 绝不在前端凭空造一个覆盖层把服务端的值抹掉。
+      const freeQuota = {};
+      const dailyFree = {}, dailyMember = {};
+      plansBox.querySelectorAll('.fq-free[data-fq="daily"]').forEach((el) => {
+        dailyFree[el.dataset.key] = parseInt(el.value, 10) || 0;
+      });
+      plansBox.querySelectorAll('.fq-member[data-fq="daily"]').forEach((el) => {
+        const v = parseInt(el.value, 10);
+        dailyMember[el.dataset.key] = Number.isFinite(v) ? v : -1;
+      });
+      if (Object.keys(dailyFree).length) freeQuota.daily_free_limits = dailyFree;
+      if (Object.keys(dailyMember).length) freeQuota.daily_member_limits = dailyMember;
       const payload = { download_plans: dl, ai_plans: ai, credit_packs: cp, credit_costs: costs };
+      if (Object.keys(freeQuota).length) payload.free_quota = freeQuota;
       console.log('[plans] save payload 档位数 dl=%d ai=%d cp=%d', Object.keys(dl).length, Object.keys(ai).length, Object.keys(cp).length);
       // 诊断期：把即将提交的档位数与是否找到表单元素直接显示出来，
       // 这样不用看控制台也能判断「点了保存到底有没有走到这里」

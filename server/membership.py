@@ -80,6 +80,39 @@ FREE_DAILY_LIMITS: dict[str, int] = {
 # 评论/数据批量（DataTool 的功能，VDL V1 未实现）已于 2026-10-04 移除 → 空元组。
 UNLIMITED_QUOTA: tuple[str, ...] = ()
 
+
+def effective_daily_limits() -> tuple[dict[str, int], dict[str, int]]:
+    """返回 `(会员每日配额, 免费每日配额)`，已叠加后台「免费额度」分栏的覆盖。
+
+    🔴 2026-10-06：后台新增「免费额度」分栏后，每日配额不再是写死常量。
+    覆盖层在 `plans.json` 的 `free_quota`：
+      · `daily_member_limits` → 覆盖会员档（key 是 `FEATURE_USAGE_DEFS[].resource`）
+      · `daily_free_limits`   → 覆盖免费档
+    未覆盖的键落回上方代码常量（默认值永不丢失）。
+    读脏值一律收敛：非整数丢弃、负数（会员不限用 -1）保留、其余按 int 取。
+    """
+    member = dict(DAILY_QUOTA_LIMITS)
+    free = dict(FREE_DAILY_LIMITS)
+    try:
+        fq = (load_plan_overrides().get("free_quota") or {})
+    except Exception:
+        return member, free
+    if not isinstance(fq, dict):
+        return member, free
+    for src, dst in (("daily_member_limits", member), ("daily_free_limits", free)):
+        ov = fq.get(src)
+        if not isinstance(ov, dict):
+            continue
+        for k, v in ov.items():
+            key = str(k or "").strip()
+            if not key:
+                continue
+            try:
+                dst[key] = int(v)
+            except (TypeError, ValueError):
+                continue          # 脏值忽略：宁可回退默认，也不让整个配额表炸掉
+    return member, free
+
 # AI 会员权益文案（供 plans().ai_member.features，前端会员中心渲染）
 # 🔴 2026-10-04 定档：只写**真实存在**的能力。此前这里写过「AI 字幕识别 / 视频总结 /
 #    图片翻译体验」三项，全仓搜不到对应路由 = 拿不存在的功能做卖点，已删。
@@ -295,7 +328,12 @@ def load_plan_overrides() -> dict[str, Any]:
 # `free_trial` 是扁平策略字典（enabled/mode/exclude/max_cost…），列入此表 ⇒ 后台可
 # 只提交改动项（如只传 enabled）而不抹掉其余字段，与其余四张表同一套合并语义。
 _SAVE_TABLE_KEYS = ("download_plans", "ai_plans", "credit_packs", "credit_costs",
-                    "free_trial")
+                    "free_trial",
+                    # 🔴 2026-10-06「免费额度」分栏：纯免费功能的每日配额覆盖
+                    # （{daily_free_limits: {...}, daily_member_limits: {...}}）。
+                    # 必须进白名单走**字段级合并** —— 否则后台只改「免费次数」也会把
+                    # 「会员次数」整条抹掉（与 2026-10-03 那次「改销量清空套餐」同类）。
+                    "free_quota")
 
 
 def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
@@ -1687,9 +1725,11 @@ class MembershipStore:
         if resource in UNLIMITED_QUOTA:
             return {"resource": resource, "allowed": True, "unlimited": True}
         is_member = self._is_download_active()
-        limit_map = DAILY_QUOTA_LIMITS if is_member else FREE_DAILY_LIMITS
+        # 🔴 2026-10-06：走生效值（叠加后台「免费额度」分栏的覆盖），不再直读常量
+        mem_limits, free_limits = effective_daily_limits()
+        limit_map = mem_limits if is_member else free_limits
         limit = limit_map.get(resource)
-        if limit is None and DAILY_QUOTA_LIMITS.get(resource) is None:
+        if limit is None and mem_limits.get(resource) is None:
             # 未知资源：V1 不设卡（保守默认放行，避免误伤功能）
             return {"resource": resource, "allowed": True, "unknown": True}
         if limit is None:
@@ -1700,8 +1740,8 @@ class MembershipStore:
                 "remaining": max(0, limit - used),
                 "allowed": used < limit,
                 "tier": "member" if is_member else "free",
-                "member_limit": DAILY_QUOTA_LIMITS.get(resource),
-                "free_limit": FREE_DAILY_LIMITS.get(resource, 0)}
+                "member_limit": mem_limits.get(resource),
+                "free_limit": free_limits.get(resource, 0)}
 
     def use_daily(self, resource: str, n: int = 1) -> dict[str, Any]:
         """消耗下载类配额（免费档 resolve 10/日；会员档按表）。超限返回 ok=False。"""

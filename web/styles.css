@@ -5091,6 +5091,20 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-plan-mkt-grid label.plan-on-sale { flex-direction: row; align-items: center; gap: .35rem; }
 .admin-plan-mkt-grid label.plan-desc { grid-column: 1 / -1; }
 .admin-plan-hint { margin: .5rem 0 0; font-size: .72rem; color: var(--text-mute, #94a3b8); line-height: 1.5; }
+/* 「免费额度」分栏（2026-10-06）：两组功能的分组小标题 + 未接入扣费的警示角标 */
+.fq-sub {
+  margin: .9rem 0 .35rem; font-size: .8rem; font-weight: 500;
+  color: var(--text, #1e293b);
+  padding-bottom: .3rem; border-bottom: 1px solid var(--line, #cbd5e1);
+}
+.fq-sub:first-of-type { margin-top: .3rem; }
+.fq-warn {
+  display: inline-block; margin-left: .35rem; padding: 0 .4rem;
+  font-size: .68rem; font-weight: 500; line-height: 1.5;
+  color: #991b1b; background: #fee2e2; border-radius: 6px;
+  cursor: help; white-space: nowrap;
+}
+.admin-plan-row .fq-cost { width: 100%; min-width: 220px; font-size: .72rem; color: var(--text-mute, #64748b); }
 .admin-plan-add {
   display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
   margin-top: .6rem; padding: .5rem .6rem; border: 1px dashed var(--line, #cbd5e1); border-radius: 10px;
