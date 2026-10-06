@@ -1922,6 +1922,16 @@ main > .panel { margin-top: 3rem; }
   .app-intro-grid { grid-template-columns: 1fr; }
 }
 
+/* 移动端/窄屏（≤760px）：顶栏允许换行，功能导航独占一行并横向滚动。
+   历史坑（2026-10-07）：.tabs 在单行 flex 顶栏里带 min-width:0 + 默认 flex-shrink:1，
+   手机窄屏空间不足时被压缩成 0 宽（实测 #tabs width=0）→ 去水印/AI字幕/个人中心等
+   入口整排「凭空消失」，表现为「手机网页版功能缺失」。让 tabs 换到第二行即可始终可见。 */
+@media (max-width: 760px) {
+  .header-inner { flex-wrap: wrap; row-gap: .3rem; align-items: center; }
+  .tabs { order: 3; flex: 1 1 100%; min-width: 100%; margin-left: 0; }
+  .tab { min-height: 34px; }
+}
+
 @media (max-width: 640px) {
   .wrap { width: min(880px, 100% - 1rem); }
   .header-inner { gap: .55rem; min-height: 52px; }
