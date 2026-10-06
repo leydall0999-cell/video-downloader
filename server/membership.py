@@ -942,6 +942,44 @@ def spend_for(store: "MembershipStore", op: str, sub: str | None = None,
     return res
 
 
+def can_afford(store: "MembershipStore", op: str, sub: str | None = None) -> str:
+    """**只查不扣**：返回 "" = 付得起；返回人话原因 = 付不起。零副作用。
+
+    🔴 2026-10-06 新增。**绝不能用 `gate_message` 当探针** —— 它会先
+    `spend_credits` 真扣积分，余额不够时还会 `trial_consume` 消耗「首次体验」
+    名额。拿它做「要不要升级云端」的预判，等于**问一次就烧掉一次免费机会**
+    （实测：0 积分用户探测后日志出现 `free trial consumed op=matting_cloud`）。
+
+    判定顺序与 gate_message 一致（先积分、后试用名额），只是不动账：
+      1. 单价 <= 0 → 免费功能，放行；
+      2. 订阅积分 + 永久积分 >= 单价 → 放行；
+      3. 该 op 还有首次体验名额（`trial_available` 是只读）→ 放行；
+      4. 否则返回与 gate_message 同措辞的原因（前端直接展示）。
+    """
+    try:
+        cost = int(credit_cost(op, sub))
+    except Exception:  # noqa: BLE001
+        return ""                      # 单价查不到 → 保守放行，交给事后真扣费兜底
+    if cost <= 0:
+        return ""
+    try:
+        st = store._state                      # noqa: SLF001 — 同模块内读状态，不改
+        ai = st.get("ai_member") or {}
+        ai_left = int(ai.get("credits_left", 0)) if ai.get("active") else 0
+        perm_total = int((st.get("permanent_credits") or {}).get("total", 0))
+        if ai_left + perm_total >= cost:
+            return ""
+        pol = free_trial_policy()
+        if pol.get("enabled") and store.trial_available(op, cost):
+            return ""
+        if str(pol.get("mode")) == "once":
+            return ("你的账号已用过一次免费体验（每个账号限一次），请开通 AI 会员或购买积分包")
+        return f"{op} 积分不足（需要 {cost}，当前 {ai_left + perm_total}）"
+    except Exception as e:  # noqa: BLE001 — 探针异常按「付得起」处理，不误伤用户
+        logging.getLogger("membership").warning("can_afford probe error op=%s: %s", op, e)
+        return ""
+
+
 def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
                  reason: str | None = None) -> str | None:
     """扣积分并产出拦截原因：None=放行；非 None=「积分不足」原因字符串（供 402 detail）。

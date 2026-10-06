@@ -79,6 +79,8 @@ run_one test_static_undefined_names.py
 run_one test_membership.py
 run_one test_member_quota_e2e.py
 run_one test_matting_member.py
+# 3a. test_matting_credit_gate.py —— 云端抠图「积分不足」必须不升级 + 有提示（A+B 段）
+run_one test_matting_credit_gate.py
 run_one test_subtitle_quota.py
 run_one test_subtitle_preview.py
 run_one test_subtitle_audio.py

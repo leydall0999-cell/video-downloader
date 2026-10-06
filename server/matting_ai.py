@@ -1675,12 +1675,36 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
         #   （回调由 routers/matting.py 注入，扣费发生在仍持有 request 的线程里）。
         if _force_cloud and not force_cloud:
             _cb = (meta or {}).get("on_cloud_charge")
+            # 🔴 2026-10-06 B 段（用户「没积分会提示吗」→ A+B 一起做）：
+            #   自动升级前**先探一次积分**。不够就不升级 —— 继续走本机兜底，
+            #   绝不出现「出了云端图却没扣分」（原实现的静默白嫖）。
+            #   探针异常按「够用」处理：宁可少收一次，也不能误伤正常用户。
+            _no_credit = ""
             if callable(_cb):
+                _probe = getattr(_cb, "can_charge", None)
+                if callable(_probe):
+                    try:
+                        _no_credit = _probe("matting_cloud") or ""
+                    except Exception:  # noqa: BLE001
+                        _no_credit = ""
+            if _no_credit:
+                # 积分不足 → 不升级。_force_cloud 置回 False 让下方「本地优先 / 跳过云端」
+                # 优化重新生效；同时置 _no_cloud_credit 兜住后面两处云端分支。
+                _force_cloud = False
+                if meta is not None:
+                    # 标志：下方**所有**云端分支（人像 MediaKit / 通用 MediaKit /
+                    # cv 兜底）都要看它 —— 否则「不升级」只挡住了第一处，后面
+                    # 本地引擎再失败仍会滑到云端，变成另一种形态的白嫖。
+                    meta["_no_cloud_credit"] = True
+                    meta["cloud_escalate_skipped"] = _no_credit
+                    meta["cloud_error"] = ("积分不足，本次未升级云端（已用本机处理）：%s"
+                                           % _no_credit)
+            elif callable(_cb):
                 try:
                     _cb("matting_cloud")
                 except Exception as _e:  # noqa: BLE001
                     # 记账失败**不阻断出图**：宁可少收这一次，也不能让用户白等。
-                    # 失败会由 routers/matting.py 记 warning。
+                    # 失败会由 routers/matting.py 记 warning，并由 A 段提示用户。
                     if meta is not None:
                         meta["cloud_charge_error"] = str(_e)
         _cloud_models = ("auto", "birefnet-general", "sam-matting")
@@ -1721,7 +1745,35 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                 _skip_txt_on = bool(_gc0().get("skip_cloud_for_text", True))
             except Exception:  # noqa: BLE001
                 pass
-            if is_cloud_matting_mediakit_ready():
+            # 🔴 2026-10-06 A+B 兜底闸门：**任何**真正要跑云端的路径都在这里过一道。
+            #   ① 积分不足 → 不跑云端（置 _no_cloud_credit，后续分支全被守卫挡住），
+            #      本机继续兜底；② 够用但还没扣过 → 先扣（幂等，已扣不重复）。
+            #   覆盖「本地引擎抛异常后直接落到云端」这条**从未记账**的路径
+            #   （2026-10-05 修的是升级路径，这里是它的兄弟漏洞）。
+            _cb0 = (meta or {}).get("on_cloud_charge")
+            if (callable(_cb0) and not (meta or {}).get("_no_cloud_credit")
+                    and (is_cloud_matting_mediakit_ready() or is_cloud_matting_ready())):
+                _st = getattr(_cb0, "state", {}) or {}
+                _probe0 = getattr(_cb0, "can_charge", None)
+                _msg0 = ""
+                if callable(_probe0):
+                    try:
+                        _msg0 = _probe0("matting_cloud") or ""
+                    except Exception:  # noqa: BLE001
+                        _msg0 = ""
+                if _msg0:
+                    if meta is not None:
+                        meta["_no_cloud_credit"] = True
+                        meta["cloud_escalate_skipped"] = _msg0
+                        meta["cloud_error"] = ("积分不足，本次未使用云端处理（已用本机结果）：%s"
+                                               % _msg0)
+                elif not (_st.get("already_charged") or _st.get("charged")):
+                    try:
+                        _cb0("matting_cloud")
+                    except Exception as _e:  # noqa: BLE001
+                        if meta is not None:
+                            meta["cloud_charge_error"] = str(_e)
+            if not (meta or {}).get("_no_cloud_credit") and is_cloud_matting_mediakit_ready():
                 try:
                     _is_solid_bg, _bg_rgb = _detect_solid_background(rgb)
                 except Exception:  # noqa: BLE001
@@ -1758,6 +1810,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                             % (_pc_val, _pthr))
                 elif (_is_person or _is_person_label(vision_label)
                         or _is_person_label((meta or {}).get("prompt", ""))) \
+                        and not (meta or {}).get("_no_cloud_credit") \
                         and is_cloud_matting_mediakit_ready():
                     try:
                         from cloud_matting_mediakit import mediakit_remove_bg
@@ -1839,7 +1892,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     meta["skip_cloud_for_text"] = True
                     meta["cloud_error"] = "已跳过云端(整图非人像)，直接走本地"
             # ① MediaKit 通用软 alpha 抠图（豆包级，任意图）
-            elif is_cloud_matting_mediakit_ready():
+            elif (not (meta or {}).get("_no_cloud_credit")) and is_cloud_matting_mediakit_ready():
                 try:
                     from cloud_matting_mediakit import mediakit_remove_bg
                     _scene = "human" if _is_person else "general"
@@ -2142,7 +2195,7 @@ def matting_image(src: str | Path, out: str | Path, box: tuple | list | None = N
                     if meta is not None:
                         meta["cloud_error"] = "MediaKit失败: " + str(_ce)[:300]
             # ② cv 视觉智能（SigV4 AK/SK）：物体走 GeneralSegment，人像走 HumanSegment
-            if is_cloud_matting_ready():
+            if not (meta or {}).get("_no_cloud_credit") and is_cloud_matting_ready():
                 try:
                     from cloud_matting import cloud_matting_rgba
                     rgba = cloud_matting_rgba(rgb, box=_cb, person=_is_person, timeout=60)

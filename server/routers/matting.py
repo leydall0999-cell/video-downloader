@@ -48,6 +48,26 @@ def _make_cloud_charge_hook(request, store=None) -> dict:
     """
     box = {"already_charged": False, "charged": False, "op": "", "error": ""}
 
+    def can_charge(op: str) -> str:
+        """**只查不扣**：返回 "" 表示积分够用，返回人话原因表示不够。
+
+        🔴 2026-10-06（用户「没积分会提示吗」）：升级发生在后台线程、事前无法预知，
+        原实现只有「事后扣、扣不到就算了」⇒ 积分用完的用户自动升级那次会**白嫖且
+        界面零提示**。有了这个探针，matting_ai 可以在**真正跑云端之前**先问一次：
+        不够就**不升级**（回退本机结果，不白嫖），并在 meta 里留下原因给前端提示。
+        🔴 **不能用 `gate_message` 当探针**（实测踩过）：它会真 `spend_credits`，
+        余额不够时还会 `trial_consume` 烧掉「首次体验」名额 ⇒ 问一次就少一次
+        免费机会。改用同模块的零副作用 `membership.can_afford`。
+        """
+        try:
+            st = store if store is not None else app.current_member_store(request)
+            return _mem.can_afford(st, op)
+        except Exception as e:  # noqa: BLE001 — 探针异常按「够用」处理，交由事后扣费兜底
+            app.logger.warning("[matting] 积分探针异常（按可升级处理）: %s", e)
+            return ""
+
+    box["can_charge"] = can_charge
+
     def _hook(op: str) -> None:
         if box["already_charged"] or box["charged"]:
             return
@@ -63,6 +83,10 @@ def _make_cloud_charge_hook(request, store=None) -> dict:
             box["error"] = str(e)
             app.logger.warning("[matting] 云端升级记账异常（已出图，未扣分）：%s", e)
 
+    # 🔴 注入进 job 的是 **hook 函数本身**（`meta["on_cloud_charge"]`），所以探针与
+    #   幂等状态必须挂在函数属性上，工作线程（matting_ai）才拿得到。
+    _hook.can_charge = can_charge          # 只查不扣：升级前探积分（B 段）
+    _hook.state = box                      # already_charged / charged 实时状态
     box["hook"] = _hook
     return box
 
@@ -580,6 +604,12 @@ def matting_image_status(job_id: str) -> dict:
         "local_quality_reason": job.get("local_quality_reason", ""),
         "local_auto_escalated": job.get("local_auto_escalated", False),
         "forced_cloud": job.get("forced_cloud", False),
+        # 🔴 2026-10-06 积分闸门诊断（B+A）：
+        #   cloud_escalate_skipped = 积分不足、本次**没有**升级到云端（已回退本机）
+        #   cloud_charge_error     = 云端真跑了但记账被拒/异常（已出图、未扣分）
+        # 前端据此提示用户，避免「白嫖了却不知道」。
+        "cloud_escalate_skipped": job.get("cloud_escalate_skipped", ""),
+        "cloud_charge_error": job.get("cloud_charge_error", ""),
     }
 
 

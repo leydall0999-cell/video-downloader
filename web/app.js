@@ -6919,6 +6919,17 @@
             } else {
               el.matStatus.textContent = '抠图完成 ✅（☁️ 云端抠图 · 火山豆包级像素级：' + (d.vision_label || '主体') + '）';
             }
+          } else if (d.cloud_escalate_skipped) {
+            // 🔴 2026-10-06 A 段：积分不足 → 后端**没有**升级到云端（不白嫖）。
+            //   必须让用户知道「为什么这次效果一般」+ 一键购买入口，否则他会
+            //   以为产品坏了。下同 cloud_charge_error。
+            el.matStatus.textContent = '抠图完成（⚠️ 积分不足，本次未使用云端精修：'
+              + d.cloud_escalate_skipped + '。开通会员或购买积分包后可自动升级）';
+            try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+          } else if (d.cloud_charge_error) {
+            el.matStatus.textContent = '抠图完成（⚠️ 云端已处理但本次未扣积分：'
+              + d.cloud_charge_error + '）';
+            try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
           } else if (d.cloud_error) {
             el.matStatus.textContent = '抠图完成（⚠️ 云端抠图未生效：' + d.cloud_error + '，已回退本地）';
           }
