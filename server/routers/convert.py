@@ -18,7 +18,7 @@ router = APIRouter()
 @router.post("/api/convert")
 def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
-    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
+    _gate = app.app_compute_gate(request, "convert", "格式转换")           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     task = app._require_task(payload.task_id, _device_of(request))
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
@@ -105,7 +105,7 @@ def create_upload_convert(
     图片目标（png/jpg/webp/bmp/tiff）另用 image_quality/resize/flatten_alpha。
     """
     app._check_rate_limit(request)
-    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
+    _gate = app.app_compute_gate(request, "convert", "格式转换")           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
@@ -182,7 +182,7 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
     """落盘完成后的公共收尾：登记 job + 提交线程池转码（整传/分片 finish 共用）。
     request 传入时执行本地算力账号级配额（免费 5 次/日，超限 402）。"""
     if request is not None:
-        _gate = app.app_compute_gate(request)
+        _gate = app.app_compute_gate(request, "convert", "格式转换")
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
     out_path = app.CONVERT_DIR / f"up_conv_{job_id}.{ext}"
@@ -631,7 +631,7 @@ def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library, 
 
 def _create_concat_job(segs, out_format, out_name, to_library, audio_only, request):
     """为 /api/concat 与 /api/concat/local 共用的 job 创建逻辑（含本地算力配额）。"""
-    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
+    _gate = app.app_compute_gate(request, "convert", "格式转换")           # 本地算力账号级配额（免费 5 次/日）
     if len(segs) < 2:
         raise app.HTTPException(status_code=400, detail="至少需要 2 个片段")
     probes = [_probe_streams(p) for p in segs]

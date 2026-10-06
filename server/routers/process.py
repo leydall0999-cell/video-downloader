@@ -8,13 +8,19 @@ from fastapi import APIRouter
 router = APIRouter()
 
 @router.post("/api/process/run")
-def process_run(req: app.ProcessRequest) -> dict:
+def process_run(req: app.ProcessRequest, request: app.Request = None) -> dict:
     if not (app.plat.is_desktop() or app.os.environ.get("VDL_LIBRARY_ENABLED")):
         raise app.HTTPException(status_code=403, detail="当前部署未启用本地加工功能")
     if req.op not in ("audio", "gif", "trim", "crop", "compress", "upscale",
                       "frame", "frames", "sheet", "ringtone", "dewatermark",
                       "ai_dewatermark"):
         raise app.HTTPException(status_code=400, detail="不支持的处理类型")
+
+    # 🔴 2026-10-06 补配额闸门：本端点此前**完全没有额度限制**（实测确认），
+    # 用户可用它绕开「格式转换 / 高清修复」的每日额度（都是 ffmpeg 重活，
+    # 跑在本机但占 CPU/内存）。现在独立记到 `bridge`（音视频桥接）额度。
+    _gate = app.app_compute_gate(request, "bridge", "音视频桥接")
+    app.app_compute_count(request, _gate)
 
     # 解析来源：lib_ids 批量优先，否则单个 lib_id
     skipped = []

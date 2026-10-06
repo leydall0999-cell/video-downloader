@@ -715,7 +715,7 @@ class LocalSrRequest(BaseModel):
 def sr_local(payload: LocalSrRequest, request: app.Request) -> dict:
     """桌面版专用：本机绝对路径直接处理（免上传）。"""
     app._check_rate_limit(request)
-    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
+    _gate = app.app_compute_gate(request, "sr", "高清修复")           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     from .convert import _resolve_safe_local_path
     resolved = _resolve_safe_local_path(payload.local_path)
@@ -752,7 +752,7 @@ def sr_video_local(payload: LocalSrVideoRequest, request: app.Request) -> dict:
     与其让用户等 20 分钟拿到一个 2.6GB 的文件，不如一开始就讲清楚。
     """
     app._check_rate_limit(request)
-    _gate = app.app_compute_gate(request)           # 本地算力账号级配额（免费 5 次/日）
+    _gate = app.app_compute_gate(request, "sr", "高清修复")           # 本地算力账号级配额（免费 5 次/日）
     subscribed, free_used, free_daily = app._check_convert_quota(request)
     from .convert import _resolve_safe_local_path
     resolved = _resolve_safe_local_path(payload.local_path)

@@ -768,26 +768,46 @@ def _check_convert_quota(request: Request) -> tuple[bool, int, int]:
 _APP_COMPUTE_QUOTA_OFF = os.environ.get("VDL_APP_COMPUTE_QUOTA_OFF", "false").strip().lower() == "true"
 
 
-def app_compute_gate(request: Request) -> dict:
-    """本地算力配额预检（不计数）。免费 5/日，超限 402；引擎异常 fail-open。"""
+# 🔴 2026-10-06 用户定档「每个功能独立配置」：本地重算力从共用一个 `app_compute`
+# 键拆成 convert / compress / sr / commentary / bridge 五个独立键。
+# `resource` 决定记到哪一份额度；传入的 `label` 只用于给人话提示。
+# ⚠️ 不含 `commentary`：视频解说走 `quota.py` 的终身云端额度 + AI 积分，
+#    **不走日配额**（守卫 test_feature_usage_gate 会红 —— 别把它配成日配额键）。
+_APP_COMPUTE_KEYS = ("convert", "compress", "sr", "bridge")
+_APP_COMPUTE_LABELS = {
+    "convert": "格式转换", "compress": "高效压缩", "sr": "高清修复",
+    "bridge": "音视频桥接",
+}
+
+
+def app_compute_gate(request: Request, resource: str = "convert",
+                     label: str = "") -> dict:
+    """本地算力配额预检（不计数）。超限 402；引擎异常 fail-open。
+
+    `resource` 必须是 `_APP_COMPUTE_KEYS` 之一（旧键 `app_compute` 仍接受，
+    作为存量归集与兜底）。`label` 只影响错误提示文案。
+    """
     if _APP_COMPUTE_QUOTA_OFF:
         return {"mode": "off"}
+    # 未知键一律回落到 convert（而不是放行）—— 传错键时不该变成不限次
+    res = resource if resource in _APP_COMPUTE_KEYS else "convert"
+    name = label or _APP_COMPUTE_LABELS.get(res, "本地处理")
     try:
         from user_membership import current_member_store  # 局部导入，避免 import 顺序问题
         store = current_member_store(request)
-        q = store.quota_state("app_compute")
+        q = store.quota_state(res)
         if q.get("unlimited") or q.get("unknown") or q.get("allowed", True):
-            return {"mode": "local", "store": store, "remaining": q.get("remaining")}
+            return {"mode": "local", "store": store, "resource": res, "remaining": q.get("remaining")}
         if q.get("tier") == "free":
-            detail = (f"今日免费处理额度已用尽（{q['limit']}/日），"
+            detail = (f"今日免费「{name}」额度已用尽（{q['limit']}/日），"
                       f"开通会员可解锁 {q.get('member_limit', 0)} 次/日")
         else:
-            detail = f"今日处理配额已用尽（{q['limit']}/日）"
+            detail = f"今日「{name}」配额已用尽（{q['limit']}/日）"
         raise HTTPException(status_code=402, detail=detail)
     except HTTPException:
         raise
     except Exception:  # noqa: BLE001 — 会员引擎异常 fail-open
-        return {"mode": "local", "store": None}
+        return {"mode": "local", "store": None, "resource": res}
 
 
 def app_compute_count(request: Request, gate: dict, n: int = 1) -> None:
@@ -799,7 +819,8 @@ def app_compute_count(request: Request, gate: dict, n: int = 1) -> None:
         if store is None:
             from user_membership import current_member_store
             store = current_member_store(request)
-        store.use_daily("app_compute", n=n)
+        # 记到 gate 里带的那个独立键（2026-10-06 拆键）
+        store.use_daily(gate.get("resource") or "convert", n=n)
     except Exception as e:  # noqa: BLE001 — 计数失败绝不回滚已创建的任务
         try:
             logger.warning("[app-compute-quota] 计数失败（忽略）: %s", str(e)[:160])

@@ -180,11 +180,20 @@ def test_daily_feature_rows_mark_shared():
     import admin as A
     rows = A._daily_feature_rows()
     check(bool(rows), "能取到功能行")
-    # app_compute 应有多个功能行，且都标了 shared_group
-    ac = [r for r in rows if r["resource"] == "app_compute"]
-    check(len(ac) >= 3, f"app_compute 拆成多个功能行（实际 {len(ac)}）")
-    check(all(r["shared_group"] for r in ac), "每个功能行都标了共用额度组名")
-    check(all(r["known"] for r in ac), "app_compute 的功能行都 known=true")
+    # 🔴 2026-10-06 用户定档「每个功能独立配置」后，原本共用 app_compute 的
+    # 6 个重活已拆成 **4 个独立键**：convert / compress / sr / bridge。
+    # （commentary 不在内：视频解说走 quota.py 终身云端 + AI 积分，不走日配额。）
+    for key in ("convert", "compress", "sr", "bridge"):
+        ks = [r for r in rows if r["resource"] == key]
+        check(f"独立额度键 {key} 存在", bool(ks), "拆键后该功能应有独立额度")
+    # 5 个旧键仍共用（下载与追更同一份；转换三兄弟同一份；字幕/抠图/在线各自独立）
+    check(len([r for r in rows if r["resource"] == "download"]) == 2,
+          "视频下载/订阅追更共用 download（同一类）")
+    check(len([r for r in rows if r["resource"] == "convert"]) == 3,
+          "视频/音乐/图片转换共用 convert（同一类）")
+    check(all(r["known"] for r in rows if r["resource"] in
+              ("convert", "compress", "sr", "bridge")),
+          "拆出的 4 个独立键都 known=true")
     # 覆盖值取生效值：plans.json 覆盖 app_compute=3 时应显示 3 而非代码默认 5
     import os, tempfile, json as _json
     d = Path(tempfile.mkdtemp())

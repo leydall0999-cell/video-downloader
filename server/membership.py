@@ -62,19 +62,43 @@ CREDIT_PACKS: dict[str, dict[str, Any]] = {
 #    use_daily 拦截点；而且「原画」本身是**清晰度档位门**（>1080P 需会员），
 #    不按次计费 —— 拿次数配额表达是错的概念。留着会让会员页承诺
 #    「原画 100 次/日、批量素材 1000 条/日」两份不存在的权益。
+# 🔴 2026-10-06 用户定档「每个功能独立配置，可以手动调整」—— 拆键。
+# 此前 6 个重活共用一个 `app_compute` 键：管理员在后台改「音乐转换」也会改到
+# 「高清修复」，因为它们是同一个数。拆成独立键后每个功能各计各的。
+#
+# ⚠️ 存量迁移（用户同轮定档「旧记录归到 app_compute 总池」）：
+#   `_LEGACY_KEYS` 里的老键**保留在表里**（作为兜底与历史归集目标），
+#   `migrate_legacy_usage()` 在读取时把老键的已用量并到第一个新键，
+#   这样「今天之前用过 3 次转换」不会因为换键而凭空多出 3 次额度。
+#   老键不再有新的写入点（业务全部改用新键），但**保留**是为了：
+#     ① 历史数据归集；② 后台仍能看到「总池」这一行做对照。
+LEGACY_QUOTA_KEYS: tuple[str, ...] = ("app_compute",)
+
 DAILY_QUOTA_LIMITS: dict[str, int] = {
-    "download": 1000,         # 下载任务 / 日（会员）—— 2026-09-06 起配额墙在「点清晰度下载」处
-    "matting": 500,           # 本地一键抠图 / 日（会员）—— 2026-09-13 起配额墙；云端火山抠图走积分不计此配额
-    "cloud": 200,             # 云端算力（网页版转码/拼接/去水印/字幕）/ 日（会员）—— 2026-09-29 对齐（App 本地算力不消耗）
-    "app_compute": 200,       # App 本地重算力（转码/拼接/压缩/超分）/ 日（会员）—— 2026-09-29 用户定档：免费 5 次/日
+    "download": 1000,         # 下载任务 / 日（会员）
+    "matting": 500,           # 本地一键抠图 / 日（会员）；云端火山抠图走积分不计此配额
+    "cloud": 200,             # 网页版在线处理 / 日（会员）
+    # ── 以下 6 个是 2026-10-06 从 app_compute 拆出的独立键 ──────────────
+    "convert": 200,           # 视频/音频/图片格式转换、拼接（会员）
+    "compress": 200,          # 高效压缩（会员）
+    "sr": 200,                # 高清修复 / AI 超分（会员）
+    "bridge": 200,            # 音视频桥接（合成 / 替换）
+    # 老键：仅用于存量归集与后台对照，不再有写入点
+    "app_compute": 200,
 }
 # 免费档每日配额
 FREE_DAILY_LIMITS: dict[str, int] = {
     "download": 10,
-    "matting": 8,             # 免费本地抠图 8 次/日；云端火山抠图走积分，不占此配额
-    "cloud": 3,               # 云端算力免费 3 次/日（网页版专用键，账号级两端共享）—— 2026-09-29 对齐
-    "app_compute": 5,         # App 本地算力免费 5 次/日（转码/拼接/压缩/超分，账号级上云共享）—— 2026-09-29 用户定档
-    "subtitle": 2,            # 免费本地字幕提取 2 次/日（faster-whisper 本地推理）；会员无限
+    "matting": 8,             # 免费本地抠图 8 次/日
+    "cloud": 3,               # 网页版在线处理 3 次/日（账号级两端共享）
+    "subtitle": 2,            # 免费字幕提取 2 次/日（faster-whisper 本地推理）；会员无限
+    # ── 6 个独立键（2026-10-06）─────────────────────────────────────
+    "convert": 5,             # 格式转换 5 次/日
+    "compress": 5,            # 高效压缩 5 次/日
+    "sr": 5,                  # 高清修复 5 次/日
+    "bridge": 5,              # 音视频桥接 5 次/日
+    # 老键：存量归集用
+    "app_compute": 5,
 }
 # 字幕提取(subtitle) 自 2026-09-13 起改为免费 2 次/日（会员无限），不列入不限配额。
 # 评论/数据批量（DataTool 的功能，VDL V1 未实现）已于 2026-10-04 移除 → 空元组。
@@ -121,6 +145,37 @@ def effective_daily_limits() -> tuple[dict[str, int], dict[str, int]]:
                 continue          # 脏值忽略：宁可回退默认，也不让整个配额表炸掉
     return member, free
 
+def migrate_legacy_usage(usage: dict[str, Any]) -> dict[str, Any]:
+    """把老键 `app_compute` 的已用量归集到新的独立键（2026-10-06 拆键）。
+
+    🔴 背景：拆键前 6 个重活共用 `app_compute`。用户当天已用 3 次转换，
+    拆键后 `convert` 是新键（值 0）⇒ 凭空多出 3 次额度。
+    用户 2026-10-06 定档「旧记录归到 app_compute 总池」—— 这里的做法是：
+    **读某个新键时，若老键有已用量而该新键为 0，则把老键的量算进该新键**。
+    只读不写（不改用户的落盘数据），故：
+      · 老键一直保留，总池数字始终可见、可对照；
+      · 不会因为迁移而「清零」或「重复计数」。
+    局限（诚实说明）：老键的量会**同时**被每个新键读到，所以拆键当天
+    「用掉 3 次转换」会同时占掉压缩/修复/解说的 3 次 —— 这是「归集」的
+    语义（宁可少放行，也不要凭空多给），次日日切后自然恢复正常。
+    """
+    if not isinstance(usage, dict):
+        return usage
+    try:
+        legacy = int(usage.get("app_compute") or 0)
+    except (TypeError, ValueError):
+        return usage
+    if legacy <= 0:
+        return usage
+    for k in ("convert", "compress", "sr", "bridge"):
+        try:
+            if int(usage.get(k) or 0) <= 0:
+                usage[k] = legacy          # 新键尚无记录 → 以老键的量起算
+        except (TypeError, ValueError):
+            usage[k] = legacy
+    return usage
+
+
 # AI 会员权益文案（供 plans().ai_member.features，前端会员中心渲染）
 # 🔴 2026-10-04 定档：只写**真实存在**的能力。此前这里写过「AI 字幕识别 / 视频总结 /
 #    图片翻译体验」三项，全仓搜不到对应路由 = 拿不存在的功能做卖点，已删。
@@ -162,15 +217,16 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     # ⚠️ 拆行**不改变**任何计数逻辑：同一个 resource 的几行加起来还是那一份额度。
     {"key": "video_parse",      "name": "视频下载",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
     {"key": "subscribe",        "name": "订阅追更",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0, "shared_note": "与「视频下载」共用下载额度"},
-    {"key": "commentary",       "name": "视频解说",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机跑时占本地算力；引擎选云端时走云端额度并按 AI 积分计费"},
+    {"key": "commentary",       "name": "视频解说",     "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "走「终身云端 3 次」额度，并按 AI 积分计费（自动解说 40 积分 / 画面理解 50）"},
     # ⚠️ 名称不带「本地」：用户 2026-10-04 定档「会员权益文案不得出现 云端/算力/AI/本地」，
     # 当时把「本地一键抠图」改成「一键抠图」；这里同理（守卫 test_membership_benefits）。
     {"key": "subtitle_extract", "name": "字幕提取",     "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 0},
-    {"key": "convert_video",    "name": "视频格式转换", "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "与音乐/图片转换、高清修复、高效压缩共用本地算力额度"},
-    {"key": "convert_audio",    "name": "音乐转换",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "同「视频格式转换」"},
-    {"key": "convert_image",    "name": "图片转换",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "同「视频格式转换」"},
-    {"key": "compress",         "name": "高效压缩",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "同「视频格式转换」"},
-    {"key": "sr",               "name": "高清修复",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "同「视频格式转换」"},
+    {"key": "convert_video",    "name": "视频格式转换", "resource": "convert",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "含视频/音频/图片格式互转、拼接（同一类重活）"},
+    {"key": "convert_audio",    "name": "音乐转换",     "resource": "convert",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "与「视频格式转换」共用同一份额度"},
+    {"key": "convert_image",    "name": "图片转换",     "resource": "convert",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "与「视频格式转换」共用同一份额度"},
+    {"key": "compress",         "name": "高效压缩",     "resource": "compress",    "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "独立额度（此前与转换/修复共用）"},
+    {"key": "sr",               "name": "高清修复",     "resource": "sr",          "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "独立额度（此前与转换/压缩共用）"},
+    {"key": "bridge",           "name": "音视频桥接",   "resource": "bridge",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "合成 / 替换（此前无任何配额，现独立计）"},
     {"key": "local_matting",    "name": "一键抠图",     "resource": "matting",     "unit": "次", "free_limit": 8,  "member_limit": 500,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机跑；选云端抠图时按 AI 积分计费（云端抠图 50 积分）"},
     # 🔴 下面三行是**网页版**的功能（跑在服务器上），与桌面端不是同一批入口。
     #    名称用「在线」而非「云端」：用户 2026-10-04 定档「文案不得出现 云端/算力/
@@ -974,11 +1030,19 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 #    例：原来「本地一键抠图 500 次/日」→ 现在「一键抠图 500 次/日」；
 #        「云端算力（转码/拼接/…）」→「在线处理（转码/拼接/…）」。
 #    ⚠️ 不是隐藏条目 —— 每条权益、配额、限流都照旧（见 test_benefits_hide_impl_wording 守卫）。
+# 🔴 2026-10-06 拆键后新增 5 条独立权益（此前 6 个重活共用 app_compute 一条）。
+# 文案守则（用户 2026-10-04 定档，守卫 test_membership_benefits）：不得出现
+# 「云端 / 算力 / AI / 本地」——用「在线」「本机」以外的中性说法。
 _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("download", "下载任务 {v} 次/日"),
     ("matting", "一键抠图 {v} 次/日"),
     ("cloud", "在线处理（转码 / 拼接 / 去水印 / 字幕）{v} 次/日"),
-    ("app_compute", "视频处理（转码 / 拼接 / 压缩 / 超分）{v} 次/日"),
+    ("convert", "格式转换（视频 / 音频 / 图片）{v} 次/日"),
+    ("compress", "高效压缩 {v} 次/日"),
+    ("sr", "高清修复 {v} 次/日"),
+    ("bridge", "音视频桥接（合成 / 替换）{v} 次/日"),
+    # 老键：仅存量归集用，不作为对外权益展示（否则用户看到「视频处理」会以为
+    # 转换/压缩/超分还共用一份额度 —— 拆键后已不共用）
 )
 # 不走每日配额、但属于会员权益的说明项
 _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
@@ -1003,6 +1067,12 @@ def download_benefits() -> list[dict[str, str]]:
         if v > 0:
             out.append({"key": key, "text": tpl.format(v=v)})
             seen.add(key)
+    # 🔴 2026-10-06 拆键：老键（app_compute）只在存量归集时读，**不对外展示**
+    # 权益 —— 展示它会让用户以为「转换/压缩/超分还共用一份额度」，而拆键后已不共用。
+    # 它仍留在 DAILY_QUOTA_LIMITS 里（历史用量归集 + 后台对照），故这里显式跳过。
+    _skip = set(LEGACY_QUOTA_KEYS)
+    if _skip:
+        out = [x for x in out if x["key"] not in _skip]
     # member_limit = -1 的功能 = 会员不限次（字幕提取等）
     for d in FEATURE_USAGE_DEFS:
         k = str(d.get("key"))
@@ -1743,11 +1813,13 @@ class MembershipStore:
                         del hist[k]
                 self._persist()
             du["date"] = day
-            du["download"] = 0
-            du["subtitle"] = 0
-            du["cloud"] = 0
-            du["matting"] = 0
-            du["app_compute"] = 0
+            # 🔴 2026-10-06：改为**按配额表自动清零**，不再写死键名。
+            # 原写法只清 6 个硬编码键 —— 拆键后新增的 convert / compress / sr /
+            # bridge **永远不会跨日重置**（用户第二天额度仍显示用尽）。
+            # 写死键名是「加新键时忘记加日切」这类 bug 的根源。
+            for _k in list(du.keys()):
+                if _k != "date":
+                    du[_k] = 0
             for _dead in _DEAD_USAGE_KEYS:      # 清掉历史状态文件里的死键
                 du.pop(_dead, None)
 
@@ -1768,7 +1840,9 @@ class MembershipStore:
         if limit is None:
             # 免费表未覆盖但会员表有（原画/批量）→ 免费额度为 0
             limit = 0
-        used = int(self._state["daily_usage"].get(resource, 0))
+        # 🔴 拆键兼容：把老键 app_compute 的已用量归集到新独立键（只读迁移）
+        _mig = migrate_legacy_usage(self._state["daily_usage"])
+        used = int(_mig.get(resource, 0))
         return {"resource": resource, "limit": limit, "used": used,
                 "remaining": max(0, limit - used),
                 "allowed": used < limit,

@@ -50,6 +50,13 @@ def test_benefits_cover_quotas() -> None:
             # 🔴 2026-10-04：这里**不能**有「隐藏名单」豁免。第一版误把用户说的
             # 「隐藏那几个字」做成「整条隐藏」，权益条目少了一半 —— 权益是权益，
             # 只改措辞。少了豁免，删条目立刻会红。
+            # 🔴 2026-10-06 拆键：跳过「老键」（LEGACY_QUOTA_KEYS，如 app_compute）。
+            # 老键只用于存量用量归集，不再有业务写入点，也不对外展示权益 ——
+            # 展示它会让用户以为「转换/压缩/超分还共用一份额度」，而拆键后已不共用。
+            # 其余每个真配额键仍必须有对外文案（这条规则继续保护「配了额度却
+            # 不给用户看」的情况）。
+            if key in getattr(M, "LEGACY_QUOTA_KEYS", ()):
+                continue
             check(f"[覆盖] 配额 {key}={limit} 有对应权益文案", key in keys)
     for key, limit in M.FREE_DAILY_LIMITS.items():
         if int(limit or 0) == 0 and key in M.DAILY_QUOTA_LIMITS:
@@ -80,6 +87,8 @@ def test_benefits_wording_only() -> None:
     # ② 🔴 条目数：每条配额都要有文案（第一版做错的地方，防线在这）
     for key, limit in M.DAILY_QUOTA_LIMITS.items():
         if int(limit or 0) > 0:
+            if key in getattr(M, "LEGACY_QUOTA_KEYS", ()):
+                continue
             check(f"[条目] 配额 {key} 的条目仍在", str(key) in by_key)
     check("[条目] no_credits 说明项仍在", "no_credits" in by_key)
 

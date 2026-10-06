@@ -10,7 +10,8 @@ import tempfile
 import shutil
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
-from quota import QuotaManager, LIFETIME_CLOUD_EVENTS, DAILY_AUTO_RUNS, FREE_MAX_DURATION_SEC
+from quota import (QuotaManager, LIFETIME_CLOUD_EVENTS, DAILY_AUTO_RUNS,
+                    FREE_MAX_DURATION_SEC)
 
 
 def _mgr(member=False, base_dir=None, now=1000000000.0):
@@ -35,17 +36,43 @@ def test_lifetime_exhaustion():
     shutil.rmtree(d, ignore_errors=True)
 
 
+def _eff():
+    """当前生效的 (终身, 每日auto) —— 后台可改，别用模块常量断言。"""
+    from quota import cloud_quota_limits
+    return cloud_quota_limits()
+
+
 def test_daily_auto_resets():
+    """每日 auto 额度的「用满 → 跨日重置」语义。
+
+    🔴 2026-10-06：管理员可能把 daily_auto 配成 0（用户已这么做 —— 本机跑不动
+    自动回落云端要烧大模型 token）。本守卫必须与「生效值」联动，不能假设 ≥1：
+    额度为 0 时 `consume_daily_auto()` 必然 False，断言 True 会恒红。
+    故：生效值 >0 时跑完整的「用满→跨日重置」；=0 时改为验证「扣不动但
+    终身额度仍在、且显式选云端仍放行」（这才是 0 额度下该保证的行为）。
+    """
+    _life, daily = _eff()
     d = tempfile.mkdtemp(prefix="vdl_quota_")
-    # 第 1 天用满每日 auto
     q = _mgr(base_dir=d, now=1000.0)
-    assert q.daily_auto_remaining() == DAILY_AUTO_RUNS
+    assert q.daily_auto_remaining() == daily
+
+    if daily <= 0:
+        # 额度为 0：auto 回落被拒，但**显式选云端仍能用终身额度**
+        assert q.consume_daily_auto() is False, "额度 0 时不该扣得动"
+        assert q.decide_cloud_fallback("auto") == "deny", "auto 回落应被拒"
+        assert q.decide_cloud_fallback("cloud_only") == "allow", \
+            "显式选云端应仍放行（走终身额度）"
+        assert q.lifetime_cloud_remaining() == _life
+        shutil.rmtree(d, ignore_errors=True)
+        return
+
+    # 第 1 天用满每日 auto
     assert q.consume_daily_auto() is True
     assert q.daily_auto_remaining() == 0
     assert q.decide_cloud_fallback() == "deny"
     # 跨到「下一天」（+86400s），应重置
     q2 = _mgr(base_dir=d, now=1000.0 + 86400.0)
-    assert q2.daily_auto_remaining() == DAILY_AUTO_RUNS
+    assert q2.daily_auto_remaining() == daily
     assert q2.decide_cloud_fallback() == "allow"
     shutil.rmtree(d, ignore_errors=True)
 
@@ -74,21 +101,30 @@ def test_upload_duration_gate():
 
 
 def test_fallback_three_states():
+    """三态：allow / deny（终身耗尽）/ deny（每日 auto 用满）。
+
+    🔴 2026-10-06：daily_auto 可被管理员配成 0（用户已设）。为 0 时
+    「初始 auto 应 allow」不成立（daily_auto_remaining()==0 ⇒ 直接 deny），
+    故此处按生效值分流，只断言**该配置下应成立**的行为。
+    """
+    _life, daily = _eff()
     d = tempfile.mkdtemp(prefix="vdl_quota_")
-    # allow：初始
     q = _mgr(base_dir=d, now=1000.0)
-    assert q.decide_cloud_fallback() == "allow"
+    assert q.decide_cloud_fallback() == ("deny" if daily <= 0 else "allow")
+    # 显式选云端不受每日 auto 影响（daily=0 时也放行）
+    assert q.decide_cloud_fallback("cloud_only") == "allow"
     # deny：终身耗尽
-    for _ in range(LIFETIME_CLOUD_EVENTS):
+    for _ in range(_life):
         q.consume_cloud_event()
     assert q.decide_cloud_fallback() == "deny"
     # 重置每日后，若终身仍在，allow（每日满才会 deny）
-    d2 = tempfile.mkdtemp(prefix="vdl_quota_")
-    q2 = _mgr(base_dir=d2, now=1000.0)
-    q2.consume_daily_auto()
-    assert q2.decide_cloud_fallback() == "deny"  # 当日 auto 用满
+    if daily > 0:
+        d2 = tempfile.mkdtemp(prefix="vdl_quota_")
+        q2 = _mgr(base_dir=d2, now=1000.0)
+        q2.consume_daily_auto()
+        assert q2.decide_cloud_fallback() == "deny"  # 当日 auto 用满
+        shutil.rmtree(d2, ignore_errors=True)
     shutil.rmtree(d, ignore_errors=True)
-    shutil.rmtree(d2, ignore_errors=True)
 
 
 def test_cloud_only_ignores_daily_auto():
@@ -98,6 +134,14 @@ def test_cloud_only_ignores_daily_auto():
     结果是当天跑过 1 次后第 2 次被误拒（提示「额度已用完」，实际终身还剩额度）。
     """
     d = tempfile.mkdtemp(prefix="vdl_quota_")
+    # 🔴 2026-10-06：daily_auto 可被配成 0（用户已设）。为 0 时「先消耗当日
+    # auto」这步不成立，本用例的前提消失 ⇒ 明确跳过并说明原因，
+    # 而不是让断言恒红（那会掩盖真正的问题）。
+    _life, _daily = _eff()
+    if _daily <= 0:
+        shutil.rmtree(d, ignore_errors=True)
+        print("  ⏭ 跳过：当前每日 auto 额度为 0，本用例需 ≥1 才能验证「用满后仍放行」")
+        return
     q = _mgr(base_dir=d, now=1000.0)
     # 先消耗掉当日 auto 额度（模拟今天已发生过一次 auto 回落）
     assert q.consume_daily_auto() is True
@@ -108,7 +152,7 @@ def test_cloud_only_ignores_daily_auto():
     # 显式选云端：只看终身额度 → 仍 allow（终身还剩）
     assert q.decide_cloud_fallback("cloud_only") == "allow"
     # 终身耗尽后，显式选云端同样 deny
-    for _ in range(LIFETIME_CLOUD_EVENTS):
+    for _ in range(_life):
         q.consume_cloud_event()
     assert q.lifetime_cloud_remaining() == 0
     assert q.decide_cloud_fallback("cloud_only") == "deny"

@@ -119,6 +119,20 @@ def test_rows_have_real_gate() -> None:
             check(f'[{r["key"]}] use_daily/quota_state("{r["resource"]}") 有拦截点',
                   True, "")
             continue
+        # 🔴 2026-10-06 拆键后新增的间接拦截点形态：`app_compute_gate(request, "convert")`
+        # 把资源名当**参数**传进闸门（而不是在业务代码里写死 `quota_state("convert")`）。
+        # 这种「参数化闸门」是真实存在的拦截点，原先的正则只认字面量
+        # `use_daily("X")` / `quota_state("X")` ⇒ 会误报「无拦截点」。
+        # 判据：业务代码里出现 `app_compute_gate(<任意>, "资源名"` 或
+        #       `app_compute_count(...)` 且 gate 带该资源 —— 前者足以证明
+        #       该资源会被真实计入（gate 里 quota_state(res) + count 里 use_daily(res)）。
+        if not hit:
+            argpat = re.compile(r'app_compute_gate\(\s*[^,]+,\s*["\']' + res + r'["\']')
+            hit = [f for f, s2 in srcs if argpat.search(s2)]
+        if hit:
+            check(f'[{r["key"]}] use_daily/quota_state("{r["resource"]}") 有拦截点',
+                  True, "")
+            continue
         # 桌面端没有 → 允许「跨端资源」，但必须在网页端**真的**有拦截点
         cross = CROSS_END_RESOURCES.get(r["resource"])
         if not cross:
@@ -172,7 +186,16 @@ def test_benefits_text_honest() -> None:
           "原画是清晰度档位门（>1080P 需会员），不按次计费")
     check("不承诺「批量下载素材 N 条/日」", "批量下载素材" not in body)
     daily = _parse_limits("DAILY_QUOTA_LIMITS")
+    # 🔴 2026-10-06 拆键：跳过老键（app_compute）。它只用于存量用量归集，
+    # 不再有业务写入点，也不对外展示权益（展示会让用户误以为转换/压缩/
+    # 超分还共用一份额度，而拆键后已不共用）。其余真配额键仍必须有文案。
+    legacy = set()
+    m = re.search(r"LEGACY_QUOTA_KEYS[^=]*=\s*\(([^)]*)\)", _MP)
+    if m:
+        legacy = {x.strip().strip('"\'') for x in m.group(1).split(",") if x.strip()}
     for key in daily:
+        if key in legacy:
+            continue
         check(f"配额 {key}={daily[key]} 有对应权益文案", f'("{key}"' in body)
 
 
