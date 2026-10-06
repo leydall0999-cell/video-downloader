@@ -289,7 +289,7 @@ def main() -> None:
          "changelog": builtin,
          "cached": {"version": "1.0.43", "items": ["本次更新条目"]}},
         # ④ 已是最新（本机 == 源）、且没更新缓存 → 必须展示「当前版本」的内置条目
-        #    （2026-10-08 用户核心反馈：「当前是最新版本就不显示更新内容」）
+        #    （2026-10-07 用户核心反馈：「当前是最新版本就不显示更新内容」）
         {"name": "已是最新显示当前版本", "cur": "1.0.43", "avail": False,
          "latest": {"version": "1.0.43", "notes_list": [], "published_at": ""},
          "changelog": builtin},
