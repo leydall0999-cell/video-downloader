@@ -1195,10 +1195,14 @@ def download_benefits() -> list[dict[str, str]]:
     2026-10-04 起不再有隐藏名单：条目全部保留，只把「云端/算力/AI/本地」几个字
     从文案里去掉了（见 _BENEFIT_FROM_LIMITS 上方注释）。
     """
+    # 🔴 2026-10-07：权益文案同样要跟随后台「免费额度」分栏的**会员档**覆盖（与
+    #   quota_state 同口径）。此前直读 DAILY_QUOTA_LIMITS 常量 ⇒ 后台把「会员每日」
+    #   改完后再看会员中心，文案还是旧数字（同型漂移）。
+    mem_limits, _free_limits = effective_daily_limits()
     out: list[dict[str, str]] = []
     seen: set[str] = set()
     for key, tpl in _BENEFIT_FROM_LIMITS:
-        v = int(DAILY_QUOTA_LIMITS.get(key) or 0)
+        v = int(mem_limits.get(key) or 0)
         if v > 0:
             out.append({"key": key, "text": tpl.format(v=v)})
             seen.add(key)
@@ -1208,10 +1212,11 @@ def download_benefits() -> list[dict[str, str]]:
     _skip = set(LEGACY_QUOTA_KEYS)
     if _skip:
         out = [x for x in out if x["key"] not in _skip]
-    # member_limit = -1 的功能 = 会员不限次（字幕提取等）
+    # member_limit = -1 的功能 = 会员不限次（字幕提取等）；同样取生效值
     for d in FEATURE_USAGE_DEFS:
         k = str(d.get("key"))
-        if int(d.get("member_limit", 0)) == -1 and k not in seen:
+        _ml = int(mem_limits.get(d["resource"], d.get("member_limit", 0)) or 0)
+        if _ml == -1 and k not in seen:
             out.append({"key": k, "text": f"{d.get('name') or k}：不限"})
             seen.add(k)
     out.extend(dict(x) for x in _BENEFIT_EXTRA)
@@ -2078,6 +2083,13 @@ def feature_usage_status(store: MembershipStore, period: str = "today") -> list[
     daily = st.get("daily_usage", {})
     period_totals = usage_summary(store, period)
     is_member = st["download_member"].get("active", False)
+    # 🔴 2026-10-07：日限额必须取**生效值**（叠加后台「免费额度」分栏的覆盖），与真正
+    #   的放行判定 `quota_state()` 同源。此前本函数直读 `FEATURE_USAGE_DEFS` 里烘焙的
+    #   `free_limit` / `member_limit` ⇒ 后台把「视频下载 10→3」改完后，功能已按 3 次
+    #   拦（quota_state 走的是覆盖值），但本表仍显示 10/10 —— 用户 2026-10-07 截图
+    #   反馈「更改了为什么没有生效」，实为**显示层与拦截层口径漂移**。
+    mem_limits, free_limits = effective_daily_limits()
+    limit_map = mem_limits if is_member else free_limits
     rows: list[dict[str, Any]] = []
     for d in FEATURE_USAGE_DEFS:
         key = d["key"]
@@ -2096,7 +2108,14 @@ def feature_usage_status(store: MembershipStore, period: str = "today") -> list[
                 "credit_cost": int(d.get("credit_cost", 0)),
             })
             continue
-        limit = int(d.get("member_limit", 0)) if is_member else int(d.get("free_limit", 0))
+        _lim = limit_map.get(d["resource"])
+        if _lim is None:
+            # 当前档位的配额表里没有这个 resource：免费档缺但会员档有（原画 / 批量）
+            # ⇒ 免费额度为 0（与 quota_state 同口径）；其余情况回退表内烘焙值，
+            # 保证「表里少登记一行」时也不会显示成 0/未定义。
+            _lim = 0 if (not is_member and mem_limits.get(d["resource"]) is not None) \
+                else int(d.get("member_limit", 0) if is_member else d.get("free_limit", 0))
+        limit = int(_lim)
         used = int(daily.get(d["resource"], 0)) if limit >= 0 else 0
         remaining = -1 if limit < 0 else max(0, limit - used)
         bonus = int(d.get("ai_bonus", 0))

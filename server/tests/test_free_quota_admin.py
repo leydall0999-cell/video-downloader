@@ -497,6 +497,58 @@ def test_quota_state_uses_effective_limits():
           "member_limit 反映生效值", f"{st['member_limit']} vs {mem.get('download')}")
 
 
+def test_usage_rows_use_effective_limits():
+    """🔴 2026-10-07 用户截图：后台把「视频下载 10→3」改完，个人中心「使用统计」
+    仍显示 10/10 —— 显示层与拦截层口径漂移。
+
+    根因：`feature_usage_status()`（使用统计）与 `download_benefits()`（会员权益
+    文案）当初直读 `FEATURE_USAGE_DEFS` / `DAILY_QUOTA_LIMITS` 的**烘焙常量**，
+    而 `quota_state()` 走的是 `effective_daily_limits()`（叠加后台覆盖）。
+    ⇒ 后台改完只有「真正拦不拦」变了，用户看到的数字不变，看起来像「改了没生效」。
+
+    本守卫钉死：三处必须同源（使用统计 == quota_state == 覆盖后的 effective）。
+    """
+    import membership as M
+    M.save_plan_overrides({"free_quota": {
+        "daily_free_limits": {"download": 3, "subtitle": 1},
+        "daily_member_limits": {"download": 800},
+    }})
+    M._PLAN_OVERRIDE_CACHE = None
+
+    # ── 免费档：使用统计的 daily_limit 必须等于覆盖值，而不是常量 10 / 2
+    free_store = M.MembershipStore(path=Path(_TMP) / "usage_free.json",
+                                   now_fn=lambda: 1000.0)
+    rows = {r["key"]: r for r in M.feature_usage_status(free_store)}
+    check(rows["video_parse"]["daily_limit"] == 3,
+          "免费态 使用统计 视频下载 daily_limit=3（跟随后台覆盖）",
+          str(rows["video_parse"]["daily_limit"]))
+    check(rows["subtitle_extract"]["daily_limit"] == 1,
+          "免费态 使用统计 字幕提取 daily_limit=1",
+          str(rows["subtitle_extract"]["daily_limit"]))
+    check(rows["video_parse"]["daily_limit"] == free_store.quota_state("download")["limit"],
+          "使用统计的 limit 与 quota_state 同源（不再漂移）")
+
+    # ── 会员档：同样跟随覆盖（800，不是常量 1000）
+    mem_store = M.MembershipStore(path=Path(_TMP) / "usage_mem.json",
+                                  now_fn=lambda: 1000.0)
+    mem_store._ensure_loaded()
+    mem_store._state["download_member"].update(
+        {"active": True, "expire_at": 4102444800.0})   # 2100 年，确定算会员
+    mrows = {r["key"]: r for r in M.feature_usage_status(mem_store)}
+    check(mrows["video_parse"]["daily_limit"] == 800,
+          "会员态 使用统计 视频下载 daily_limit=800（会员档覆盖）",
+          str(mrows["video_parse"]["daily_limit"]))
+    check(mrows["video_parse"]["daily_limit"]
+          == mem_store.quota_state("download")["limit"],
+          "会员态 limit 与 quota_state 同源")
+
+    # ── 会员权益文案：也必须跟随会员档覆盖（否则会员中心写旧数字）
+    texts = {b["key"]: b["text"] for b in M.download_benefits()}
+    check("800" in (texts.get("download") or ""),
+          "会员权益文案跟随会员档覆盖（下载任务 800 次/日）",
+          str(texts.get("download")))
+
+
 def test_white_list_preserves_sibling_fields():
     """白名单的核心价值：只提交一个子表，不得抹掉另一个子表的既有值。"""
     import membership as M
@@ -688,6 +740,7 @@ def main():
         test_free_quota_in_save_table_keys,
         test_dirty_value_does_not_break_limits,
         test_quota_state_uses_effective_limits,
+        test_usage_rows_use_effective_limits,
         test_white_list_preserves_sibling_fields,
         test_has_cost_gate_matches_reality,
         test_commentary_vision_charged_at_every_entry,
