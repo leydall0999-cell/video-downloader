@@ -103,9 +103,17 @@ def test_account_level_wired() -> None:
     src = _web_app_py()
     if not src:
         return
-    for res in ("cloud",):
-        check(f'quota_state("{res}") 有调用', f'quota_state("{res}")' in src)
-        check(f'use_daily("{res}"', f'use_daily("{res}"' in src)
+    # 🔴 2026-10-06 拆池：web-dev app.py 不再有 `quota_state("cloud")` /
+    # `use_daily("cloud")` 字面量 —— resource 由 gate 携带（动态变量），
+    # 兜底形态是 `store.quota_state(resource)` / `store.use_daily(resource, n=n)`；
+    # 主路径是 `cloud_quota_remote(tok, lifetime=n, resource=resource)`。
+    # 拦截点字面量（resource="cloud_convert" 等）在 routers/*.py，由
+    # test_feature_usage_gate.py 的 CROSS_END_RESOURCES 钉住。
+    check("quota_state 兜底（动态 resource）", "store.quota_state(resource)" in src)
+    check("use_daily 兜底（动态 resource）", "store.use_daily(resource" in src)
+    check("中心主路径扣减带 per-resource 键",
+          "resource=resource" in src,
+          "拆池后中心扣减必须携带 resource（各功能独立终身额度）")
     # hk 必须回派 cn 为权威，否则两台机的云端额度各算各的
     check("hk 节点回派 cn（_cloud_quota_relay）", "_cloud_quota_relay" in src,
           "没有回派逻辑 ⇒ hk 与 cn 各算各的")
