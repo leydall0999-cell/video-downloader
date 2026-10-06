@@ -708,9 +708,13 @@ _CLOUD_LOGIN_MSG = "使用该功能前请先登录账号（免费注册即得，
 # 🔴 2026-10-06 拆池：4 个云端功能各自独立配额键（与桌面端 quota.CLOUD_RESOURCES 同名）。
 _CLOUD_RESOURCE_NAMES = {
     "cloud_commentary": "视频解说",
-    "cloud_convert": "视频转码",
-    "cloud_dewatermark": "在线去水印",
-    "cloud_subtitle": "字幕处理",
+    "cloud_convert": "在线转码",
+    "cloud_concat": "在线拼接",
+    "cloud_dewatermark": "图片去水印",
+    "cloud_dewatermark_pdf": "PDF 去水印",
+    "cloud_subtitle": "字幕提取",
+    "cloud_subtitle_burn": "字幕烧录",
+    "cloud_subtitle_translate": "字幕翻译",
 }
 
 

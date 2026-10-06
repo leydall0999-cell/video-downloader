@@ -458,7 +458,7 @@ def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
     """视频拼接：接收已落地的片段列表，按顺序无损合并为单个文件。"""
     user_membership.require_login_user(request)
     app._check_rate_limit(request)
-    gate = app.cloud_quota_gate(request, resource="cloud_convert")
+    gate = app.cloud_quota_gate(request, resource="cloud_concat")
     out_format = payload.out_format
     if out_format not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的输出格式")

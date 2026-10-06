@@ -10,7 +10,7 @@
   1. 配额表：免费 limit=3；会员（activate download_month）limit=200（逐键）；
   2. use_daily("cloud_convert")：3 次内 ok；第 4 次 ok=False + code=MEMBER_QUOTA +
      文案含「视频转码」（用户可读，不带机器前缀）；
-  2b. 独立性：转码用尽后，去水印/字幕仍各自有完整 3 次（拆池核心语义）；
+  2b. 独立性：任一功能用尽后，其余 6 个仍各自有完整 3 次（拆池核心语义）；
   3. cloud_quota_gate：匿名 403（文案引导登录）；超限 402 且发生在任务创建前；
   4. cloud_quota_count：任务成功创建后计数（与下载墙同语义，失败吞掉不回滚）；
   5. relay（global 节点）：cn 判 MEMBER_QUOTA → 402 / NO_AUTH → 403 /
@@ -66,7 +66,9 @@ def test_free_quota_three_per_day():
     with tempfile.TemporaryDirectory() as d:
         _patch_stores(d)
         # 逐键断言（2026-10-06 拆池：每个功能独立 3 次/日）
-        for res in ("cloud_convert", "cloud_dewatermark", "cloud_subtitle"):
+        for res in ("cloud_convert", "cloud_concat", "cloud_dewatermark",
+                    "cloud_dewatermark_pdf", "cloud_subtitle",
+                    "cloud_subtitle_burn", "cloud_subtitle_translate"):
             assert FREE_DAILY_LIMITS[res] == 3, f"免费 {res} 应为 3 次/日"
             assert DAILY_QUOTA_LIMITS[res] == 200, f"会员 {res} 应为 200 次/日"
         st = MembershipStore(path=Path(d) / "u_free.json")
@@ -78,11 +80,11 @@ def test_free_quota_three_per_day():
             assert r["remaining"] == 2 - i, r
         r4 = st.use_daily("cloud_convert", n=1)
         assert not r4.get("ok") and r4.get("code") == "MEMBER_QUOTA", r4
-        assert "视频转码" in r4["error"], f"文案须含「视频转码」: {r4['error']}"
+        assert "在线转码" in r4["error"], f"文案须含「在线转码」: {r4['error']}"
         assert "MEMBER_QUOTA" not in r4["error"]
         q2 = st.quota_state("cloud_convert")
         assert q2["used"] == 3 and not q2["allowed"], q2
-    print("✅ 免费视频转码 3 次/日：3 次内放行、第 4 次拒、文案含「视频转码」")
+    print("✅ 免费在线转码 3 次/日：3 次内放行、第 4 次拒、文案含「在线转码」")
 
 
 def test_resources_are_independent():
@@ -93,17 +95,19 @@ def test_resources_are_independent():
         for _ in range(3):
             assert st.use_daily("cloud_convert", n=1)["ok"]
         assert not st.use_daily("cloud_convert", n=1)["ok"], "转码第 4 次应拒"
-        for other in ("cloud_dewatermark", "cloud_subtitle"):
+        for other in ("cloud_concat", "cloud_dewatermark", "cloud_dewatermark_pdf",
+                      "cloud_subtitle", "cloud_subtitle_burn", "cloud_subtitle_translate"):
             q = st.quota_state(other)
             assert q["used"] == 0 and q["remaining"] == 3 and q["allowed"], q
             for _ in range(3):
                 assert st.use_daily(other, n=1)["ok"]
             assert not st.use_daily(other, n=1)["ok"], f"{other} 第 4 次应拒"
         # 互不串台：转码仍拒、另两项也各自拒，但三者计数互不影响
-        assert st.quota_state("cloud_convert")["used"] == 3
-        assert st.quota_state("cloud_dewatermark")["used"] == 3
-        assert st.quota_state("cloud_subtitle")["used"] == 3
-    print("✅ 独立计次：转码用尽不影响去水印/字幕（各自 3 次/日独立扣）")
+        for res in ("cloud_convert", "cloud_concat", "cloud_dewatermark",
+                    "cloud_dewatermark_pdf", "cloud_subtitle",
+                    "cloud_subtitle_burn", "cloud_subtitle_translate"):
+            assert st.quota_state(res)["used"] == 3, f"{res} 应各扣满 3 次"
+    print("✅ 独立计次：7 个云端功能各自 3 次/日、互不挤占")
 
 
 def test_member_quota_200():
@@ -115,7 +119,7 @@ def test_member_quota_200():
         assert q["limit"] == 200 and q["tier"] == "member", q
         r = st.use_daily("cloud_convert", n=1)
         assert r.get("ok") and r["remaining"] == 199, r
-    print("✅ 会员视频转码 200 次/日（activate 后档位切换生效）")
+    print("✅ 会员在线转码 200 次/日（activate 后档位切换生效）")
 
 
 # --------------------------------------------------------------------------- #
@@ -148,7 +152,7 @@ def test_gate_local_paths():
         except A.HTTPException as e:
             raised2 = e
         assert raised2 is not None and raised2.status_code == 402, f"超限应 402，实为 {raised2}"
-        assert "视频转码" in raised2.detail, raised2.detail
+        assert "在线转码" in raised2.detail, raised2.detail
         # count 失败吞掉（store 炸了不回滚不抛）
         gate_broken = {"mode": "local", "store": None, "resource": "cloud_convert"}
         orig = A.current_member_store

@@ -213,7 +213,7 @@ def create_dw_pdf(
     if not dwc.pdf_available():
         raise app.HTTPException(status_code=503, detail="PDF 去水印不可用（缺少 PyMuPDF 依赖）")
     app._check_rate_limit(request)
-    gate = app.cloud_quota_gate(request, resource="cloud_dewatermark")   # 云端算力配额：免费 3 次/日
+    gate = app.cloud_quota_gate(request, resource="cloud_dewatermark_pdf")   # 云端算力配额：免费 3 次/日
     suffix = app.Path(file.filename or "upload.pdf").suffix.lower()
     if suffix != ".pdf":
         raise app.HTTPException(status_code=409, detail="请上传 PDF 文件")
