@@ -131,13 +131,19 @@ def test_cloud_quota_limits_are_configurable():
 
 
 def test_frontend_can_edit_cloud_quota():
-    """前端必须有云端额度的输入框并提交（否则又是「能看不能改」）。"""
+    """前端必须有云端额度的输入框并提交（否则又是「能看不能改」）。
+
+    🔴 2026-10-06 拆池：终身次数按功能独立（4 个 resource 各一输入行，
+    data-res 标识），保存时收集成字典 {resource: n} 提交；daily_auto 仍单值。
+    """
     js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
     check('class="admin-input admin-input-sm fq-cloud"' in js, "云端额度有输入框")
-    check('data-key="cloud_lifetime"' in js, "终身次数可填")
+    check('data-key="cloud_lifetime" data-res=' in js, "终身次数按功能独立可填（data-res）")
+    check("cloud_lifetime_per_resource" in js, "渲染读 per-resource limits（4 行）")
     check('data-key="daily_auto"' in js, "每日 auto 次数可填")
-    check("payload[el.dataset.key] = v" in js, "输入值被收集进 payload")
-    check("fq.cloud_lifetime = payload.cloud_lifetime" in js, "终身次数随保存提交")
+    check("clDict[el.dataset.res] = v" in js, "输入值按 resource 收集进 payload")
+    check("payload.cloud_lifetime = clDict" in js, "终身次数（字典）随保存提交")
+    check("fq.cloud_lifetime = payload.cloud_lifetime" in js, "终身次数提交到套餐接口")
     check("fq.daily_auto = payload.daily_auto" in js, "每日 auto 随保存提交")
 
 
@@ -395,15 +401,20 @@ def test_free_quota_panel_covers_every_quota_key():
     check(not missing, "配额表所有真配额键都在后台页面出现", f"缺: {sorted(missing)}")
     legacy_shown = got & set(M.LEGACY_QUOTA_KEYS)
     check(not legacy_shown, "老键未出现在后台配置表", f"不该显示: {sorted(legacy_shown)}")
-    check("cloud" in got, "云端算力（cloud）已列出（此前漏项）")
+    # 🔴 2026-10-06 拆池：旧总池键 cloud 已进 LEGACY_QUOTA_KEYS（无写入点，
+    # 只做存量归集）→ 与 app_compute 一样故意不显示；取而代之的是 4 个独立键。
+    for res in ("cloud_commentary", "cloud_convert", "cloud_dewatermark", "cloud_subtitle"):
+        check(f"{res} 已列出（拆池独立行）", res in got)
     # 展示值必须是**生效值**（叠加后台覆盖），不能是写死的默认
     by_res = {r["resource"]: r for r in rows}
-    check(by_res.get("cloud", {}).get("free_limit") == M.FREE_DAILY_LIMITS.get("cloud"),
-          "cloud 免费次数取自配额表（当前 3/日）",
-          str(by_res.get("cloud", {}).get("free_limit")))
-    check(by_res.get("cloud", {}).get("member_limit") == M.DAILY_QUOTA_LIMITS.get("cloud"),
-          "cloud 会员次数取自配额表（当前 200/日）",
-          str(by_res.get("cloud", {}).get("member_limit")))
+    check(by_res.get("cloud_commentary", {}).get("free_limit")
+          == M.FREE_DAILY_LIMITS.get("cloud_commentary"),
+          "cloud_commentary 免费次数取自配额表（当前 3/日）",
+          str(by_res.get("cloud_commentary", {}).get("free_limit")))
+    check(by_res.get("cloud_subtitle", {}).get("member_limit")
+          == M.DAILY_QUOTA_LIMITS.get("cloud_subtitle"),
+          "cloud_subtitle 会员次数取自配额表（当前 200/日）",
+          str(by_res.get("cloud_subtitle", {}).get("member_limit")))
 
 
 def test_override_applies_and_merges():

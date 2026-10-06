@@ -29,6 +29,13 @@ _SERVER = _HERE.parent
 if str(_SERVER) not in sys.path:
     sys.path.insert(0, str(_SERVER))
 
+import quota  # noqa: E402  (路径插入后导入，读取 DEFAULT_CLOUD_RESOURCE)
+
+# 🔴 隔离真实 plans.json：生产环境把 daily_auto 配成了 0（共享护栏已关），
+# 否则 daily_auto_remaining() 恒为 0，本用例「次日恢复」的前提不成立。
+# 指向一个无 plans.json 的临时目录 → cloud_quota_limits 落回代码默认 daily_auto=1。
+os.environ["VDL_DATA_DIR"] = tempfile.mkdtemp(prefix="vdl_cq_datadir_")
+
 
 class FakeCenter:
     """授权中心 cloud_quota 端点的内存替身。
@@ -57,8 +64,12 @@ class FakeCenter:
             a["daily"] = 0
 
     def post(self, token: str, lifetime: int = 0, daily: int = 0,
-             refund: bool = False, _raise: bool = False) -> dict:
-        """模拟 license_client.cloud_quota_remote。_raise=True 模拟网络异常。"""
+             refund: bool = False, _raise: bool = False, **kw) -> dict:
+        """模拟 license_client.cloud_quota_remote。_raise=True 模拟网络异常。
+
+        🔴 2026-10-06 拆池：客户端现在会多传 `resource`（按功能拆键），本替身只跟踪
+        共享单池（所有用例都用 cloud_commentary），故用 **kw 吸收并忽略 resource。
+        """
         self.calls += 1
         if _raise:
             raise OSError("network down")
@@ -128,12 +139,16 @@ def _used(d: str) -> tuple[int, int]:
 
     ⚠️ 必须在缺文件时返回 0 而不是抛错：这正是原漏洞的场景 —— 新端/重装后
     本机根本没有 quota.json，计数天然归零。
+
+    🔴 2026-10-06 拆池：终身计数已按功能拆进 `cloud_lifetime` 字典，这里读
+    `cloud_commentary`（桌面唯一云端功能，consume_cloud_event 默认 resource）。
     """
     p = Path(d) / "quota.json"
     if not p.exists():
         return 0, 0
     st = json.loads(p.read_text(encoding="utf-8"))
-    return int(st.get("lifetime_cloud_used", 0)), int(st.get("daily_auto_used", 0))
+    cl = st.get("cloud_lifetime") or {}
+    return int(cl.get(quota.DEFAULT_CLOUD_RESOURCE, 0)), int(st.get("daily_auto_used", 0))
 
 
 def _cleanup_keychain():
@@ -175,9 +190,9 @@ def test_local_file_is_cache_not_source():
     """本机 quota.json 降级为缓存：中心是真源，本机被覆盖回灌。"""
     d = _fresh()
     # 伪造「本机计数比中心大」的篡改状态
-    Path(d, "quota.json").write_text(json.dumps({"lifetime_cloud_used": 0,
-                                                 "daily_auto_used": 0}),
-                                    encoding="utf-8")
+    Path(d, "quota.json").write_text(json.dumps(
+        {"cloud_lifetime": {quota.DEFAULT_CLOUD_RESOURCE: 0}, "daily_auto_used": 0},
+        ensure_ascii=False), encoding="utf-8")
     q = _mgr(d)
     for _ in range(2):
         q.consume_cloud_event()
@@ -185,7 +200,7 @@ def test_local_file_is_cache_not_source():
     assert life == 2, "本机应跟随中心（2 次）"
     # 直接把本机改回 0（模拟手改 JSON），下次消费应被中心纠正回 2→3
     st = json.loads(Path(d, "quota.json").read_text(encoding="utf-8"))
-    st["lifetime_cloud_used"] = 0
+    st.setdefault("cloud_lifetime", {})[quota.DEFAULT_CLOUD_RESOURCE] = 0
     Path(d, "quota.json").write_text(json.dumps(st), encoding="utf-8")
     assert q.consume_cloud_event() is True
     assert _used(d)[0] == 3, "中心说 2 → 扣成 3，本机被纠正（覆盖而非累加本机脏值）"
@@ -334,7 +349,7 @@ def test_stale_local_cache_never_falsely_denies():
     q.refund(lifetime=2)
     # 强制本机回到「已用尽」的脏状态（模拟旧缓存 / 手改 JSON）
     st = json.loads(Path(d, "quota.json").read_text(encoding="utf-8"))
-    st["lifetime_cloud_used"] = 3
+    st.setdefault("cloud_lifetime", {})[quota.DEFAULT_CLOUD_RESOURCE] = 3
     Path(d, "quota.json").write_text(json.dumps(st), encoding="utf-8")
     assert q.lifetime_cloud_remaining() == 0, "本机确实显示用尽"
 
@@ -397,7 +412,7 @@ def test_shadow_uses_max_not_trust():
     # 手动把本机改小（篡改尝试）
     p = os.path.join(d, "quota.json")
     st = json.loads(open(p, encoding="utf-8").read())
-    st["lifetime_cloud_used"] = 0
+    st.setdefault("cloud_lifetime", {})[quota.DEFAULT_CLOUD_RESOURCE] = 0
     open(p, "w", encoding="utf-8").write(json.dumps(st))
     q2 = _mgr(d)
     assert q2.lifetime_cloud_remaining() == 1, "取较大值：仍认已用 2 次，不被改回 3"

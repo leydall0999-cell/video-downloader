@@ -360,7 +360,10 @@ def test_quota_concurrent_consume_caps_exactly():
         t.start()
     for t in ts:
         t.join()
-    used = json.loads((d / "quota.json").read_text(encoding="utf-8"))["lifetime_cloud_used"]
+    # 🔴 2026-10-06 拆池：盘上格式由扁平 `lifetime_cloud_used` 改为
+    # `cloud_lifetime` 字典（per-resource）；无参调用默认记 cloud_commentary。
+    used = json.loads((d / "quota.json").read_text(encoding="utf-8"))[
+        "cloud_lifetime"]["cloud_commentary"]
     assert sum(results) == q.LIFETIME_CLOUD_EVENTS, (
         f"并发扣减成功 {sum(results)} 次，应恰好 {q.LIFETIME_CLOUD_EVENTS} 次（超额放行=变现漏洞）")
     assert used == q.LIFETIME_CLOUD_EVENTS, f"落盘计数 {used} 与实际放行数不一致"
@@ -393,7 +396,9 @@ def test_quota_cross_process_lock_serializes():
             errs.append(e.strip()[-400:])
     assert not errs, f"子进程失败：{errs}"
     total = sum(int(x) for x in outs if x.isdigit())
-    used = json.loads((d / "quota.json").read_text(encoding="utf-8"))["lifetime_cloud_used"]
+    # 🔴 2026-10-06 拆池：盘上为 cloud_lifetime 字典（见上）
+    used = json.loads((d / "quota.json").read_text(encoding="utf-8"))[
+        "cloud_lifetime"]["cloud_commentary"]
     assert total == q.LIFETIME_CLOUD_EVENTS, (
         f"4 进程共放行 {total} 次（各进程自报 {outs}），应恰好 {q.LIFETIME_CLOUD_EVENTS} 次")
     assert used == q.LIFETIME_CLOUD_EVENTS, f"落盘计数 {used} 与放行数不一致"

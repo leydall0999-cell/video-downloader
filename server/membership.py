@@ -72,12 +72,17 @@ CREDIT_PACKS: dict[str, dict[str, Any]] = {
 #   这样「今天之前用过 3 次转换」不会因为换键而凭空多出 3 次额度。
 #   老键不再有新的写入点（业务全部改用新键），但**保留**是为了：
 #     ① 历史数据归集；② 后台仍能看到「总池」这一行做对照。
-LEGACY_QUOTA_KEYS: tuple[str, ...] = ("app_compute",)
+LEGACY_QUOTA_KEYS: tuple[str, ...] = ("app_compute", "cloud")
 
 DAILY_QUOTA_LIMITS: dict[str, int] = {
     "download": 1000,         # 下载任务 / 日（会员）
     "matting": 500,           # 本地一键抠图 / 日（会员）；云端火山抠图走积分不计此配额
-    "cloud": 200,             # 网页版在线处理 / 日（会员）
+    "cloud": 200,             # 网页版在线处理 / 日（会员）—— 旧总池，2026-10-06 拆池后无写入点，仅存量归集
+    # 🔴 2026-10-06 拆池：4 个云端功能各自独立「每日免费次数」键（会员档）
+    "cloud_commentary": 200,   # 视频解说 / 日（会员）
+    "cloud_convert": 200,      # 在线转码/拼接 / 日（会员）
+    "cloud_dewatermark": 200,  # 在线去水印 / 日（会员）
+    "cloud_subtitle": 200,     # 在线字幕处理 / 日（会员）
     # ── 以下 6 个是 2026-10-06 从 app_compute 拆出的独立键 ──────────────
     "convert_video": 200,     # 视频格式转换 / 视频拼接（会员）
     "convert_audio": 200,     # 音乐（音频）转换 / 音频拼接（会员）
@@ -92,8 +97,13 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
 FREE_DAILY_LIMITS: dict[str, int] = {
     "download": 10,
     "matting": 8,             # 免费本地抠图 8 次/日
-    "cloud": 3,               # 网页版在线处理 3 次/日（账号级两端共享）
+    "cloud": 3,               # 网页版在线处理 3 次/日（旧总池，保留向后兼容）
     "subtitle": 2,            # 免费字幕提取 2 次/日（faster-whisper 本地推理）；会员无限
+    # 🔴 2026-10-06 拆池：4 个云端功能各自独立「每日免费次数」（默认各 3 次/日）
+    "cloud_commentary": 3,    # 视频解说 3 次/日
+    "cloud_convert": 3,       # 在线转码/拼接 3 次/日
+    "cloud_dewatermark": 3,   # 在线去水印 3 次/日
+    "cloud_subtitle": 3,      # 在线字幕处理 3 次/日
     # ── 6 个独立键（2026-10-06）─────────────────────────────────────
     "convert_video": 5,       # 视频格式转换 5 次/日
     "convert_audio": 5,       # 音乐转换 5 次/日
@@ -222,7 +232,7 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     # ⚠️ 拆行**不改变**任何计数逻辑：同一个 resource 的几行加起来还是那一份额度。
     {"key": "video_parse",      "name": "视频下载",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
     {"key": "subscribe",        "name": "订阅追更",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0, "shared_note": "与「视频下载」共用下载额度"},
-    {"key": "commentary",       "name": "视频解说",     "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "走「终身云端 3 次」额度，并按 AI 积分计费（自动解说 40 积分 / 画面理解 50）"},
+    {"key": "commentary",       "name": "视频解说",     "resource": "cloud_commentary", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "走「终身云端 3 次」额度（按功能独立计），并按 AI 积分计费（自动解说 40 积分 / 画面理解 50）"},
     # ⚠️ 名称不带「本地」：用户 2026-10-04 定档「会员权益文案不得出现 云端/算力/AI/本地」，
     # 当时把「本地一键抠图」改成「一键抠图」；这里同理（守卫 test_membership_benefits）。
     {"key": "subtitle_extract", "name": "字幕提取",     "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 0},
@@ -233,15 +243,17 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     {"key": "sr",               "name": "高清修复",     "resource": "sr",          "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "独立额度（此前与转换/压缩共用）"},
     {"key": "bridge",           "name": "音视频桥接",   "resource": "bridge",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "合成 / 替换（此前无任何配额，现独立计）"},
     {"key": "local_matting",    "name": "一键抠图",     "resource": "matting",     "unit": "次", "free_limit": 8,  "member_limit": 500,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机跑；选云端抠图时按 AI 积分计费（云端抠图 50 积分）"},
-    # 🔴 下面三行是**网页版**的功能（跑在服务器上），与桌面端不是同一批入口。
-    #    名称用「在线」而非「云端」：用户 2026-10-04 定档「文案不得出现 云端/算力/
-    #    AI/本地」（守卫 test_membership_benefits），且这仨与桌面端功能同名
-    #    （转码/去水印/字幕），加「云端」前缀既违规又和本地版混淆。
-    #   · 云端算力（cloud）真实拦截点在 web-dev 的 convert/dewatermark/subtitle/subtitles
-    #     四个 router（cloud_quota_gate），桌面端没有 —— 故这里只列功能名供后台理解。
-    {"key": "cloud_convert",    "name": "在线转码/拼接", "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：上传到服务器处理（免重传重转）"},
-    {"key": "cloud_dewatermark","name": "在线去水印",   "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：图片/PDF 框选去水印（另按 AI 积分计费）"},
-    {"key": "cloud_subtitle",   "name": "在线字幕处理", "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕识别/烧录/翻译"},
+    # 🔴 下面三行是**网页版**的云端功能（跑在服务器上），与桌面端「视频解说」一起
+    #    构成 4 个独立云端功能，各自独立「每日免费次数」+ 各自独立「终身免费次数」
+    #    （2026-10-06 拆池，此前 4 个共用一个 cloud 总池，名字分了计数器没分）。
+    #   · 名称用「在线」而非「云端」：用户 2026-10-04 定档「文案不得出现 云端/算力/
+    #     AI/本地」（守卫 test_membership_benefits）。
+    #   · 真实拦截点在 web-dev 的 convert/dewatermark/subtitle/subtitles 四个 router
+    #     （cloud_quota_gate 按 resource 调 use_daily + 授权中心终身额度），桌面端
+    #     视频解说走 quota.py 的终身额度 + 这里 use_daily(cloud_commentary)。
+    {"key": "cloud_convert",    "name": "在线转码/拼接", "resource": "cloud_convert",   "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：上传到服务器处理（免重传重转）"},
+    {"key": "cloud_dewatermark","name": "在线去水印",   "resource": "cloud_dewatermark", "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：图片/PDF 框选去水印（另按 AI 积分计费）"},
+    {"key": "cloud_subtitle",   "name": "在线字幕处理", "resource": "cloud_subtitle",   "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕识别/烧录/翻译"},
 ]
 
 # --------------------------------------------------------------------------- #
@@ -723,6 +735,10 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
                         base = merged.get(ik)
                         if isinstance(base, dict) and isinstance(iv, dict):
                             merged[ik] = {**base, **iv}
+                        elif isinstance(iv, dict) and not isinstance(base, dict):
+                            # 🔴 类型变了（如 cloud_lifetime 由 int 拆池成 dict）→ 直接覆盖，
+                            # 不能 `{**base, **iv}`（base 是 int 会 TypeError）。
+                            merged[ik] = iv
                         else:
                             merged[ik] = iv
                 existing[k] = merged
@@ -979,6 +995,8 @@ def _empty_state() -> dict[str, Any]:
                       "grant_credits": 0, "credits_left": 0, "feature_credits": {}},
         "permanent_credits": {"total": 0, "packs": []},
         "daily_usage": {"date": "", "download": 0, "subtitle": 0, "cloud": 0,
+                        "cloud_commentary": 0, "cloud_convert": 0,
+                        "cloud_dewatermark": 0, "cloud_subtitle": 0,
                         "matting": 0, "app_compute": 0},
         "usage_history": {},
         # 免费用户「首次体验」已用记录：{op 或 "*": 使用时刻}（见 DEFAULT_FREE_TRIAL_POLICY）
@@ -1041,7 +1059,11 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("download", "下载任务 {v} 次/日"),
     ("matting", "一键抠图 {v} 次/日"),
-    ("cloud", "在线处理（转码 / 拼接 / 去水印 / 字幕）{v} 次/日"),
+    # 🔴 2026-10-06 拆池：4 个云端功能各自独立权益（此前共用「在线处理」一条）
+    ("cloud_commentary", "视频解说 {v} 次/日"),
+    ("cloud_convert", "在线转码 / 拼接 {v} 次/日"),
+    ("cloud_dewatermark", "在线去水印 {v} 次/日"),
+    ("cloud_subtitle", "在线字幕处理 {v} 次/日"),
     ("convert_video", "视频格式转换 / 拼接 {v} 次/日"),
     ("convert_audio", "音乐转换 {v} 次/日"),
     ("convert_image", "图片转换 {v} 次/日"),

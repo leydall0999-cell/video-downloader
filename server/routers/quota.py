@@ -114,13 +114,18 @@ def precheck_commentary(
     qm = get_quota_manager(request)
     eng = (engine or "").strip().lower() or resolve_engine(request)
     res = qm.precheck_commentary(
-        duration_sec, local_engine_ready=_local_engine_ready(eng), engine=eng
+        duration_sec, local_engine_ready=_local_engine_ready(eng), engine=eng,
+        resource="cloud_commentary",
     )
     st = qm.status()
     res["engine"] = eng
     res["is_member"] = st["is_member"]
     res["free_max_duration_sec"] = st["free_max_duration_sec"]
-    res["lifetime_cloud_remaining"] = st["lifetime_cloud_remaining"]
+    # 🔴 2026-10-06 按功能独立终身额度：解说走 cloud_commentary 资源键。
+    # 旧字段 lifetime_cloud_remaining 保留（默认 resource 值）向后兼容前端；
+    # cloud_lifetime_remaining 是 per-resource 字典，前端升级后用它渲染 4 个独立行。
+    res["lifetime_cloud_remaining"] = st["cloud_lifetime_remaining"].get("cloud_commentary")
+    res["cloud_lifetime_remaining"] = st["cloud_lifetime_remaining"]
     return res
 
 
@@ -159,6 +164,23 @@ def precheck_or_raise(
                 "subscribe": True,
             },
         )
+    # 🔴 2026-10-06 按功能独立「每日免费次数」：视频解说走 cloud_commentary 资源键，
+    # 与在线转码 / 在线去水印 / 在线字幕处理各自独立计每日次数（用户要求「独立功能
+    # 独立计数」）。免费档默认 3 次/日、会员档 200 次/日（见 membership.FREE_DAILY_LIMITS
+    # / DAILY_QUOTA_LIMITS），门禁顺序与字幕提取同构：先日配额 → 再 AI 积分 → 最后落账。
+    _mstore = app_module().current_member_store(request)
+    _dq = _mstore.quota_state("cloud_commentary")
+    if not _dq.get("allowed"):
+        from fastapi import HTTPException
+        _limit = int(_dq.get("limit", 0))
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "message": f"今日视频解说免费额度已用尽（{_limit}/日）",
+                "hint": "开通会员可解锁无限次/日，并享满速生成",
+                "category": "quota", "code": "MEMBER_QUOTA", "subscribe": True,
+            },
+        )
     charge_commentary_credits(request, res.get("engine") or engine, duration_sec)
     # 🔴 2026-10-06 补漏：`commentary_vision`（解说画面理解，50 积分）此前
     # **完全没有扣费点** —— 用户勾了「画面理解」会真的去调多模态模型
@@ -168,6 +190,12 @@ def precheck_or_raise(
     # 覆盖；② 用户定档是「按次定价」，任务入口收一次即一份，与内部调用几次无关。
     if vision:
         _charge_optional(request, "commentary_vision", "解说画面理解")
+    # 每日免费配额落账（任务已通过门禁 + 积分已扣，才计一次；与字幕提取同构）。
+    # 重复点击会各自计一次（解说当前无去重），与 AI 积分扣费口径一致。
+    try:
+        _mstore.use_daily("cloud_commentary", 1)
+    except Exception:
+        pass
     return res
 
 

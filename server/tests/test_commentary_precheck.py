@@ -30,6 +30,7 @@
     cd server && python -m pytest tests/test_commentary_precheck.py -v
 """
 import os
+import pathlib
 import shutil
 import sys
 import tempfile
@@ -206,15 +207,32 @@ class _Patch:
         self._qm = quota_router.get_quota_manager
         self._ready = quota_router._local_engine_ready
         self._charge = quota_router.charge_commentary_credits
+        self._appmod = quota_router.app_module
         quota_router.get_quota_manager = lambda request=None: _mgr()
         quota_router._local_engine_ready = lambda engine="": False
         quota_router.charge_commentary_credits = lambda *a, **k: {"ok": True, "spent": 0, "free": True}
+        # 🔴 2026-10-06 拆池后 `precheck_or_raise` 还会走 `current_member_store`
+        # 的每日门禁（cloud_commentary 3 次/日）。整个套件共享 VDL_DATA_DIR，
+        # 前面的测试把配额耗尽会让本文件的「应放行」用例撞 402（实测）。
+        # 桩成**每个用例一套全新的临时 store**：门禁逻辑照走，状态互不串扰。
+        import membership as _mem
+        self._tmp = tempfile.mkdtemp(prefix="vdl_precheck_store_")
+        _fresh_store = _mem.MembershipStore(
+            path=pathlib.Path(self._tmp) / "member.json")
+
+        class _FakeApp:
+            @staticmethod
+            def current_member_store(_request=None):
+                return _fresh_store
+
+        quota_router.app_module = lambda: _FakeApp()
         return self
 
     def __exit__(self, *exc):
         quota_router.get_quota_manager = self._qm
         quota_router._local_engine_ready = self._ready
         quota_router.charge_commentary_credits = self._charge
+        quota_router.app_module = self._appmod
         return False
 
 

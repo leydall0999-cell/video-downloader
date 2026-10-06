@@ -21308,13 +21308,26 @@ el.dwVidPlayer.hidden = true;
       // 🔴 云端额度（终身 / 每日 auto）此前只是提示文字里的两个数字，看得到改不了
       // （真值是 quota.py 的模块常量）。用户 2026-10-06 要求「后台能不能改」——
       // 能，故做成可输入行：覆盖值存 plans.json 的 free_quota，脏值后端会忽略。
-      h += `<div class="admin-plan-row" data-fq="cloud" data-key="cloud_limits">
-        <span class="admin-plan-name">云端额度 <code class="admin-plan-code">cloud</code></span>
-        <label>终身免费次数<input class="admin-input admin-input-sm fq-cloud" data-key="cloud_lifetime"
-               value="${esc(fq.limits?.cloud_lifetime ?? 3)}" type="number" min="0"></label>
+      // 🔴 2026-10-06 拆池：终身次数按功能独立（4 个 resource 各一份），
+      // 覆盖值存 free_quota.cloud_lifetime 字典 {resource: n}；后端也接受整数
+      // （= 全部功能同一值，向后兼容旧配置）。
+      const clpr = (fq.limits?.cloud_lifetime_per_resource)
+        || { cloud_commentary: 3, cloud_convert: 3, cloud_dewatermark: 3, cloud_subtitle: 3 };
+      const CL_NAMES = { cloud_commentary: '视频解说', cloud_convert: '在线转码/拼接',
+                         cloud_dewatermark: '在线去水印', cloud_subtitle: '在线字幕处理' };
+      Object.entries(clpr).forEach(([res, val]) => {
+        h += `<div class="admin-plan-row" data-fq="cloud" data-key="cloud_lifetime_${esc(res)}">
+        <span class="admin-plan-name">${esc(CL_NAMES[res] || res)}终身免费 <code class="admin-plan-code">${esc(res)}</code></span>
+        <label>终身免费次数<input class="admin-input admin-input-sm fq-cloud" data-key="cloud_lifetime" data-res="${esc(res)}"
+               value="${esc(Number(val) || 0)}" type="number" min="0"></label>
+        <span class="admin-plan-hint">该功能独立一份（与其它功能互不挤占），由授权中心按账号记账</span>
+      </div>`;
+      });
+      h += `<div class="admin-plan-row" data-fq="cloud" data-key="cloud_daily_auto">
+        <span class="admin-plan-name">每日 auto 护栏 <code class="admin-plan-code">daily_auto</code></span>
         <label>每日 auto 次数<input class="admin-input admin-input-sm fq-cloud" data-key="daily_auto"
                value="${esc(fq.limits?.cloud_daily_auto ?? 1)}" type="number" min="0"></label>
-        <span class="admin-plan-hint">由授权中心按账号记账（换电脑/换网页不重置）；改 0 = 完全不给云端免费额度</span>
+        <span class="admin-plan-hint">旧总池的每日护栏（当前套餐已配 0 = 关闭）；改 0 = 完全不给该护栏</span>
       </div>`;
       (fq.credit_features || []).forEach((f) => {
         const ex = (fq.defaults?.trial_exclude || []).includes(f.op);
@@ -21343,10 +21356,22 @@ el.dwVidPlayer.hidden = true;
       if (Object.keys(dailyMember).length) payload.daily_member_limits = dailyMember;
       // 🔴 云端额度（终身 / 每日 auto）也要提交 —— 此前它只是提示文字里的数字，
       // 真值是 quota.py 模块常量，后台改了不生效。覆盖值存 free_quota 同级。
+      // 🔴 2026-10-06 拆池：终身次数按功能独立收集为字典 {resource: n}；
+      // daily_auto 仍是单值。带 data-res 的输入 = per-resource 终身行。
+      const clDict = {};
+      let hasDailyAuto = false;
       box.querySelectorAll('.fq-cloud').forEach((el) => {
         const v = parseInt(el.value, 10);
-        if (Number.isFinite(v) && v >= 0) payload[el.dataset.key] = v;
+        if (!Number.isFinite(v) || v < 0) return;
+        if (el.dataset.res) clDict[el.dataset.res] = v;
+        else if (el.dataset.key === 'daily_auto') hasDailyAuto = true;
       });
+      if (Object.keys(clDict).length) payload.cloud_lifetime = clDict;
+      if (hasDailyAuto) {
+        const daEl = box.querySelector('.fq-cloud[data-key="daily_auto"]');
+        const dav = parseInt(daEl && daEl.value, 10);
+        if (Number.isFinite(dav) && dav >= 0) payload.daily_auto = dav;
+      }
       // 试用水位走 free_trial.exclude（与上方「首次体验」同一份配置，不另开一套）
       const exclude = [];
       box.querySelectorAll('.fq-trial').forEach((el) => { if (!el.checked) exclude.push(el.dataset.op); });

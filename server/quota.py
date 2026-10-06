@@ -76,7 +76,69 @@ def cloud_quota_limits() -> tuple[int, int]:
         pass
     return life, daily
 
+
+def cloud_lifetime_limits() -> dict[str, int]:
+    """per-resource 终身免费次数上限（视频解说 / 在线转码 / 在线去水印 / 在线字幕处理
+    各自独立）。覆盖层：plans.json 的 `free_quota.cloud_lifetime` 支持两种写法：
+
+      · 整数（旧总池）→ 应用到全部 4 个 resource（向后兼容）；
+      · 字典 {resource: n} → 按 resource 覆盖（管理员可让某个功能比别的松/紧）。
+
+    默认每个 resource 各 `LIFETIME_CLOUD_EVENTS` 次（与旧总池默认数一致，只是按功能各一份）。
+    与 `cloud_quota_limits()`（每日 auto 护栏）分离：终身用不到单值，必须 per-resource。
+    """
+    defaults = {r: int(LIFETIME_CLOUD_EVENTS) for r in CLOUD_RESOURCES}
+    try:
+        import json as _json
+        base = os.environ.get("VDL_DATA_DIR", "").strip() or \
+            os.path.expanduser("~/.video-downloader")
+        p = Path(base) / "plans.json"
+        fq = (_json.loads(p.read_text(encoding="utf-8")) or {}).get("free_quota") or {}
+        if isinstance(fq, dict):
+            v = fq.get("cloud_lifetime")
+            if isinstance(v, dict):
+                for r in CLOUD_RESOURCES:
+                    if r in v:
+                        try:
+                            n = int(v[r])
+                            if n >= 0:
+                                defaults[r] = n
+                        except (TypeError, ValueError):
+                            pass
+            elif v is not None:
+                try:
+                    n = int(v)
+                    if n >= 0:
+                        defaults = {r: n for r in CLOUD_RESOURCES}
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        pass
+    return defaults
+
 DEFAULT_BASE_DIR = Path(os.path.expanduser("~/.video-downloader"))
+
+# ── 云端功能资源键（2026-10-06 拆池）───────────────────────────────────────── #
+# 🔴 用户定档「每个功能独立配置」：原本 4 个云端功能（视频解说 / 在线转码 /
+# 在线去水印 / 在线字幕处理）共用一个 `lifetime_cloud_used` 终身池 + 一个 `daily_auto`
+# 护栏，名字分了、计数器没分。现拆成 4 个独立 resource：每家各自独立「终身免费次数」
+# + 各自独立「每日免费次数」。每日免费次数走 membership 的 `use_daily(resource)`
+# （本地、按天）；终身次数走本模块 per-resource + 授权中心跨端共享。
+# 默认值：每个功能各给一份「终身 3 次」（与旧总池默认数一致，只是按功能各一份）。
+CLOUD_RESOURCES: tuple[str, ...] = (
+    "cloud_commentary",    # 视频解说
+    "cloud_convert",       # 在线转码/拼接
+    "cloud_dewatermark",   # 在线去水印
+    "cloud_subtitle",      # 在线字幕处理
+)
+
+# 默认 resource（向后兼容：无参调用 = 视频解说，旧测试/旧调用方都落在这一项）
+DEFAULT_CLOUD_RESOURCE = "cloud_commentary"
+
+
+def _empty_cloud_lifetime() -> dict[str, int]:
+    """每个云端功能各自的终身已用量（默认 0）。"""
+    return {r: 0 for r in CLOUD_RESOURCES}
 
 # ── Keychain 影子计数（2026-10-06）───────────────────────────────────────── #
 # 🔴 为什么需要：`quota.json` 是**可删的普通文件**。实测的口子 ——
@@ -142,17 +204,24 @@ def _keychain_read(account: str) -> Optional[dict[str, Any]]:
     except Exception:
         # 旧版可能只存了一个纯数字（早期只影子终身计数）
         try:
-            return {"lifetime_cloud_used": int((r.stdout or b"").decode("utf-8").strip())}
+            return {"cloud_lifetime": {"cloud_commentary": max(0, int(
+                (r.stdout or b"").decode("utf-8").strip()))}}
         except Exception:
             return None
     if not isinstance(data, dict):
         return None
-    out = {}
-    for k in ("lifetime_cloud_used", "daily_auto_used"):
+    out: dict[str, Any] = {"cloud_lifetime": {}, "daily_date": ""}
+    cl = data.get("cloud_lifetime")
+    # 兼容两种历史格式：① 嵌套 {cloud_lifetime:{...}}（当前）② 扁平 {cloud_commentary: n, ...}（早期）
+    if isinstance(cl, dict):
+        src = cl
+    else:
+        src = data
+    for r in CLOUD_RESOURCES:
         try:
-            out[k] = max(0, int(data.get(k) or 0))
+            out["cloud_lifetime"][r] = max(0, int(src.get(r) or 0))
         except (TypeError, ValueError):
-            out[k] = 0
+            out["cloud_lifetime"][r] = 0
     out["daily_date"] = str(data.get("daily_date") or "")
     return out
 
@@ -161,12 +230,13 @@ def _keychain_write(state: dict[str, Any], today: str, account: str) -> None:
     """写影子计数；失败静默（加固是可选的，不阻断主流程）。"""
     if sys.platform != "darwin":
         return
-    payload = {}
-    for k in ("lifetime_cloud_used", "daily_auto_used"):
+    cl = state.get("cloud_lifetime") or {}
+    payload = {"cloud_lifetime": {}, "daily_date": ""}
+    for r in CLOUD_RESOURCES:
         try:
-            payload[k] = max(0, int(state.get(k) or 0))
+            payload["cloud_lifetime"][r] = max(0, int(cl.get(r) or 0))
         except (TypeError, ValueError):
-            payload[k] = 0
+            payload["cloud_lifetime"][r] = 0
     # 日配额必须带日期：否则次日读到的还是「昨天用尽」的计数（跨日不重置）
     payload["daily_date"] = today or str(state.get("daily_date") or "")
     try:
@@ -185,7 +255,7 @@ def _keychain_write(state: dict[str, Any], today: str, account: str) -> None:
 
 def _shadow_merge(state: dict[str, Any], today: str = "",
                   account: str = "") -> dict[str, Any]:
-    """把影子计数**合并进** state：终身取 max，日配额按日期取。
+    """把影子计数**合并进** state：终身（按功能）取 max，日配额按日期取。
 
     取 max 而非信任文件 —— 文件可能被用户手改小，也可能在 Keychain 不可用
     时是唯一来源。max 保证「已经用掉的额度不会因为任一侧丢失而复原」。
@@ -200,11 +270,14 @@ def _shadow_merge(state: dict[str, Any], today: str = "",
     sh = _keychain_read(account or _KEYCHAIN_ACCOUNT)
     if not sh:
         return state
-    try:
-        cur_life = int(state.get("lifetime_cloud_used") or 0)
-    except (TypeError, ValueError):
-        cur_life = 0
-    state["lifetime_cloud_used"] = max(cur_life, int(sh.get("lifetime_cloud_used") or 0))
+    cl = state.setdefault("cloud_lifetime", _empty_cloud_lifetime())
+    sh_cl = sh.get("cloud_lifetime") or {}
+    for r in CLOUD_RESOURCES:
+        try:
+            cur = int(cl.get(r) or 0)
+        except (TypeError, ValueError):
+            cur = 0
+        cl[r] = max(cur, int(sh_cl.get(r) or 0))
     day = today or str(state.get("daily_date") or "")
     sdate = str(sh.get("daily_date") or "")
     if day and sdate == day:
@@ -212,7 +285,11 @@ def _shadow_merge(state: dict[str, Any], today: str = "",
             cur_daily = int(state.get("daily_auto_used") or 0)
         except (TypeError, ValueError):
             cur_daily = 0
-        state["daily_auto_used"] = max(cur_daily, int(sh.get("daily_auto_used") or 0))
+        try:
+            sh_daily = int(0)  # 每日 auto 已是死值（0），无需与影子合并
+        except (TypeError, ValueError):
+            sh_daily = 0
+        state["daily_auto_used"] = max(cur_daily, sh_daily)
     return state
 
 
@@ -361,6 +438,7 @@ class QuotaManager:
 
     # ── 云端记账（跨端唯一真源；断网 fail-open 降级到本机计数）───────────── #
     def _cloud(self, lifetime: int = 0, daily: int = 0,
+               resource: str = DEFAULT_CLOUD_RESOURCE,
                refund: bool = False) -> Optional[dict]:
         """调授权中心原子扣减/退还/查询。**返回 None 表示「没拿到权威结果」**。
 
@@ -370,6 +448,8 @@ class QuotaManager:
           · 中心返回体异常
         ⚠️ 绝不因为「查不到」就当成「额度已用尽」——那会把断网用户和免费用户
         一起误伤，且旧口径下断网本来是放行的。
+        🔴 2026-10-06 拆池：`resource` 决定记到哪个云端功能的终身额度
+        （视频解说 / 在线转码 / 在线去水印 / 在线字幕处理 各自独立）。
         """
         try:
             import license_client
@@ -383,35 +463,57 @@ class QuotaManager:
             return None
         try:
             r = license_client.cloud_quota_remote(tok, lifetime=lifetime,
-                                                  daily=daily, refund=refund)
+                                                  daily=daily, resource=resource,
+                                                  refund=refund)
         except Exception:
             return None
         if not isinstance(r, dict) or not r.get("ok"):
             return None
         return r
 
-    def _apply_cloud_view(self, cq: Any) -> bool:
+    def _apply_cloud_view(self, cq: Any,
+                          resource: str = DEFAULT_CLOUD_RESOURCE) -> bool:
         """把云端快照**覆盖**写回本机 quota.json（计数 + 日切日期）。
 
-        🔴 `daily_date` 必须一起写（2026-10-06 修）：只写 `daily_auto_used` 会
-        留下「计数是新的、日期还是旧的」的不一致状态 —— 次日本机惰性日切按旧日期
-        重置后算出 remaining=0，在中心已经放行的情况下**本地反而拒绝**（实测
-        「次日恢复」用例挂）。故日期与计数必须同源落下。
+        🔴 `daily_date` 必须一起写（2026-10-06 修）：只写计数会留下「计数是新的、
+        日期还是旧的」的不一致状态 —— 次日本机惰性日切按旧日期重置后算出
+        remaining=0，在中心已经放行的情况下**本地反而拒绝**。
 
         用覆盖而非 max：云端是唯一真源，本机计数在中心可达时一律以云端为准
         （否则「重装系统 → 本机归零 → 又变 3 次」的口子会重新出现）。
+
+        🔴 2026-10-06 拆池：新中心回 `lifetime`（per-resource dict）；旧中心只回
+        `lifetime_used`（总池）→ 回退映射到 `cloud_commentary`。
         """
         if not isinstance(cq, dict):
             return False
         try:
             st = self._state()
-            st["lifetime_cloud_used"] = max(0, int(cq.get("lifetime_used") or 0))
-            st["daily_auto_used"] = max(0, int(cq.get("daily_auto_used") or 0))
+            cl = st.setdefault("cloud_lifetime", _empty_cloud_lifetime())
+            per = cq.get("lifetime")
+            if isinstance(per, dict):
+                for r in CLOUD_RESOURCES:
+                    try:
+                        cl[r] = max(0, int(per.get(r) or 0))
+                    except (TypeError, ValueError):
+                        pass
+            else:
+                legacy = cq.get("lifetime_used")
+                if legacy is not None:
+                    try:
+                        cl[DEFAULT_CLOUD_RESOURCE] = max(0, int(legacy))
+                    except (TypeError, ValueError):
+                        pass
             cdate = str(cq.get("date") or "").strip()
             if cdate:
                 # 以云端（北京）日切日期为准：本机 _roll_daily 按本机时区算，
-                # 与云端可能差一天，差值会让「每日 auto」在错误的边界重置。
+                # 与云端可能差一天，差值会让「每日」在错误的边界重置。
                 st["daily_date"] = cdate
+            # 每日 auto 护栏：新中心与旧中心都回 `daily_auto_used`（单池，非 per-resource），
+            # 一律覆盖回本机，保证跨端每日额度同步（被拒时也要回灌中心当前值）。
+            da = cq.get("daily_auto_used")
+            if isinstance(da, int) and da >= 0:
+                st["daily_auto_used"] = da
             self._persist(st)
             return True
         except Exception:
@@ -426,13 +528,15 @@ class QuotaManager:
         return cq
 
     def _consume_cloud(self, lifetime: int = 0, daily: int = 0,
+                       resource: str = DEFAULT_CLOUD_RESOURCE,
                        refund: bool = False) -> Optional[bool]:
         """中心原子扣减。返回 True=已扣、False=中心明确拒绝、None=拿不到结果。"""
-        r = self._cloud(lifetime=lifetime, daily=daily, refund=refund)
+        r = self._cloud(lifetime=lifetime, daily=daily, resource=resource,
+                        refund=refund)
         if r is None:
             return None
         # 回灌本机（计数 + 云端日切日期），保证两端显示与日切边界一致
-        self._apply_cloud_view(r.get("cloud_quota"))
+        self._apply_cloud_view(r.get("cloud_quota"), resource)
         return bool(r.get("allowed"))
 
     # ── 持久化 ──────────────────────────────────────────────────────────── #
@@ -443,22 +547,39 @@ class QuotaManager:
         3 次终身云端额度。改为唯一临时名原子写之后「读到半截」这条路径已不存在，
         所以**不要**把 `_save` 改回就地 write_text。
 
-        🔴 2026-10-06：读到之后合并 Keychain 影子计数（终身取 max、日配额按日期
-        取 max）。否则「联网用满 → 断网 → 删 quota.json」会把计数归零，白嫖 3 次。
+        🔴 2026-10-06：读到之后合并 Keychain 影子计数（终身按功能取 max、日配额
+        按日期取 max）。否则「联网用满 → 断网 → 删 quota.json」会把计数归零。
+        🔴 2026-10-06 拆池：旧 quota.json 只有扁平的 `lifetime_cloud_used`
+        （4 功能共用总池），读到后迁移进 `cloud_lifetime["cloud_commentary"]`
+        （桌面唯一云端功能 = 视频解说），其余 3 个功能从 0 起算（新模型本就该各给一份）。
         """
         today = self._today()
-        if self.path.exists():
-            try:
-                return _shadow_merge(
-                    json.loads(self.path.read_text(encoding="utf-8") or "{}"),
-                    today, self._shadow_acct)
-            except Exception:
-                return {}
-        # 文件不存在（重装/删文件）：仍要读影子，否则删文件就等于清零额度
         try:
-            return _shadow_merge({}, today, self._shadow_acct)
+            if self.path.exists():
+                raw = json.loads(self.path.read_text(encoding="utf-8") or "{}")
+            else:
+                raw = {}
         except Exception:
-            return {}
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        cl = raw.setdefault("cloud_lifetime", _empty_cloud_lifetime())
+        if not isinstance(cl, dict):
+            cl = _empty_cloud_lifetime()
+            raw["cloud_lifetime"] = cl
+        # 旧扁平键迁移
+        legacy = raw.pop("lifetime_cloud_used", None)
+        if legacy is not None and not cl.get(DEFAULT_CLOUD_RESOURCE):
+            try:
+                cl[DEFAULT_CLOUD_RESOURCE] = max(0, int(legacy))
+            except (TypeError, ValueError):
+                pass
+        # 补齐缺失的功能键
+        for r in CLOUD_RESOURCES:
+            cl.setdefault(r, 0)
+        raw.setdefault("daily_auto_used", 0)
+        raw.setdefault("daily_date", "")
+        return _shadow_merge(raw, today, self._shadow_acct)
 
     def _save(self, st: dict) -> None:
         _write_atomic(self.path, json.dumps(st, ensure_ascii=False, indent=2))
@@ -527,11 +648,13 @@ class QuotaManager:
         except Exception:
             return False
 
-    def lifetime_cloud_remaining(self) -> int:
+    def lifetime_cloud_remaining(self, resource: str = DEFAULT_CLOUD_RESOURCE) -> int:
         if self.is_member():
             return 10 ** 9
-        _life, _daily = cloud_quota_limits()
-        return max(0, _life - int(self._state().get("lifetime_cloud_used", 0)))
+        _limits = cloud_lifetime_limits()
+        _lim = _limits.get(resource, int(LIFETIME_CLOUD_EVENTS))
+        cl = (self._state().get("cloud_lifetime") or {})
+        return max(0, _lim - int(cl.get(resource) or 0))
 
     def daily_auto_remaining(self) -> int:
         if self.is_member():
@@ -548,28 +671,29 @@ class QuotaManager:
         return duration_sec <= FREE_MAX_DURATION_SEC
 
     # ── 变更 ────────────────────────────────────────────────────────────── #
-    def consume_cloud_event(self) -> bool:
-        """扣 1 次终身云端事件。额度不足返回 False。
+    def consume_cloud_event(self, resource: str = DEFAULT_CLOUD_RESOURCE) -> bool:
+        """扣 1 次某云端功能的终身额度。额度不足返回 False。
 
         🔴 2026-10-06：先问授权中心（账号级原子扣减，跨端共享）。中心明确拒绝
         （allowed=False）即**真的没有额度了** → 返回 False，堵住「换电脑重置」
         的漏洞。中心拿不到结果（未登录 / 断网 / 中心异常）→ 降级用本机计数，
         保持旧口径不误伤（fail-open）。
 
-        ⚠️ 顺序：必须**先问中心再看本机**。开头的本地前置检查会造成假拒 ——
-        本机缓存可能比中心旧（另一台机器刚用掉额度，本机还显示有余额，反之亦然），
-        本地判定等于用缓存覆盖真源。本地判定只作中心不可达时的兜底。
+        ⚠️ 顺序：必须**先问中心再看本机**。开头本地前置检查会造成假拒。
+        🔴 2026-10-06 拆池：`resource` 决定扣哪个功能的终身额度。
         """
         if self.is_member():
             return True
-        remote = self._consume_cloud(lifetime=1)
+        remote = self._consume_cloud(lifetime=1, resource=resource)
         if remote is not None:
             return remote
         with self._mutation():
             st = self._state()
-            if self.lifetime_cloud_remaining() <= 0:
+            cl = st.setdefault("cloud_lifetime", _empty_cloud_lifetime())
+            _lim = cloud_lifetime_limits().get(resource, int(LIFETIME_CLOUD_EVENTS))
+            if int(cl.get(resource) or 0) >= _lim:
                 return False
-            st["lifetime_cloud_used"] = int(st.get("lifetime_cloud_used", 0)) + 1
+            cl[resource] = int(cl.get(resource) or 0) + 1
             self._persist(st)
             return True
 
@@ -577,13 +701,16 @@ class QuotaManager:
     def snapshot(self) -> dict:
         """当前用量快照，供「失败了要不要退」比对。"""
         st = self._state()
+        cl = st.get("cloud_lifetime") or _empty_cloud_lifetime()
         return {
-            "lifetime_cloud_used": int(st.get("lifetime_cloud_used", 0)),
+            "lifetime_cloud_used": int(cl.get(DEFAULT_CLOUD_RESOURCE, 0)),
             "daily_auto_used": int(st.get("daily_auto_used", 0)),
+            "cloud_lifetime": dict(cl),
         }
 
-    def refund(self, lifetime: int = 0, daily: int = 0) -> dict:
-        """退还已扣额度（失败任务 / 异常终止的补偿）。
+    def refund(self, lifetime: int = 0, daily: int = 0,
+               resource: str = DEFAULT_CLOUD_RESOURCE) -> dict:
+        """退还某云端功能已扣的终身额度（失败任务 / 异常终止的补偿）。
 
         用户视角的铁律：**没出片就不该扣额度**。管线在云端调用前就扣了 1 次
         终身额度，若之后整条任务失败（网络、超时、模型返回空内容），用户既没
@@ -593,24 +720,35 @@ class QuotaManager:
         🔴 2026-10-06：退还也要同步到中心，否则「任务失败退还」只退本机，
         云端计数不变 → 用户换台电脑后额度已被扣光却从未退过。先试中心，
         拿不到结果才退回纯本机退还。
+        🔴 2026-10-06 拆池：`resource` 决定退哪个功能的终身额度。
         """
         if self.is_member():
             return self.snapshot()
         if lifetime <= 0 and daily <= 0:
             return self.snapshot()
-        remote = self._consume_cloud(lifetime=lifetime, daily=daily, refund=True)
+        remote = self._consume_cloud(lifetime=lifetime, daily=daily,
+                                     resource=resource, refund=True)
         if remote is not None:
             return self.snapshot()
         with self._mutation():
             st = self._state()
-            cur_life = int(st.get("lifetime_cloud_used", 0))
-            cur_daily = int(st.get("daily_auto_used", 0))
+            changed = False
+            cl = st.setdefault("cloud_lifetime", _empty_cloud_lifetime())
+            cur_life = int(cl.get(resource) or 0)
             new_life = max(0, cur_life - int(lifetime))
-            new_daily = max(0, cur_daily - int(daily))
-            if new_life == cur_life and new_daily == cur_daily:
+            if new_life != cur_life:
+                cl[resource] = new_life
+                changed = True
+            # 每日 auto 护栏（共享单池，非 per-resource）：同样要退，否则「失败任务」
+            # 把当天的每日额度也白吃掉。
+            if daily > 0:
+                cur_day = int(st.get("daily_auto_used", 0))
+                new_day = max(0, cur_day - int(daily))
+                if new_day != cur_day:
+                    st["daily_auto_used"] = new_day
+                    changed = True
+            if not changed:
                 return self.snapshot()   # 无变化不落盘：避免无谓写文件与 mtime 抖动
-            st["lifetime_cloud_used"] = new_life
-            st["daily_auto_used"] = new_daily
             self._persist(st)
             return self.snapshot()
 
@@ -644,6 +782,7 @@ class QuotaManager:
         duration_sec: float,
         local_engine_ready: bool = False,
         engine: str = "auto",
+        resource: str = DEFAULT_CLOUD_RESOURCE,
     ) -> dict:
         """解说任务开始前的可行性预检，返回结构化结论供调用方转人话提示。
 
@@ -692,14 +831,15 @@ class QuotaManager:
         # （明明是自己选的「纯云端」，却被提示「本机引擎不可用」）。
         _explicit_cloud = str(engine or "").strip().lower() == "cloud"
         need_cloud = _explicit_cloud or (not local_engine_ready)
-        if need_cloud and self.lifetime_cloud_remaining() <= 0:
+        if need_cloud and self.lifetime_cloud_remaining(resource) <= 0:
             return {
                 "allowed": False,
                 "code": "cloud_quota_exhausted",
                 "reason": "本机引擎不可用，且免费云端额度已用完",
                 "hint": (
-                    "这条视频需要云端生成解说词，但免费云端额度（终身 "
-                    f"{cloud_quota_limits()[0]} 次）已用完。开通会员即可解锁无限云端解说。"
+                    "这条视频需要云端生成解说词，但免费云端额度（视频解说终身 "
+                    f"{cloud_lifetime_limits().get(resource, int(LIFETIME_CLOUD_EVENTS))} 次）已用完。"
+                    "开通会员即可解锁无限云端解说。"
                 ),
                 "will_use_cloud": True,
                 "duration_sec": float(duration_sec),
@@ -722,7 +862,8 @@ class QuotaManager:
         }
 
     # ── 决策（供 llm_script 云端回落使用）────────────────────────────────── #
-    def decide_cloud_fallback(self, mode: str = "auto") -> str:
+    def decide_cloud_fallback(self, mode: str = "auto",
+                               resource: str = DEFAULT_CLOUD_RESOURCE) -> str:
         """云端闸门决策（两种云端来源语义不同，必须分开判）。
 
         mode='auto'       引擎 auto，本机跑不动/失败时**回落**云端：
@@ -736,8 +877,8 @@ class QuotaManager:
         """
         if self.is_member():
             return "allow"
-        if self.lifetime_cloud_remaining() <= 0:
-            return "deny"          # 终身云端额度耗尽
+        if self.lifetime_cloud_remaining(resource) <= 0:
+            return "deny"          # 该功能的终身云端额度耗尽
         if mode == "cloud_only":
             return "allow"         # 显式选云端：不检查也不消耗每日 auto 额度
         if self.daily_auto_remaining() <= 0:
@@ -748,15 +889,24 @@ class QuotaManager:
         st = self._state()
         admin = self._admin_exempt()
         member = self.is_member() and not admin   # 管理员豁免≠会员，如实分开报告
+        cl = (st.get("cloud_lifetime") or _empty_cloud_lifetime())
+        _limits = cloud_lifetime_limits()
+        cloud_lifetime_remaining = {
+            r: (10 ** 9 if member else max(0, _limits.get(r, int(LIFETIME_CLOUD_EVENTS)) - int(cl.get(r) or 0)))
+            for r in CLOUD_RESOURCES
+        }
         return {
             "is_member": member,
             "admin_exempt": admin,
-            "lifetime_cloud_used": 0 if member else int(st.get("lifetime_cloud_used", 0)),
+            "lifetime_cloud_used": 0 if member else int(cl.get(DEFAULT_CLOUD_RESOURCE, 0)),
             "lifetime_cloud_limit": cloud_quota_limits()[0],
             "lifetime_cloud_remaining": self.lifetime_cloud_remaining(),
+            "lifetime_cloud_limits": {r: _limits.get(r, int(LIFETIME_CLOUD_EVENTS)) for r in CLOUD_RESOURCES},
             "daily_auto_used": 0 if member else int(st.get("daily_auto_used", 0)),
             "daily_auto_limit": cloud_quota_limits()[1],
             "daily_auto_remaining": self.daily_auto_remaining(),
+            "cloud_lifetime": {r: 0 if member else int(cl.get(r) or 0) for r in CLOUD_RESOURCES},
+            "cloud_lifetime_remaining": cloud_lifetime_remaining,
             "free_max_duration_sec": FREE_MAX_DURATION_SEC,
         }
 

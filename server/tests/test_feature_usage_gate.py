@@ -69,13 +69,45 @@ def _business_sources() -> list[tuple[str, str]]:
 # 网页端读不到（未 clone / 无 git）时该资源判为无拦截点 ⇒ 守卫照样会红，
 # 不会因为「环境缺 git」而静默放过。
 CROSS_END_RESOURCES: dict[str, str] = {
-    "cloud": "web-dev:server/app.py::cloud_quota_gate",
+    # 🔴 2026-10-06 拆池：旧总池键 "cloud" 拆为 3 个独立键（cloud_commentary
+    # 的拦截点在桌面端 routers/quota.py 本地，不在此表）。网页端的预检统一走
+    # app.cloud_quota_gate(request, resource="X")（routers 显式传键），
+    # 下面的映射指向**真有该字面量**的网页端文件。
+    "cloud_convert": "web-dev:server/routers/convert.py",
+    "cloud_dewatermark": "web-dev:server/routers/dewatermark.py",
+    "cloud_subtitle": "web-dev:server/routers/subtitle.py",
 }
 
 
 def _web_dev_source(rel_path: str) -> str:
-    """读 web-dev 分支上的文件内容；取不到返回空串。"""
+    """读 web-dev 分支上的文件内容；取不到返回空串。
+
+    🔴 2026-10-06：优先读 **web-dev 工作树**的实际文件（`git worktree list`
+    定位），而不是 `git show web-dev:...` —— 后者只能看到**已提交**的内容，
+    两端同批改动时（网页端已改、尚未 commit）会读到旧版而误报「无拦截点」；
+    工作树定位失败才回退 git show（覆盖 web-dev 未 checkout 的场景）。
+    """
     import subprocess
+    # ① 定位 web-dev 工作树，直接读文件（含未提交改动）
+    try:
+        out = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=str(_SERVER.parent), capture_output=True, timeout=20,
+        ).stdout.decode("utf-8", "ignore")
+        cur = None
+        for line in out.splitlines():
+            if line.startswith("worktree "):
+                cur = line[len("worktree "):].strip()
+            elif line.startswith("branch ") and cur:
+                b = line[len("branch "):].strip()   # refs/heads/web-dev
+                if b.rsplit("/", 1)[-1] == "web-dev":
+                    p = pathlib.Path(cur) / rel_path
+                    if p.exists():
+                        return p.read_text(encoding="utf-8", errors="ignore")
+                cur = None
+    except Exception:
+        pass
+    # ② 回退：git show 已提交的 web-dev 分支内容
     try:
         return subprocess.run(
             ["git", "show", f"web-dev:{rel_path}"],
@@ -152,11 +184,15 @@ def test_rows_have_real_gate() -> None:
         if rel.startswith("web-dev:"):          # 写成 "web-dev:server/app.py::fn"
             rel = rel.split(":", 1)[1]
         wsrc = _web_dev_source(rel)
-        # 🔴 判据必须是**真调用**（`quota_state("cloud")` / `use_daily("cloud", n=…)`），
-        # 不能只认「文件里出现过 cloud 字面量」—— 后者会连注释/回派 payload 都算通过，
-        # 等于给跨端资源开了一张万能通行证（实测变异：把 app_compute 谎报成跨端资源
-        # 时，仅靠字面量判定就不会变红）。
-        wok = bool(re.search(r'(use_daily|quota_state)\(\s*["\']' + res + r'["\']', wsrc))
+        # 🔴 判据必须是**真调用**，不能只认「文件里出现过资源名字面量」——
+        # 后者会连注释/回派 payload 都算通过，等于给跨端资源开万能通行证。
+        # 2026-10-06 拆池后网页端拦截点形态是
+        # `app.cloud_quota_gate(request, resource="X")`（router 显式传键），
+        # 与 use_daily/quota_state 字面量同等效力，一并认可。
+        wok = bool(
+            re.search(r'(use_daily|quota_state)\(\s*["\']' + res + r'["\']', wsrc)
+            or re.search(r'cloud_quota_gate\([^)]*resource=\s*["\']' + res + r'["\']', wsrc)
+        )
         check(f'[{r["key"]}] 拦截点在网页版（{cross}）', wok,
               f"web-dev 的 {rel} 里搜不到 use_daily/quota_state(\"{r['resource']}\") —— "
               f"若网页版已改实现，请同步更新 CROSS_END_RESOURCES")

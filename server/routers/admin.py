@@ -177,6 +177,46 @@ def _cloud_quota_limits() -> tuple[int, int]:
     return life, daily
 
 
+def _cloud_lifetime_per_resource() -> dict[str, int]:
+    """per-resource 终身免费次数上限（与 quota.py::cloud_lifetime_limits 同源）。
+
+    plans.json 的 `free_quota.cloud_lifetime` 支持：
+      · 整数（旧总池）→ 应用到全部 4 个 resource（向后兼容）；
+      · 字典 {resource: n} → 按 resource 覆盖（管理员可让某功能更松/更紧）。
+    默认每个 resource 各 `LIFETIME_CLOUD_EVENTS` 次。
+    """
+    try:
+        from quota import LIFETIME_CLOUD_EVENTS, CLOUD_RESOURCES
+        defaults = {r: int(LIFETIME_CLOUD_EVENTS) for r in CLOUD_RESOURCES}
+    except Exception:
+        return {}
+    try:
+        from membership import load_plan_overrides
+        fq = (load_plan_overrides().get("free_quota") or {})
+    except Exception:
+        return defaults
+    if not isinstance(fq, dict):
+        return defaults
+    v = fq.get("cloud_lifetime")
+    if isinstance(v, dict):
+        for r in CLOUD_RESOURCES:
+            if r in v:
+                try:
+                    n = int(v[r])
+                    if n >= 0:
+                        defaults[r] = n
+                except (TypeError, ValueError):
+                    pass
+    elif v is not None:
+        try:
+            n = int(v)
+            if n >= 0:
+                defaults = {r: n for r in CLOUD_RESOURCES}
+        except (TypeError, ValueError):
+            pass
+    return defaults
+
+
 def _daily_feature_rows() -> list[dict[str, Any]]:
     """后台「免费额度」右栏的功能列表（**按用户看到的功能名**）。
 
@@ -397,6 +437,11 @@ def admin_ai_credit_costs(request: Request = None) -> dict[str, Any]:
             "limits": {
                 "cloud_lifetime": _cloud_quota_limits()[0],
                 "cloud_daily_auto": _cloud_quota_limits()[1],
+                # 🔴 2026-10-06 拆池：终身免费次数按功能独立（视频解说 / 在线转码 /
+                # 在线去水印 / 在线字幕处理 各自一份），后台可逐功能配。
+                # 兼容旧前端：cloud_lifetime 仍为单值（取默认 resource 的值）；
+                # cloud_lifetime_per_resource 是 per-resource 字典，新前端用它渲染 4 个独立输入。
+                "cloud_lifetime_per_resource": _cloud_lifetime_per_resource(),
             },
         },
         # 免费用户「首次体验」策略（2026-10-05 晚用户定档：账号首次使用免费一次）。

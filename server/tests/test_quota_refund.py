@@ -21,18 +21,32 @@ from quota import QuotaManager  # noqa: E402
 
 def _mk(is_member: bool = False):
     home = Path(tempfile.mkdtemp(prefix="vdl_quota_refund_"))
+    # 🔴 隔离真实 plans.json：生产环境把 daily_auto 配成了 0（共享护栏已关），
+    # 否则 consume_daily_auto 永远 False，本用例的前提（每日 +1）不成立。
+    # 指向临时目录（无 plans.json）→ cloud_quota_limits 落回代码默认 daily_auto=1。
+    os.environ["VDL_DATA_DIR"] = str(home)
     return QuotaManager(base_dir=home, is_member_fn=lambda: is_member)
 
 
 # ── 用例 ───────────────────────────────────────────────────────────────── #
+def _assert_cloud(snap, resource, n):
+    assert snap["cloud_lifetime"][resource] == n, f"{resource} 应={n}, 实={snap['cloud_lifetime'][resource]}"
+
+
 def test_refund_restores_consumed_quota():
     """扣多少退多少：用完再退，应回到初始状态。"""
     q = _mk()
-    q.consume_cloud_event()
+    q.consume_cloud_event()                  # 默认 resource=cloud_commentary
     q.consume_daily_auto()
-    assert q.snapshot() == {"lifetime_cloud_used": 1, "daily_auto_used": 1}
+    snap = q.snapshot()
+    assert snap["lifetime_cloud_used"] == 1
+    assert snap["daily_auto_used"] == 1
+    _assert_cloud(snap, "cloud_commentary", 1)
     q.refund(lifetime=1, daily=1)
-    assert q.snapshot() == {"lifetime_cloud_used": 0, "daily_auto_used": 0}
+    snap2 = q.snapshot()
+    assert snap2["lifetime_cloud_used"] == 0
+    assert snap2["daily_auto_used"] == 0
+    _assert_cloud(snap2, "cloud_commentary", 0)
 
 
 def test_refund_never_goes_negative():
@@ -42,6 +56,7 @@ def test_refund_never_goes_negative():
     for _ in range(5):
         q.refund(lifetime=1)
     assert q.snapshot()["lifetime_cloud_used"] == 0
+    _assert_cloud(q.snapshot(), "cloud_commentary", 0)
 
 
 def test_refund_zero_delta_is_noop():
@@ -49,7 +64,9 @@ def test_refund_zero_delta_is_noop():
     q = _mk()
     before = q.path.read_text(encoding="utf-8") if q.path.exists() else ""
     after_dims = q.refund(lifetime=1)
-    assert after_dims == {"lifetime_cloud_used": 0, "daily_auto_used": 0}
+    assert after_dims["lifetime_cloud_used"] == 0
+    assert after_dims["daily_auto_used"] == 0
+    _assert_cloud(after_dims, "cloud_commentary", 0)
     assert (q.path.read_text(encoding="utf-8") if q.path.exists() else "") == before
 
 
@@ -58,7 +75,9 @@ def test_refund_skipped_for_member():
     q = _mk(is_member=True)
     q.consume_cloud_event()          # 会员分支直接 True，不落账
     snap = q.refund(lifetime=1, daily=1)
-    assert snap == {"lifetime_cloud_used": 0, "daily_auto_used": 0}
+    assert snap["lifetime_cloud_used"] == 0
+    assert snap["daily_auto_used"] == 0
+    _assert_cloud(snap, "cloud_commentary", 0)
 
 
 def test_snapshot_reflects_real_consumption():
@@ -68,6 +87,7 @@ def test_snapshot_reflects_real_consumption():
     q.consume_cloud_event()
     snap = q.snapshot()
     assert snap["lifetime_cloud_used"] == 2
+    _assert_cloud(snap, "cloud_commentary", 2)
     q.refund(lifetime=2)
     assert q.lifetime_cloud_remaining() == 3
 
@@ -79,7 +99,21 @@ def test_daily_auto_refund_independent_from_lifetime():
     q.consume_daily_auto()
     q.refund(daily=1)                       # 只退每日
     snap = q.snapshot()
-    assert snap == {"lifetime_cloud_used": 1, "daily_auto_used": 0}
+    assert snap["lifetime_cloud_used"] == 1
+    assert snap["daily_auto_used"] == 0
+    _assert_cloud(snap, "cloud_commentary", 1)
+
+
+def test_per_resource_refund_isolated():
+    """🔴 拆池后：退还某功能额度不得波及另一功能（各退各的）。"""
+    q = _mk()
+    # 用满 cloud_commentary（默认），但 cloud_subtitle 不动
+    q.consume_cloud_event()                  # cloud_commentary +1
+    assert q.lifetime_cloud_remaining("cloud_commentary") == 2
+    assert q.lifetime_cloud_remaining("cloud_subtitle") == 3  # 另一功能满额
+    q.refund(lifetime=1, resource="cloud_commentary")
+    assert q.lifetime_cloud_remaining("cloud_commentary") == 3
+    assert q.lifetime_cloud_remaining("cloud_subtitle") == 3  # 不受影响
 
 
 _TESTS = [
@@ -89,6 +123,7 @@ _TESTS = [
     test_refund_skipped_for_member,
     test_snapshot_reflects_real_consumption,
     test_daily_auto_refund_independent_from_lifetime,
+    test_per_resource_refund_isolated,
 ]
 
 
