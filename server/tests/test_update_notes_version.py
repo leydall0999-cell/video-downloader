@@ -134,6 +134,76 @@ def _render_scenarios(src: str, scenarios: list[dict]) -> list[dict]:
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
+_IIFE_MARK = "/* ==== 更新完成后主动告知"
+
+
+def _extract_iife(src: str, marker: str) -> str:
+    """按括号配平取出一个自执行 IIFE（从 marker 之后的 `(function () {` 起）。"""
+    i = src.index(marker)
+    j = src.index("(function () {", i)
+    depth = 0
+    for k in range(j, len(src)):
+        if src[k] == "(":
+            depth += 1
+        elif src[k] == ")":
+            depth -= 1
+            if depth == 0:
+                # 配平停在 `})`，必须补上 `()` 才会真正自执行（写成 `});` 只是个表达式，
+                # 探针会「取到了代码却什么都没跑」，表现为所有场景都不弹）
+                return src[j:k + 1] + "();"
+    raise AssertionError("无法取出 IIFE：" + marker)
+
+
+_POPUP_HARNESS = """
+const SC = %s;
+const __LS = SC.ls || {};
+const __APPENDED = [];
+const localStorage = {
+  getItem: (k) => (Object.prototype.hasOwnProperty.call(__LS, k) ? __LS[k] : null),
+  setItem: (k, v) => { __LS[k] = String(v); },
+  removeItem: (k) => { delete __LS[k]; },
+};
+const window = {
+  VDL: {
+    request: async (p) => (String(p).indexOf('changelog') >= 0
+      ? (SC.changelog || {}) : (SC.info || {})),
+  },
+};
+const document = {
+  getElementById: () => null,
+  createElement: () => ({
+    id: '', style: { cssText: '' }, innerHTML: '',
+    setAttribute() {}, addEventListener() {}, remove() {},
+  }),
+  addEventListener() {},
+  body: { appendChild: (n) => { __APPENDED.push(n); } },
+};
+
+%s
+
+setTimeout(() => {
+  console.log(JSON.stringify({ appended: __APPENDED.length, ls: __LS }));
+}, 20);
+"""
+
+
+def _popup_scenarios(src: str, scenarios: list[dict]) -> list[dict]:
+    """在 node 里真跑「更新完成后弹层」IIFE，返回每个场景弹没弹。"""
+    out = []
+    for sc in scenarios:
+        js = _POPUP_HARNESS % (
+            json.dumps(sc, ensure_ascii=False),
+            _extract_iife(src, _IIFE_MARK),
+        )
+        p = pathlib.Path("/tmp/_vdl_popup_probe.mjs")
+        p.write_text(js, encoding="utf-8")
+        r = subprocess.run(["node", str(p)], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            raise AssertionError("node 弹层探针失败：" + r.stderr[:300])
+        out.append(json.loads(r.stdout.strip().splitlines()[-1]))
+    return out
+
+
 def _ver_newer_cases() -> list[tuple[object, ...]]:
     """把 `_verNewer` 抽出来用 node 跑真实比较用例（不 mock）。"""
     src = _APP_JS.read_text(encoding="utf-8")
@@ -233,10 +303,61 @@ def main() -> None:
     check("② 内容里绝不出现旧版本条目",
           "旧版条目-39" not in (r2.get("items") or []), str(r2.get("items")))
     r3 = got.get("刚更新完用缓存", {})
-    check("③ 刚更新完 → 用更新时缓存的条目",
-          r3.get("items") == ["本次更新条目"] and r3.get("title") == "v1.0.43 更新内容", str(r3))
+    check("③ 刚更新完 → 用更新时缓存的条目，且标题明确说「本次更新已完成」",
+          r3.get("items") == ["本次更新条目"]
+          and r3.get("title") == "本次更新已完成（v1.0.43）", str(r3))
     r4 = got.get("无条目应隐藏", {})
     check("④ 无同版本条目 → 整块隐藏", r4.get("hidden") is True, str(r4))
+
+    # ── [E] 更新完成后必须主动告知（2026-10-07 用户实测：「更新完了不显示」）──
+    print("\n[E] 更新完成后主动弹一次「本次更新已完成」（node 实跑弹层 IIFE）")
+    notes = {"version": "1.0.43", "items": ["本次条目A", "本次条目B"]}
+    nj = json.dumps(notes, ensure_ascii=False)
+    pscenes = [
+        {"name": "刚更新完", "ls": {"vdl_update_notes": nj}, "info": {"version": "1.0.43"}},
+        {"name": "已展示过", "ls": {"vdl_update_notes": nj, "vdl_update_notes_shown": "1.0.43"},
+         "info": {"version": "1.0.43"}},
+        {"name": "版本没对上", "ls": {"vdl_update_notes": nj}, "info": {"version": "1.0.39"}},
+        {"name": "无缓存", "ls": {}, "info": {"version": "1.0.43"}},
+        {"name": "缓存条目为空", "ls": {"vdl_update_notes": json.dumps({"version": "1.0.43", "items": []})},
+         "info": {"version": "1.0.43"}},
+        # 缓存丢了（更新助手清理 / 无痕存储）也不能让用户「更新完什么都看不到」：
+        # 本机版本 > 上次运行版本 → 判定为刚升级，条目退回内置日志
+        {"name": "刚升级但缓存丢了", "ls": {"vdl_last_run_version": "1.0.39"},
+         "info": {"version": "1.0.43"},
+         "changelog": {"entries": [{"version": "1.0.43", "items": ["内置条目A", "内置条目B"]}]}},
+        {"name": "同为最新再启动", "ls": {"vdl_last_run_version": "1.0.43"},
+         "info": {"version": "1.0.43"}},
+        {"name": "刚升级但内置日志无该版本", "ls": {"vdl_last_run_version": "1.0.39"},
+         "info": {"version": "1.0.43"}, "changelog": {"entries": []}},
+    ]
+    pres = {sc["name"]: r for sc, r in zip(pscenes, _popup_scenarios(src, pscenes))}
+    check("① 刚更新完（缓存版本 == 本机版本）→ 弹出卡片",
+          pres["刚更新完"]["appended"] == 1, str(pres["刚更新完"]))
+    check("② 该版本已展示过 → 不再打扰",
+          pres["已展示过"]["appended"] == 0, str(pres["已展示过"]))
+    check("③ 本机版本 != 缓存版本（更新其实没装上）→ 不弹",
+          pres["版本没对上"]["appended"] == 0, str(pres["版本没对上"]))
+    check("④ 没有更新缓存 → 不弹",
+          pres["无缓存"]["appended"] == 0, str(pres["无缓存"]))
+    check("⑤ 缓存条目为空 → 不弹（空卡片没有意义）",
+          pres["缓存条目为空"]["appended"] == 0, str(pres["缓存条目为空"]))
+    check("⑥ 刚升级但更新缓存丢了 → 仍要弹（退回内置日志条目），不能让用户什么也看不到",
+          pres["刚升级但缓存丢了"]["appended"] == 1, str(pres["刚升级但缓存丢了"]))
+    check("⑦ 上次运行就是本版本 → 不是刚升级，不弹",
+          pres["同为最新再启动"]["appended"] == 0, str(pres["同为最新再启动"]))
+    check("⑧ 刚升级但内置日志也没有该版本条目 → 不弹（空卡片没有意义）",
+          pres["刚升级但内置日志无该版本"]["appended"] == 0,
+          str(pres["刚升级但内置日志无该版本"]))
+
+    iife = _extract_iife(src, _IIFE_MARK)
+    check("⑨ 弹层有 3 个关闭入口（× / 知道了 / 点遮罩空白处）+ Esc",
+          all(s in iife for s in ("data-close", "data-ok", "[data-card]", "Escape")),
+          "缺少关闭入口")
+    check("⑩ 关闭时写入已读标记（同一版本不再弹）",
+          "KEY_SHOWN" in iife and "wr(KEY_SHOWN, cur)" in iife, "没有已读标记")
+    check("⑪ 每次启动记录本次运行版本（升级判定依赖它）",
+          "KEY_LAST" in iife and "wr(KEY_LAST, cur)" in iife, "没有记录上次运行版本")
 
     print()
     if FAILS:

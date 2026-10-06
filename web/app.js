@@ -19034,15 +19034,17 @@ el.dwVidPlayer.hidden = true;
       const cached = _cachedUpdateNotes();
       if (cached && String(cached.version) === String(cur)
           && Array.isArray(cached.items) && cached.items.length) {
+        // 刚更新完：本机版本 == 缓存版本 → 明确说「这次更新装好了」，而不是含糊的版本标题
         items = cached.items.slice();            // 本次更新装到的条目（最贴近真实）
+        title = '本次更新已完成（v' + cur + '）';
       } else {
         const hit = pickBuiltin(cur);
         if (hit) {
           items = Array.isArray(hit.items) ? hit.items.slice() : [];
           dateText = hit.date || '';
         }
+        title = 'v' + cur + ' 更新内容';
       }
-      title = 'v' + cur + ' 更新内容';
     }
     if (!items.length) { box.hidden = true; return; }
 
@@ -23058,4 +23060,115 @@ el.dwVidPlayer.hidden = true;
   syncIdle();
   syncTime();
   syncIcon();
+})();
+
+/* ==== 更新完成后主动告知「本次更新了什么」（2026-10-07 用户实测要求） ====
+ *
+ * 用户实测：检测到新版本时能看到「vX 更新内容」，但点更新、App 重启之后就再也
+ * 看不到这次装了什么（只能自己去「关于」页翻），等于「更新完了不显示」。
+ * 这里补上：重启后首次进入应用弹一次卡片，看完关掉即标记已读，之后不再打扰。
+ *
+ * 触发条件（避免误报与打扰，两条来源任一成立即可，都不成立就不弹）：
+ *   ① 缓存来源：本机版本 == 上次更新时缓存的版本（_pollUpdate 在 status==='ready' 时写入）
+ *      → 条目用缓存，最贴近「这次真装上了什么」
+ *   ② 版本来源：本机版本 > 上次运行版本（vdl_last_run_version）→ 说明刚被更新过。
+ *      缓存丢了（更新助手清理 / 无痕存储）也照样提示，退回内置日志里本机版本的条目。
+ *   ③ 已读标记：这个版本已展示过（vdl_update_notes_shown）→ 关掉后不再打扰。
+ * 关闭入口三个（用户明确要求任何打开的东西都必须有显式退出）：右上角 × / 底部「知道了」/ 点遮罩空白处，另支持 Esc。
+ */
+(function () {
+  const KEY_NOTES = 'vdl_update_notes';
+  const KEY_SHOWN = 'vdl_update_notes_shown';
+  const KEY_LAST = 'vdl_last_run_version';
+  const rd = (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+  const wr = (k, v) => { try { localStorage.setItem(k, v); } catch (_) { /* 无痕模式等，忽略 */ } };
+  const escHtml = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  /** a 是否比 b 新（逐段数字比较，'v1.0.43' 与 '1.0.43' 等价）。 */
+  function verNewer(a, b) {
+    const p = (v) => {
+      const n = String(v || '').split('.').map((x) => {
+        const d = String(x).replace(/[^0-9]/g, '');
+        return d ? parseInt(d, 10) : 0;
+      });
+      while (n.length < 3) n.push(0);
+      return n.slice(0, 3);
+    };
+    const x = p(a), y = p(b);
+    for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] > y[i]; }
+    return false;
+  }
+
+  const req = (p) => ((window.VDL && window.VDL.request)
+    ? window.VDL.request(p).catch(() => null)
+    : fetch(p).then((r) => r.json()).catch(() => null));
+
+  Promise.resolve(req('/api/system/info')).then((info) => {
+    const cur = (info && info.version) ? String(info.version) : '';
+    if (!cur) return;
+
+    let notes = null;
+    try { notes = JSON.parse(rd(KEY_NOTES) || 'null'); } catch (_) { notes = null; }
+    const cachedItems = (notes && String(notes.version) === cur && Array.isArray(notes.items))
+      ? notes.items.filter((t) => t && String(t).trim()) : [];
+    const lastVer = rd(KEY_LAST) || '';
+    wr(KEY_LAST, cur);                                   // 记下本次运行版本（供下次判定）
+
+    if (rd(KEY_SHOWN) === cur) return;                   // 这个版本已经展示过，不打扰
+    const upgraded = !!lastVer && verNewer(cur, lastVer);
+    if (!cachedItems.length && !upgraded) return;        // 既没更新缓存也不是刚升级 → 不弹
+
+    const show = (list) => {
+      const items = (list || []).filter((t) => t && String(t).trim()).slice(0, 12);
+      if (!items.length || document.getElementById('updateDoneMask')) return;
+      const mask = document.createElement('div');
+      mask.id = 'updateDoneMask';
+      mask.setAttribute('role', 'dialog');
+      mask.setAttribute('aria-modal', 'true');
+      mask.setAttribute('aria-label', '本次更新内容');
+      mask.style.cssText = 'position:fixed;inset:0;z-index:12000;background:rgba(15,23,42,.45);'
+        + 'display:flex;align-items:center;justify-content:center;padding:24px';
+      mask.innerHTML =
+        '<div data-card style="width:100%;max-width:480px;background:var(--surface,#fff);'
+        + 'color:var(--text,#0f172a);border-radius:var(--radius-lg,18px);box-shadow:var(--shadow);'
+        + 'padding:20px 22px 18px">'
+        +   '<div style="display:flex;align-items:flex-start;gap:12px">'
+        +     '<div style="flex:1;min-width:0">'
+        +       '<div style="font-size:16px;font-weight:700">本次更新已完成</div>'
+        +       '<div style="margin-top:3px;font-size:13px;color:var(--text-mute,#64748b)">'
+        +         '已升级到 v' + escHtml(cur) + '</div>'
+        +     '</div>'
+        +     '<button type="button" data-close aria-label="关闭" title="关闭" style="flex:none;width:32px;'
+        +       'height:32px;border:1px solid var(--line,#e6e8f0);background:transparent;border-radius:8px;'
+        +       'cursor:pointer;font-size:18px;line-height:1;color:var(--text-mute,#64748b)">×</button>'
+        +   '</div>'
+        +   '<ul style="margin:14px 0 0;padding-left:18px;font-size:13px;line-height:1.75;'
+        +     'max-height:38vh;overflow:auto">'
+        +     items.map((t) => '<li>' + escHtml(t) + '</li>').join('')
+        +   '</ul>'
+        +   '<button type="button" data-ok style="margin-top:16px;width:100%;min-height:var(--tap,44px);'
+        +     'border:0;border-radius:10px;background:var(--brand,#4f46e5);color:#fff;font-size:14px;'
+        +     'font-weight:600;cursor:pointer">知道了</button>'
+        + '</div>';
+
+      const close = () => { wr(KEY_SHOWN, cur); mask.remove(); };
+      mask.addEventListener('click', (e) => {
+        if (e.target.closest('[data-close]') || e.target.closest('[data-ok]')) { close(); return; }
+        if (!e.target.closest('[data-card]')) close();    // 点遮罩空白处也能关
+      });
+      document.addEventListener('keydown', function onEsc(ev) {
+        if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc); }
+      });
+      document.body.appendChild(mask);
+    };
+
+    if (cachedItems.length) { show(cachedItems); return; }
+    // 缓存丢了：退回内置日志里本机版本的条目（离线可用，不依赖线上更新源）
+    Promise.resolve(req('/api/system/changelog')).then((chg) => {
+      const hit = ((chg && chg.entries) || []).find((e) => e && String(e.version) === cur);
+      show((hit && Array.isArray(hit.items)) ? hit.items : []);
+    });
+  });
 })();
