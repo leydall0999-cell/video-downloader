@@ -3867,7 +3867,6 @@
               <button type="button" class="admin-seg-btn is-active" data-cat="dl" role="tab" aria-selected="true">下载会员</button>
               <button type="button" class="admin-seg-btn" data-cat="ai" role="tab" aria-selected="false">AI 会员</button>
               <button type="button" class="admin-seg-btn" data-cat="cp" role="tab" aria-selected="false">积分包</button>
-              <button type="button" class="admin-seg-btn" data-cat="fq" role="tab" aria-selected="false">免费额度</button>
             </div>
             <div id="adminPlansBox" data-page-node-id="rHiuvHw67RNhbWBWSHWd7y"></div>
             <button type="button" id="adminPlansSave" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="UTASA0d2I96VuV564sGonf">保存套餐配置</button>
@@ -3934,6 +3933,26 @@
               </p>
             </div>
             <div id="adminAiCostTable" class="ai-cost-table" data-page-node-id="aiCostTable">加载中…</div>
+          </div>
+
+          <!-- 🔴 免费额度（2026-10-06）：与「AI 积分成本」放在同一区块，不另起分栏。
+               理由（用户定档）：这 11 项消耗积分的功能与上方成本表是**同一批 op**，
+               拆到「套餐」那边要来回对照；且「首次体验」本来就是 AI 计费口径的一部分。
+               区块内顺序：① 首次体验开关 → ② AI 积分成本表 → ③ 免费额度（纯免费 + 试用水位）。 -->
+          <div class="admin-cfg-section" id="adminFreeQuotaSec" data-page-node-id="fqSec">
+            <div class="admin-cfg-head" data-page-node-id="fqHead">
+              <h3 data-page-node-id="fqTitle">免费额度</h3>
+              <div class="admin-toolbar" style="margin:0" data-page-node-id="fqTb">
+                <button type="button" id="adminFqReload" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="fqReload">重新加载</button>
+                <button type="button" id="adminFqSave" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="fqSave">保存免费额度</button>
+              </div>
+            </div>
+            <p class="admin-hint" data-page-node-id="fqHint">
+              两类口径分开看：<b>纯免费功能</b>不扣积分、只按每日次数限制；<b>消耗积分的功能</b>按次扣积分，另受上方「首次体验」名额保护。
+              改完点「保存免费额度」即时生效（写入 <code>plans.json</code> 的 <code>free_quota</code> 覆盖层，默认值不丢）。
+            </p>
+            <div id="adminFreeQuotaBox" data-page-node-id="fqBox">加载中…</div>
+            <p id="adminFqMsg" class="admin-msg" data-page-node-id="fqMsg"></p>
           </div>
         </section>
         <!-- 运维监控（2026-09-26）：完整运维看板并入管理后台——访客/事件/告警/对账一处看全 -->

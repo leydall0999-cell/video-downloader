@@ -199,21 +199,51 @@ def test_voice_clone_gate_added():
     check(i_gate > i_ready, "门禁在 is_ready 之后（没启用不收钱）")
 
 
-def test_admin_html_has_four_tabs():
-    """后台「套餐与积分成本」必须有 4 个分栏：下载会员/AI会员/积分包/免费额度。"""
+def test_free_quota_shares_block_with_ai_cost():
+    """🔴 免费额度必须与「AI 积分成本」在**同一个区块**里（用户 2026-10-06 定档
+    「不要分开放」）。
+
+    理由：那 11 项消耗积分的功能与成本表是**同一批 op**，拆到「套餐」分栏要来回
+    对照；「首次体验」策略本来也在 AI 成本区里。三者同区块后顺序是
+    首次体验开关 → 积分成本表 → 免费额度，读起来是一条线。
+    """
     html = (_SERVER.parent / "web" / "index.html").read_text(encoding="utf-8")
-    for cat, label in (("dl", "下载会员"), ("ai", "AI 会员"),
-                       ("cp", "积分包"), ("fq", "免费额度")):
-        check(f'data-cat="{cat}"' in html, f"分栏 {label}（data-cat={cat}）存在")
+    # 独立区块 id，与 adminAiCostSec 同属 config view
+    check('id="adminFreeQuotaSec"' in html, "有独立的免费额度区块")
+    check('id="adminFreeQuotaBox"' in html, "有免费额度容器")
+    check('id="adminFqSave"' in html, "有独立保存按钮")
+    # 区块必须在 config（系统配置）view 内，不能挂在 aiaccounts
+    i_cfg = html.index('data-admin-view="config"')
+    i_ai_cost = html.index('id="adminAiCostSec"')
+    i_fq = html.index('id="adminFreeQuotaSec"')
+    check(i_ai_cost < i_fq, "免费额度排在 AI 积分成本之后（同一区块内上下相邻）")
+    # 套餐分栏里不该再有 fq
+    check('data-cat="fq"' not in html, "套餐分栏已移除 fq（不与套餐分开放）")
+    for cat, label in (("dl", "下载会员"), ("ai", "AI 会员"), ("cp", "积分包")):
+        check(f'data-cat="{cat}"' in html, f"套餐分栏保留 {label}")
+
+
+def test_free_quota_loading_wired():
+    """进入「系统配置」页必须会加载免费额度（否则新区块空白）。"""
+    js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
+    check("else if (name === 'config') { loadConfig(); loadAiCosts(); }" in js,
+          "config 页会调 loadAiCosts（免费额度才会渲染）")
+    check("renderFreeQuota(r.free_quota)" in js, "loadAiCosts 里渲染免费额度")
+    check("adminFqSave" in js and "saveFreeQuota" in js, "独立保存逻辑已接上")
+    check("freeQuotaBlock" not in js, "旧的 freeQuotaBlock 已移除（无重复渲染）")
 
 
 def test_frontend_collects_free_quota():
-    """前端必须真的收集并提交 free_quota，否则页面能看不能存。"""
+    """前端必须真的收集并提交两类配置，否则页面能看不能存。"""
     js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
-    check("freeQuotaBlock" in js, "定义了 freeQuotaBlock 渲染函数")
-    check("daily_free_limits" in js, "提交 daily_free_limits")
-    check("daily_member_limits" in js, "提交 daily_member_limits")
-    check("payload.free_quota" in js, "把 free_quota 挂进保存 payload")
+    check("renderFreeQuota" in js, "定义了 renderFreeQuota 渲染函数")
+    check("daily_free_limits" in js, "提交 daily_free_limits（纯免费功能每日次数）")
+    check("daily_member_limits" in js, "提交 daily_member_limits（会员每日次数）")
+    # 试用水位走 free_trial.exclude（与「首次体验」同一份配置，不另开一套）
+    check("free_trial: { exclude:" in js, "试用水位写入 free_trial.exclude")
+    # 两类各走自己的接口：free_quota→套餐接口，free_trial→积分成本接口
+    check("/api/admin/config/plans" in js, "free_quota 走套餐接口")
+    check("/api/admin/ai/credit-costs" in js, "free_trial 走积分成本接口")
     # 未接入扣费的功能必须有醒目角标，否则管理员以为配了价就在收钱
     check("未接入扣费" in js, "对未接入扣费的功能打了角标")
 
@@ -237,7 +267,8 @@ def main():
         test_commentary_vision_charged_at_every_entry,
         test_voice_clone_gate_added,
         test_cloud_quota_limits_readable,
-        test_admin_html_has_four_tabs,
+        test_free_quota_shares_block_with_ai_cost,
+        test_free_quota_loading_wired,
         test_frontend_collects_free_quota,
         test_no_hardcoded_pipeline_path,
     ]
