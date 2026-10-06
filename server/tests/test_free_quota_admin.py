@@ -29,6 +29,25 @@ os.environ.setdefault("VDL_CLOUD_LINK", "0")
 fails = []
 
 
+def _reload_quota():
+    """重新执行 `server/quota.py` 并返回新模块对象（测试用）。
+
+    🔴 两个坑（都实测踩过）：
+      ① 不能 `import quota` —— 本测试把 `routers/` 放进 sys.path，
+         `routers/quota.py` 会抢走 `quota` 这个名字（AttributeError）。
+      ② 不能 `importlib.reload()` —— 它要求模块有可查的 spec，自
+         `spec_from_file_location` 建的模块会报 "spec not found"。
+    所以直接重读源码 exec 一遍，最可靠。
+    """
+    import sys as _sys, types as _t
+    mod = _t.ModuleType("_vdl_quota_root")
+    mod.__file__ = str(_SERVER / "quota.py")
+    _sys.modules["_vdl_quota_root"] = mod
+    exec(compile((_SERVER / "quota.py").read_text(encoding="utf-8"),
+                 "quota.py", "exec"), mod.__dict__)
+    return mod
+
+
 def check(cond, label, extra=""):
     if cond:
         print(f"  OK   {label}" + (f"  [{extra}]" if extra else ""))
@@ -45,7 +64,9 @@ def test_cloud_quota_limits_are_configurable():
     `quota.cloud_quota_limits()` 是唯一读取口；未配置时落回代码常量。
     """
     import membership as M
-    import quota as Q
+    # 🔴 必须从 server/ 根取 quota：本测试已把 routers/ 放进 sys.path，
+    # `routers/quota.py` 会抢先占住 `quota` 这个名字（实测 AttributeError）。
+    Q = _reload_quota()
 
     # 1) 无覆盖时 == 代码常量
     d = Path(_TMP) / "cq_limits"
@@ -53,14 +74,14 @@ def test_cloud_quota_limits_are_configurable():
     (d / "plans.json").write_text("{}", encoding="utf-8")
     os.environ["VDL_DATA_DIR"] = str(d)
     import importlib
-    importlib.reload(Q)
+    Q = _reload_quota()
     check(Q.cloud_quota_limits() == (Q.LIFETIME_CLOUD_EVENTS, Q.DAILY_AUTO_RUNS),
           "无覆盖时云端额度 == 代码常量", str(Q.cloud_quota_limits()))
 
     # 2) 覆盖生效
     (d / "plans.json").write_text(
         '{"free_quota": {"cloud_lifetime": 10, "daily_auto": 5}}', encoding="utf-8")
-    importlib.reload(Q)
+    Q = _reload_quota()
     check(Q.cloud_quota_limits() == (10, 5),
           "后台改 10/5 后生效", str(Q.cloud_quota_limits()))
 
@@ -76,14 +97,14 @@ def test_cloud_quota_limits_are_configurable():
     # 4) 脏值/负数忽略并回退默认（不让后台填错炸掉链路）
     (d / "plans.json").write_text(
         '{"free_quota": {"cloud_lifetime": "abc", "daily_auto": -1}}', encoding="utf-8")
-    importlib.reload(Q)
+    Q = _reload_quota()
     check(Q.cloud_quota_limits() == (Q.LIFETIME_CLOUD_EVENTS, Q.DAILY_AUTO_RUNS),
           "脏值/负数回退默认（不炸表）", str(Q.cloud_quota_limits()))
 
     # 5) admin 接口读到的也是生效值（后台页面显示与实际一致）
     (d / "plans.json").write_text(
         '{"free_quota": {"cloud_lifetime": 7, "daily_auto": 2}}', encoding="utf-8")
-    importlib.reload(Q)
+    Q = _reload_quota()
     # 🔴 membership 的 plans.json 路径由 auth_store._base_dir() 决定，且
     # `load_plan_overrides` 自带 mtime 缓存 —— 必须把它也指向同一目录并清缓存，
     # 否则 admin 侧仍读旧值（实测踩过：只改 os.environ 不够）。
@@ -118,6 +139,89 @@ def test_frontend_can_edit_cloud_quota():
     check("payload[el.dataset.key] = v" in js, "输入值被收集进 payload")
     check("fq.cloud_lifetime = payload.cloud_lifetime" in js, "终身次数随保存提交")
     check("fq.daily_auto = payload.daily_auto" in js, "每日 auto 随保存提交")
+
+
+def test_quota_rows_use_function_names():
+    """🔴 后台「免费额度」必须按**用户看到的功能名**列出（用户 2026-10-06 14:22
+    「得按功能来：视频下载、订阅追更、视频解说、本地字幕提取、音视频格式转换、
+    音乐转换等，这样更清楚」）。
+
+    此前后台只写「云端算力 / 本地重算力」—— 内部技术词，管理员看不出管哪些功能。
+    现在每个额度池拆成若干**功能行**，名称 = 首页卡片原文。
+    """
+    import membership as M
+    names = {str(x.get("name") or "") for x in M.FEATURE_USAGE_DEFS}
+    # 用户点名的功能必须都在
+    for fn in ("视频下载", "订阅追更", "视频解说", "字幕提取",
+               "视频格式转换", "音乐转换", "图片转换", "高效压缩",
+               "高清修复", "一键抠图"):
+        check(f"功能名「{fn}」在表里", fn in names)
+    # 技术词不得作为**功能名**出现（可作为 resource 键，那是内部标识）
+    for tech in ("云端算力", "本地重算力"):
+        check(f"「{tech}」不再作为功能名", tech not in names,
+              "改用具体功能名，技术词只作 resource 键")
+    # 🔴 用户 2026-10-04 定档：文案不得出现「云端/算力/AI/本地」（守卫
+    # test_membership_benefits 会红）。功能名同样是给管理员看的文案，须一致。
+    for x in M.FEATURE_USAGE_DEFS:
+        nm = str(x.get("name") or "")
+        hit = [k for k in ("云端", "算力", "AI", "本地") if k in nm]
+        check(f"功能名「{nm}」不含技术词", not hit, f"命中 {hit}")
+
+    # 每个 resource 至少有一个功能行（否则该额度在后台不可见）
+    for r in set(M.FREE_DAILY_LIMITS) | set(M.DAILY_QUOTA_LIMITS):
+        rows = [x for x in M.FEATURE_USAGE_DEFS if x.get("resource") == r]
+        check(f"额度 {r} 有功能行", bool(rows), "配额表里的键必须有功能名，否则后台看不到")
+
+
+def test_daily_feature_rows_mark_shared():
+    """同一 resource 的多个功能行必须带 `shared_group`（前端据此告知共用额度）。"""
+    import membership as M
+    sys.path.insert(0, str(_SERVER / "routers"))
+    import admin as A
+    rows = A._daily_feature_rows()
+    check(bool(rows), "能取到功能行")
+    # app_compute 应有多个功能行，且都标了 shared_group
+    ac = [r for r in rows if r["resource"] == "app_compute"]
+    check(len(ac) >= 3, f"app_compute 拆成多个功能行（实际 {len(ac)}）")
+    check(all(r["shared_group"] for r in ac), "每个功能行都标了共用额度组名")
+    check(all(r["known"] for r in ac), "app_compute 的功能行都 known=true")
+    # 覆盖值取生效值：plans.json 覆盖 app_compute=3 时应显示 3 而非代码默认 5
+    import os, tempfile, json as _json
+    d = Path(tempfile.mkdtemp())
+    (d / "plans.json").write_text(
+        _json.dumps({"free_quota": {"daily_free_limits": {"app_compute": 3}}}), encoding="utf-8")
+    old = os.environ.get("VDL_DATA_DIR")
+    os.environ["VDL_DATA_DIR"] = str(d)
+    try:
+        import importlib
+        import auth_store, membership as MM
+        importlib.reload(auth_store); importlib.reload(MM)
+        MM._PLAN_OVERRIDE_CACHE = None
+        importlib.reload(A)
+        rows2 = A._daily_feature_rows()
+        ac2 = [r for r in rows2 if r["resource"] == "app_compute"]
+        check(all(r["free_limit"] == 3 for r in ac2),
+              "覆盖值生效：app_compute 显示 3（不是代码默认 5）",
+              str([r["free_limit"] for r in ac2]))
+    finally:
+        if old is None:
+            os.environ.pop("VDL_DATA_DIR", None)
+        else:
+            os.environ["VDL_DATA_DIR"] = old
+
+
+def test_frontend_groups_by_resource():
+    """前端必须按 resource 分块（一个额度池一块，块内列功能名）。"""
+    js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
+    check("const _byRes = {}" in js, "按 resource 聚合（_byRes）")
+    check('class="fq-block"' in js, "用 fq-block 分块渲染")
+    check('class="fq-block-fns"' in js, "块内渲染功能名列表")
+    check("共用同一份次数" in js, "提示共用额度（避免误以为每功能独立）")
+    # 输入框仍以 resource 为键（改任一功能行都改同一份）
+    check('class="admin-input admin-input-sm fq-free" data-key="${esc(r)}"' in js,
+          "输入框按 resource 提交（共用同一份额度）")
+    css = (_SERVER.parent / "web" / "styles.css").read_text(encoding="utf-8")
+    check(".fq-block-fns" in css, "有 fq-block-fns 样式")
 
 
 def test_unknown_resource_keys_are_ignored():
@@ -308,10 +412,8 @@ def test_cloud_quota_limits_readable():
     `daily_auto`），两边都读 `cloud_quota_limits()`，故改为断言**两者一致**——
     无论是否配置过。这才是「单一真源」的正确表述。
     """
-    import quota as Q
     import admin as A
-    import importlib
-    importlib.reload(Q)
+    Q = _reload_quota()
     A_life, A_daily = A._cloud_quota_limits()
     q_life, q_daily = Q.cloud_quota_limits()
     check((A_life, A_daily) == (q_life, q_daily),
@@ -425,8 +527,10 @@ def test_no_hardcoded_pipeline_path():
 def main():
     tests = [
         test_effective_limits_default_unchanged,
+        test_quota_rows_use_function_names,
+        test_daily_feature_rows_mark_shared,
+        test_frontend_groups_by_resource,
         test_unknown_resource_keys_are_ignored,
-        test_frontend_daily_inputs_use_resource_key,
         test_cloud_quota_limits_are_configurable,
         test_frontend_can_edit_cloud_quota,
         test_free_quota_panel_covers_every_quota_key,

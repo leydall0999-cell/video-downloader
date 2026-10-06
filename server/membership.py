@@ -149,20 +149,38 @@ AI_FEATURES: list[str] = [
 #    守卫 test_feature_usage_gate.mjs 静态核对「每一行的 resource 都能在业务代码里
 #    搜到拦截点」，防止再塞占位行（V1 时从 DataTool 抄了 8 行从未实现的功能）。
 FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
-    {"key": "video_parse",      "name": "下载视频",   "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
-    {"key": "local_matting",    "name": "一键抠图",   "resource": "matting",     "unit": "次", "free_limit": 8,  "member_limit": 500,  "ai_bonus": 0, "credit_cost": 0},
-    {"key": "subtitle_extract", "name": "字幕提取",   "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 0},
-    {"key": "app_compute",      "name": "本地重算力", "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0},
-    # 🔴 2026-10-06 补：云端算力此前不在本表 → 后台「免费额度」栏看不到也改不了
-    # （`FREE_DAILY_LIMITS` 里有 `cloud` 键，两端都真实生效：桌面转码/拼接/压缩走
-    #  app_compute，但网页版转码/拼接/去水印/字幕识别走 `cloud`）。补上后后台
-    #  五个键与 `effective_daily_limits()` 完全对齐，不会出现「表里有、页面没有」。
-    #  ⚠️ 只对**网页版**有实际拦截点（web-dev 的 cloud_quota_gate）；桌面端的
-    #  本机加工走 app_compute，列在这里是为了让后台能统一改网页版的额度。
-    {"key": "cloud_compute",    "name": "云端算力",   "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0},
-    # 🔴 这里**不列 cloud**：App 的转码/拼接/压缩/超分全在本机跑（app_compute），
-    #    不消耗网页版的云端算力配额；server/ 里找不到 use_daily("cloud") 拦截点，
-    #    列进来就是「页面上写着、App 里做不到」（守卫 test_feature_usage_gate.mjs 会红）。
+    # ── 🔴 2026-10-06 大改：按「用户看到的功能」列，不再按技术名词列 ──────────
+    # 用户 2026-10-06 14:22 指出：后台只写「云端算力 / 本地重算力」是内部技术词，
+    # 管理员看不出它管哪些功能，要求「得按功能来：视频下载、订阅追更、视频解说、
+    # 本地字幕提取、音视频格式转换、音乐转换等」，这样才清楚。
+    #
+    # 因此每个 resource 拆成**多个功能行**（同一 resource 的几行共用一份额度，
+    # 改其中任一行都改同一份 —— 这是刻意的，见 `shared_note`）：
+    #   · 名称用**首页卡片上的原文**（视频工坊 app / web/index.html 的 #homeGrid），
+    #     保证管理员在后台看到的名字 = 用户在 App 里点的名字；
+    #   · `resource` 仍是配额表真键（决定改哪个数），这一列后台要显示成「共用额度」。
+    # ⚠️ 拆行**不改变**任何计数逻辑：同一个 resource 的几行加起来还是那一份额度。
+    {"key": "video_parse",      "name": "视频下载",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
+    {"key": "subscribe",        "name": "订阅追更",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0, "shared_note": "与「视频下载」共用下载额度"},
+    {"key": "commentary",       "name": "视频解说",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机跑时占本地算力；引擎选云端时走云端额度并按 AI 积分计费"},
+    # ⚠️ 名称不带「本地」：用户 2026-10-04 定档「会员权益文案不得出现 云端/算力/AI/本地」，
+    # 当时把「本地一键抠图」改成「一键抠图」；这里同理（守卫 test_membership_benefits）。
+    {"key": "subtitle_extract", "name": "字幕提取",     "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 0},
+    {"key": "convert_video",    "name": "视频格式转换", "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "与音乐/图片转换、高清修复、高效压缩共用本地算力额度"},
+    {"key": "convert_audio",    "name": "音乐转换",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "同「视频格式转换」"},
+    {"key": "convert_image",    "name": "图片转换",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "同「视频格式转换」"},
+    {"key": "compress",         "name": "高效压缩",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "同「视频格式转换」"},
+    {"key": "sr",               "name": "高清修复",     "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "同「视频格式转换」"},
+    {"key": "local_matting",    "name": "一键抠图",     "resource": "matting",     "unit": "次", "free_limit": 8,  "member_limit": 500,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机跑；选云端抠图时按 AI 积分计费（云端抠图 50 积分）"},
+    # 🔴 下面三行是**网页版**的功能（跑在服务器上），与桌面端不是同一批入口。
+    #    名称用「在线」而非「云端」：用户 2026-10-04 定档「文案不得出现 云端/算力/
+    #    AI/本地」（守卫 test_membership_benefits），且这仨与桌面端功能同名
+    #    （转码/去水印/字幕），加「云端」前缀既违规又和本地版混淆。
+    #   · 云端算力（cloud）真实拦截点在 web-dev 的 convert/dewatermark/subtitle/subtitles
+    #     四个 router（cloud_quota_gate），桌面端没有 —— 故这里只列功能名供后台理解。
+    {"key": "cloud_convert",    "name": "在线转码/拼接", "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：上传到服务器处理（免重传重转）"},
+    {"key": "cloud_dewatermark","name": "在线去水印",   "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：图片/PDF 框选去水印（另按 AI 积分计费）"},
+    {"key": "cloud_subtitle",   "name": "在线字幕处理", "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕识别/烧录/翻译"},
 ]
 
 # --------------------------------------------------------------------------- #

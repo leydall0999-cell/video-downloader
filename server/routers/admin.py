@@ -178,41 +178,62 @@ def _cloud_quota_limits() -> tuple[int, int]:
 
 
 def _daily_feature_rows() -> list[dict[str, Any]]:
-    """后台「免费额度」右栏的纯免费功能列表。
+    """后台「免费额度」右栏的功能列表（**按用户看到的功能名**）。
 
-    🔴 为什么要兜底拼装（2026-10-06）：直接返回 `FEATURE_USAGE_DEFS` 时，
-    配额表里新增的键若忘了在 FEATURE_USAGE_DEFS 登记，**后台就看不到也改不了**
-    —— 实测就漏了 `cloud`（云端算力，两端都真实生效、免费 3/日）。这里以
-    **配额表为真源**逐键补齐，FEATURE_USAGE_DEFS 只提供「 nicer 名称 + 展示顺序」。
+    🔴 2026-10-06 用户 14:22 要求：「得按功能来：视频下载、订阅追更、视频解说、
+    本地字幕提取、音视频格式转换、音乐转换等，这样更清楚」—— 之前只写
+    「云端算力 / 本地重算力」是内部技术词，管理员看不出管哪些功能。
 
-    这样以后给 `FREE_DAILY_LIMITS` 加一个键，后台自动出现该行，不用记得两处都改。
+    实现要点：
+      · 直接用 `FEATURE_USAGE_DEFS` 的**功能行**（名称 = 首页卡片原文）；
+      · 同一 `resource` 的多个功能行**共用一份额度**，故用 `shared_group` 标注，
+        前端据此显示「与 XXX 共用」；改任一行都改同一份（这是刻意的）；
+      · 仍以**配额表为真源**兜底：某个 resource 若没登记功能行，自动补一行
+        技术名 + `known: false`，保证「配额表里有的键后台一定能看到能改」
+        （这正是当初漏 `cloud` 的教训）。
+
+    ⚠️ 返回的 `free_limit` / `member_limit` 是**生效值**（已叠加后台覆盖），
+    不是代码默认值 —— 否则页面显示 3 而实际生效的是管理员改过的 10。
     """
     from membership import FEATURE_USAGE_DEFS, effective_daily_limits
     mem_limits, free_limits = effective_daily_limits()
-    named = {str(x.get("resource") or ""): x for x in FEATURE_USAGE_DEFS}
+
+    # 同一 resource 的功能行 → 该 resource 的展示名（取第一行），用于共用提示
+    first_name: dict[str, str] = {}
+    for x in FEATURE_USAGE_DEFS:
+        r = str(x.get("resource") or "")
+        if r and r not in first_name:
+            first_name[r] = str(x.get("name") or r)
+
     rows: list[dict[str, Any]] = []
-    for resource, free_v in free_limits.items():
-        meta = named.get(resource) or {}
+    seen: set[str] = set()
+    for x in FEATURE_USAGE_DEFS:
+        r = str(x.get("resource") or "")
+        if not r:
+            continue
+        seen.add(r)
         rows.append({
-            "key": meta.get("key") or resource,
-            "name": meta.get("name") or resource,
-            "resource": resource,
-            "unit": meta.get("unit") or "次",
-            # 用**生效值**（叠加后台覆盖），避免页面显示默认值而实际生效的是改过的
-            "free_limit": int(free_v),
-            "member_limit": int(mem_limits.get(resource, -1)),
-            "known": bool(meta),          # False = 配额表里有但没登记展示名
+            "key": x.get("key") or r,
+            "name": x.get("name") or r,
+            "resource": r,                     # 决定改哪个数（输入框的 data-key）
+            "unit": x.get("unit") or "次",
+            "free_limit": int(free_limits.get(r, x.get("free_limit") or 0)),
+            "member_limit": int(mem_limits.get(r, x.get("member_limit", -1))),
+            "shared_group": first_name.get(r, ""),   # 共用同一额度的「首个功能名」
+            "shared_note": x.get("shared_note") or "",
+            "known": True,
         })
-    # FEATURE_USAGE_DEFS 里有、配额表里没有的（理论上不该有，兜底显示出来便于发现）
-    for resource, meta in named.items():
-        if not resource or resource in free_limits:
+
+    # 兜底：配额表里有、但没登记功能行的 resource（技术名显示，标 known=false）
+    for r, free_v in free_limits.items():
+        if r in seen:
             continue
         rows.append({
-            "key": meta.get("key") or resource, "name": meta.get("name") or resource,
-            "resource": resource, "unit": meta.get("unit") or "次",
-            "free_limit": int(meta.get("free_limit") or 0),
-            "member_limit": int(meta.get("member_limit") or -1),
-            "known": True,
+            "key": r, "name": r, "resource": r, "unit": "次",
+            "free_limit": int(free_v),
+            "member_limit": int(mem_limits.get(r, -1)),
+            "shared_group": "", "shared_note": "⚠ 未登记功能名（配额表里有此键）",
+            "known": False,
         })
     return rows
 

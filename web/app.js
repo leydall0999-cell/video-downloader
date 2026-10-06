@@ -21262,16 +21262,38 @@ el.dwVidPlayer.hidden = true;
       let h = '';
 
       h += '<div class="fq-sub">① 纯免费功能（不扣积分，按每日次数限制）</div>';
-      h += '<p class="admin-hint">下载视频 10 次/日、一键抠图 8 次/日、字幕提取 2 次/日、本地重算力 5 次/日。会员每日次数填 <code>-1</code> = 不限。</p>';
+      h += '<p class="admin-hint">按<strong>功能</strong>列出，名称与 App 首页卡片一致。同一个额度池里的几个功能<strong>共用同一份次数</strong>（如「视频格式转换 / 音乐转换 / 图片转换 / 高效压缩 / 高清修复」都走本地算力，用掉一次就少一次）。会员每日次数填 <code>-1</code> = 不限。</p>';
+      // 🔴 2026-10-06 用户要求「得按功能来：视频下载、订阅追更、视频解说、
+      // 本地字幕提取、音视频格式转换、音乐转换等」—— 此前只写「云端算力 /
+      // 本地重算力」这种内部技术词，管理员看不出管哪些功能。
+      // 实现：**按 resource 分块**（一个额度池一块），块内列出该池管的所有功能名 ——
+      // 若逐功能各渲染一行并各带输入框，管理员会误以为每个功能独立计数
+      // （改「音乐转换」以为不影响「视频格式转换」），而它们其实共用一份。
+      const _byRes = {};
       (fq.daily_features || []).forEach((f) => {
-        const cf = (ov.daily_free_limits || {})[f.key];
-        const cm = (ov.daily_member_limits || {})[f.key];
-        h += `<div class="admin-plan-row" data-fq="daily" data-key="${esc(f.resource)}">
-          <span class="admin-plan-name">${esc(f.name)} <code class="admin-plan-code">${esc(f.key)}</code></span>
-          <label>每日免费次数<input class="admin-input admin-input-sm fq-free" data-key="${esc(f.resource)}"
-                 value="${esc(cf === undefined ? f.free_limit : cf)}" type="number" min="0"></label>
-          <label>会员每日次数<input class="admin-input admin-input-sm fq-member" data-key="${esc(f.resource)}"
-                 value="${esc(cm === undefined ? f.member_limit : cm)}" type="number" min="-1"></label>
+        const r = f.resource || f.key;
+        (_byRes[r] = _byRes[r] || []).push(f);
+      });
+      Object.keys(_byRes).forEach((r) => {
+        const group = _byRes[r];
+        const f0 = group[0];
+        const cf = (ov.daily_free_limits || {})[r];
+        const cm = (ov.daily_member_limits || {})[r];
+        const vFree = (cf === undefined ? f0.free_limit : cf);
+        const vMem = (cm === undefined ? f0.member_limit : cm);
+        // 块内功能名：单功能直接显示；多功能并列成一行标签
+        const names = group.map((f) => esc(f.name)).join('、');
+        const note = f0.shared_note ? `<span class="admin-plan-hint">${esc(f0.shared_note)}</span>` : '';
+        h += `<div class="fq-block" data-res="${esc(r)}">
+          <div class="fq-block-head">
+            <span class="admin-plan-name"><code class="admin-plan-code">${esc(r)}</code></span>
+            <label class="fq-num">每日免费次数<input class="admin-input admin-input-sm fq-free" data-key="${esc(r)}"
+                   value="${esc(vFree)}" type="number" min="0"></label>
+            <label class="fq-num">会员每日次数<input class="admin-input admin-input-sm fq-member" data-key="${esc(r)}"
+                   value="${esc(vMem)}" type="number" min="-1"></label>
+          </div>
+          <div class="fq-block-fns">${names}</div>
+          ${note}
         </div>`;
       });
 

@@ -5091,7 +5091,9 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-plan-mkt-grid label.plan-on-sale { flex-direction: row; align-items: center; gap: .35rem; }
 .admin-plan-mkt-grid label.plan-desc { grid-column: 1 / -1; }
 .admin-plan-hint { margin: .5rem 0 0; font-size: .72rem; color: var(--text-mute, #94a3b8); line-height: 1.5; }
-/* 「免费额度」分栏（2026-10-06）：两组功能的分组小标题 + 未接入扣费的警示角标 */
+/* 「免费额度」分栏（2026-10-06）：一组可调自由度的功能列表。
+   用户 2026-10-06 要求「得按功能来」—— 按「额度池」分块，块内列该池管的所有功能名，
+   避免管理员只看到「云端算力 / 本地重算力」这种内部技术词。 */
 .fq-sub {
   margin: .9rem 0 .35rem; font-size: .8rem; font-weight: 500;
   color: var(--text, #1e293b);
@@ -5105,6 +5107,22 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
   cursor: help; white-space: nowrap;
 }
 .admin-plan-row .fq-cost { width: 100%; min-width: 220px; font-size: .72rem; color: var(--text-mute, #64748b); }
+/* 一个额度池 = 一块。块内功能名是这一份额度实际管的功能。 */
+.fq-block {
+  margin: 0 0 .5rem; padding: .55rem .7rem;
+  border: 1px solid var(--line, #cbd5e1); border-left: 3px solid #7f77dd;
+  border-radius: 8px; background: var(--bg, #fbfbfd);
+}
+.fq-block-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
+.fq-block-head .admin-plan-name { display: inline-flex; align-items: center; gap: .3rem; }
+.fq-num { display: inline-flex; align-items: center; gap: .35rem; font-size: .74rem; color: var(--text-mute, #64748b); }
+.fq-num .admin-input { width: 84px; }
+/* 块内功能名列表：这是管理员最需要的信息，放在最显眼位置 */
+.fq-block-fns {
+  margin-top: .4rem; padding-top: .4rem;
+  border-top: 1px dashed var(--line, #cbd5e1);
+  font-size: .82rem; color: var(--text, #1e293b); line-height: 1.6; word-break: break-all;
+}
 .admin-plan-add {
   display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
   margin-top: .6rem; padding: .5rem .6rem; border: 1px dashed var(--line, #cbd5e1); border-radius: 10px;
