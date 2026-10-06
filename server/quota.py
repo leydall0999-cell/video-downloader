@@ -18,7 +18,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 try:                                    # 跨进程锁：POSIX 用 flock，Windows 用 msvcrt
     import fcntl as _fcntl
