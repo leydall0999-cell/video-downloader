@@ -48,6 +48,33 @@ def test_effective_limits_default_unchanged():
         check(k in free, f"免费档保留 {k}")
 
 
+def test_free_quota_panel_covers_every_quota_key():
+    """🔴 防漏项：配额表里的**每一个**键都必须出现在后台「免费额度」栏。
+
+    实测踩过：配额表有 `cloud`（云端算力，两端都真实生效、免费 3/日），
+    但 `FEATURE_USAGE_DEFS` 漏登记 ⇒ 后台看不到也改不了。现由
+    `admin._daily_feature_rows()` 以配额表为真源兜底拼装，故本用例对
+    「键集合一致」做硬断言 —— 以后给配额表加键却忘了登记展示名，后台仍会显示。
+    """
+    import membership as M
+    sys.path.insert(0, str(_SERVER / "routers"))
+    import admin as A
+    rows = A._daily_feature_rows()
+    got = {r["resource"] for r in rows}
+    want = set(M.FREE_DAILY_LIMITS) | set(M.DAILY_QUOTA_LIMITS)
+    missing = want - got
+    check(not missing, "配额表所有键都在后台页面出现", f"缺: {sorted(missing)}")
+    check("cloud" in got, "云端算力（cloud）已列出（此前漏项）")
+    # 展示值必须是**生效值**（叠加后台覆盖），不能是写死的默认
+    by_res = {r["resource"]: r for r in rows}
+    check(by_res.get("cloud", {}).get("free_limit") == M.FREE_DAILY_LIMITS.get("cloud"),
+          "cloud 免费次数取自配额表（当前 3/日）",
+          str(by_res.get("cloud", {}).get("free_limit")))
+    check(by_res.get("cloud", {}).get("member_limit") == M.DAILY_QUOTA_LIMITS.get("cloud"),
+          "cloud 会员次数取自配额表（当前 200/日）",
+          str(by_res.get("cloud", {}).get("member_limit")))
+
+
 def test_override_applies_and_merges():
     """覆盖生效，且未覆盖的键保留默认（字段级合并，不是整条替换）。"""
     import membership as M
@@ -269,6 +296,7 @@ def test_no_hardcoded_pipeline_path():
 def main():
     tests = [
         test_effective_limits_default_unchanged,
+        test_free_quota_panel_covers_every_quota_key,
         test_override_applies_and_merges,
         test_free_quota_in_save_table_keys,
         test_dirty_value_does_not_break_limits,

@@ -140,6 +140,46 @@ def _cloud_quota_limits() -> tuple[int, int]:
         return 3, 1
 
 
+def _daily_feature_rows() -> list[dict[str, Any]]:
+    """后台「免费额度」右栏的纯免费功能列表。
+
+    🔴 为什么要兜底拼装（2026-10-06）：直接返回 `FEATURE_USAGE_DEFS` 时，
+    配额表里新增的键若忘了在 FEATURE_USAGE_DEFS 登记，**后台就看不到也改不了**
+    —— 实测就漏了 `cloud`（云端算力，两端都真实生效、免费 3/日）。这里以
+    **配额表为真源**逐键补齐，FEATURE_USAGE_DEFS 只提供「 nicer 名称 + 展示顺序」。
+
+    这样以后给 `FREE_DAILY_LIMITS` 加一个键，后台自动出现该行，不用记得两处都改。
+    """
+    from membership import FEATURE_USAGE_DEFS, effective_daily_limits
+    mem_limits, free_limits = effective_daily_limits()
+    named = {str(x.get("resource") or ""): x for x in FEATURE_USAGE_DEFS}
+    rows: list[dict[str, Any]] = []
+    for resource, free_v in free_limits.items():
+        meta = named.get(resource) or {}
+        rows.append({
+            "key": meta.get("key") or resource,
+            "name": meta.get("name") or resource,
+            "resource": resource,
+            "unit": meta.get("unit") or "次",
+            # 用**生效值**（叠加后台覆盖），避免页面显示默认值而实际生效的是改过的
+            "free_limit": int(free_v),
+            "member_limit": int(mem_limits.get(resource, -1)),
+            "known": bool(meta),          # False = 配额表里有但没登记展示名
+        })
+    # FEATURE_USAGE_DEFS 里有、配额表里没有的（理论上不该有，兜底显示出来便于发现）
+    for resource, meta in named.items():
+        if not resource or resource in free_limits:
+            continue
+        rows.append({
+            "key": meta.get("key") or resource, "name": meta.get("name") or resource,
+            "resource": resource, "unit": meta.get("unit") or "次",
+            "free_limit": int(meta.get("free_limit") or 0),
+            "member_limit": int(meta.get("member_limit") or -1),
+            "known": True,
+        })
+    return rows
+
+
 @router.get("/api/admin/users")
 def admin_list_users(request: Request = None) -> dict[str, Any]:
     require_admin(request)
@@ -273,7 +313,7 @@ def admin_ai_credit_costs(request: Request = None) -> dict[str, Any]:
         #   · 消耗积分的功能（AI_CREDIT_COSTS）：扣积分，可用**首次体验**免费名额
         # 两者口径不同，混在一起会让人以为「下载 10/日」和「首次体验 1 次」是一回事。
         "free_quota": {
-            "daily_features": [dict(x) for x in FEATURE_USAGE_DEFS],
+            "daily_features": _daily_feature_rows(),
             "credit_features": [
                 {
                     "op": op,

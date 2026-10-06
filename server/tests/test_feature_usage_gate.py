@@ -59,6 +59,32 @@ def _business_sources() -> list[tuple[str, str]]:
     return out
 
 
+# 🔴 2026-10-06：某些 resource 的拦截点只存在于**网页版**（web-dev 分支），
+# 桌面端 server/ 里搜不到 —— 最典型的是 `cloud`（云端算力）：网页版的
+# 转码/拼接/去水印/字幕识别走 `cloud_quota_gate` → quota_state("cloud")，
+# 而桌面端这些活儿都在本机跑、记在 `app_compute` 上。
+#
+# 守卫的原始意图是「不许塞没有实现的占位行」，所以这里**不放宽成通融**，而是
+# 精确登记跨端资源 + 校验网页端**真的**有拦截点（用 git show 读 web-dev）。
+# 网页端读不到（未 clone / 无 git）时该资源判为无拦截点 ⇒ 守卫照样会红，
+# 不会因为「环境缺 git」而静默放过。
+CROSS_END_RESOURCES: dict[str, str] = {
+    "cloud": "web-dev:server/app.py::cloud_quota_gate",
+}
+
+
+def _web_dev_source(rel_path: str) -> str:
+    """读 web-dev 分支上的文件内容；取不到返回空串。"""
+    import subprocess
+    try:
+        return subprocess.run(
+            ["git", "show", f"web-dev:{rel_path}"],
+            cwd=str(_SERVER.parent), capture_output=True, timeout=20,
+        ).stdout.decode("utf-8", "ignore")
+    except Exception:
+        return ""
+
+
 def _parse_rows() -> list[dict]:
     blk = re.search(r"FEATURE_USAGE_DEFS:[^\[]*\[(.*?)\n\]", _MP, re.S)
     assert blk, "server/membership.py 必须仍定义 FEATURE_USAGE_DEFS"
@@ -89,8 +115,28 @@ def test_rows_have_real_gate() -> None:
         res = re.escape(r["resource"])
         pat = re.compile(r'(use_daily|quota_state)\(\s*["\']' + res + r'["\']')
         hit = [f for f, s in srcs if pat.search(s)]
-        check(f'[{r["key"]}] use_daily/quota_state("{r["resource"]}") 有拦截点',
-              bool(hit), f"server/ 里搜不到（{r['key']} resource={r['resource']}）")
+        if hit:
+            check(f'[{r["key"]}] use_daily/quota_state("{r["resource"]}") 有拦截点',
+                  True, "")
+            continue
+        # 桌面端没有 → 允许「跨端资源」，但必须在网页端**真的**有拦截点
+        cross = CROSS_END_RESOURCES.get(r["resource"])
+        if not cross:
+            check(f'[{r["key"]}] use_daily/quota_state("{r["resource"]}") 有拦截点',
+                  False, f"server/ 里搜不到（{r['key']} resource={r['resource']}）")
+            continue
+        rel = cross.split("::", 1)[0]
+        if rel.startswith("web-dev:"):          # 写成 "web-dev:server/app.py::fn"
+            rel = rel.split(":", 1)[1]
+        wsrc = _web_dev_source(rel)
+        # 🔴 判据必须是**真调用**（`quota_state("cloud")` / `use_daily("cloud", n=…)`），
+        # 不能只认「文件里出现过 cloud 字面量」—— 后者会连注释/回派 payload 都算通过，
+        # 等于给跨端资源开了一张万能通行证（实测变异：把 app_compute 谎报成跨端资源
+        # 时，仅靠字面量判定就不会变红）。
+        wok = bool(re.search(r'(use_daily|quota_state)\(\s*["\']' + res + r'["\']', wsrc))
+        check(f'[{r["key"]}] 拦截点在网页版（{cross}）', wok,
+              f"web-dev 的 {rel} 里搜不到 use_daily/quota_state(\"{r['resource']}\") —— "
+              f"若网页版已改实现，请同步更新 CROSS_END_RESOURCES")
 
 
 def test_no_dead_or_datatool_rows() -> None:

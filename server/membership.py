@@ -145,6 +145,13 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     {"key": "local_matting",    "name": "一键抠图",   "resource": "matting",     "unit": "次", "free_limit": 8,  "member_limit": 500,  "ai_bonus": 0, "credit_cost": 0},
     {"key": "subtitle_extract", "name": "字幕提取",   "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 0},
     {"key": "app_compute",      "name": "本地重算力", "resource": "app_compute", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0},
+    # 🔴 2026-10-06 补：云端算力此前不在本表 → 后台「免费额度」栏看不到也改不了
+    # （`FREE_DAILY_LIMITS` 里有 `cloud` 键，两端都真实生效：桌面转码/拼接/压缩走
+    #  app_compute，但网页版转码/拼接/去水印/字幕识别走 `cloud`）。补上后后台
+    #  五个键与 `effective_daily_limits()` 完全对齐，不会出现「表里有、页面没有」。
+    #  ⚠️ 只对**网页版**有实际拦截点（web-dev 的 cloud_quota_gate）；桌面端的
+    #  本机加工走 app_compute，列在这里是为了让后台能统一改网页版的额度。
+    {"key": "cloud_compute",    "name": "云端算力",   "resource": "cloud",       "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0},
     # 🔴 这里**不列 cloud**：App 的转码/拼接/压缩/超分全在本机跑（app_compute），
     #    不消耗网页版的云端算力配额；server/ 里找不到 use_daily("cloud") 拦截点，
     #    列进来就是「页面上写着、App 里做不到」（守卫 test_feature_usage_gate.mjs 会红）。
