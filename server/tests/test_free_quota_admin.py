@@ -120,6 +120,48 @@ def test_frontend_can_edit_cloud_quota():
     check("fq.daily_auto = payload.daily_auto" in js, "每日 auto 随保存提交")
 
 
+def test_unknown_resource_keys_are_ignored():
+    """🔴 覆盖层里**不存在的 resource 键**必须被忽略（2026-10-06 修的真实 bug）。
+
+    背景：前端保存时误把展示标识 `FEATURE_USAGE_DEFS[].key`（video_parse /
+    local_matting / subtitle_extract）当成 `resource` 提交，plans.json 里躺着
+    三条**永不生效**的垃圾项。后台界面还照样显示它们，但改次数对 download /
+    matting / subtitle 毫无作用。根因在前端已修（data-key 改用 resource），
+    这里钉住后端兜底：历史脏数据也不得污染生效的配额表。
+    """
+    import membership as M
+    M.save_plan_overrides({"free_quota": {
+        "daily_free_limits": {"video_parse": 3, "local_matting": 3,
+                              "subtitle_extract": 3, "download": 6},
+        "daily_member_limits": {"video_parse": 1000, "download": 800},
+    }})
+    M._PLAN_OVERRIDE_CACHE = None
+    mem, free = M.effective_daily_limits()
+    for junk in ("video_parse", "local_matting", "subtitle_extract"):
+        check(f"垃圾键 {junk} 未进生效配额", junk not in free and junk not in mem)
+    check(free.get("download") == 6, "合法键 download 正常生效（6）", str(free.get("download")))
+    check(mem.get("download") == 800, "合法键 member download 生效（800）", str(mem.get("download")))
+    # 配额表里有的键一个都不能少
+    for k in M.FREE_DAILY_LIMITS:
+        check(f"配额表键 {k} 仍在生效表里", k in free)
+
+
+def test_frontend_daily_inputs_use_resource_key():
+    """🔴 前端每日配额的输入框必须用 `resource` 而非 `key`（否则改了不生效）。
+
+    这是真实事故：`f.key`（展示标识 video_parse）与 `f.resource`（配额表键
+    download）是两个不同字段，写错时界面照常保存、但改的是无效键。
+    """
+    js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
+    seg = js[js.index("① 纯免费功能"):js.index("① 纯免费功能") + 1600]
+    check('data-key="${esc(f.resource)}"' in seg,
+          "每日配额输入框用 f.resource 作 data-key")
+    # 确认没有残留 f.key 作为提交键
+    bad = [ln.strip() for ln in seg.splitlines()
+           if ('fq-free' in ln or 'fq-member' in ln) and 'f.key' in ln]
+    check(not bad, "没有 f.key 混进提交键", "; ".join(bad[:1]))
+
+
 def test_effective_limits_default_unchanged():
     """没配覆盖时，生效值必须等于代码常量（默认值永不丢失）。"""
     import membership as M
@@ -383,6 +425,8 @@ def test_no_hardcoded_pipeline_path():
 def main():
     tests = [
         test_effective_limits_default_unchanged,
+        test_unknown_resource_keys_are_ignored,
+        test_frontend_daily_inputs_use_resource_key,
         test_cloud_quota_limits_are_configurable,
         test_frontend_can_edit_cloud_quota,
         test_free_quota_panel_covers_every_quota_key,

@@ -21266,11 +21266,11 @@ el.dwVidPlayer.hidden = true;
       (fq.daily_features || []).forEach((f) => {
         const cf = (ov.daily_free_limits || {})[f.key];
         const cm = (ov.daily_member_limits || {})[f.key];
-        h += `<div class="admin-plan-row" data-fq="daily" data-key="${esc(f.key)}">
+        h += `<div class="admin-plan-row" data-fq="daily" data-key="${esc(f.resource)}">
           <span class="admin-plan-name">${esc(f.name)} <code class="admin-plan-code">${esc(f.key)}</code></span>
-          <label>每日免费次数<input class="admin-input admin-input-sm fq-free" data-key="${esc(f.key)}"
+          <label>每日免费次数<input class="admin-input admin-input-sm fq-free" data-key="${esc(f.resource)}"
                  value="${esc(cf === undefined ? f.free_limit : cf)}" type="number" min="0"></label>
-          <label>会员每日次数<input class="admin-input admin-input-sm fq-member" data-key="${esc(f.key)}"
+          <label>会员每日次数<input class="admin-input admin-input-sm fq-member" data-key="${esc(f.resource)}"
                  value="${esc(cm === undefined ? f.member_limit : cm)}" type="number" min="-1"></label>
         </div>`;
       });

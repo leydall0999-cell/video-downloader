@@ -99,14 +99,22 @@ def effective_daily_limits() -> tuple[dict[str, int], dict[str, int]]:
         return member, free
     if not isinstance(fq, dict):
         return member, free
+    # 🔴 只认**配额表里真实存在**的 resource 键（2026-10-06 修）。
+    # 背景：前端保存时误把展示标识 `FEATURE_USAGE_DEFS[].key`（video_parse /
+    # local_matting / subtitle_extract）当成 resource 提交，导致 plans.json 里
+    # 躺着三条**永不生效**的垃圾项 —— 后台界面还照样显示它们，改次数却对
+    # download/matting/subtitle 毫无作用。原先这里 `dst[key] = int(v)` 来者不拒，
+    # 垃圾项就混进了生效的配额表。**根因在前端已修（data-key 改用 resource）**，
+    # 这里再加白名单兜底：即便历史脏数据还在，也不会污染配额。
+    valid = set(DAILY_QUOTA_LIMITS) | set(FREE_DAILY_LIMITS)
     for src, dst in (("daily_member_limits", member), ("daily_free_limits", free)):
         ov = fq.get(src)
         if not isinstance(ov, dict):
             continue
         for k, v in ov.items():
             key = str(k or "").strip()
-            if not key:
-                continue
+            if not key or key not in valid:
+                continue          # 未知 resource：忽略（不报错、不落进配额表）
             try:
                 dst[key] = int(v)
             except (TypeError, ValueError):
