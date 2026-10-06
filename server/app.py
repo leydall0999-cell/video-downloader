@@ -733,9 +733,16 @@ def _cloud_quota_relay(request, payload: dict):
 
 
 def cloud_quota_gate(request, need: int = 1) -> dict:
-    """云端算力配额预检（不计数）。免费 3/日，超限 402；匿名 403；引擎异常 fail-open。
+    """云端算力配额预检（不计数）。**终身 3 次 + 每日 auto 1 次**（2026-10-06 起
+    与桌面端统一），超限 402；匿名 403；引擎异常 fail-open。
 
     need：本次打算创建的任务数。返回 gate 描述（供 cloud_quota_count 复用）。
+
+    🔴 2026-10-06 口径统一：此前网页版用「每日配额」（use_daily("cloud")，
+    免费 3 次/日、日切重置），桌面端用「终身 3 次」（quota.json）。同一个「云端
+    免费 3 次」在两端是**两套东西**，用户换端就白拿。现统一走授权中心按**账号**
+    记账（lifetime 3 次 / daily auto 1 次），App 与网页共享一份。
+    hk 节点仍回派 cn 权威（中心在 cn）。
     """
     if _CLOUD_QUOTA_OFF:
         return {"mode": "off"}
@@ -747,30 +754,96 @@ def cloud_quota_gate(request, need: int = 1) -> dict:
             if isinstance(res, dict) and res.get("ok") is False:
                 if res.get("code") == "MEMBER_QUOTA":
                     raise HTTPException(status_code=402,
-                                        detail=res.get("error") or "今日免费云端处理次数已用尽")
+                                        detail=res.get("error") or "免费云端额度已用尽")
                 if res.get("code") == "NO_AUTH":
                     raise HTTPException(status_code=403, detail=_CLOUD_LOGIN_MSG)
             return {"mode": "relay"}
         if not get_current_user_id(request):
             raise HTTPException(status_code=403, detail=_CLOUD_LOGIN_MSG)
         store = current_member_store(request)
-        q = store.quota_state("cloud")
-        if q.get("unlimited") or q.get("unknown") or q.get("allowed", True):
-            return {"mode": "local", "store": store, "remaining": q.get("remaining")}
-        if q.get("tier") == "free":
-            detail = (f"今日免费云端处理次数已用尽（{q['limit']}/日），"
-                      f"开通会员可解锁 {q.get('member_limit', 0)} 次/日")
-        else:
-            detail = f"今日云端处理配额已用尽（{q['limit']}/日）"
-        raise HTTPException(status_code=402, detail=detail)
+        if _is_member_any(store):
+            return {"mode": "local", "store": store, "remaining": None}   # 会员不限
+        # 免费用户：向中心问「还有没有额度」（只查不扣，扣在 cloud_quota_count）
+        rem = _cloud_quota_remaining(store)
+        if rem is None:
+            # 拿不到权威结果（未登录云端 / 断网）→ 退回每日配额口径（fail-open）
+            q = store.quota_state("cloud")
+            if q.get("unlimited") or q.get("unknown") or q.get("allowed", True):
+                return {"mode": "local", "store": store, "remaining": q.get("remaining"),
+                        "legacy_daily": True}
+            detail = (f"免费云端额度已用完（终身 {q['limit']}/日）。"
+                      f"开通会员可解锁无限云端处理。")
+            raise HTTPException(status_code=402, detail=detail)
+        if rem > 0:
+            return {"mode": "local", "store": store, "remaining": rem}
+        raise HTTPException(
+            status_code=402,
+            detail=f"免费云端额度已用完（终身 {_cloud_quota_limits()[0]} 次）。"
+                   f"开通会员可解锁无限云端处理，或在设置里启用本机模型零成本运行。")
     except HTTPException:
         raise
     except Exception:  # noqa: BLE001 — 会员引擎异常 fail-open
         return {"mode": "local", "store": None}
 
 
+def _cloud_quota_token(store) -> str:
+    """取云端账号 token。
+
+    🔴 用网页版既有的 `store.cloud_session()`（`cloud_link.py` 全程用它发云端
+    请求），**不要**用 `status()["account"]`（那是给前端的公开视图，不含 token），
+    也不要用桌面端的 `_cloud_token()`（网页版 MembershipStore 没那个方法）。
+    """
+    try:
+        return str((store.cloud_session() or {}).get("token") or "").strip()
+    except Exception:
+        return ""
+
+
+def _is_member_any(store) -> bool:
+    """是否任一会员档活跃（下载或 AI）。网页版只有 status()，没有 is_*_active()。"""
+    try:
+        st = store.status()
+        return bool((st.get("download_member") or {}).get("active")) or \
+               bool((st.get("ai_member") or {}).get("active"))
+    except Exception:
+        return False
+
+
+def _cloud_quota_limits() -> tuple[int, int]:
+    """（终身, 每日 auto）上限，读 quota.py 常量做单一真源。"""
+    try:
+        from quota import LIFETIME_CLOUD_EVENTS, DAILY_AUTO_RUNS
+        return int(LIFETIME_CLOUD_EVENTS), int(DAILY_AUTO_RUNS)
+    except Exception:
+        return 3, 1
+
+
+def _cloud_quota_remaining(store):
+    """问中心「终身额度还剩几次」；None = 拿不到权威结果（fail-open）。"""
+    try:
+        import license_client
+        tok = _cloud_quota_token(store)
+        if not tok:
+            return None
+        r = license_client.cloud_quota_remote(tok)
+        if not isinstance(r, dict) or not r.get("ok"):
+            return None
+        cq = r.get("cloud_quota")
+        if not isinstance(cq, dict):
+            return None
+        return max(0, int(cq.get("lifetime_remaining") or 0))
+    except Exception:
+        return None
+
+
 def cloud_quota_count(request, gate: dict, n: int = 1) -> None:
-    """任务成功创建后的计数（与下载墙同语义：失败只记日志，不回滚已建任务）。"""
+    """任务成功创建后的计数（与下载墙同语义：失败只记日志，不回滚已建任务）。
+
+    🔴 2026-10-06 统一到账号级中心记账（与桌面端同一份终身额度）：
+    此前是 `store.use_daily("cloud", n=n)`（每日配额），现改为向授权中心
+    **原子扣减** lifetime 额度。中心不可达时退回每日配额口径（fail-open），
+    绝不因记账失败让已创建的任务失败。
+    """
     if gate.get("mode") in ("off",) or n <= 0:
         return
     try:
@@ -778,7 +851,23 @@ def cloud_quota_count(request, gate: dict, n: int = 1) -> None:
             _cloud_quota_relay(request, {"resource": "cloud", "n": n})
             return
         store = gate.get("store") or current_member_store(request)
-        store.use_daily("cloud", n=n)
+        if gate.get("legacy_daily"):
+            # 拿不到中心（未登录云端 / 断网）→ 退回旧的每日配额口径
+            store.use_daily("cloud", n=n)
+            return
+        if _is_member_any(store):
+            return                                  # 会员不限，不计数
+        try:
+            import license_client
+            tok = _cloud_quota_token(store)
+            if not tok:
+                store.use_daily("cloud", n=n)       # 无云端身份 → 退回每日
+                return
+            r = license_client.cloud_quota_remote(tok, lifetime=n)
+            if not isinstance(r, dict) or not r.get("ok"):
+                store.use_daily("cloud", n=n)       # 中心异常 → fail-open
+        except Exception:
+            store.use_daily("cloud", n=n)
     except Exception as e:  # noqa: BLE001 — 计数失败绝不回滚已创建的任务
         try:
             logger.warning("[cloud-quota] 计数失败（忽略）: %s", str(e)[:160])

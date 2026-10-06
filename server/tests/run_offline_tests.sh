@@ -129,6 +129,15 @@ run_one test_batch3_history.py
 run_one test_ai_free_trial_web.py
 run_one e2e_ai_trial_check.py
 
+#  test_cloud_quota_unified.py —— 两端云端额度口径统一（2026-06-06 用户定档
+#    「两端统一成终身 3 次」）：此前桌面记 quota.json 的终身 3 次、网页记
+#    use_daily("cloud") 的每日 3 次/日 ⇒ 换端就白拿。现网页版也走授权中心原子
+#    扣减（App / 网页共享一份）。守卫钉住：中心扣减是主路径、本地每日配额仅作
+#    fail-open 兜底（AST 判「不许出现在 try 体的无条件单条语句里」）、上限读
+#    quota.py 常量、取 token 走 store.cloud_session()、会员判定用网页版**实际
+#    存在**的接口（它没有桌面端的 is_download_active / _cloud_token）。
+run_one test_cloud_quota_unified.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
