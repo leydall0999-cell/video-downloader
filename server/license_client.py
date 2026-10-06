@@ -178,6 +178,7 @@ def trial_claim_remote(token: str, op: str, mode: str = "once",
 
 def cloud_quota_remote(token: str, lifetime: int = 0, daily: int = 0,
                        refund: bool = False,
+                       resource: str = "cloud_commentary",
                        base_url: Optional[str] = None,
                        timeout: float = 8.0,
                        opener: Optional[Callable] = None) -> dict[str, Any]:
@@ -192,15 +193,16 @@ def cloud_quota_remote(token: str, lifetime: int = 0, daily: int = 0,
       · refund=True       → 退还（任务失败补偿）
       · 都不传             → 只查询余额（冷启动/心跳回灌用）
 
-    返回 {ok, allowed, reason, applied, cloud_quota:{lifetime_used,
-    lifetime_remaining, daily_auto_used, daily_auto_remaining, ...}}。
+    返回 {ok, allowed, reason, applied, cloud_quota:{lifetime:{res:n},
+    lifetime_remaining:{res:n}, lifetime_used(旧中心=总池 int), daily_auto_used, ...}}。
     allowed=False 表示额度已用尽（reason=lifetime_exhausted / daily_auto_exhausted），
     此时**不落账**。网络异常抛 LicenseCloudError —— 调用方按 fail-open 处理
     （沿用本机计数，绝不因断网把已付费会员拦在门外）。
     """
     return _post("/api/license/cloud_quota",
                  {"token": token, "lifetime": int(lifetime or 0),
-                  "daily": int(daily or 0), "refund": bool(refund)},
+                  "daily": int(daily or 0), "refund": bool(refund),
+                  "resource": str(resource or "cloud_commentary")},
                  base_url, timeout, opener)
 
 

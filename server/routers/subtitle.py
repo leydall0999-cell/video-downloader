@@ -217,7 +217,7 @@ def _device_of_req(request):
 def subtitle_extract(payload: SubtitleRequest, request: app.Request) -> dict:
     user_membership.require_login_user(request)
     app._check_rate_limit(request)
-    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日
+    gate = app.cloud_quota_gate(request, resource="cloud_subtitle")   # 云端算力配额：免费 3 次/日
     resolved = _resolve_safe_local_path(payload.local_path)
     suffix = resolved.suffix.lower()
     if suffix not in app.UPLOAD_VIDEO_EXTS and suffix not in app.UPLOAD_AUDIO_EXTS:
@@ -305,7 +305,7 @@ def subtitle_upload_finish(
                                    reason="subtitle_extract_upload")
     if _msg:
         raise app.HTTPException(status_code=402, detail=_msg)
-    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日
+    gate = app.cloud_quota_gate(request, resource="cloud_subtitle")   # 云端算力配额：免费 3 次/日
     if not re.fullmatch(r"[0-9a-z]+", upload_id or "") or total <= 0 or total > 4096:
         raise app.HTTPException(status_code=400, detail="分片参数非法")
     suffix = app.Path(filename or "upload.mp4").suffix.lower() or ".mp4"

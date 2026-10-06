@@ -95,7 +95,13 @@ for (const row of (M.feature_rows || [])) {
 
 // ── ③ 配额与限流数值原样（改措辞不该顺手改额度）────────────────────────────
 // 2026-10-04 定档时的数值，改文案不许顺手动。
-const EXPECTED = { download: [1000, 10], cloud: [200, 3] };
+// 🔴 2026-10-06 拆池：旧总池键 cloud 拆为 3 个独立功能键（每个功能 200/3 原样平移）。
+const EXPECTED = {
+  download: [1000, 10],
+  cloud_convert: [200, 3],
+  cloud_dewatermark: [200, 3],
+  cloud_subtitle: [200, 3],
+};
 for (const [key, [memberV, freeV]] of Object.entries(EXPECTED)) {
   assert.equal(Number(M.daily[key]), memberV, `${key} 会员限额应为 ${memberV}/日（只改措辞）`);
   assert.equal(Number(M.free[key]), freeV, `${key} 免费限额应为 ${freeV}/日（只改措辞）`);

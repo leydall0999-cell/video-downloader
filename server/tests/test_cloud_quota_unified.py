@@ -234,7 +234,11 @@ def main() -> None:
     check("app.py 有 _cloud_quota_token", "def _cloud_quota_token" in app)
 
     print("\n[B] 云端额度不能只记每日配额（use_daily 仅作 fail-open 兜底）")
-    has_fallback = 'use_daily("cloud"' in cnt_code
+    # 🔴 2026-10-06 拆池：resource 不再是字面量 "cloud"，而是 gate 携带的动态键
+    # （cloud_commentary/convert/dewatermark/subtitle）。兜底判据改为「存在
+    # use_daily 调用」+ AST 判定其全在条件分支内（_use_daily_is_conditional
+    # 对动态参数恒真 —— 它只认字面量，字面量没了就只能靠下面这条主路径判据钉）。
+    has_fallback = "use_daily(" in cnt_code
     check("有 use_daily 兜底分支（断网时不阻断用户）", has_fallback)
     ok, why = _use_daily_is_conditional(app)
     check("use_daily 只出现在兜底分支（不在函数体顶层）", ok, why)
@@ -242,8 +246,11 @@ def main() -> None:
           ("legacy_daily" in app or "无云端身份" in app or "中心异常" in app),
           "看不到「为什么退回每日配额」的说明")
     check("中心成功时不走 use_daily（主路径是原子扣减）",
-          "cloud_quota_remote(tok, lifetime=n)" in cnt_code,
+          "cloud_quota_remote(tok, lifetime=n" in cnt_code,
           "没看到 lifetime 扣减调用 = 中心记账不是主路径")
+    check("主路径扣减带 per-resource 键",
+          "resource=resource" in cnt_code,
+          "拆池后中心扣减必须带 resource（各功能独立终身额度）")
     # ⚠️ 曾试过「中心扣减必须出现在首个 use_daily 之前」这条判据，**已放弃**：
     # 正确代码里 `if gate.get("legacy_daily"): store.use_daily(...)` 本来就在前面
     # （那是「预检阶段就确认中心不可达」的兜底路径，先于中心扣减是必然的）。

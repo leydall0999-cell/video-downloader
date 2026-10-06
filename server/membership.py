@@ -62,12 +62,20 @@ CREDIT_PACKS: dict[str, dict[str, Any]] = {
 #    留着会让会员页承诺「原画 100 次/日、批量素材 1000 条/日」两份不存在的权益。
 DAILY_QUOTA_LIMITS: dict[str, int] = {
     "download": 1000,         # 下载任务 / 日（会员）—— 2026-09-06 起配额墙在「点清晰度下载」处
-    "cloud": 200,             # 云端算力（转码/拼接/去水印/字幕）/ 日（会员）—— 2026-09-29
+    # 🔴 2026-10-06 拆池：每个功能独立「每日次数」，与桌面端同名键共享口径。
+    # 网页端没有解说功能，故无 cloud_commentary 键（别承诺不存在的功能）；
+    # 旧总池键 "cloud" 已无调用点（routers 全部改传独立键），按 2026-10-04 同样的
+    # 清理原则一并移除，避免权益页渲染一条重复的旧文案。
+    "cloud_convert": 200,     # 视频转码 / 日（会员）
+    "cloud_dewatermark": 200, # 在线去水印 / 日（会员）
+    "cloud_subtitle": 200,    # 字幕处理 / 日（会员）
 }
-# 免费档每日配额（2026-10-04 定稿：免费下载 10 次/日、云端算力 3 次/日）
+# 免费档每日配额（2026-10-04 定稿：免费下载 10 次/日；2026-10-06 起各功能免费 3 次/日独立计）
 FREE_DAILY_LIMITS: dict[str, int] = {
     "download": 10,
-    "cloud": 3,               # 云端算力免费 3 次/日（账号级，App/网页共享）—— 2026-09-29
+    "cloud_convert": 3,       # 视频转码 免费 3 次/日（独立计）
+    "cloud_dewatermark": 3,   # 在线去水印 免费 3 次/日（独立计）
+    "cloud_subtitle": 3,      # 字幕处理 免费 3 次/日（独立计）
 }
 # 不限次资源：网页端没有「评论/数据/字幕批量」功能（那是从 DataTool 抄来的、V1 未实现），
 # 故为空元组。quota_state 遇到不在两张表里的 resource 会走 unknown → fail-open 放行。
@@ -98,7 +106,12 @@ AI_FEATURES: list[str] = [
 #    （V1 时从 DataTool 抄了 8 行从未实现的功能，是前车之鉴）。
 FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     {"key": "video_parse",   "name": "下载视频", "resource": "download", "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
-    {"key": "cloud_compute", "name": "云端算力", "resource": "cloud",    "unit": "次", "free_limit": 3,   "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0},
+    # 🔴 2026-10-06 拆池：旧「云端算力」单行拆为 3 个独立功能行（网页端没有解说功能，
+    # 故无 cloud_commentary 行；桌面端 4 行齐全）。resource 与 app.py cloud_quota_gate
+    # 的调用点一一对应（routers/convert.py、dewatermark.py、subtitle.py、subtitles.py）。
+    {"key": "cloud_convert",     "name": "视频转码",   "resource": "cloud_convert",     "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
+    {"key": "cloud_dewatermark", "name": "在线去水印", "resource": "cloud_dewatermark", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
+    {"key": "cloud_subtitle",    "name": "字幕处理",   "resource": "cloud_subtitle",    "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
 ]
 
 # --------------------------------------------------------------------------- #
@@ -721,7 +734,10 @@ def _empty_state() -> dict[str, Any]:
         "ai_member": {"active": False, "plan": None, "expire_at": 0.0,
                       "grant_credits": 0, "credits_left": 0, "feature_credits": {}},
         "permanent_credits": {"total": 0, "packs": []},
-        "daily_usage": {"date": "", "download": 0, "cloud": 0},
+        # daily_usage 按功能独立计（2026-10-06 拆池；cloud 为旧键向后兼容保留）
+        "daily_usage": {"date": "", "download": 0, "cloud": 0,
+                        "cloud_commentary": 0, "cloud_convert": 0,
+                        "cloud_dewatermark": 0, "cloud_subtitle": 0},
         "usage_history": {},
         "meta": {"activated_at": 0.0, "history": []},
         # 免费用户「首次体验」已用记录：{op 或 "*": 使用时刻}（见 DEFAULT_FREE_TRIAL_POLICY）
@@ -784,7 +800,10 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 #    ⚠️ 不是隐藏条目 —— 每条权益、配额、限流都照旧。
 _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("download", "下载任务 {v} 次/日"),
-    ("cloud", "在线处理（转码 / 拼接 / 去水印 / 字幕）{v} 次/日"),
+    # 🔴 2026-10-06 拆池：旧「在线处理」单条拆为 3 条独立权益（每个功能各自计次）
+    ("cloud_convert", "视频转码 {v} 次/日"),
+    ("cloud_dewatermark", "在线去水印 {v} 次/日"),
+    ("cloud_subtitle", "字幕处理 {v} 次/日"),
 )
 # 不走每日配额、但属于会员权益的说明项
 _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
@@ -1401,6 +1420,9 @@ class MembershipStore:
             du["date"] = day
             du["download"] = 0
             du["cloud"] = 0
+            for _r in ("cloud_commentary", "cloud_convert",
+                       "cloud_dewatermark", "cloud_subtitle"):
+                du[_r] = 0                       # 2026-10-06 拆池：各功能独立日切
             for _dead in _DEAD_USAGE_KEYS:      # 清掉历史状态文件里的死键
                 du.pop(_dead, None)
 
@@ -1440,7 +1462,11 @@ class MembershipStore:
                     msg = (f"今日免费下载额度已用尽（{q['limit']}/日）"
                            f"— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日")
                 else:
-                    label = {"cloud": "云端处理"}.get(resource, resource)
+                    label = {"cloud": "该功能",
+                             "cloud_commentary": "视频解说",
+                             "cloud_convert": "视频转码",
+                             "cloud_dewatermark": "在线去水印",
+                             "cloud_subtitle": "字幕处理"}.get(resource, resource)
                     msg = f"今日免费{label}次数已用尽（{q['limit']}/日）"
                     if q.get("member_limit"):
                         msg += f"— 开通会员可解锁 {q['member_limit']} 次/日"

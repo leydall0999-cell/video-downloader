@@ -704,7 +704,14 @@ def _check_download_quota(request: Request) -> tuple[bool, int, int]:
 # 注意：旧 IP 粒度墙 _check_convert_quota（VDL_CONVERT_REQUIRE_SUB）已被本机制取代，
 # 该环境变量必须保持 false —— 否则会双重计数。
 _CLOUD_QUOTA_OFF = os.environ.get("VDL_CLOUD_QUOTA_OFF", "false").strip().lower() == "true"
-_CLOUD_LOGIN_MSG = "使用云端处理前请先登录账号（免费注册即得，每日 3 次免费额度）"
+_CLOUD_LOGIN_MSG = "使用该功能前请先登录账号（免费注册即得，每个功能每日 3 次免费额度）"
+# 🔴 2026-10-06 拆池：4 个云端功能各自独立配额键（与桌面端 quota.CLOUD_RESOURCES 同名）。
+_CLOUD_RESOURCE_NAMES = {
+    "cloud_commentary": "视频解说",
+    "cloud_convert": "视频转码",
+    "cloud_dewatermark": "在线去水印",
+    "cloud_subtitle": "字幕处理",
+}
 
 
 def _cloud_quota_relay(request, payload: dict):
@@ -732,24 +739,24 @@ def _cloud_quota_relay(request, payload: dict):
         return None
 
 
-def cloud_quota_gate(request, need: int = 1) -> dict:
-    """云端算力配额预检（不计数）。**终身 3 次 + 每日 auto 1 次**（2026-10-06 起
-    与桌面端统一），超限 402；匿名 403；引擎异常 fail-open。
+def cloud_quota_gate(request, need: int = 1, resource: str = "cloud_commentary") -> dict:
+    """云端算力配额预检（不计数）。**按功能独立**：每个云端功能（解说/转码/
+    去水印/字幕）各自一份「终身 3 次」+ 独立每日配额（2026-10-06 拆池），
+    超限 402；匿名 403；引擎异常 fail-open。
 
-    need：本次打算创建的任务数。返回 gate 描述（供 cloud_quota_count 复用）。
-
-    🔴 2026-10-06 口径统一：此前网页版用「每日配额」（use_daily("cloud")，
-    免费 3 次/日、日切重置），桌面端用「终身 3 次」（quota.json）。同一个「云端
-    免费 3 次」在两端是**两套东西**，用户换端就白拿。现统一走授权中心按**账号**
-    记账（lifetime 3 次 / daily auto 1 次），App 与网页共享一份。
+    need：本次打算创建的任务数。
+    resource：配额键（cloud_commentary / cloud_convert / cloud_dewatermark /
+    cloud_subtitle），**各功能独立计数**，与桌面端同名键共用一份。
+    返回 gate 描述（供 cloud_quota_count 复用，resource 随 gate 传递）。
     hk 节点仍回派 cn 权威（中心在 cn）。
     """
+    resource = str(resource or "cloud_commentary").strip() or "cloud_commentary"
     if _CLOUD_QUOTA_OFF:
         return {"mode": "off"}
     try:
         if NODE_REGION != "cn" and (os.environ.get("VDL_QUOTA_RELAY_URL")
                                     or os.environ.get("VDL_WORKER_URL") or "").strip():
-            res = _cloud_quota_relay(request, {"resource": "cloud", "n": need,
+            res = _cloud_quota_relay(request, {"resource": resource, "n": need,
                                                "check_only": True})
             if isinstance(res, dict) and res.get("ok") is False:
                 if res.get("code") == "MEMBER_QUOTA":
@@ -757,33 +764,36 @@ def cloud_quota_gate(request, need: int = 1) -> dict:
                                         detail=res.get("error") or "免费云端额度已用尽")
                 if res.get("code") == "NO_AUTH":
                     raise HTTPException(status_code=403, detail=_CLOUD_LOGIN_MSG)
-            return {"mode": "relay"}
+            return {"mode": "relay", "resource": resource}
         if not get_current_user_id(request):
             raise HTTPException(status_code=403, detail=_CLOUD_LOGIN_MSG)
         store = current_member_store(request)
         if _is_member_any(store):
             return {"mode": "local", "store": store, "remaining": None}   # 会员不限
-        # 免费用户：向中心问「还有没有额度」（只查不扣，扣在 cloud_quota_count）
-        rem = _cloud_quota_remaining(store)
+        # 免费用户：向中心问「该功能还有没有额度」（只查不扣，扣在 cloud_quota_count）
+        rem = _cloud_quota_remaining(store, resource)
         if rem is None:
             # 拿不到权威结果（未登录云端 / 断网）→ 退回每日配额口径（fail-open）
-            q = store.quota_state("cloud")
+            q = store.quota_state(resource)
             if q.get("unlimited") or q.get("unknown") or q.get("allowed", True):
                 return {"mode": "local", "store": store, "remaining": q.get("remaining"),
-                        "legacy_daily": True}
-            detail = (f"免费云端额度已用完（终身 {q['limit']}/日）。"
-                      f"开通会员可解锁无限云端处理。")
+                        "legacy_daily": True, "resource": resource}
+            _res_name = _CLOUD_RESOURCE_NAMES.get(resource, "该功能")
+            detail = (f"「{_res_name}」今日免费额度已用完（每日 {q['limit']} 次），"
+                      f"明天再来，或开通会员解锁无限使用。")
             raise HTTPException(status_code=402, detail=detail)
         if rem > 0:
-            return {"mode": "local", "store": store, "remaining": rem}
+            return {"mode": "local", "store": store, "remaining": rem,
+                    "resource": resource}
+        _res_name = _CLOUD_RESOURCE_NAMES.get(resource, "该功能")
         raise HTTPException(
             status_code=402,
-            detail=f"免费云端额度已用完（终身 {_cloud_quota_limits()[0]} 次）。"
-                   f"开通会员可解锁无限云端处理，或在设置里启用本机模型零成本运行。")
+            detail=f"「{_res_name}」的免费额度（每个功能终身 {_cloud_quota_limits()[0]} 次）"
+                   f"已用完。开通会员即可解锁无限使用。")
     except HTTPException:
         raise
     except Exception:  # noqa: BLE001 — 会员引擎异常 fail-open
-        return {"mode": "local", "store": None}
+        return {"mode": "local", "store": None, "resource": resource}
 
 
 def _cloud_quota_token(store) -> str:
@@ -818,20 +828,34 @@ def _cloud_quota_limits() -> tuple[int, int]:
         return 3, 1
 
 
-def _cloud_quota_remaining(store):
-    """问中心「终身额度还剩几次」；None = 拿不到权威结果（fail-open）。"""
+def _cloud_quota_remaining(store, resource: str = "cloud_commentary"):
+    """问中心「该 resource 的终身额度还剩几次」；None = 拿不到权威结果（fail-open）。
+
+    🔴 兼容两种中心返回：新中心 `lifetime_remaining` 是 **per-resource dict**；
+    旧中心是 **int**（4 个功能共用的总池）→ 直接当该 resource 的余量用
+    （旧中心本来就只记一份总数，语义等价于旧总池口径，不放大也不缩小）。
+    """
     try:
         import license_client
         tok = _cloud_quota_token(store)
         if not tok:
             return None
-        r = license_client.cloud_quota_remote(tok)
+        r = license_client.cloud_quota_remote(tok, resource=resource)
         if not isinstance(r, dict) or not r.get("ok"):
             return None
         cq = r.get("cloud_quota")
         if not isinstance(cq, dict):
             return None
-        return max(0, int(cq.get("lifetime_remaining") or 0))
+        rem = cq.get("lifetime_remaining")
+        if isinstance(rem, dict):
+            try:
+                return max(0, int(rem.get(resource) or 0))
+            except (TypeError, ValueError):
+                return None
+        try:
+            return max(0, int(rem or 0))
+        except (TypeError, ValueError):
+            return None
     except Exception:
         return None
 
@@ -839,21 +863,21 @@ def _cloud_quota_remaining(store):
 def cloud_quota_count(request, gate: dict, n: int = 1) -> None:
     """任务成功创建后的计数（与下载墙同语义：失败只记日志，不回滚已建任务）。
 
-    🔴 2026-10-06 统一到账号级中心记账（与桌面端同一份终身额度）：
-    此前是 `store.use_daily("cloud", n=n)`（每日配额），现改为向授权中心
-    **原子扣减** lifetime 额度。中心不可达时退回每日配额口径（fail-open），
-    绝不因记账失败让已创建的任务失败。
+    🔴 2026-10-06 拆池：按 gate 里携带的 resource 向授权中心**原子扣减**
+    该功能独立的终身额度（cloud_commentary/convert/dewatermark/subtitle 各一份）。
+    中心不可达时退回每日配额口径（fail-open），绝不因记账失败让已创建的任务失败。
     """
     if gate.get("mode") in ("off",) or n <= 0:
         return
+    resource = str(gate.get("resource") or "cloud_commentary").strip() or "cloud_commentary"
     try:
         if gate.get("mode") == "relay":
-            _cloud_quota_relay(request, {"resource": "cloud", "n": n})
+            _cloud_quota_relay(request, {"resource": resource, "n": n})
             return
         store = gate.get("store") or current_member_store(request)
         if gate.get("legacy_daily"):
-            # 拿不到中心（未登录云端 / 断网）→ 退回旧的每日配额口径
-            store.use_daily("cloud", n=n)
+            # 拿不到中心（未登录云端 / 断网）→ 退回每日配额口径（按功能独立计数）
+            store.use_daily(resource, n=n)
             return
         if _is_member_any(store):
             return                                  # 会员不限，不计数
@@ -861,13 +885,13 @@ def cloud_quota_count(request, gate: dict, n: int = 1) -> None:
             import license_client
             tok = _cloud_quota_token(store)
             if not tok:
-                store.use_daily("cloud", n=n)       # 无云端身份 → 退回每日
+                store.use_daily(resource, n=n)      # 无云端身份 → 退回每日
                 return
-            r = license_client.cloud_quota_remote(tok, lifetime=n)
+            r = license_client.cloud_quota_remote(tok, lifetime=n, resource=resource)
             if not isinstance(r, dict) or not r.get("ok"):
-                store.use_daily("cloud", n=n)       # 中心异常 → fail-open
+                store.use_daily(resource, n=n)      # 中心异常 → fail-open
         except Exception:
-            store.use_daily("cloud", n=n)
+            store.use_daily(resource, n=n)
     except Exception as e:  # noqa: BLE001 — 计数失败绝不回滚已创建的任务
         try:
             logger.warning("[cloud-quota] 计数失败（忽略）: %s", str(e)[:160])

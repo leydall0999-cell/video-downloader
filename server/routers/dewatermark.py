@@ -129,7 +129,7 @@ def create_dw_image(
                                        reason="dw_image_ai")
         if _msg:
             raise app.HTTPException(status_code=402, detail=_msg)
-    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日（服务端防滑，与积分无关）
+    gate = app.cloud_quota_gate(request, resource="cloud_dewatermark")   # 云端算力配额：免费 3 次/日（服务端防滑，与积分无关）
     suffix = app.Path(file.filename or "upload.png").suffix.lower()
     if suffix not in DW_IMAGE_EXTS:
         raise app.HTTPException(status_code=409, detail="请上传图片文件（png/jpg/webp/bmp 等）")
@@ -213,7 +213,7 @@ def create_dw_pdf(
     if not dwc.pdf_available():
         raise app.HTTPException(status_code=503, detail="PDF 去水印不可用（缺少 PyMuPDF 依赖）")
     app._check_rate_limit(request)
-    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日
+    gate = app.cloud_quota_gate(request, resource="cloud_dewatermark")   # 云端算力配额：免费 3 次/日
     suffix = app.Path(file.filename or "upload.pdf").suffix.lower()
     if suffix != ".pdf":
         raise app.HTTPException(status_code=409, detail="请上传 PDF 文件")

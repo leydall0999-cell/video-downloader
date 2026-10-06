@@ -57,10 +57,13 @@ const daily = readLimits('DAILY_QUOTA_LIMITS');
 const free = readLimits('FREE_DAILY_LIMITS');
 
 // ── ① 每行必须有真实拦截点 ─────────────────────────────────────────────────
-// 拦截点形态：use_daily("X" / quota_state("X" / cloud_quota_gate（内部查 "X"）
+// 拦截点形态：use_daily("X" / quota_state("X" / cloud_quota_gate(request, resource="X")
+// （2026-10-06 拆池后，网页端各云端功能的预检统一走 app.cloud_quota_gate，
+//   resource 由 router 显式传入 —— 这同样是真实拦截点，与 use_daily 等价钉死。）
 function hasGate(resource) {
-  const re = new RegExp(`(use_daily|quota_state)\\(\\s*["']${resource}["']`);
-  return businessPy.some(({ p, src }) => re.test(src));
+  const reA = new RegExp(`(use_daily|quota_state)\\(\\s*["']${resource}["']`);
+  const reB = new RegExp(`cloud_quota_gate\\([^)]*resource=\\s*["']${resource}["']`);
+  return businessPy.some(({ src }) => reA.test(src) || reB.test(src));
 }
 
 for (const r of rows) {

@@ -14,7 +14,7 @@ def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
     user_membership.require_login_user(request)
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)  # 旧 IP 墙（已停用，仅喂响应字段）
-    gate = app.cloud_quota_gate(request)
+    gate = app.cloud_quota_gate(request, resource="cloud_convert")
     task = app._require_task(payload.task_id, _device_of(request))
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise app.HTTPException(status_code=409, detail="原任务文件尚未准备好，无法转换")
@@ -94,7 +94,7 @@ def create_upload_convert(
     """
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)  # 旧 IP 墙（已停用，仅喂响应字段）
-    gate = app.cloud_quota_gate(request)
+    gate = app.cloud_quota_gate(request, resource="cloud_convert")
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -170,7 +170,7 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
     免重传重转；保留期由 app._cleanup_merged_upload_sources（2h TTL）兜底清理。
 
     云端算力账号级配额（免费 3 次/日）：预检在落盘后、计数在任务成功创建后。"""
-    gate = app.cloud_quota_gate(request)
+    gate = app.cloud_quota_gate(request, resource="cloud_convert")
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
     out_path = app.CONVERT_DIR / f"up_conv_{job_id}.{ext}"
@@ -458,7 +458,7 @@ def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
     """视频拼接：接收已落地的片段列表，按顺序无损合并为单个文件。"""
     user_membership.require_login_user(request)
     app._check_rate_limit(request)
-    gate = app.cloud_quota_gate(request)
+    gate = app.cloud_quota_gate(request, resource="cloud_convert")
     out_format = payload.out_format
     if out_format not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的输出格式")

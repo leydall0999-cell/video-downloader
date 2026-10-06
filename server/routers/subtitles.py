@@ -36,7 +36,7 @@ def sub_extract(req: app.SubExtractRequest, request: app.Request = None) -> dict
 @router.post("/api/subtitles/burn")
 def sub_burn(req: app.SubBurnRequest, request: app.Request = None) -> dict:
     user_membership.require_login_user(request)
-    gate = app.cloud_quota_gate(request)   # 云端算力配额：免费 3 次/日（烧录=服务端重编码）
+    gate = app.cloud_quota_gate(request, resource="cloud_subtitle")   # 云端算力配额：免费 3 次/日（烧录=服务端重编码）
     video = app._resolve_lib_video(req.lib_id)
     out_dir = video.parent
     sub_path = (out_dir / req.sub_rel).resolve()
@@ -60,7 +60,7 @@ def sub_translate(req: app.SubTranslateRequest, request: app.Request = None) -> 
                                    reason="subtitles_translate")
     if _msg:
         raise app.HTTPException(status_code=402, detail=_msg)
-    gate = app.cloud_quota_gate(request)
+    gate = app.cloud_quota_gate(request, resource="cloud_subtitle")
     video = app._resolve_lib_video(req.lib_id)
     out_dir = video.parent
     sub_path = (out_dir / req.sub_rel).resolve()
