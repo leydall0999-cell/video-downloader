@@ -128,6 +128,7 @@ def precheck_or_raise(
     request: Optional[Request] = None,
     duration_sec: float = 0.0,
     engine: str = "",
+    vision: bool = False,
 ) -> dict[str, Any]:
     """前置预检：不通过则抛 403，detail 为结构化对象（message/hint/category/subscribe）。
 
@@ -142,6 +143,7 @@ def precheck_or_raise(
     auto 自动切成 cloud，所以长片按云端价）：
       - 本机 MLX          → `commentary_local_mlx`
       - 云端网关 / 大模型  → `commentary_llm`
+    `vision=True`（用户主动开「画面理解」）时**额外**扣 `commentary_vision`。
     不足时抛 **402 + MEMBER_QUOTA|**（与会员墙其余部分同契约）。
     """
     res = precheck_commentary(request, duration_sec, engine=engine)
@@ -158,7 +160,38 @@ def precheck_or_raise(
             },
         )
     charge_commentary_credits(request, res.get("engine") or engine, duration_sec)
+    # 🔴 2026-10-06 补漏：`commentary_vision`（解说画面理解，50 积分）此前
+    # **完全没有扣费点** —— 用户勾了「画面理解」会真的去调多模态模型
+    # （单次真实成本 ¥0.24，全表最贵）却不扣任何积分，等于白嫖。
+    # 扣在这里而不是管线里：① 本函数已是全部解说入口的统一收口，一处覆盖
+    # 4 个入口（本地拖拽 / 上传 / 批量 / 单任务），新增入口照旧调它就自动被
+    # 覆盖；② 用户定档是「按次定价」，任务入口收一次即一份，与内部调用几次无关。
+    if vision:
+        _charge_optional(request, "commentary_vision", "解说画面理解")
     return res
+
+
+def _charge_optional(request: Optional[Request], op: str, label: str) -> None:
+    """按需扣一项积分；不足抛 402（与主线同样的契约，前端统一弹会员中心）。"""
+    import membership as _mem
+    try:
+        store = app_module().current_member_store(request) if request is not None \
+            else app_module().member_store
+    except Exception:
+        return
+    msg = _mem.gate_message(store, op, reason=op)
+    if msg:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=402, detail={
+            "message": msg, "hint": f"{label}会消耗 AI 积分",
+            "category": "quota", "code": "MEMBER_QUOTA", "subscribe": True,
+        })
+
+
+def app_module():
+    """延迟 import app（避免 routers 层在导入期就绑死 app 模块）。"""
+    import app as _a
+    return _a
 
 
 def _commentary_credit_op(engine: str, duration_sec: float) -> str:
@@ -198,13 +231,17 @@ def charge_commentary_credits(
     return {"ok": True, "op": op}
 
 
-def assert_upload_allowed(request: Optional[Request], duration_sec: float) -> None:
+def assert_upload_allowed(request: Optional[Request], duration_sec: float,
+                          vision: bool = False) -> None:
     """上传前服务端校验（兼容旧调用）：等价于 precheck_or_raise。
 
     历史上这里只判「时长 > 30 分钟」，漏了「时长合法但必须走云端、而云端额度
     已耗尽」这一致命分支（用户实测的废片场景就是后者）。现统一收口到预检。
+
+    `vision` 透传给预检：上传入口勾了「画面理解」同样要扣 `commentary_vision`
+    （这两个入口不走 `precheck_or_raise`，不传会漏扣）。
     """
-    precheck_or_raise(request, duration_sec)
+    precheck_or_raise(request, duration_sec, vision=vision)
 
 
 @router.get("/api/quota/status")

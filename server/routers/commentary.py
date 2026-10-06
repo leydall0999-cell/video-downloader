@@ -386,7 +386,8 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
     # 额度不够，白等十几分钟且拿到废片（2026-09-15 用户实测反馈）。
     from routers.quota import precheck_or_raise
     precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end,
-                                                  payload.drama_start_sec, payload.drama_end_sec))
+                                                payload.drama_start_sec, payload.drama_end_sec),
+                      vision=bool(payload.vision))
 
     job_id = app.uuid.uuid4().hex[:12]
     _title = app._commentary_title(payload, src_path)
@@ -509,7 +510,7 @@ def create_commentary_upload(
         from routers.quota import assert_upload_allowed
         _dur = _effective_duration(dest, trim_start, trim_end,
                                    drama_start_sec, drama_end_sec)
-        assert_upload_allowed(None, _dur)
+        assert_upload_allowed(None, _dur, vision=bool(vision))
     except app.HTTPException:
         raise
     except Exception:
@@ -597,7 +598,7 @@ def create_script_only_upload(
         from routers.quota import assert_upload_allowed
         _dur = _effective_duration(dest, trim_start, trim_end,
                                    drama_start_sec, drama_end_sec)
-        assert_upload_allowed(None, _dur)
+        assert_upload_allowed(None, _dur, vision=bool(vision))
     except app.HTTPException:
         raise
     except Exception:
@@ -955,7 +956,8 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
     # 免费用户跑一条超能力的片子，若在此放行，会白等十几分钟后才失败并产出废片。
     from routers.quota import precheck_or_raise
     precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end,
-                                                  payload.drama_start_sec, payload.drama_end_sec))
+                                                payload.drama_start_sec, payload.drama_end_sec),
+                      vision=bool(payload.vision))
 
     job_id = app.uuid.uuid4().hex[:12]
     _title = app._commentary_title(payload, src_path)

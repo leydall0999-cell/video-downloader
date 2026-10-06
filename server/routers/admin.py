@@ -98,12 +98,17 @@ _COST_GATE_SITES: dict[str, tuple[str, ...]] = {
     "subtitle_asr": ("routers/subtitle.py",),
     "subtitle_translate": ("routers/subtitles.py",),
     "dewatermark_ai": ("routers/dewatermark.py",),
-    # ⚠️ 下面三项**故意不登记**：全仓搜索连注释都搜不到 op 字面量，
-    # 说明它们只有后台能配价、业务代码从不扣费 ⇒ 现在完全免费随便用。
-    # 前端会据此打「⚠ 未接入扣费」角标。补上拦截点后从这里删掉并加进上面那张表。
-    # "matting_cloud_enhance": (),
-    # "commentary_vision": (),
-    # "voice_clone": (),
+    # 🔴 2026-10-06 补上两项真实扣费点：
+    #   · commentary_vision（50 积分，单次真实成本 ¥0.24，全表最贵）此前只在
+    #     成本表登记、代码里从无扣费点 ⇒ 用户勾「画面理解」会真去调多模态模型
+    #     却不扣分（白嫖）。现由解说任务入口按 `vision` 开关扣。
+    #   · voice_clone（30 积分）——/api/voice-studio/tts 此前完全无鉴权无计费，
+    #     任何能打到本机端口的人都能无限免费调 TTS。
+    "commentary_vision": ("routers/quota.py",),
+    "voice_clone": ("routers/voice_studio.py",),
+    # ⚠️ `matting_cloud_enhance` **故意不登记**（用户 2026-10-06 定档）：
+    # 它是云端抠图的**内部步骤**（人像场景自动触发），外层 `matting_cloud` 已收
+    # 50 积分；单独再收 15 会对同一次操作重复收费。故不设独立拦截点。
 }
 def _has_cost_gate(op: str) -> bool:
     """该 op 是否真有扣费拦截点。

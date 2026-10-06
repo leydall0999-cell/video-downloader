@@ -138,11 +138,14 @@ def test_has_cost_gate_matches_reality():
     # 已接入的（实测业务代码里真有扣费调用点）
     for op in ("matting_cloud", "matting_vision", "local_matting_ai",
                "commentary_llm", "commentary_local_mlx", "subtitle_asr",
-               "subtitle_translate", "dewatermark_ai"):
+               "subtitle_translate", "dewatermark_ai",
+               # 2026-10-06 补上的两个真实拦截点
+               "commentary_vision", "voice_clone"):
         check(A._has_cost_gate(op) is True, f"{op} 判为已接入扣费")
-    # 故意未登记的三项：全仓搜不到 op 字面量 ⇒ 现在完全免费随便用
-    for op in ("matting_cloud_enhance", "commentary_vision", "voice_clone"):
-        check(A._has_cost_gate(op) is False, f"{op} 判为未接入（真实漏洞，需补扣费）")
+    # ⚠️ 画质增强是云端抠图的内部步骤，外层已收 50 积分，用户定档**不单独收**
+    # （单独再收会对同一次操作重复收费）⇒ 故意不登记
+    check(A._has_cost_gate("matting_cloud_enhance") is False,
+          "matting_cloud_enhance 判为不单独收费（已含在云端抠图 50 里）")
 
 
 def test_cloud_quota_limits_readable():
@@ -158,6 +161,42 @@ def test_cloud_quota_limits_readable():
           "终身次数与 quota.py 常量一致", f"admin={life} quota={m_life.group(1) if m_life else '?'}")
     check(bool(m_daily) and daily == int(m_daily.group(1)),
           "每日 auto 与 quota.py 常量一致", f"admin={daily} quota={m_daily.group(1) if m_daily else '?'}")
+
+
+def test_commentary_vision_charged_at_every_entry():
+    """🔴 防漏扣：`commentary_vision` 必须在**全部 4 个解说入口**都传 vision。
+
+    解说有 4 个入口（本地拖拽 / script-only / 两个上传），其中 2 个走
+    `precheck_or_raise`、2 个走 `assert_upload_allowed`（转发到前者）。
+    任一入口漏传 `vision` ⇒ 用户在该入口勾「画面理解」就白嫖 50 积分。
+    本用例数出现次数，个数不对就红。
+    """
+    src = (_SERVER / "routers" / "commentary.py").read_text(encoding="utf-8")
+    n_pre = src.count("precheck_or_raise(None,")
+    n_up = src.count("assert_upload_allowed(None, _dur")
+    check(n_pre == 2, f"2 处 precheck_or_raise 入口", str(n_pre))
+    check(n_up == 2, f"2 处 assert_upload_allowed 入口", str(n_up))
+    # 每一处都必须带 vision=
+    check(src.count("vision=bool(payload.vision)") == n_pre,
+          "所有 precheck 入口都传了 vision=payload.vision")
+    check(src.count("vision=bool(vision)") == n_up,
+          "所有上传入口都传了 vision=vision")
+    # 预检侧必须有条件扣费（不能只在某个分支扣）
+    q = (_SERVER / "routers" / "quota.py").read_text(encoding="utf-8")
+    check("_charge_optional(request, \"commentary_vision\"" in q,
+          "precheck_or_raise 里按 vision 开关扣 commentary_vision")
+    check("if vision:" in q, "扣费有 vision 条件判断（不开就不扣）")
+
+
+def test_voice_clone_gate_added():
+    """`/api/voice-studio/tts` 必须有积分门禁（此前完全无鉴权无计费）。"""
+    src = (_SERVER / "routers" / "voice_studio.py").read_text(encoding="utf-8")
+    check("_credit_gate(\"voice_clone\"" in src, "tts 端点有 voice_clone 门禁")
+    check("status_code=402" in src, "不足时抛 402（前端统一弹会员中心）")
+    # 门禁必须在「服务未就绪」之后：没启用不该收钱
+    i_ready = src.index("if not _vsc.is_ready()")
+    i_gate = src.index('_credit_gate("voice_clone"')
+    check(i_gate > i_ready, "门禁在 is_ready 之后（没启用不收钱）")
 
 
 def test_admin_html_has_four_tabs():
@@ -195,6 +234,8 @@ def main():
         test_quota_state_uses_effective_limits,
         test_white_list_preserves_sibling_fields,
         test_has_cost_gate_matches_reality,
+        test_commentary_vision_charged_at_every_entry,
+        test_voice_clone_gate_added,
         test_cloud_quota_limits_readable,
         test_admin_html_has_four_tabs,
         test_frontend_collects_free_quota,
