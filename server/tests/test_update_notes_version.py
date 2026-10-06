@@ -261,7 +261,9 @@ def main() -> None:
           "否则本机抢先升级时没有内容可显示，会退回显示源里的旧版本")
     check("刚更新完缓存的条目被真正使用（不再是死代码）",
           "_cachedUpdateNotes()" in body and "function _cachedUpdateNotes(" in src)
-    check("找不到条目时整块隐藏", "box.hidden = true" in body)
+    check("找不到条目也不整块隐藏（退回兜底文案）",
+          "本版本暂无更新说明" in body,
+          "老实现 `if (!items.length) { box.hidden = true; }` 会让「已是最新」的用户什么都看不到")
 
     print("\n[C] _verNewer 行为（node 实跑）")
     bad = _ver_newer_cases()
@@ -286,8 +288,13 @@ def main() -> None:
          "latest": {"version": "1.0.43", "notes_list": [], "published_at": ""},
          "changelog": builtin,
          "cached": {"version": "1.0.43", "items": ["本次更新条目"]}},
-        # ④ 找不到任何条目 → 整块隐藏（绝不拿别的版本充数）
-        {"name": "无条目应隐藏", "cur": "1.0.99", "avail": False,
+        # ④ 已是最新（本机 == 源）、且没更新缓存 → 必须展示「当前版本」的内置条目
+        #    （2026-10-08 用户核心反馈：「当前是最新版本就不显示更新内容」）
+        {"name": "已是最新显示当前版本", "cur": "1.0.43", "avail": False,
+         "latest": {"version": "1.0.43", "notes_list": [], "published_at": ""},
+         "changelog": builtin},
+        # ⑤ 找不到任何同版本条目 → 仍展示区块 + 兜底文案（绝不整块隐藏）
+        {"name": "无条目给兜底不隐藏", "cur": "1.0.99", "avail": False,
          "latest": {"version": "1.0.39", "notes_list": ["旧版条目-39"]},
          "changelog": builtin},
     ]
@@ -303,11 +310,17 @@ def main() -> None:
     check("② 内容里绝不出现旧版本条目",
           "旧版条目-39" not in (r2.get("items") or []), str(r2.get("items")))
     r3 = got.get("刚更新完用缓存", {})
-    check("③ 刚更新完 → 用更新时缓存的条目，且标题明确说「本次更新已完成」",
+    check("③ 刚更新完 → 用更新时缓存的条目，标题＝当前版本",
           r3.get("items") == ["本次更新条目"]
-          and r3.get("title") == "本次更新已完成（v1.0.43）", str(r3))
-    r4 = got.get("无条目应隐藏", {})
-    check("④ 无同版本条目 → 整块隐藏", r4.get("hidden") is True, str(r4))
+          and r3.get("title") == "v1.0.43 更新内容", str(r3))
+    r4 = got.get("已是最新显示当前版本", {})
+    check("④ 已是最新 → 仍展示「当前版本」的内置条目（不再什么都不显示）",
+          (not r4.get("hidden")) and r4.get("title") == "v1.0.43 更新内容"
+          and r4.get("items") == ["新版条目-43"], str(r4))
+    r5 = got.get("无条目给兜底不隐藏", {})
+    check("⑤ 无同版本条目 → 仍展示区块 + 兜底文案（绝不整块隐藏）",
+          (not r5.get("hidden")) and r5.get("title") == "v1.0.99 更新内容"
+          and r5.get("items") == ["本版本暂无更新说明"], str(r5))
 
     # ── [E] 更新完成后必须主动告知（2026-10-07 用户实测：「更新完了不显示」）──
     print("\n[E] 更新完成后主动弹一次「本次更新已完成」（node 实跑弹层 IIFE）")

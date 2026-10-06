@@ -2077,7 +2077,8 @@
             <button type="button" class="pf-update-btn" id="profUpdateNowBtn" data-page-node-id="Wh2vDyuVrtaqgBB4swHUmm">立即更新</button>
           </div>
 
-          <!-- 更新内容：**仅在有更新可用时**展示新版本这次会改什么；已是最新则整块隐藏 -->
+          <!-- 更新内容：有更新可用时展示新版本会改什么；已是最新 / 刚更新完则展示「当前版本」的条目。
+               2026-10-08 起**永不整块隐藏**（取不到条目也给兜底文案），旧的「已是最新则隐藏」口径已废弃 -->
           <div class="pf-changelog" id="profChangelog" hidden data-page-node-id="pfChangelogSec">
             <div class="pf-changelog-head" data-page-node-id="pfChangelogHead">
               <span class="pf-changelog-title" id="profChangelogTitle" data-page-node-id="pfChangelogTitle">更新内容</span>

@@ -18980,18 +18980,32 @@ el.dwVidPlayer.hidden = true;
   /**
    * 更新内容展示（2026-09-26 用户要求「更新加入更新内容」）。
    *
-   * 展示口径（2026-10-07 统一定档，核心是**标题版本与内容必须同源**）：
-   *   发布源比本机新 → 「v{新版本} 更新内容」+ 该新版本的条目（点更新会装到什么）
-   *   本机不比源旧   → 「v{本机版本} 更新内容」+ 本机这版的条目
-   *                    （优先用更新时缓存的条目，退回内置 changelog 同版本条目）
-   *   找不到条目     → 整块隐藏（绝不拿别的版本的内容充数）
+   * 展示口径（2026-10-08 定档，两条铁律：**标题版本与内容必须同源** + **永不整块隐藏**）：
+   *   有更新可用        → 「v{新版本} 更新内容」+ 该新版本的条目（点更新会装到什么）
+   *   已是最新/刚更新完 → 「v{当前版本} 更新内容」+ 本机这版的条目
+   *                      （优先更新时缓存的条目 → 内置日志同版本 → 内置日志 current 条目）
+   *   一条条目都取不到   → 仍显示区块 + 一行「本版本暂无更新说明」
+   *
+   * 🔴 2026-10-08 用户反馈「当前是最新版本就不显示更新内容」：
+   *    此前 `if (!items.length) { box.hidden = true; return; }` —— 只要取不到条目就整块隐藏，
+   *    于是已是最新的用户什么都看不到（App 刚重启后端没就绪 / 接口偶发失败 / 该版本恰好
+   *    没登记条目时必现）。现改为**区块恒显示**，并给 changelog 拉取加一次重试。
+   *    此改动覆盖 2026-10-03「更新完成就不再展示」的旧口径（用户已明确反转）。
    */
   async function _loadAboutChangelog() {
-    try {
-      _aboutChangelog = await request('/api/system/changelog');
-    } catch (_) {
-      _aboutChangelog = null;
+    // 带重试：App 刚重启时后端可能还没就绪，老实现一次失败就直接把整块隐藏了
+    for (let i = 0; i < 2; i += 1) {
+      try {
+        const d = await request('/api/system/changelog');
+        if (d && Array.isArray(d.entries) && d.entries.length) {
+          _aboutChangelog = d;
+          _renderChangelog();
+          return;
+        }
+      } catch (_) { /* 落到重试 */ }
+      if (i === 0) await new Promise((r) => setTimeout(r, 800));
     }
+    _aboutChangelog = { entries: [] };   // 明确标记「已尝试但没数据」→ 渲染兜底文案
     _renderChangelog();
   }
 
@@ -19007,48 +19021,53 @@ el.dwVidPlayer.hidden = true;
     const pickBuiltin = (ver) => (ver
       ? (entries.find((e) => e && String(e.version) === String(ver)) || null) : null);
 
-    // 🔴 2026-10-07 修（用户实测反馈：本机 1.0.43 却显示 1.0.39 的更新内容）：
-    // 展示的版本必须 **≥ 当前版本**，两者必须同源同版本。
-    //   ① 发布源比本机新 → 展示那个新版本的更新内容（= 点更新会装到什么）
-    //   ② 本机不比源旧（抢先升级 / 刚更新完 / 源还没同步 / 本就最新）→ 展示
-    //      **本机这一版**改了什么（更新时缓存下来的、退回内置日志同版本条目）
-    // 历史版本的整块列表依旧不展示（沿用 2026-10-03 的要求）。
+    // 🔴 2026-10-08 用户反馈「已是最新就不显示更新内容」+「显示的是未更新版本的内容」。
+    // 展示的版本始终与区块标题**同源**，且三种状态**都展示、绝不整块隐藏**：
+    //   ① 有更新可用（发布源比本机新）→ 展示那个新版本的更新内容（= 点更新会装到什么）
+    //   ② 已是最新 / 刚更新完        → 展示**当前运行版本**改了什么
+    //   ③ 一条条目都取不到            → 仍展示区块 + 「本版本暂无更新说明」
+    // 取条目顺序：更新时缓存的 → 内置日志同版本条目 → 内置日志 current 标记条目。
     const hasNewer = !!latestVer
       && ((_aboutUpdateAvail) || !cur || _verNewer(latestVer, cur));
 
-    let title = '';
+    // 内置日志里被服务端标记为「当前版本」的那条（版本号取不到时的最后兜底）
+    const pickCurrentBuiltin = () => (entries.find((e) => e && e.current) || null);
+
+    let ver = '';                                // 区块标题里的版本号
     let items = [];
     let dateText = '';
     if (hasNewer) {
+      ver = latestVer;                           // 即将升级到的版本
       items = _changelogItems(_aboutLatest || {});
       dateText = (_aboutLatest && _aboutLatest.published_at) || '';
-      title = 'v' + latestVer + ' 更新内容';
       if (!items.length) {                       // 线上清单没带条目 → 退回内置同版本
-        const hit = pickBuiltin(latestVer);
+        const hit = pickBuiltin(latestVer) || pickCurrentBuiltin();
         if (hit) {
           items = Array.isArray(hit.items) ? hit.items.slice() : [];
           dateText = dateText || hit.date || '';
         }
       }
     } else if (cur) {
+      ver = cur;                                 // 本机正在运行的版本
       const cached = _cachedUpdateNotes();
       if (cached && String(cached.version) === String(cur)
           && Array.isArray(cached.items) && cached.items.length) {
-        // 刚更新完：本机版本 == 缓存版本 → 明确说「这次更新装好了」，而不是含糊的版本标题
-        items = cached.items.slice();            // 本次更新装到的条目（最贴近真实）
-        title = '本次更新已完成（v' + cur + '）';
+        items = cached.items.slice();            // 更新时缓存的条目（最贴近这次真装了什么）
       } else {
-        const hit = pickBuiltin(cur);
+        const hit = pickBuiltin(cur) || pickCurrentBuiltin();
         if (hit) {
           items = Array.isArray(hit.items) ? hit.items.slice() : [];
           dateText = hit.date || '';
         }
-        title = 'v' + cur + ' 更新内容';
       }
     }
-    if (!items.length) { box.hidden = true; return; }
+    if (!ver) { box.hidden = true; return; }     // 连版本都拿不到 → 才允许隐藏
+    if (!items.length) {
+      if (!_aboutChangelog) return;              // 内置日志还在加载 → 先别盖兜底文案（等它回来）
+      items = ['本版本暂无更新说明'];             // 🔴 绝不整块隐藏（老实现这里直接 box.hidden = true）
+    }
 
-    if (el.profChangelogTitle) el.profChangelogTitle.textContent = title;
+    if (el.profChangelogTitle) el.profChangelogTitle.textContent = 'v' + ver + ' 更新内容';
     if (el.profChangelogDate) el.profChangelogDate.textContent = dateText;
     list.replaceChildren(...items.map((t) => {
       const li = document.createElement('li');
