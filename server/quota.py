@@ -529,6 +529,22 @@ class QuotaManager:
                         cl[DEFAULT_CLOUD_RESOURCE] = max(0, int(legacy))
                     except (TypeError, ValueError):
                         pass
+            # 🔴 2026-10-06 回灌中心的**生效上限**（管理员覆盖值）。本机 plans.json
+            #   只是缓存，管理员在另一台机器改过时本机不知道 → 402 文案会报过期数字。
+            #   云端可达时以中心为准（下次联网询问后自动纠正）。
+            clims = cq.get("lifetime_limits")
+            if isinstance(clims, dict):
+                cl_lim: dict[str, int] = {}
+                for r in CLOUD_RESOURCES:
+                    try:
+                        n = int(clims.get(r) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if n >= 0:
+                        cl_lim[r] = n
+                if cl_lim:
+                    st["cloud_limits"] = cl_lim
+
             cdate = str(cq.get("date") or "").strip()
             if cdate:
                 # 以云端（北京）日切日期为准：本机 _roll_daily 按本机时区算，
@@ -698,13 +714,55 @@ class QuotaManager:
         except Exception:
             return False
 
-    def lifetime_cloud_remaining(self, resource: str = DEFAULT_CLOUD_RESOURCE) -> int:
+    def _limit_for(self, resource: str = DEFAULT_CLOUD_RESOURCE) -> int:
+        """该资源的生效终身上限：**中心回灌值 > 本机 plans.json > 代码常量**。
+
+        🔴 2026-10-06：放行判定在授权中心（管理员可覆盖终身次数），本机
+        plans.json 只是缓存。管理员在另一台机器改过时，若仍读本机会在 402 文案里
+        报过期数字（「终身 3 次已用完」而实际配的是 5）。
+        """
+        try:
+            n = int((self._state().get("cloud_limits") or {}).get(resource))
+            if n >= 0:
+                return n
+        except (TypeError, ValueError, KeyError):
+            pass
+        return int(cloud_lifetime_limits().get(resource, LIFETIME_CLOUD_EVENTS))
+
+    def lifetime_cloud_remaining(self, resource: str = DEFAULT_CLOUD_RESOURCE,
+                                confirm: bool = True) -> int:
+        """该资源还剩几次终身额度。
+
+        🔴 2026-10-06 覆盖层引入的假拒风险：放行判定在授权中心（管理员可改上限），
+        本机 plans.json 只是缓存。管理员在**另一台机器**把上限从 3 放宽到 5 时，
+        本机仍按 3 算 → 用户明明还剩 2 次却看到「已用完」。
+
+        修法是**只在将被拒的那一刻**才去问中心（`confirm=True` 时 remaining<=0
+        才发一次只读查询）：平时（remaining>0）零网络开销，不拖慢预检；只有边界
+        情况才付一次往返。中心不可达 / 未登录云端 → 按本机值 fail-open 放行。
+        """
         if self.is_member():
             return 10 ** 9
-        _limits = cloud_lifetime_limits()
-        _lim = _limits.get(resource, int(LIFETIME_CLOUD_EVENTS))
         cl = (self._state().get("cloud_lifetime") or {})
-        return max(0, _lim - int(cl.get(resource) or 0))
+        _used = int(cl.get(resource) or 0)
+        # 本机口径（含中心回灌过的上限，_limit_for 优先用云端真值）
+        _left = max(0, self._limit_for(resource) - _used)
+        if _left > 0 or not confirm:
+            return _left
+        # 只查不扣：center 会在 allowed 判定时用它的生效上限；这里只用它纠正
+        # 「本机判 0、中心其实还有」这一种假拒。
+        # 只查不扣：`_cloud(lifetime=0, daily=0)` 是纯查询，中心会回灌
+        # `cloud_lifetime[resource]`（已用量）与 `cloud_limits[resource]`（上限）。
+        if self._cloud(resource=resource) is None:
+            return _left                       # fail-open：按本机（放行）
+        st2 = self._state()
+        try:
+            _used2 = int((st2.get("cloud_lifetime") or {}).get(resource) or 0)
+            _lim2 = int((st2.get("cloud_limits") or {}).get(resource)
+                        or cloud_lifetime_limits().get(resource, LIFETIME_CLOUD_EVENTS))
+        except (TypeError, ValueError):
+            return _left
+        return max(0, _lim2 - _used2)
 
     def daily_auto_remaining(self, resource: str = DEFAULT_CLOUD_RESOURCE) -> int:
         """该功能今天还剩几次「每日 auto」额度（per-resource）。"""
@@ -894,7 +952,7 @@ class QuotaManager:
                 "reason": "本机引擎不可用，且免费云端额度已用完",
                 "hint": (
                     "这条视频需要云端生成解说词，但免费云端额度（视频解说终身 "
-                    f"{cloud_lifetime_limits().get(resource, int(LIFETIME_CLOUD_EVENTS))} 次）已用完。"
+                    f"{self._limit_for(resource)} 次）已用完。"
                     "开通会员即可解锁无限云端解说。"
                 ),
                 "will_use_cloud": True,

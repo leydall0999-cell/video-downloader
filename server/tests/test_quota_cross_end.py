@@ -482,6 +482,7 @@ def main():
         test_accounts_isolated,
         test_daily_auto_shared_and_rolls_over,
         test_daily_auto_is_per_resource_and_stable,
+        test_center_limit_override_corrects_false_reject,
         test_member_bypasses_center,
         test_concurrent_consume_never_exceeds_limit,
         test_stale_local_cache_never_falsely_denies,
@@ -524,6 +525,54 @@ def test_daily_auto_is_per_resource_and_stable():
         assert q._state()["daily_auto"] == da, f"第 {i + 1} 次重读漂移"
     print("✅ daily_auto per-resource，反复重读不漂移")
 
+
+def test_center_limit_override_corrects_false_reject():
+    """🔴 2026-10-06 覆盖层引入的假拒：中心放宽上限后本机必须跟着纠正。
+
+    管理员在**另一台机器**把某功能的终身次数从 3 放宽到 5，本机 plans.json 仍是
+    旧值、本机已用量 3 ⇒ 只读本机会判 0 → 用户明明还剩 2 次却被拒。
+    修法：`lifetime_cloud_remaining(confirm=True)` 在**将被拒的那一刻**问一次中心
+    （平时 remaining>0 零网络开销），并把中心的 lifetime/lifetime_limits 回灌本机。
+
+    同时钉住两条边界：
+      · 中心不可达 → 保持本机判定（不凭空放行，与改动前一致，不是回归）
+      · 回灌后本机缓存即真值 → 后续调用 confirm=False 也应得到正确余量
+    """
+    import time as _t
+    import quota as _q
+    RES = "cloud_commentary"
+    today = _t.strftime("%Y-%m-%d")
+    d = _fresh()
+    p = Path(d) / "quota.json"
+    p.write_text(json.dumps({
+        "cloud_lifetime": {r: (3 if r == RES else 0) for r in _q.CLOUD_RESOURCES},
+        "daily_auto": {r: 0 for r in _q.CLOUD_RESOURCES},
+        "daily_auto_used": 0, "daily_date": today,
+    }), encoding="utf-8")
+    q = _mgr(d)
+
+    # ① 本机旧口径判 0
+    assert q.lifetime_cloud_remaining(RES, confirm=False) == 0, "本机口径应判 0"
+
+    # ② 中心不可达 → 不得凭空放行（fail-safe，不是 fail-open）
+    orig = q._cloud
+    q._cloud = lambda **kw: None
+    assert q.lifetime_cloud_remaining(RES) == 0, "中心不可达时不该放行"
+
+    # ③ 中心放宽到 5 → 纠正为 2（假拒修复）
+    cq = {"lifetime": {r: (3 if r == RES else 0) for r in _q.CLOUD_RESOURCES},
+          "lifetime_limits": {r: (5 if r == RES else 3) for r in _q.CLOUD_RESOURCES},
+          "date": today}
+    q._cloud = lambda **kw: (q._apply_cloud_view(cq, RES), cq)[1]
+    assert q.lifetime_cloud_remaining(RES) == 2, "中心放宽后假拒未纠正"
+
+    # ④ 回灌落缓存 → 之后 confirm=False 也是真值
+    q._cloud = orig
+    assert q.lifetime_cloud_remaining(RES, confirm=False) == 2, "中心真值未落本机缓存"
+
+    # ⑤ 别的功能不被连累
+    assert q.lifetime_cloud_remaining("cloud_convert", confirm=False) == 3
+    print("✅ 中心覆盖值纠正假拒：不可达不回归 / 纠正生效 / 落缓存 / 不连累")
 
 if __name__ == "__main__":
     main()
