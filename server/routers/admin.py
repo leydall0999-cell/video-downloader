@@ -132,12 +132,49 @@ def _has_cost_gate(op: str) -> bool:
 
 
 def _cloud_quota_limits() -> tuple[int, int]:
-    """云端免费额度上限（终身 / 每日 auto），读 quota.py 的常量做单一真源。"""
+    """云端免费额度上限（终身 / 每日 auto）。
+
+    优先级：`plans.json` 的 `free_quota.{cloud_lifetime, daily_auto}` 覆盖
+    → `quota.py` 的模块常量（代码默认值）。
+
+    🔴 2026-10-06：此前只读模块常量 ⇒ **后台看得到数字但改不了**（实测往
+    `free_quota` 写 99/88 完全不生效，要改代码 + 重新构建）。用户要求
+    「后台能不能改」—— 能，所以加覆盖层，与 `effective_daily_limits()` 同套路：
+    未配置时落回代码常量（默认值永不丢失），脏值忽略而非炸表。
+    """
     try:
         from quota import LIFETIME_CLOUD_EVENTS, DAILY_AUTO_RUNS
-        return int(LIFETIME_CLOUD_EVENTS), int(DAILY_AUTO_RUNS)
+        life, daily = int(LIFETIME_CLOUD_EVENTS), int(DAILY_AUTO_RUNS)
     except Exception:
-        return 3, 1
+        life, daily = 3, 1
+    # 🔴 局部 import：模块顶层没有 `load_plan_overrides`，此前直接调用会 NameError
+    # 被下面的 except 吞掉 → 永远返回默认 (3,1)，后台改了额度却显示没变（实测）。
+    try:
+        from membership import load_plan_overrides
+        fq = (load_plan_overrides().get("free_quota") or {})
+    except Exception:
+        return life, daily
+    if not isinstance(fq, dict):
+        return life, daily
+    # ⚠️ 不能写 `for key, cur in (...)` 再 `cur = n` —— 改的是循环变量，
+    # 不会写回 life/daily（第一版就是这么写的，后台改值不生效）。
+    v = fq.get("cloud_lifetime")
+    if v is not None:
+        try:
+            n = int(v)
+            if n >= 0:
+                life = n
+        except (TypeError, ValueError):
+            pass                          # 脏值忽略：宁可回退默认
+    v = fq.get("daily_auto")
+    if v is not None:
+        try:
+            n = int(v)
+            if n >= 0:
+                daily = n
+        except (TypeError, ValueError):
+            pass
+    return life, daily
 
 
 def _daily_feature_rows() -> list[dict[str, Any]]:

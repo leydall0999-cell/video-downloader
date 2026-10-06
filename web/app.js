@@ -21276,9 +21276,18 @@ el.dwVidPlayer.hidden = true;
       });
 
       h += '<div class="fq-sub">② 消耗积分的功能（按次扣积分，上方成本表定单价）</div>';
-      h += '<p class="admin-hint">下面就是上方「AI 积分成本」里的同一批功能。勾选 = 允许它参与「首次体验」免费名额；取消 = 该功能不给免费机会。云端免费额度（终身 '
-        + `${esc(fq.limits?.cloud_lifetime ?? 3)} 次、每日 auto ${esc(fq.limits?.cloud_daily_auto ?? 1)} 次）`
-        + ' 由授权中心跨端记账，换电脑 / 换网页不会重置。</p>';
+      h += '<p class="admin-hint">下面就是上方「AI 积分成本」里的同一批功能。勾选 = 允许它参与「首次体验」免费名额；取消 = 该功能不给免费机会。</p>';
+      // 🔴 云端额度（终身 / 每日 auto）此前只是提示文字里的两个数字，看得到改不了
+      // （真值是 quota.py 的模块常量）。用户 2026-10-06 要求「后台能不能改」——
+      // 能，故做成可输入行：覆盖值存 plans.json 的 free_quota，脏值后端会忽略。
+      h += `<div class="admin-plan-row" data-fq="cloud" data-key="cloud_limits">
+        <span class="admin-plan-name">云端额度 <code class="admin-plan-code">cloud</code></span>
+        <label>终身免费次数<input class="admin-input admin-input-sm fq-cloud" data-key="cloud_lifetime"
+               value="${esc(fq.limits?.cloud_lifetime ?? 3)}" type="number" min="0"></label>
+        <label>每日 auto 次数<input class="admin-input admin-input-sm fq-cloud" data-key="daily_auto"
+               value="${esc(fq.limits?.cloud_daily_auto ?? 1)}" type="number" min="0"></label>
+        <span class="admin-plan-hint">由授权中心按账号记账（换电脑/换网页不重置）；改 0 = 完全不给云端免费额度</span>
+      </div>`;
       (fq.credit_features || []).forEach((f) => {
         const ex = (fq.defaults?.trial_exclude || []).includes(f.op);
         h += `<div class="admin-plan-row" data-fq="credit" data-key="${esc(f.op)}">
@@ -21304,6 +21313,12 @@ el.dwVidPlayer.hidden = true;
       });
       if (Object.keys(dailyFree).length) payload.daily_free_limits = dailyFree;
       if (Object.keys(dailyMember).length) payload.daily_member_limits = dailyMember;
+      // 🔴 云端额度（终身 / 每日 auto）也要提交 —— 此前它只是提示文字里的数字，
+      // 真值是 quota.py 模块常量，后台改了不生效。覆盖值存 free_quota 同级。
+      box.querySelectorAll('.fq-cloud').forEach((el) => {
+        const v = parseInt(el.value, 10);
+        if (Number.isFinite(v) && v >= 0) payload[el.dataset.key] = v;
+      });
       // 试用水位走 free_trial.exclude（与上方「首次体验」同一份配置，不另开一套）
       const exclude = [];
       box.querySelectorAll('.fq-trial').forEach((el) => { if (!el.checked) exclude.push(el.dataset.op); });
@@ -21315,11 +21330,15 @@ el.dwVidPlayer.hidden = true;
       try {
         // free_quota 走套餐接口、free_trial 走积分成本接口（各自归属自己的覆盖层）
         let ok = true;
-        if (payload.daily_free_limits || payload.daily_member_limits) {
+        if (payload.daily_free_limits || payload.daily_member_limits
+            || payload.cloud_lifetime !== undefined || payload.daily_auto !== undefined) {
+          const fq = {};
+          if (payload.daily_free_limits) fq.daily_free_limits = payload.daily_free_limits;
+          if (payload.daily_member_limits) fq.daily_member_limits = payload.daily_member_limits;
+          if (payload.cloud_lifetime !== undefined) fq.cloud_lifetime = payload.cloud_lifetime;
+          if (payload.daily_auto !== undefined) fq.daily_auto = payload.daily_auto;
           const r1 = await adminRequest('/api/admin/config/plans', {
-            method: 'POST', body: JSON.stringify({ free_quota: {
-              daily_free_limits: payload.daily_free_limits,
-              daily_member_limits: payload.daily_member_limits } }),
+            method: 'POST', body: JSON.stringify({ free_quota: fq }),
           });
           if (!r1 || !r1.ok) ok = false;
         }

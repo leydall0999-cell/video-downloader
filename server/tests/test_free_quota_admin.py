@@ -37,6 +37,89 @@ def check(cond, label, extra=""):
         fails.append(label)
 
 
+def test_cloud_quota_limits_are_configurable():
+    """🔴 云端额度（终身 / 每日 auto）必须**后台可改**（用户 2026-10-06 问
+    「后台能不能改」—— 此前只读 quota.py 模块常量，看得到数字却改不了）。
+
+    覆盖值存 `plans.json` 的 `free_quota.{cloud_lifetime, daily_auto}`，
+    `quota.cloud_quota_limits()` 是唯一读取口；未配置时落回代码常量。
+    """
+    import membership as M
+    import quota as Q
+
+    # 1) 无覆盖时 == 代码常量
+    d = Path(_TMP) / "cq_limits"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "plans.json").write_text("{}", encoding="utf-8")
+    os.environ["VDL_DATA_DIR"] = str(d)
+    import importlib
+    importlib.reload(Q)
+    check(Q.cloud_quota_limits() == (Q.LIFETIME_CLOUD_EVENTS, Q.DAILY_AUTO_RUNS),
+          "无覆盖时云端额度 == 代码常量", str(Q.cloud_quota_limits()))
+
+    # 2) 覆盖生效
+    (d / "plans.json").write_text(
+        '{"free_quota": {"cloud_lifetime": 10, "daily_auto": 5}}', encoding="utf-8")
+    importlib.reload(Q)
+    check(Q.cloud_quota_limits() == (10, 5),
+          "后台改 10/5 后生效", str(Q.cloud_quota_limits()))
+
+    # 3) 真实影响剩余额度（不只是 getter 返回值变了）
+    q = Q.QuotaManager(base_dir=str(d / "state"), is_member_fn=lambda: False,
+                       token_fn=lambda: "")
+    check(q.lifetime_cloud_remaining() == 10,
+          "QuotaManager 终身剩余跟着变（真生效，非仅展示）",
+          str(q.lifetime_cloud_remaining()))
+    check(q.daily_auto_remaining() == 5, "每日 auto 剩余跟着变",
+          str(q.daily_auto_remaining()))
+
+    # 4) 脏值/负数忽略并回退默认（不让后台填错炸掉链路）
+    (d / "plans.json").write_text(
+        '{"free_quota": {"cloud_lifetime": "abc", "daily_auto": -1}}', encoding="utf-8")
+    importlib.reload(Q)
+    check(Q.cloud_quota_limits() == (Q.LIFETIME_CLOUD_EVENTS, Q.DAILY_AUTO_RUNS),
+          "脏值/负数回退默认（不炸表）", str(Q.cloud_quota_limits()))
+
+    # 5) admin 接口读到的也是生效值（后台页面显示与实际一致）
+    (d / "plans.json").write_text(
+        '{"free_quota": {"cloud_lifetime": 7, "daily_auto": 2}}', encoding="utf-8")
+    importlib.reload(Q)
+    # 🔴 membership 的 plans.json 路径由 auth_store._base_dir() 决定，且
+    # `load_plan_overrides` 自带 mtime 缓存 —— 必须把它也指向同一目录并清缓存，
+    # 否则 admin 侧仍读旧值（实测踩过：只改 os.environ 不够）。
+    old_data_dir = os.environ.get("VDL_DATA_DIR")
+    os.environ["VDL_DATA_DIR"] = str(d)
+    try:
+        import auth_store
+        importlib.reload(auth_store)
+        M._PLAN_OVERRIDE_CACHE = None
+        check(str(M.plan_override_path()) == str(d / "plans.json"),
+              "membership 与 quota 读同一个 plans.json",
+              f"{M.plan_override_path()} vs {d / 'plans.json'}")
+        sys.path.insert(0, str(_SERVER / "routers"))
+        import admin as A
+        life, daily = A._cloud_quota_limits()
+        check((life, daily) == (7, 2), "admin._cloud_quota_limits 读到覆盖值",
+              f"{life},{daily}")
+    finally:
+        if old_data_dir is None:
+            os.environ.pop("VDL_DATA_DIR", None)
+        else:
+            os.environ["VDL_DATA_DIR"] = old_data_dir
+        M._PLAN_OVERRIDE_CACHE = None
+
+
+def test_frontend_can_edit_cloud_quota():
+    """前端必须有云端额度的输入框并提交（否则又是「能看不能改」）。"""
+    js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
+    check('class="admin-input admin-input-sm fq-cloud"' in js, "云端额度有输入框")
+    check('data-key="cloud_lifetime"' in js, "终身次数可填")
+    check('data-key="daily_auto"' in js, "每日 auto 次数可填")
+    check("payload[el.dataset.key] = v" in js, "输入值被收集进 payload")
+    check("fq.cloud_lifetime = payload.cloud_lifetime" in js, "终身次数随保存提交")
+    check("fq.daily_auto = payload.daily_auto" in js, "每日 auto 随保存提交")
+
+
 def test_effective_limits_default_unchanged():
     """没配覆盖时，生效值必须等于代码常量（默认值永不丢失）。"""
     import membership as M
@@ -176,18 +259,22 @@ def test_has_cost_gate_matches_reality():
 
 
 def test_cloud_quota_limits_readable():
-    """云端免费额度上限从 quota.py 常量读（单一真源，别在 admin 里写死 3/1）。"""
+    """admin 的云端额度必须与 `quota.cloud_quota_limits()` 一致（同一真源）。
+
+    🔴 2026-10-06 改口径：此前断言是「等于 quota.py 的**模块常量**」，
+    那只对「没配覆盖」时成立。现在后台可改了（`free_quota.cloud_lifetime` /
+    `daily_auto`），两边都读 `cloud_quota_limits()`，故改为断言**两者一致**——
+    无论是否配置过。这才是「单一真源」的正确表述。
+    """
+    import quota as Q
     import admin as A
-    life, daily = A._cloud_quota_limits()
-    # 直接读源码里的常量定义，避免 import 时把 servers 下的同名模块弄进 sys.modules
-    import re
-    qsrc = (_SERVER / "quota.py").read_text(encoding="utf-8")
-    m_life = re.search(r"^LIFETIME_CLOUD_EVENTS\s*=\s*(\d+)", qsrc, re.M)
-    m_daily = re.search(r"^DAILY_AUTO_RUNS\s*=\s*(\d+)", qsrc, re.M)
-    check(bool(m_life) and life == int(m_life.group(1)),
-          "终身次数与 quota.py 常量一致", f"admin={life} quota={m_life.group(1) if m_life else '?'}")
-    check(bool(m_daily) and daily == int(m_daily.group(1)),
-          "每日 auto 与 quota.py 常量一致", f"admin={daily} quota={m_daily.group(1) if m_daily else '?'}")
+    import importlib
+    importlib.reload(Q)
+    A_life, A_daily = A._cloud_quota_limits()
+    q_life, q_daily = Q.cloud_quota_limits()
+    check((A_life, A_daily) == (q_life, q_daily),
+          "admin 与 quota 读同一真源（改一处两端同步）",
+          f"admin={A_life},{A_daily} quota={q_life},{q_daily}")
 
 
 def test_commentary_vision_charged_at_every_entry():
@@ -296,6 +383,8 @@ def test_no_hardcoded_pipeline_path():
 def main():
     tests = [
         test_effective_limits_default_unchanged,
+        test_cloud_quota_limits_are_configurable,
+        test_frontend_can_edit_cloud_quota,
         test_free_quota_panel_covers_every_quota_key,
         test_override_applies_and_merges,
         test_free_quota_in_save_table_keys,

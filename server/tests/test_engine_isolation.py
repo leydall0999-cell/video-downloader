@@ -672,6 +672,14 @@ _ALLOWED_SHARED_CONFIG = {
     # (b) 只读静态资源：扩展清单 —— routers/extension.py 读源码目录里的那份，
     # routers/system.py 读上传包里的那份（zip 内），两边都不是可写状态，不会互相覆盖。
     "manifest.json",
+    # (c) plans.json —— 套餐/额度覆盖层：**写入者仍只有 membership.py**
+    # （`save_plan_overrides` → `atomic_io.atomic_write_json`）。
+    # 2026-10-06 起 `quota.py` 也**只读**这份文件，读 `free_quota.{cloud_lifetime,
+    # daily_auto}` 来让后台可改云端额度 —— 加进来是因为用户要求「后台能不能改」。
+    # 为什么必须自己读而不能 import membership：quota.py 要与解说管线同源、独立运行，
+    # import membership 会把它绑死在 app/membership 上（管线侧起不来）。
+    # 只读不写 ⇒ 单一写入者不变，不会出现「两处各写一份、互相覆盖」。
+    "plans.json",
 }
 
 

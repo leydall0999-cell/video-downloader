@@ -32,10 +32,49 @@ try:
 except ImportError:                     # pragma: no cover
     _msvcrt = None
 
-# ── 配额常量（唯一真源）────────────────────────────────────────────────────── #
+# ── 配额常量（默认值 + 可覆盖）────────────────────────────────────────────── #
+# 这两个是**代码默认值**（单一真源在代码里）；后台「免费额度」栏可覆盖，
+# 覆盖值放在 plans.json 的 free_quota.{cloud_lifetime, daily_auto}。
+# ⚠️ 别直接改这两个常量去「改额度」—— 后台改一次要重新构建 App 才能生效；
+#    且已下发到 cn/hk 的网页版不会跟着变。正确做法是后台改（走覆盖层）。
 LIFETIME_CLOUD_EVENTS = 3          # 终身云端事件上限（不可恢复）
 DAILY_AUTO_RUNS = 1                # 每日 auto 运行额度（自然日重置）
 FREE_MAX_DURATION_SEC = 30 * 60    # 免费用户单条视频时长上限（秒）
+
+
+def cloud_quota_limits() -> tuple[int, int]:
+    """当前生效的 `(终身次数, 每日 auto 次数)`。
+
+    🔴 2026-10-06：后台可配了，此前只有模块常量 → 管理员看得到数字却改不了。
+    覆盖值在 `plans.json` 的 `free_quota.{cloud_lifetime, daily_auto}`。
+    **不能 import membership**（本模块要与解说管线同源、独立运行），所以这里
+    自己读一次 plans.json；读不到就落回代码默认值（fail-safe）。
+    脏值/负数忽略，不让「后台填错」把整条链路炸掉。
+    """
+    life, daily = LIFETIME_CLOUD_EVENTS, DAILY_AUTO_RUNS
+    try:
+        import json as _json
+        base = os.environ.get("VDL_DATA_DIR", "").strip() or \
+            os.path.expanduser("~/.video-downloader")
+        p = Path(base) / "plans.json"
+        fq = (_json.loads(p.read_text(encoding="utf-8")) or {}).get("free_quota") or {}
+        if isinstance(fq, dict):
+            for key, cur in (("cloud_lifetime", life), ("daily_auto", daily)):
+                v = fq.get(key)
+                if v is None:
+                    continue
+                try:
+                    n = int(v)
+                except (TypeError, ValueError):
+                    continue
+                if n >= 0:
+                    if key == "cloud_lifetime":
+                        life = n
+                    else:
+                        daily = n
+    except Exception:
+        pass
+    return life, daily
 
 DEFAULT_BASE_DIR = Path(os.path.expanduser("~/.video-downloader"))
 
@@ -491,12 +530,14 @@ class QuotaManager:
     def lifetime_cloud_remaining(self) -> int:
         if self.is_member():
             return 10 ** 9
-        return max(0, LIFETIME_CLOUD_EVENTS - int(self._state().get("lifetime_cloud_used", 0)))
+        _life, _daily = cloud_quota_limits()
+        return max(0, _life - int(self._state().get("lifetime_cloud_used", 0)))
 
     def daily_auto_remaining(self) -> int:
         if self.is_member():
             return 10 ** 9
-        return max(0, DAILY_AUTO_RUNS - int(self._state().get("daily_auto_used", 0)))
+        _life, _daily = cloud_quota_limits()
+        return max(0, _daily - int(self._state().get("daily_auto_used", 0)))
 
     def can_upload_video(self, duration_sec: float) -> bool:
         """免费用户单条视频 ≤ 30 分钟才放行；会员 / 时长未知(≤0) 不拦（前端主拦，服务端兜底宽松）。"""
@@ -658,7 +699,7 @@ class QuotaManager:
                 "reason": "本机引擎不可用，且免费云端额度已用完",
                 "hint": (
                     "这条视频需要云端生成解说词，但免费云端额度（终身 "
-                    f"{LIFETIME_CLOUD_EVENTS} 次）已用完。开通会员即可解锁无限云端解说。"
+                    f"{cloud_quota_limits()[0]} 次）已用完。开通会员即可解锁无限云端解说。"
                 ),
                 "will_use_cloud": True,
                 "duration_sec": float(duration_sec),
@@ -711,10 +752,10 @@ class QuotaManager:
             "is_member": member,
             "admin_exempt": admin,
             "lifetime_cloud_used": 0 if member else int(st.get("lifetime_cloud_used", 0)),
-            "lifetime_cloud_limit": LIFETIME_CLOUD_EVENTS,
+            "lifetime_cloud_limit": cloud_quota_limits()[0],
             "lifetime_cloud_remaining": self.lifetime_cloud_remaining(),
             "daily_auto_used": 0 if member else int(st.get("daily_auto_used", 0)),
-            "daily_auto_limit": DAILY_AUTO_RUNS,
+            "daily_auto_limit": cloud_quota_limits()[1],
             "daily_auto_remaining": self.daily_auto_remaining(),
             "free_max_duration_sec": FREE_MAX_DURATION_SEC,
         }
