@@ -21200,6 +21200,35 @@ el.dwVidPlayer.hidden = true;
       return r ? String(r.default) : '0';
     };
 
+    // ---- AI 计费区左右分栏切换（2026-10-06 用户定档「左右排版，不要上下排版」）----
+    // 「AI 积分成本」与「免费额度」是同一批 op，做成同 section 内的两栏切换，
+    // 形态对齐「下载会员/AI会员/积分包」那套 admin-seg。
+    const applyAiCostSeg = (cat) => {
+      const seg = $('adminAiCostSeg');
+      if (!seg) return;
+      const cur = cat || (seg.querySelector('.admin-seg-btn.is-active') || {}).dataset?.acat || 'cost';
+      seg.querySelectorAll('.admin-seg-btn').forEach((b) => {
+        const on = b.dataset.acat === cur;
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('[data-acat-panel]').forEach((p) => {
+        p.hidden = p.dataset.acatPanel !== cur;
+      });
+      // 保存按钮跟着当前栏走：左栏改价、右栏改免费额度，避免点错
+      const bCost = $('adminAiCostSave');
+      const bFq = $('adminFqSave');
+      if (bCost) bCost.hidden = (cur !== 'cost');
+      if (bFq) bFq.hidden = (cur !== 'fq');
+    };
+    const aiCostSeg = $('adminAiCostSeg');
+    if (aiCostSeg) {
+      aiCostSeg.addEventListener('click', (e) => {
+        const b = e.target.closest('.admin-seg-btn');
+        if (b) applyAiCostSeg(b.dataset.acat);
+      });
+    }
+
     const loadAiCosts = async () => {
       const box = aiCostBox();
       if (box) box.innerHTML = '<div class="admin-empty">加载中…</div>';
@@ -21314,11 +21343,6 @@ el.dwVidPlayer.hidden = true;
       }
     };
 
-    const fqReloadBtn = $('adminFqReload');
-    if (fqReloadBtn) fqReloadBtn.onclick = () => loadAiCosts();
-    const fqSaveBtn = $('adminFqSave');
-    if (fqSaveBtn) fqSaveBtn.onclick = () => saveFreeQuota();
-
     const saveAiCosts = async (extra) => {
       const box = aiCostBox();
       // 只提交「与代码默认不同」的项，避免整表覆盖别人的改动
@@ -21359,6 +21383,9 @@ el.dwVidPlayer.hidden = true;
     if (aiCostReloadBtn) aiCostReloadBtn.onclick = () => loadAiCosts();
     const aiCostSaveBtn = $('adminAiCostSave');
     if (aiCostSaveBtn) aiCostSaveBtn.onclick = () => saveAiCosts();
+    const fqSaveBtn = $('adminFqSave');
+    if (fqSaveBtn) fqSaveBtn.onclick = () => saveFreeQuota();
+    applyAiCostSeg();          // 初始左栏（AI 积分成本）并同步按钮显隐
 
     // ---- 用户管理 ----
     const loadUsers = async () => {

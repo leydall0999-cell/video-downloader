@@ -3882,17 +3882,26 @@
           </div>
           <div id="adminAiAccounts" class="admin-ai-accounts" data-page-node-id="aiAcctBox"></div>
 
-          <!-- 🔴 AI 积分成本配置（2026-10-05）：用户定档「每个功能每次消耗多少积分要能在后台配」。
-               计价口径：云端算力 + 本机重算力都计费；按「次」定价，一次操作内多次模型调用只扣一份。 -->
+          <!-- 🔴 AI 积分成本 + 免费额度（2026-10-06 用户定档「左右排版，不要上下排版」）：
+               两者是**同一批 op**（AI_CREDIT_COSTS），拆开放要来回对照，故做成
+               左右两个分栏切换（同「下载会员/AI会员/积分包」那套 admin-seg）。 -->
           <div class="admin-cfg-section" id="adminAiCostSec" data-page-node-id="aiCostSec">
             <div class="admin-cfg-head" data-page-node-id="aiCostHead">
-              <h3 data-page-node-id="aiCostTitle">AI 积分成本</h3>
+              <h3 data-page-node-id="aiCostTitle">AI 积分成本 · 免费额度</h3>
               <div class="admin-toolbar" style="margin:0" data-page-node-id="aiCostTb">
                 <span class="admin-count" id="adminAiCostPolicy" data-page-node-id="aiCostPolicy"></span>
                 <button type="button" id="adminAiCostReload" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="aiCostReload">重新加载</button>
                 <button type="button" id="adminAiCostSave" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="aiCostSave">保存改动</button>
+                <button type="button" id="adminFqSave" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="fqSave" hidden>保存免费额度</button>
               </div>
             </div>
+            <div class="admin-seg" id="adminAiCostSeg" role="tablist" aria-label="AI 计费分类">
+              <button type="button" class="admin-seg-btn is-active" data-acat="cost" role="tab" aria-selected="true">AI 积分成本</button>
+              <button type="button" class="admin-seg-btn" data-acat="fq" role="tab" aria-selected="false">免费额度</button>
+            </div>
+
+            <!-- 左栏：AI 积分成本 + 首次体验策略 -->
+            <div data-acat-panel="cost">
             <p class="admin-hint" data-page-node-id="aiCostHint">
               改价立即对所有用户生效（写入 <code>plans.json</code> 的 <code>credit_costs</code> 覆盖层，优先于代码默认值）。
               填 <b>0</b> 表示该功能免费。点「恢复默认」撤销改动。
@@ -3933,26 +3942,17 @@
               </p>
             </div>
             <div id="adminAiCostTable" class="ai-cost-table" data-page-node-id="aiCostTable">加载中…</div>
-          </div>
-
-          <!-- 🔴 免费额度（2026-10-06）：与「AI 积分成本」放在同一区块，不另起分栏。
-               理由（用户定档）：这 11 项消耗积分的功能与上方成本表是**同一批 op**，
-               拆到「套餐」那边要来回对照；且「首次体验」本来就是 AI 计费口径的一部分。
-               区块内顺序：① 首次体验开关 → ② AI 积分成本表 → ③ 免费额度（纯免费 + 试用水位）。 -->
-          <div class="admin-cfg-section" id="adminFreeQuotaSec" data-page-node-id="fqSec">
-            <div class="admin-cfg-head" data-page-node-id="fqHead">
-              <h3 data-page-node-id="fqTitle">免费额度</h3>
-              <div class="admin-toolbar" style="margin:0" data-page-node-id="fqTb">
-                <button type="button" id="adminFqReload" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="fqReload">重新加载</button>
-                <button type="button" id="adminFqSave" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="fqSave">保存免费额度</button>
-              </div>
             </div>
+
+            <!-- 右栏：免费额度（与左栏同一 section，靠 admin-seg 左右切换） -->
+            <div data-acat-panel="fq" hidden>
             <p class="admin-hint" data-page-node-id="fqHint">
-              两类口径分开看：<b>纯免费功能</b>不扣积分、只按每日次数限制；<b>消耗积分的功能</b>按次扣积分，另受上方「首次体验」名额保护。
-              改完点「保存免费额度」即时生效（写入 <code>plans.json</code> 的 <code>free_quota</code> 覆盖层，默认值不丢）。
+              两类口径分开看：<b>纯免费功能</b>不扣积分、只按每日次数限制；<b>消耗积分的功能</b>按次扣积分（即左栏那 11 项），另受「首次体验」名额保护。
+              改完点右上「保存免费额度」即时生效（写入 <code>plans.json</code> 的 <code>free_quota</code> 覆盖层，默认值不丢）。
             </p>
             <div id="adminFreeQuotaBox" data-page-node-id="fqBox">加载中…</div>
             <p id="adminFqMsg" class="admin-msg" data-page-node-id="fqMsg"></p>
+            </div>
           </div>
         </section>
         <!-- 运维监控（2026-09-26）：完整运维看板并入管理后台——访客/事件/告警/对账一处看全 -->

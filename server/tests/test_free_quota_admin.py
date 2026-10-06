@@ -200,25 +200,36 @@ def test_voice_clone_gate_added():
 
 
 def test_free_quota_shares_block_with_ai_cost():
-    """🔴 免费额度必须与「AI 积分成本」在**同一个区块**里（用户 2026-10-06 定档
-    「不要分开放」）。
+    """🔴 免费额度必须与「AI 积分成本」在**同一区块、左右两栏**（用户定档
+    「左右排版，不要上下排版，参考会员那个」）。
 
-    理由：那 11 项消耗积分的功能与成本表是**同一批 op**，拆到「套餐」分栏要来回
-    对照；「首次体验」策略本来也在 AI 成本区里。三者同区块后顺序是
-    首次体验开关 → 积分成本表 → 免费额度，读起来是一条线。
+    理由：那 11 项消耗积分的功能与成本表是**同一批 op**，拆开放要来回对照；
+    「首次体验」策略本来也在 AI 成本区里。形态对齐「下载会员/AI会员/积分包」
+    那套 admin-seg 切换器。
     """
     html = (_SERVER.parent / "web" / "index.html").read_text(encoding="utf-8")
-    # 独立区块 id，与 adminAiCostSec 同属 config view
-    check('id="adminFreeQuotaSec"' in html, "有独立的免费额度区块")
-    check('id="adminFreeQuotaBox"' in html, "有免费额度容器")
-    check('id="adminFqSave"' in html, "有独立保存按钮")
-    # 区块必须在 config（系统配置）view 内，不能挂在 aiaccounts
-    i_cfg = html.index('data-admin-view="config"')
-    i_ai_cost = html.index('id="adminAiCostSec"')
-    i_fq = html.index('id="adminFreeQuotaSec"')
-    check(i_ai_cost < i_fq, "免费额度排在 AI 积分成本之后（同一区块内上下相邻）")
+    js = (_SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
+
+    # 同一 section 内左右两栏：两个面板 + 一个切换器
+    check('id="adminAiCostSec"' in html, "AI 计费区块存在")
+    check('id="adminAiCostSeg"' in html, "有左右分栏切换器 adminAiCostSeg")
+    check('data-acat="cost"' in html, "左栏 = AI 积分成本")
+    check('data-acat="fq"' in html, "右栏 = 免费额度")
+    check('data-acat-panel="cost"' in html, "左栏面板")
+    check('data-acat-panel="fq"' in html, "右栏面板")
+    # 免费额度不再是一个独立 section（那才是「上下排版」）
+    check('id="adminFreeQuotaSec"' not in html, "免费额度不再是独立 section（已左右并入）")
+    # 切换逻辑存在，且两栏互斥
+    check("applyAiCostSeg" in js, "定义了 applyAiCostSeg 切换函数")
+    check("p.hidden = p.dataset.acatPanel !== cur" in js, "两栏互斥显隐")
+    # 保存按钮跟着当前栏走，避免在右栏误点「保存改动」改了价格
+    check("bCost.hidden = (cur !== 'cost')" in js and "bFq.hidden = (cur !== 'fq')" in js,
+          "保存按钮随当前栏切换显隐")
+    # 容器与按钮 id 仍存在
+    check('id="adminFreeQuotaBox"' in html, "免费额度容器")
+    check('id="adminFqSave"' in html, "免费额度保存按钮")
     # 套餐分栏里不该再有 fq
-    check('data-cat="fq"' not in html, "套餐分栏已移除 fq（不与套餐分开放）")
+    check('data-cat="fq"' not in html, "套餐分栏无 fq（不与套餐分开放）")
     for cat, label in (("dl", "下载会员"), ("ai", "AI 会员"), ("cp", "积分包")):
         check(f'data-cat="{cat}"' in html, f"套餐分栏保留 {label}")
 
