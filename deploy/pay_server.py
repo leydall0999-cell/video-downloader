@@ -186,15 +186,35 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a) -> None:  # 静默
         pass
 
+    def _cors(self) -> None:
+        # 前端支付从 web(hanyuxz.top) / 桌面(localhost:8321) 跨域打到本服务，
+        # 且带 Authorization / X-Api-Key / X-Device-Id 等头，必须放行 CORS + 预检。
+        origin = self.headers.get("Origin", "")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers",
+                         "Content-Type, Authorization, X-Api-Key, "
+                         "X-Subscription-Key, X-Device-Id, X-Requested-With")
+        self.send_header("Access-Control-Max-Age", "600")
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._cors()
+        self.end_headers()
+
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self._cors()
         self.end_headers()
         self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
     def _text(self, status: int, text: str) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self._cors()
         self.end_headers()
         self.wfile.write(text.encode("utf-8"))
 

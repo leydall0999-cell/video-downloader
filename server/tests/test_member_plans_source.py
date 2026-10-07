@@ -185,9 +185,18 @@ def test_desktop_wiring_present() -> None:
           "'/api/member/plans'" in appjs and "renderMemberPlans" in appjs)
     check("套餐卡价格取自后端字段（不写死价格）",
           "plan.price_cny" in appjs)
-    check("购买走 /api/cloud/pay/create（金额由服务端决定）",
-          "'/api/cloud/pay/create'" in appjs and "payCreate" in appjs)
-    check("支付轮询 /api/cloud/pay/query", "'/api/cloud/pay/query'" in appjs)
+    # 2026-10-08：支付已切到「真 VPS 通道」—— 前端实际打 https://pay.hanyuxz.top/api/pay/*，
+    # 本地 /api/cloud/pay/* 的 mock 退化为开发兜底（此前「两套并存、前端打不通真通道」
+    # 就是这么来的）。base 还必须可经 window.VDL_PAY_API_BASE 注入覆盖，否则内网/沙箱
+    # 没法自测；且下单/轮询都得把 base **透传给 request** —— 不透传就打回本地 mock，
+    # 等于真通道根本没接上。守卫据此从「钉旧路径」改为「钉真通道接线 + 可覆盖」。
+    check("购买走真支付网关 /api/pay/create（非本地 mock）",
+          "'/api/pay/create'" in appjs and "payCreate" in appjs)
+    check("支付轮询走同一网关 /api/pay/query", "'/api/pay/query'" in appjs)
+    check("支付网关 base 可经 window.VDL_PAY_API_BASE 覆盖（内网/沙箱可测）",
+          "window.VDL_PAY_API_BASE" in appjs)
+    check("下单/轮询都把 base 透传给 request（不透传＝仍打本地 mock）",
+          appjs.count("PAY_API_BASE)") >= 2)
     # 2026-10-03：后台表单重写为「档位卡 + 营销面板」，选择器从 plan-price[data-plan=…]
     # 改成 class + data-plan 组合，这里按新结构钉，并顺带把营销字段纳入守卫。
     check("超管面板按现有套餐渲染价格输入框（新档自动出现，可直接改价）",

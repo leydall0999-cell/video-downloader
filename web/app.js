@@ -16898,14 +16898,18 @@ el.dwVidPlayer.hidden = true;
   }
   // 卡密通道已下线（2026-09-26）：activateMember 已移除，充值一律走 payCreate（支付宝/微信在线支付）
   // ---- 支付宝购买（下单 → 二维码弹窗 → 轮询自动开通）----
+  // 🔴 支付真通道统一走 VPS 支付服务（支付宝异步回调必须公网可达，桌面本地 127.0.0.1 收不到）。
+  //    前端只改「打哪」，本地 /api/cloud/pay/* 的 mock 仅留作开发兜底（见下方 fallback）。
+  //    PAY_API_BASE 可经 window.VDL_PAY_API_BASE 注入覆盖（例如内网/沙箱），默认公网入口。
+  const PAY_API_BASE = (window.VDL_PAY_API_BASE || 'https://pay.hanyuxz.top').replace(/\/+$/, '');
   let _payTimer = null;
   async function payCreate(planCode) {
     if (!el.memberModal) return;
     _memberMsg('正在生成支付二维码…');
     let r;
     try {
-      r = await request('/api/cloud/pay/create', {
-        method: 'POST', body: JSON.stringify({ plan_code: planCode }) });
+      r = await request('/api/pay/create', {
+        method: 'POST', body: JSON.stringify({ plan_code: planCode }) }, PAY_API_BASE);
     } catch (e) {
       _memberMsg('❌ 下单失败：网络错误', true); return;
     }
@@ -16934,8 +16938,8 @@ el.dwVidPlayer.hidden = true;
     const statusEl = overlay.querySelector('#vdlPayStatus');
     _payTimer = setInterval(async () => {
       try {
-        const q = await request('/api/cloud/pay/query', {
-          method: 'POST', body: JSON.stringify({ order_id: orderId }) });
+        const q = await request('/api/pay/query', {
+          method: 'POST', body: JSON.stringify({ order_id: orderId }) }, PAY_API_BASE);
         if (q && q.ok && q.status === 'PAID') {
           clearInterval(_payTimer); _payTimer = null;
           statusEl.textContent = '✅ 支付成功，已开通';
