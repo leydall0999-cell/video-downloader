@@ -113,3 +113,10 @@ sherpa-onnx>=1.13.0
 #   起始；缺失时这些用例直接 ModuleNotFoundError，导致构建自验证拦截发布。
 #   仅测试期使用——App 运行代码从不 import pytest，PyInstaller 不会把它打进包。
 pytest>=8.0
+
+# 静态守卫依赖（2026-10-08）：test_static_undefined_names.py 用 pyflakes 抓「用了名字却
+#   没 import」这类只在生产炸的缺陷（py_compile 抓不到）。它原先**没被登记**，导致守卫
+#   在每次构建里缺失依赖、直接跳过却仍显示绿 —— deploy/pay_server.py 漏 `import secrets`
+#   的致命支付缺陷就是这样混到线上的。已把扫描范围扩到 deploy/ 并在此登记依赖。
+#   仅测试期使用，App 运行代码从不 import pyflakes。
+pyflakes>=3.2
