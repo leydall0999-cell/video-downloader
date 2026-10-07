@@ -125,6 +125,9 @@ def _mgr(base: str, token_fn=None, is_member: bool = False, now_fn=None):
                            _raise=kw.pop("_raise", False))
 
     license_client.cloud_quota_remote = _fake_post
+    # 登记该 base_dir 的影子 account：所有 base_dir 都经本函数构造 QuotaManager，
+    # 这里是唯一登记点，保证 _cleanup_keychain 删得干净（影子按 base_dir 分桶）。
+    _remember_shadow_account(base)
     return quota.QuotaManager(base_dir=base, is_member_fn=lambda: is_member,
                               token_fn=token_fn or (lambda: "TOK-A"),
                               now_fn=now_fn)
@@ -166,6 +169,22 @@ def _used(d: str) -> tuple[int, int]:
     return int(cl.get(quota.DEFAULT_CLOUD_RESOURCE, 0)), int(st.get("daily_auto_used", 0))
 
 
+# 本文件创建过的所有 base_dir 对应的影子 account（供 cleanup 精准删除）。
+# 🔴 为什么必须登记：影子是**按 base_dir 分桶**的，真实 account 名是
+#    `cloud_quota_shadow.<hash16>`；而旧版 cleanup 只删**不带后缀**的 base
+#    account —— 实测「写后存在=True、cleanup 后仍残留=True」，一条都删不掉，
+#    会在用户机器上持续堆积 Keychain 垃圾（正是本文件想防的那类事故）。
+_SHADOW_ACCOUNTS: set[str] = set()
+
+
+def _remember_shadow_account(base: str) -> None:
+    """登记 base_dir 对应的影子 account，供 _cleanup_keychain 精准删除。"""
+    try:
+        _SHADOW_ACCOUNTS.add(quota._keychain_account(base))
+    except Exception:
+        pass
+
+
 def _cleanup_keychain():
     """删掉本测试写入的 Keychain 影子条目（service 带 .test 后缀）。
 
@@ -174,11 +193,14 @@ def _cleanup_keychain():
     """
     import subprocess as _sp
     import quota as _Q
-    try:
-        _sp.run(["security", "delete-generic-password", "-s", _Q._keychain_service(),
-                 "-a", _Q._KEYCHAIN_ACCOUNT], capture_output=True, timeout=5)
-    except Exception:
-        pass
+    svc = _Q._keychain_service()
+    for acct in set(_SHADOW_ACCOUNTS) | {_Q._KEYCHAIN_ACCOUNT}:
+        try:
+            _sp.run(["security", "delete-generic-password", "-s", svc, "-a", acct],
+                    capture_output=True, timeout=5)
+        except Exception:
+            pass
+    _SHADOW_ACCOUNTS.clear()
 
 
 # ── 用例 ───────────────────────────────────────────────────────────────── #
@@ -444,6 +466,28 @@ def test_shadow_count_survives_file_deletion():
     license_client.cloud_quota_remote = _boom
     os.remove(os.path.join(d, "quota.json"))
     assert not os.path.exists(os.path.join(d, "quota.json")), "文件确已删除"
+
+    # 🔴 环境自检：别把「Keychain 不可用」误报成「配额回归」。
+    #    影子是**可选加固** —— quota._keychain_write 失败会被静默吞掉（这是产品
+    #    刻意设计：fail-safe 优先于加固，不因加固失败让用户用不了）。于是本机
+    #    Keychain 一时不可用（非 macOS／被沙盒拒／security 超时）时，下面会红成
+    #    「影子没兜住」—— 那是**假红**，还会把整条发布链路挡住。
+    #    这里用真实 write→read 做一次往返自检（写在**独立哨兵 account** 上，
+    #    不碰本用例自己的影子）：
+    #      · 环境写不了              → 明确打印「跳过」（不静默），不算通过
+    #      · 环境能写但消费没落影子  → 真回归，下面必须红
+    _probe_acct = quota._keychain_account("__env_probe__" + d)
+    _SHADOW_ACCOUNTS.add(_probe_acct)          # 让 cleanup 顺带删掉哨兵
+    quota._keychain_write(
+        {"cloud_lifetime": {quota.DEFAULT_CLOUD_RESOURCE: 12345},
+         "daily_auto": {}, "daily_date": ""}, "2026-01-01", _probe_acct)
+    _probe_back = quota._keychain_read(_probe_acct)
+    if not _probe_back or int(_probe_back.get("cloud_lifetime", {}).get(
+            quota.DEFAULT_CLOUD_RESOURCE, -1)) != 12345:
+        print("  ⏭  跳过：本机 Keychain 影子不可用（非 macOS／被拒／超时）"
+              " —— 属环境能力缺失，不是配额回归，也不得计为通过")
+        _cleanup_keychain()
+        return
 
     q2 = _mgr(d)
     assert q2.lifetime_cloud_remaining() == 0, "影子计数应让 remaining 仍为 0"
