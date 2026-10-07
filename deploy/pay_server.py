@@ -23,6 +23,7 @@ import hmac
 import io
 import json
 import os
+import secrets
 import string
 import threading
 import time
@@ -39,7 +40,11 @@ ORDERS_PATH = DATA_DIR / "pay_orders.json"
 # 与授权中心共享同一 secret，用于解登录 token 取邮箱（user_id）
 SECRET = (os.environ.get("VDL_LICENSE_SECRET") or "").strip()
 ADMIN_TOKEN = (os.environ.get("VDL_LICENSE_ADMIN_TOKEN") or "").strip()
-GRANT_URL = "https://hanyuxz.top/api/license/grant"
+# 发货内部调用：授权中心与本服务同机（license 监听 127.0.0.1:8902），直连本机。
+# 🔴 不要再走 https://hanyuxz.top 公网回环 —— 多一跳 CF，CF 抖动/证书问题会让
+#    「已收款」的订单卡在 GRANT_FAILED，需人工对账补发。同机直连排除该故障面。
+GRANT_URL = (os.environ.get("VDL_GRANT_URL")
+             or "http://127.0.0.1:8902/api/license/grant")
 ALIPAY_CFG = Path(os.environ.get("VDL_ALIPAY_CFG") or "/opt/vdl-license/alipay.json")
 TOKEN_TTL = float(os.environ.get("VDL_LICENSE_TOKEN_TTL_DAYS") or "30") * 86400.0
 
@@ -178,7 +183,12 @@ def _grant(email: str, plan_code: str, note: str = "alipay-auto") -> dict[str, A
     req = urllib.request.Request(GRANT_URL, data=body,
                                  headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=10) as r:
-        return json.loads(r.read().decode("utf-8"))
+        out = json.loads(r.read().decode("utf-8"))
+    # 🔴 必须校验业务层 ok：授权中心若返回 HTTP 200 但 ok:false（软失败/未来改版），
+    #    不校验会让 _notify 把订单误标成 PAID —— 「已收款、订单显示已发货、用户没到账」。
+    if not (isinstance(out, dict) and out.get("ok")):
+        raise RuntimeError(f"grant rejected: {str(out)[:200]}")
+    return out
 
 
 # ── HTTP Handler ──────────────────────────────────────────────────────────── #
@@ -259,8 +269,9 @@ class Handler(BaseHTTPRequestHandler):
         subject = PRICE_MAP[plan_code]["subject"]
         order_id = _gen_order_id()
         try:
-            r = alipay.api_alipay_trade_precreate(
-                subject, order_id, price, notify_url=alipay.app_notify_url)
+            # notify_url 由 SDK 从 app_notify_url 自动注入（AliPay._app_notify_url），
+            # 不要显式传 alipay.app_notify_url —— SDK 未暴露该公有属性，会 AttributeError。
+            r = alipay.api_alipay_trade_precreate(subject, order_id, price)
         except Exception as e:
             return self._json(500, {"ok": False, "error": f"支付宝下单失败: {e}",
                                     "code": "ALIPAY_ERR"})
