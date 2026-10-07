@@ -5454,9 +5454,8 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 /* ---- 个人中心：关于 / 版本 / 自动更新 / 错误上报 ---- */
 .pf-about { display: flex; align-items: center; gap: .9rem; padding: .4rem 0 .9rem; }
 .pf-about-logo {
-  width: 52px; height: 52px; border-radius: 14px; flex: none;
-  display: grid; place-items: center; font-size: 1.7rem;
-  background: var(--brand-soft, #eef2ff); color: var(--brand, #4f46e5);
+  width: 52px; height: 52px; flex: none;
+  object-fit: contain; border-radius: 12px;
 }
 .pf-about-main { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
 .pf-about-name { font-size: 1.1rem; font-weight: 800; color: var(--text, #1f2937); }

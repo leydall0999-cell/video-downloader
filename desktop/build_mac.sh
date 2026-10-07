@@ -149,8 +149,15 @@ if [[ ! -x "$VENV/bin/python" ]]; then
 fi
 "$VENV/bin/pip" install --timeout 120 --retries 5 --no-cache-dir --index-url "$PIP_INDEX" -r requirements.txt pyinstaller Pillow pywebview
 
-echo "▶ 生成应用图标（512x512 圆角 + 下载箭头）"
-"$VENV/bin/python" - "$REPO" <<'PY'
+echo "▶ 应用图标：使用品牌图标（视频工坊 · 青蓝圆角）"
+SRC_ICON="$REPO/brand/app_icon/icon_videoworkshop_squircle_1024.png"
+ICON_PNG="$REPO/desktop/icon.png"
+if [ -f "$SRC_ICON" ]; then
+  cp -f "$SRC_ICON" "$ICON_PNG"
+  echo "icon.png <- $SRC_ICON"
+else
+  echo "⚠️ 未找到品牌图标源，回退到内联生成的旧图标" >&2
+  "$VENV/bin/python" - "$REPO" <<'PY'
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw
@@ -158,18 +165,16 @@ repo = Path(sys.argv[1])
 W = 512
 img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
 d = ImageDraw.Draw(img)
-d.rounded_rectangle([0, 0, W, W], radius=112, fill=(45, 140, 240, 255))
+d.rounded_rectangle([0, 0, W, W], radius=112, fill=(5, 102, 226, 255))
 cx = W // 2
-# 箭头头部（朝下三角）
 d.polygon([(cx, 372), (cx - 96, 256), (cx + 96, 256)], fill=(255, 255, 255, 255))
-# 箭杆
 d.rectangle([cx - 30, 140, cx + 30, 300], fill=(255, 255, 255, 255))
-# 底部托盘
 d.rounded_rectangle([cx - 120, 406, cx + 120, 452], radius=22, fill=(255, 255, 255, 255))
 out = repo / "desktop" / "icon.png"
 img.save(out)
-print("icon.png ->", out)
+print("icon.png (fallback) ->", out)
 PY
+fi
 ICON_PNG="$REPO/desktop/icon.png"
 ICON_ICNS="$REPO/desktop/icon.icns"
 

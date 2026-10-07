@@ -6,10 +6,8 @@
 <meta name="description" content="粘贴链接即可下载 YouTube、哔哩哔哩等主流平台的视频" data-page-node-id="IvO89181SGJVB4NauWxnHd" />
 <meta name="theme-color" content="#4f46e5" data-page-node-id="GTvAlVVfERRmeQdtE7bCFb" />
 <title>视频工坊 · 不止是下载工具，更懂视频精修加工</title>
-<!-- 2026-09-12 修复：原来的内联 SVG data URI 里混进了双引号（data-page-node-id="…"），
-     提前闭合了 href="…"，导致 <text>⬇️</text> 与 " /> 漏进 <body> 顶部渲染成乱码，
-     并把 header 整体往下顶。改为全字段百分号编码的 data URI（内部只用单引号、无裸 <>）。 -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%234f46e5'/%3E%3Cpath%20d='M16%207v11m0%200l-5-5m5%205l5-5M9%2025h14'%20fill='none'%20stroke='%23fff'%20stroke-width='2.4'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
+<!-- 2026-10-07：换用视频工坊品牌图标 logo.png（青蓝圆角，与 App 图标同源）；不再内联旧蓝 SVG。 -->
+<link rel="icon" href="logo.png" />
 <script>
   // styles.css 缓存击穿：与 app.js 同机制（dev 用时间戳、打包用构建戳），
   // 否则 WKWebView 会缓存旧 CSS，导致改样式后界面不更新。放在 head 同步写入避免闪烁。
@@ -2058,7 +2056,7 @@
         <div class="um-sec" data-page-node-id="7K2zP2hd2LmxpUXkZErae3">
           <div class="um-sec-title" data-page-node-id="NY89II9odHfBrymrXPmplB">关于本应用</div>
           <div class="pf-about" data-page-node-id="jwruU3axXMLEMS87cmUID6">
-            <div class="pf-about-logo" aria-hidden="true" data-page-node-id="rBHl5gV6JKPeur12lJ29bQ">🎬</div>
+            <img class="pf-about-logo" src="logo.png" alt="视频工坊" data-page-node-id="rBHl5gV6JKPeur12lJ29bQ" />
             <div class="pf-about-main" data-page-node-id="ijhB5otgJTEJohXC3S1YEp">
               <div class="pf-about-name" data-page-node-id="6NuM9MBWjZcJOSHAHcRtkO">VideoDownloader</div>
               <div class="pf-about-ver" data-page-node-id="tnDVHovY6BQQSXETAKv3mW">当前版本 <strong id="profAboutVersion" data-page-node-id="Pq5zeUwPFczbQ83b0YG4UB">—</strong></div>
