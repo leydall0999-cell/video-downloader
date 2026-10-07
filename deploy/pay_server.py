@@ -9,11 +9,14 @@
 
 端点：
   GET  /healthz
-  POST /api/pay/create          {token, plan_code} -> {order_id, qr_png(base64), amount, plan_code}
+  GET  /api/pay/return                        网页支付同步回跳落地页（提示返回 App）
+  POST /api/pay/create          {token, plan_code, client?} ->
+                                {order_id, mode, qr_png(base64), qr, pay_url, amount, plan_code}
+                                mode: face2face | page | wap
   POST /api/pay/alipay/notify                 支付宝异步通知，返回 success/failure（纯文本）
   POST /api/pay/query           {order_id}     -> {status: PENDING|PAID|GRANT_FAILED}
 
-依赖：python-alipay-sdk, qrcode, Pillow（香港机 venv 安装）。
+依赖：python-alipay-sdk, qrcode, Pillow（ECS venv 安装）。
 """
 from __future__ import annotations
 
@@ -47,6 +50,22 @@ GRANT_URL = (os.environ.get("VDL_GRANT_URL")
              or "http://127.0.0.1:8902/api/license/grant")
 ALIPAY_CFG = Path(os.environ.get("VDL_ALIPAY_CFG") or "/opt/vdl-license/alipay.json")
 TOKEN_TTL = float(os.environ.get("VDL_LICENSE_TOKEN_TTL_DAYS") or "30") * 86400.0
+
+# 支付产品选择
+# ------------
+# 2026-10-08 实测：本应用（appid 2021007104663693）**没有当面付资质** ——
+# precreate / trade.query 均返回 isv.insufficient-isv-permissions；而应用归属
+# 「网页/移动应用」，可用的是**电脑网站支付(page.pay) / 手机网站支付(wap.pay)**。
+#   face2face = 当面付 precreate，直接出 qr_code（UX 最好，需资质）
+#   page      = 电脑网站支付，返回收银台 URL（桌面端默认）
+#   wap       = 手机网站支付，返回收银台 URL（移动端默认）
+#   auto      = 先试当面付，遇权限不足**自动回退**网页支付（默认值：
+#               将来一旦拿到当面付资质，无需改任何配置即自动切回二维码 UX）
+PAY_MODE = (os.environ.get("VDL_PAY_MODE") or "auto").strip().lower()
+ALIPAY_GATEWAY_DEFAULT = "https://openapi.alipay.com/gateway.do"
+# return_url：支付宝收银台付完后的同步跳转落地页。由 get_alipay() 依据 notify_base
+# 推导为 <notify_base>/api/pay/return（nginx 已把 /api/pay/ 前缀转到本服务）。
+_RETURN_URL = ""
 
 # 金额真源（与 App membership.DOWNLOAD_PLANS / AI_PLANS / CREDIT_PACKS 对齐，单位元）
 PRICE_MAP: dict[str, dict[str, Any]] = {
@@ -91,7 +110,7 @@ _alipay_err = ""
 
 
 def get_alipay():
-    global _alipay, _alipay_err
+    global _alipay, _alipay_err, _RETURN_URL
     if _alipay is not None or _alipay_err:
         return _alipay, _alipay_err
     try:
@@ -114,6 +133,8 @@ def get_alipay():
         _alipay_err = "支付宝配置不完整(需 appid + app_private_key + alipay_public_key)"
         return None, _alipay_err
     notify_base = (cfg.get("notify_base") or "https://pay.hanyuxz.top").rstrip("/")
+    # 同步 return_url 与异步 notify 同源，指向本服务自己的落地页（nginx 已转 /api/pay/）。
+    _RETURN_URL = notify_base + "/api/pay/return"
     debug = bool(cfg.get("debug", False))
     try:
         _alipay = AliPay(
@@ -173,6 +194,28 @@ def _qr_png(text: str) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def _pay_return_html() -> str:
+    """网页支付（page.pay/wap.pay）付完后的同步跳转落地页。
+
+    同步 return 只负责「告诉用户成了、可以回 App」；真正的开通由**异步 notify**
+    完成（更可靠）。所以这里绝不做开通动作、也不依赖 return 参数。
+    """
+    return (
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>支付完成 · 视频工坊</title></head>"
+        "<body style=\"margin:0;font-family:-apple-system,system-ui,'PingFang SC',sans-serif;"
+        "background:#f6f7f9;color:#1a1a1a\">"
+        "<div style=\"max-width:420px;margin:18vh auto;padding:32px 24px;background:#fff;"
+        "border-radius:16px;text-align:center;box-shadow:0 2px 16px rgba(0,0,0,.06)\">"
+        "<div style=\"font-size:38px;line-height:1;color:#12B76A\">&#10003;</div>"
+        "<h1 style=\"font-size:18px;font-weight:600;margin:12px 0 8px\">支付已完成</h1>"
+        "<p style=\"font-size:14px;color:#666;margin:0 0 6px\">请返回「视频工坊」，会员将自动开通。</p>"
+        "<p style=\"font-size:13px;color:#999;margin:0\">若未自动开通，请稍候片刻，或在 App 内重新查看会员状态。</p>"
+        "</div></body></html>"
+    )
+
+
 # ── grant 内部调用（写档位到账号，state 单写者原则）──────────────────────────── #
 def _grant(email: str, plan_code: str, note: str = "alipay-auto") -> dict[str, Any]:
     # note 带 order_id（alipay-auto:<order_id>）时，授权中心每日对账可把这笔发货
@@ -189,6 +232,47 @@ def _grant(email: str, plan_code: str, note: str = "alipay-auto") -> dict[str, A
     if not (isinstance(out, dict) and out.get("ok")):
         raise RuntimeError(f"grant rejected: {str(out)[:200]}")
     return out
+
+
+# ── 下单：按可用支付产品自动选择（当面付 / 电脑网站支付 / 手机网站支付）────────── #
+def _place_order(alipay, subject: str, order_id: str, price: str, client: str) -> dict[str, Any]:
+    """按可用支付产品下单，返回 {mode, qr_code, pay_url}。
+
+    - face2face：当面付，直接返回 qr_code（二维码）
+    - page/wap ：电脑/手机网站支付，返回收银台 pay_url
+
+    AUTO 模式下先试当面付，遇权限不足（isv.insufficient-isv-permissions）自动回退网页支付。
+    ⚠️ page/wap 是**纯本地签名**，本地永远能拿到 URL（拿到 ≠ 一定可支付），
+       真实是否可付只有在用户打开收银台时才暴露 —— 所以不能拿「签名成功」当可用判据。
+    全部候选失败时抛 RuntimeError（附各候选错误摘要），由调用方转 400。
+    """
+    gateway = getattr(alipay, "_gateway", ALIPAY_GATEWAY_DEFAULT)
+    web_mode = "wap" if client == "mobile" else "page"
+    if PAY_MODE in ("face2face", "page", "wap"):
+        order = [PAY_MODE]
+    else:  # auto（含未知值）：先当面付，再回退网页支付
+        order = ["face2face", web_mode]
+
+    errors: list[str] = []
+    for m in order:
+        try:
+            if m == "face2face":
+                r = alipay.api_alipay_trade_precreate(subject, order_id, price)
+                if r.get("code") == "10000" and r.get("qr_code"):
+                    return {"mode": "face2face", "qr_code": r.get("qr_code", ""), "pay_url": ""}
+                errors.append("当面付:%s" % (
+                    r.get("sub_code") or r.get("sub_msg") or r.get("msg") or "失败"))
+                continue
+            fn = (alipay.api_alipay_trade_wap_pay if m == "wap"
+                  else alipay.api_alipay_trade_page_pay)
+            qs = fn(subject, order_id, price, return_url=(_RETURN_URL or None))
+            if not qs:
+                errors.append("%s:空支付串" % m)
+                continue
+            return {"mode": m, "qr_code": "", "pay_url": gateway + "?" + qs}
+        except Exception as e:  # 该产品不可用 → 继续试下一个候选
+            errors.append("%s:%s" % (m, str(e)[:80]))
+    raise RuntimeError("; ".join(errors) or "无可用支付产品")
 
 
 # ── HTTP Handler ──────────────────────────────────────────────────────────── #
@@ -228,6 +312,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(text.encode("utf-8"))
 
+    def _html(self, status: int, html: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
     def _body(self) -> dict[str, Any]:
         try:
             ln = int(self.headers.get("Content-Length", "0"))
@@ -236,8 +326,12 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self):
-        if self.path.split("?")[0] in ("/healthz", "/api/pay/healthz"):
+        p = self.path.split("?")[0]
+        if p in ("/healthz", "/api/pay/healthz"):
             self._json(200, {"ok": True, "service": "vdl-pay"})
+        elif p == "/api/pay/return":
+            # 网页支付同步回跳落地页（付完回 App 的提示）
+            self._html(200, _pay_return_html())
         else:
             self._json(404, {"error": "not found"})
 
@@ -256,6 +350,7 @@ class Handler(BaseHTTPRequestHandler):
         data = self._body()
         token = str(data.get("token") or "")
         plan_code = str(data.get("plan_code") or "")
+        client = str(data.get("client") or "").strip().lower()
         if plan_code not in PRICE_MAP:
             return self._json(400, {"ok": False, "error": "未知套餐", "code": "BAD_PLAN"})
         email = parse_token(token, SECRET)
@@ -265,32 +360,40 @@ class Handler(BaseHTTPRequestHandler):
         alipay, err = get_alipay()
         if err:
             return self._json(500, {"ok": False, "error": err, "code": "ALIPAY_CFG"})
+        # 桌面/移动判定：前端传 client 优先，否则按 UA 兜底（决定用 page 还是 wap）
+        if client not in ("mobile", "desktop"):
+            ua = (self.headers.get("User-Agent") or "").lower()
+            client = ("mobile" if any(k in ua for k in ("iphone", "ipad", "android", "mobile"))
+                      else "desktop")
         price = PRICE_MAP[plan_code]["price"]
         subject = PRICE_MAP[plan_code]["subject"]
         order_id = _gen_order_id()
         try:
             # notify_url 由 SDK 从 app_notify_url 自动注入（AliPay._app_notify_url），
             # 不要显式传 alipay.app_notify_url —— SDK 未暴露该公有属性，会 AttributeError。
-            r = alipay.api_alipay_trade_precreate(subject, order_id, price)
+            res = _place_order(alipay, subject, order_id, price, client)
         except Exception as e:
-            return self._json(500, {"ok": False, "error": f"支付宝下单失败: {e}",
-                                    "code": "ALIPAY_ERR"})
-        if r.get("code") != "10000" or r.get("msg") != "Success":
-            return self._json(400, {"ok": False,
-                                    "error": r.get("sub_msg") or r.get("msg") or "下单失败",
+            return self._json(400, {"ok": False, "error": f"支付宝下单失败: {e}",
                                     "code": "ALIPAY_REJECT"})
-        qr = r.get("qr_code", "")
+        mode = res["mode"]
+        qr_code = res.get("qr_code") or ""
+        pay_url = res.get("pay_url") or ""
         with _LOCK:
             o = _load_orders()
             o[order_id] = {"email": email, "plan_code": plan_code, "amount": price,
-                           "status": "PENDING", "created_at": time.time()}
+                           "mode": mode, "status": "PENDING", "created_at": time.time()}
             _save_orders(o)
+        # 二维码来源：当面付用 qr_code；网页支付用收银台 URL（两者都能被支付宝 App
+        # 扫码打开）—— 这样桌面端仍保留「扫码支付」主 UX；网页支付另有「在浏览器
+        # 打开收银台」按钮兜底（见前端 openPayModal）。
+        src = qr_code or pay_url
         try:
-            qr_png = _qr_png(qr)
+            qr_png = _qr_png(src) if src else ""
         except Exception:
             qr_png = ""
-        self._json(200, {"ok": True, "order_id": order_id, "qr_png": qr_png,
-                         "amount": price, "plan_code": plan_code, "qr": qr})
+        self._json(200, {"ok": True, "order_id": order_id, "mode": mode,
+                         "qr_png": qr_png, "qr": qr_code, "pay_url": pay_url,
+                         "amount": price, "plan_code": plan_code})
 
     def _notify(self):
         # 支付宝异步通知：form-urlencoded POST

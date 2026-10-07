@@ -197,6 +197,19 @@ def test_desktop_wiring_present() -> None:
           "window.VDL_PAY_API_BASE" in appjs)
     check("下单/轮询都把 base 透传给 request（不透传＝仍打本地 mock）",
           appjs.count("PAY_API_BASE)") >= 2)
+    # 2026-10-08：本应用**无当面付资质**（实测 precreate 返回 isv.insufficient-isv-
+    # permissions），服务端回退「电脑网站支付(page)/手机网站支付(wap)」并返回 pay_url。
+    # 前端必须：① 把 client(桌面/移动) 传给服务端（决定 page 还是 wap）；② 消费
+    # pay_url，渲染「在浏览器打开收银台」按钮，且**走桌面原生桥**打开 —— WKWebView
+    # 会静默拦截 window.open（与分享面板同款坑），只写 window.open 等于点了没反应。
+    check("下单把 client(桌面/移动) 传给服务端（决定 page/wap）",
+          "plan_code: planCode, client" in appjs and "'mobile'" in appjs)
+    check("网页支付的 pay_url 被前端消费（不是只认二维码）",
+          "r.pay_url" in appjs and "openPayModal(r)" in appjs)
+    check("收银台按钮走桌面原生桥（WKWebView 会吞 window.open）",
+          "VDL.desktop.openExternal" in appjs and "_openExternalUrl(payUrl)" in appjs)
+    check("支付弹层样式含收银台按钮 .vdl-pay-openbrowser",
+          ".vdl-pay-openbrowser" in (root / "web" / "styles.css").read_text(encoding="utf-8"))
     # 2026-10-03：后台表单重写为「档位卡 + 营销面板」，选择器从 plan-price[data-plan=…]
     # 改成 class + data-plan 组合，这里按新结构钉，并顺带把营销字段纳入守卫。
     check("超管面板按现有套餐渲染价格输入框（新档自动出现，可直接改价）",

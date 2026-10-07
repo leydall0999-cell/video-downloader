@@ -6906,6 +6906,7 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
   border: 1px solid var(--line, #e5e7eb); border-radius: 8px; background: #fff;
 }
 .vdl-pay-tip { font-size: .74rem; line-height: 1.5; color: var(--text-mute, #6b7280); }
+.vdl-pay-openbrowser { margin-top: .6rem; width: 100%; }
 .vdl-pay-status { margin-top: .55rem; font-size: .82rem; font-weight: 600; color: #1d9e75; min-height: 1.1rem; }
 .vdl-pay-close { margin-top: .9rem; width: 100%; }
 

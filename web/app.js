@@ -16906,10 +16906,12 @@ el.dwVidPlayer.hidden = true;
   async function payCreate(planCode) {
     if (!el.memberModal) return;
     _memberMsg('正在生成支付二维码…');
+    // 本应用无当面付资质，服务端按 client 决定回退「电脑网站支付(page)/手机网站支付(wap)」。
+    const client = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ? 'mobile' : 'desktop';
     let r;
     try {
       r = await request('/api/pay/create', {
-        method: 'POST', body: JSON.stringify({ plan_code: planCode }) }, PAY_API_BASE);
+        method: 'POST', body: JSON.stringify({ plan_code: planCode, client }) }, PAY_API_BASE);
     } catch (e) {
       _memberMsg('❌ 下单失败：网络错误', true); return;
     }
@@ -16917,24 +16919,44 @@ el.dwVidPlayer.hidden = true;
       _memberMsg('❌ ' + ((r && r.error) || '下单失败'), true); return;
     }
     _memberMsg('');
-    openPayModal(r.order_id, r.qr_png, r.amount, r.plan_code);
+    openPayModal(r);
   }
-  function openPayModal(orderId, qrPng, amount, planCode) {
+  // 打开外链：桌面壳 WKWebView 会**静默拦截 window.open**（见 desktop_launcher
+  // .VdlApi.open_external 说明），必须优先走 pywebview 原生桥（与分享面板同款约定），
+  // 网页版才回退 window.open。
+  function _openExternalUrl(url) {
+    const openExt = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal;
+    if (typeof openExt === 'function') {
+      Promise.resolve(openExt(url)).then((ok) => { if (!ok) window.open(url, '_blank'); })
+        .catch(() => { window.open(url, '_blank'); });
+      return;
+    }
+    window.open(url, '_blank');
+  }
+  function openPayModal(r) {
     closePayModal();
+    const orderId = r.order_id;
+    const qrPng = r.qr_png || '';
+    const amount = r.amount;
+    const planCode = r.plan_code;
+    const payUrl = r.pay_url || '';
     const overlay = document.createElement('div');
     overlay.className = 'vdl-pay-overlay';
     overlay.innerHTML = `
       <div class="vdl-pay-modal">
         <div class="vdl-pay-title">扫码支付开通会员</div>
         <div class="vdl-pay-amt">¥${(Number(amount) || 0).toFixed(2)} · ${planCode}</div>
-        <img class="vdl-pay-qr" src="${qrPng}" alt="支付宝支付二维码"/>
+        ${qrPng ? `<img class="vdl-pay-qr" src="${qrPng}" alt="支付宝支付二维码"/>` : ''}
         <div class="vdl-pay-tip">请使用支付宝扫码付款，支付成功后自动开通</div>
+        ${payUrl ? `<button type="button" class="btn btn-primary vdl-pay-openbrowser" id="vdlPayOpenBrowser">扫码不便？在浏览器中打开收银台</button>` : ''}
         <div class="vdl-pay-status" id="vdlPayStatus">等待支付…</div>
         <button type="button" class="btn btn-ghost vdl-pay-close" id="vdlPayClose">关闭</button>
       </div>`;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closePayModal(); });
     overlay.querySelector('#vdlPayClose').addEventListener('click', closePayModal);
+    const openBtn = overlay.querySelector('#vdlPayOpenBrowser');
+    if (openBtn) openBtn.addEventListener('click', () => _openExternalUrl(payUrl));
     const statusEl = overlay.querySelector('#vdlPayStatus');
     _payTimer = setInterval(async () => {
       try {

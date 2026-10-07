@@ -316,6 +316,12 @@ run_one test_payment_core.py
 #      （无短横线，是 cookie/cloud_sync 的历史目录，写错不报错但会污染家目录）。
 run_one test_payment_router.py
 
+#  30b. test_pay_order_mode.py —— VPS 支付服务下单产品分流（2026-10-08）：本应用
+#       无当面付资质，_place_order 必须 auto 先试当面付、权限不足自动回退
+#       page/wap，全败抛错（绝不静默返回空二维码让用户扫不出来）。deploy/ 此前
+#       零测试 → 与 test_static_undefined_names.py 互补，构成 deploy/ 回归网。
+run_one test_pay_order_mode.py
+
 #  31. test_credential_store.py —— 账号 token 凭据存储（2026-09-30，P2 加固）：
 #      token 不再以明文落在 ~/.video-downloader/membership*.json（拷走文件即可
 #      冒充用户调云端）。钉死三点：Keychain 存取往返、磁盘 JSON 无明文但内存态
