@@ -486,7 +486,7 @@ fi
 #    找不到该用例」）。改为：中途只快照计数，继续往下跑，末尾统一汇总。
 MID_PASS=$PASS
 MID_FAIL=$FAIL
-echo "── 前半段完成：通过 $MID_PASS / 失败 $MID_FAIL，继续跑后半段 ──"
+echo "── 前半段完成：通过 ${MID_PASS:-0} / 失败 ${MID_FAIL:-0}，继续跑后半段 ──"
 
 #  34. test_membership_benefits.py —— 下载会员权益与配额表一致性（2026-10-03）：
 #      权益文案改为从 DAILY_QUOTA_LIMITS + FEATURE_USAGE_DEFS 自动生成，

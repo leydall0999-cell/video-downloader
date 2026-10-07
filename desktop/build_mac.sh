@@ -195,7 +195,19 @@ _cleanup_stale_copies() {
 _cleanup_stale_copies "$ICON_ICNS".bak.* "$REPO/VideoDownloader.spec".bak.* \
   "$REPO"/dist/_old_* "$REPO"/build/_old_* "$REPO"/.jscheck.err.bak.*
 [ -e "$ICON_ICNS" ] && mv "$ICON_ICNS" "$ICON_ICNS.bak.$$" 2>/dev/null || true
-sips -s format icns "$ICON_PNG" --out "$ICON_ICNS" >/dev/null 2>&1 || true
+# 用 Pillow 生成 icns：sips 对部分 RGBA PNG 会静默失败（Error 13），Pillow 稳定可靠
+if "$VENV/bin/python" - "$ICON_PNG" "$ICON_ICNS" <<'PY' 2>/dev/null
+import sys
+from PIL import Image
+Image.open(sys.argv[1]).save(sys.argv[2])
+print("icon.icns ->", sys.argv[2])
+PY
+then
+  echo "icon.icns <- Pillow ($ICON_PNG)"
+else
+  echo "⚠️ Pillow 生成 icns 失败，回退 sips" >&2
+  sips -s format icns "$ICON_PNG" --out "$ICON_ICNS" >/dev/null 2>&1 || true
+fi
 
 echo "▶ 打包 VideoDownloader.app（单文件夹 / 无控制台）"
 # 用 rename 移走旧产物，避免触发沙盒的批量删除守卫（pyinstaller 清理旧 build/dist 会被拦截）

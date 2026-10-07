@@ -107,3 +107,9 @@ zhconv>=1.4.0
 #   纠正为「正确转写」。模型（model.int8.onnx 228MB + tokens.txt）由 build_mac.sh
 #   从 ~/.cache/vdl-sensevoice 注入包内；缺失时静默降级为纯 Whisper，绝不阻断提取。
 sherpa-onnx>=1.13.0
+
+# 离线测试门禁依赖（2026-10-07）：run_offline_tests.sh 直接 `python tests/xxx.py` 跑用例，
+#   其中 test_dewatermark_core / test_license_base / test_membership_device 等以 `import pytest`
+#   起始；缺失时这些用例直接 ModuleNotFoundError，导致构建自验证拦截发布。
+#   仅测试期使用——App 运行代码从不 import pytest，PyInstaller 不会把它打进包。
+pytest>=8.0
