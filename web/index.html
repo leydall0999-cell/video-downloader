@@ -6,8 +6,8 @@
 <meta name="description" content="粘贴链接即可下载 YouTube、哔哩哔哩等主流平台的视频" />
 <meta name="theme-color" content="#4f46e5" />
 <title>视频工坊 · 不止是下载工具，更懂视频精修加工</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>⬇️</text></svg>" />
-<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%234f46e5'/%3E%3Cpath%20d='M16%207v11m0%200l-5-5m5%205l5-5M9%2025h14'%20fill='none'%20stroke='%23fff'%20stroke-width='2.4'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
+<!-- 2026-10-07：换用视频工坊品牌图标 logo.png（青蓝圆角，与 App/桌面图标同源）；不再内联旧蓝 SVG。 -->
+<link rel="icon" href="logo.png" />
 <script>
   // styles.css 缓存击穿（2026-09-29 对齐 App）：与 app.js 同机制（dev 用时间戳、
   // 打包用构建戳）。Cloudflare 边缘会按扩展名缓存无版本引用的 CSS，部署后用户拿旧样式。
@@ -25,11 +25,7 @@
 <header class="site-header">
   <div class="wrap-wide header-inner">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 3v12" /><path d="m7 11 5 5 5-5" /><path d="M4 20h16" />
-        </svg>
-      </span>
+      <img class="brand-mark" src="logo.png" alt="" aria-hidden="true" width="38" height="38" />
       <div class="brand-text">
         <strong>视频工坊</strong>
         <span>不止是下载工具，更懂视频精修加工</span>
