@@ -571,6 +571,12 @@ run_one test_ai_free_trial.py
 #      **配额表每个键都必须出现在后台页面**（防再次漏项，如当时的 cloud）。
 run_one test_free_quota_admin.py
 
+#  42b. test_quota_display_e2e.py —— 配额显示同源端到端（2026-10-07 用户「改了不生效」复测）：
+#      走真实 HTTP 链路（POST /api/admin/config/plans → GET /api/account/profile），
+#      钉死「显示层 feature_usage_status 必须读 effective_daily_limits，与放行层 quota_state 同源」，
+#      覆盖免费档 / 会员档 / 真拦截三处。函数级守卫 test_free_quota_admin 已覆盖保存侧，本例补读取侧。
+run_one test_quota_display_e2e.py
+
 #  43. test_web_quota_single_source.py —— 网页端「双配额」守卫（2026-10-06）：
 #      网页端历史上存在两套每日配额 —— 旧的按 IP 计数（开源版遗留，换 IP 即重置）
 #      与现行账号级（cloud_quota_gate + hk 回派 cn 为权威）。两者同时开会**双重
