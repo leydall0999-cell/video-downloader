@@ -590,6 +590,15 @@ run_one test_quota_display_e2e.py
 #      hk 回派链路完整。线上 cn/hk 实测均未开启旧墙（走代码默认）。
 run_one test_web_quota_single_source.py
 
+#  44. test_update_progress.py —— 自更新「实时进度」守卫（2026-10-08 用户反馈
+#      「更新没有实时进度一直在10%」）：进度此前是硬编码三跳（downloading=10 →
+#      applying=80 → ready=100），_http_download 里算好的百分比被 `_ = int(...)`
+#      直接丢弃 ⇒ 472MB 全量包下载全程停在 10%。本守卫钉三层：
+#      ① _http_download 真按分片回调且单调到 100%；② _prepare_update 把下载进度
+#      映射到 [10,80]（下载完恰好 80）；③ _run_update 把回调接到 job 状态上 ⇒
+#      /api/system/update/status 的 progress 必须随时间变化。
+run_one test_update_progress.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

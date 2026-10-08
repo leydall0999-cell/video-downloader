@@ -25,7 +25,7 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import urllib.request
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -160,11 +160,19 @@ def _http_get_json(url: str, timeout: int = 15) -> Any:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _http_download(url: str, dest: Path, timeout: int = _DOWNLOAD_TIMEOUT) -> None:
+def _http_download(url: str, dest: Path, timeout: int = _DOWNLOAD_TIMEOUT,
+                   on_progress: Optional[Callable[[int, int], None]] = None) -> None:
+    """下载 url 到 dest。on_progress(done_bytes, total_bytes) 分片回调（total 未知时不回调）。
+
+    ⚠️ 2026-10-08 前这里把算好的百分比直接丢弃（`_ = int(done * 100 / total)`），
+    下载过程不上报任何进度，界面于是全程停在 _run_update 硬编码的 10%（用户反馈
+    「更新没有实时进度一直在10%」）。现在把进度回调出去、由任务状态对外暴露。
+    """
     req = urllib.request.Request(url, headers={"User-Agent": "VDL-Update/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         total = int(resp.headers.get("Content-Length", "0") or "0")
         done = 0
+        last_pct = -1
         with open(dest, "wb") as f:
             while True:
                 chunk = resp.read(1024 * 1024)
@@ -172,9 +180,14 @@ def _http_download(url: str, dest: Path, timeout: int = _DOWNLOAD_TIMEOUT) -> No
                     break
                 f.write(chunk)
                 done += len(chunk)
-                if total:
-                    # 进度留作扩展（前端目前靠「下载中…」占位）
-                    _ = int(done * 100 / total)
+                if on_progress and total:
+                    pct = int(done * 100 / total)
+                    if pct != last_pct:  # 节流：只在整数百分比变化时回调（472MB ≈ 472 次读）
+                        last_pct = pct
+                        try:
+                            on_progress(done, total)
+                        except Exception:
+                            pass  # 进度上报失败绝不能中断下载
 
 
 def _sha256_of(path: Path) -> str:
@@ -290,9 +303,22 @@ def _verify_app(app: Path, target_ver: str) -> bool:
         return False
 
 
-def _prepare_update(data: dict, work: Path, bundle: Path, target_ver: str) -> Optional[Path]:
-    """准备好新 .app 的 staging 路径。优先增量补丁，失败自动回退全量。"""
+def _prepare_update(data: dict, work: Path, bundle: Path, target_ver: str,
+                    on_pct: Optional[Callable[[float], None]] = None) -> Optional[Path]:
+    """准备好新 .app 的 staging 路径。优先增量补丁，失败自动回退全量。
+
+    on_pct(百分比 0~100)：把下载阶段真实进度映射到 [10, 80] 上报，让界面在
+    下载 400+MB 全量包时有实时进度（此前该区间完全不上报，全程停在 10%）。
+    """
     staging = work / "VideoDownloader.app"
+
+    def _dl(url_: str, dest_: Path, lo: float, hi: float) -> None:
+        """下载并把进度线性映射到 [lo, hi] 后交给 on_pct。"""
+        def _cb(done: int, total: int) -> None:
+            if on_pct and total > 0:
+                frac = min(1.0, float(done) / float(total))
+                on_pct(lo + (hi - lo) * frac)
+        _http_download(url_, dest_, timeout=_DOWNLOAD_TIMEOUT, on_progress=_cb)
 
     # —— 增量分支：已装版本 == from_version 且补丁可用 ——
     from_ver = str(data.get("from_version") or "")
@@ -301,7 +327,7 @@ def _prepare_update(data: dict, work: Path, bundle: Path, target_ver: str) -> Op
     if from_ver and patch_url and VERSION == from_ver:
         try:
             patch_path = work / "patch.delta"
-            _http_download(patch_url, patch_path, timeout=_DOWNLOAD_TIMEOUT)
+            _dl(patch_url, patch_path, 10, 45)
             if patch_sha and _sha256_of(patch_path).lower() != patch_sha:
                 raise RuntimeError("补丁 sha256 不匹配")
             # 复制已装 app 到 staging（本地 I/O，避免触碰运行中的 /Applications）
@@ -326,7 +352,7 @@ def _prepare_update(data: dict, work: Path, bundle: Path, target_ver: str) -> Op
         return None
     zip_path = work / "VideoDownloader.app.zip"
     try:
-        _http_download(url, zip_path, timeout=_DOWNLOAD_TIMEOUT)
+        _dl(url, zip_path, 10, 80)
         if expect_sha and _sha256_of(zip_path).lower() != expect_sha:
             return None
         # 解压到独立临时目录：发布包由 `ditto -c -k <app>` 生成，zip 根部直接是
@@ -639,7 +665,8 @@ def _run_update(job_id: str, data: dict, work: Path, bundle: Path,
 
     try:
         _set("downloading", 10)
-        staging_app = _prepare_update(data, work, bundle, target_ver)
+        staging_app = _prepare_update(data, work, bundle, target_ver,
+                                      on_pct=lambda pct: _set("downloading", int(pct)))
         if not staging_app:
             _set("error", 0, "更新准备失败，请稍后重试或手动下载安装包")
             return
