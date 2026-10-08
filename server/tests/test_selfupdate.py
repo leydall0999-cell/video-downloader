@@ -91,9 +91,18 @@ def _zip_app(src_app: Path, dest_zip: Path) -> None:
             z.write(str(p), str(p.relative_to(src_app.parent)))
 
 
-def _local_copy(url, dest, timeout=None):  # noqa: ARG001  替身，签名对齐 _http_download
-    """替代真实下载：把 url 当本地路径直接复制，保留后续真实的 sha256/解压逻辑。"""
+def _local_copy(url, dest, timeout=None, on_progress=None):  # noqa: ARG001  替身，签名对齐 _http_download
+    """替代真实下载：把 url 当本地路径直接复制，保留后续真实的 sha256/解压逻辑。
+
+    on_progress：2026-10-08 起 _http_download 多了该回调（更新进度实时上报），
+    替身签名必须同步，否则 _prepare_update 里的 _dl() 传参会 TypeError、
+    被它自己的 except 吞掉 → 全量分支恒返回 None（本用例就是这样红起来的）。
+    这里按新签名回调一次「下载完成」，让进度映射链路在假下载下也被走到。
+    """
     shutil.copy(str(url), str(dest))
+    total = Path(dest).stat().st_size
+    if on_progress and total:
+        on_progress(total, total)
 
 
 def _fake_patch_result():
