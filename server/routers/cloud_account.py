@@ -491,6 +491,16 @@ def cloud_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             # 两端密码分叉（本机改过、云端没跟上）→ 把本机密码推上云端再试一次。
             # 这样用户永远不会遇到「本机密码对、云端说密码错」的死结。共用一个重试。
             healed = _heal_cloud_password(email, password)
+            if not healed:
+                from auth_store import authenticate
+                if authenticate(email, password):
+                    # 本机密码是对的 → 分叉且本机没有云端会话凭证（登出过/换机），
+                    # 设计上无法自愈（推密码需要 token 或旧云端密码，两者都没有）。
+                    # 如实说明，别让用户对着「密码不正确」怀疑自己输错。
+                    return {"ok": False, "code": "PASSWORD_DIVERGED",
+                            "error": "本机密码正确，但云端记录的密码与本机不一致，"
+                                     "且本机没有云端会话凭证、无法自动对齐。"
+                                     "请联系管理员把云端密码重置为本机密码后重新登录。"}
         if healed:
             try:
                 r = license_client.login_remote(email, password, fp, name)

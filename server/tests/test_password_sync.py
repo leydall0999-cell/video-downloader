@@ -414,6 +414,26 @@ def test_cloud_login_does_not_heal_on_wrong_local_password() -> None:
     print("✅ ⑪ 登录自愈：本机密码也不对时不推密码（防越权）")
 
 
+def test_cloud_login_diverged_without_token_reports_clearly() -> None:
+    """本机密码对、云端分叉、但本机没有云端会话凭证（登出过/换机）→
+    无法自愈是设计使然，必须回 PASSWORD_DIVERGED 可行动提示，而不是误导的
+    「密码不正确」（2026-10-08 实测：用户密码没错却被提示输错密码）。"""
+    from auth_store import create_user
+    from routers import cloud_account
+    _fresh()
+    create_user(EMAIL, PW_NEW)
+    with sandbox() as sb:
+        _mount_store(sb)  # 不写 token：meta.account 为空 = 无云端会话凭证
+        _fake_device(sb)
+        cloud = _FakeCloud(sb, login_remote=lambda *a, **kw: {
+            "ok": False, "error": "密码不正确", "code": "BAD_PASSWORD"})
+        out = cloud_account.cloud_login({"email": EMAIL, "password": PW_NEW})
+    assert out["ok"] is False and out["code"] == "PASSWORD_DIVERGED", out
+    assert "不一致" in out["error"], out
+    assert _set_password_calls(cloud.calls) == [], cloud.calls
+    print("✅ ⑬ 分叉且无凭证 → 回 PASSWORD_DIVERGED 明确提示（不再误导为密码错）")
+
+
 def test_home_dir_untouched() -> None:
     """全程不得写用户真实数据目录（所有用例都在 VDL_DATA_DIR 临时目录里）。"""
     assert os.environ["VDL_DATA_DIR"] == _TMP_ROOT
@@ -440,6 +460,7 @@ def _main() -> int:
         test_heal_requires_local_password_and_cloud_session,
         test_cloud_login_heals_divergent_password,
         test_cloud_login_does_not_heal_on_wrong_local_password,
+        test_cloud_login_diverged_without_token_reports_clearly,
         test_home_dir_untouched,
     ]
     ok = fail = 0
