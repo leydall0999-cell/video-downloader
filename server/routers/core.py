@@ -490,7 +490,7 @@ def _device_of(request: app.Request) -> str:
 #     NO_AUTH 识别匿名并同样 403。会员引擎异常仍 fail-open（已登录用户不因故障被挡）。
 
 # 下载强制登录的统一文案（前端据此弹登录框，见 web/app.js 的 needLogin 处理）
-_LOGIN_REQUIRED_MSG = "下载前请先登录账号（免费账号每日 10 次下载额度，注册即得）"
+_LOGIN_REQUIRED_MSG = "下载前请先登录账号（登陆享受下载权益）"
 
 
 def _quota_relay_base() -> str:

@@ -61,9 +61,9 @@ const mk = (profileVisible, pfAuthVisible) => {
 // ①b 不在个人中心（下载页 / 会员页 …）→ 照旧弹窗，原有拦截体验不许被这次改动弄坏
 {
   const { el, calls, api } = mk(false, true);
-  api.openAuthModal('下载需要登录账号；免费账号每日 10 次下载额度，注册即得。');
+  api.openAuthModal('下载需要登录账号；登陆享受下载权益。');
   assert.equal(calls.showModal, 1, '其他地方（如下载页）点下载被拦时，登录弹窗必须照旧弹出');
-  assert.equal(el.authModalHint.textContent, '下载需要登录账号；免费账号每日 10 次下载额度，注册即得。',
+  assert.equal(el.authModalHint.textContent, '下载需要登录账号；登陆享受下载权益。',
     '弹窗提示文案要随拦截原因更新');
   assert.equal(el.pfAuthHint.textContent, 'DEFAULT_HINT', '不该改页内提示行');
   assert.equal(calls.focus, 0, '不该去聚焦页内表单');

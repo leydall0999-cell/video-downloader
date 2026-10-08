@@ -752,7 +752,7 @@
     // request 定义早于登录弹窗代码，故经 window 钩子解耦（弹窗代码稍后挂载）。
     if ((path === '/api/download' || path === '/api/batch') && !localStorage.getItem('vdl_auth_token')) {
       try { if (window.__vdlOpenAuthModal) window.__vdlOpenAuthModal(); } catch (_e) { /* ignore */ }
-      throw { needLogin: true, message: '下载前请先登录账号（免费账号每日 10 次下载额度，注册即得）', hint: '' };
+      throw { needLogin: true, message: '下载前请先登录账号（登陆享受下载权益）', hint: '' };
     }
     const doFetch = () => {
       if (!fetchTimeout) return fetch(apiBase + path, { ...options, headers: merged });
@@ -8312,7 +8312,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
     renderAuthHeader();
   };
   // request() 定义早于本段，经 window 钩子解耦调用
-  window.__vdlOpenAuthModal = () => openAuthModal('下载需要登录账号；免费账号每日 10 次下载额度，注册即得。');
+  window.__vdlOpenAuthModal = () => openAuthModal('下载需要登录账号；登陆享受下载权益。');
 
   const closeAuthModal = () => { try { el.authModal.close(); } catch (_e) { /* 本来就没开 */ } };
   const amSetStatus = (t) => { el.amStatus.textContent = t || ''; };
