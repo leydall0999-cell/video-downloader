@@ -58,14 +58,21 @@ fi
 
 # 1) 退出运行中的旧实例，确保进程真的死了（不死绝不复制）
 echo "▶ 退出运行中的实例..."
+# 匹配口径用「可执行文件相对路径」而不是绝对路径 $EXE：
+# 🔴 2026-10-08 实测踩到 —— 本机跑着一个从 ~/.vdl_backups/app-before-deploy-20260915-224608.app
+# 启动的 1.0.21 旧实例（09-15 的备份包一直没退出过）。只按 $EXE 绝对路径 pgrep/pkill 匹配不到它，
+# 于是「复制新版本到 /Applications」成功、旧进程却仍占着 8321，自校验才报出
+# 「运行中版本与构建不符（期望 1.0.46 / 实际 1.0.21）」—— 看起来像部署坏了，其实是漏杀。
+EXE_MATCH="Contents/MacOS/$(basename "$EXE")"
 osascript -e 'quit app "视频工坊"' 2>/dev/null || true
 for _ in $(seq 1 30); do
-  pgrep -f "$EXE" >/dev/null || break
+  pgrep -f "$EXE_MATCH" >/dev/null || break
   sleep 1
 done
 pkill -9 -f "$EXE" 2>/dev/null || true
+pkill -9 -f "$EXE_MATCH" 2>/dev/null || true   # 兜底：异路径启动的同名 App
 sleep 2
-pgrep -f "$EXE" >/dev/null && die "旧实例进程仍存活，无法安全部署（请手动检查 Activity Monitor）"
+pgrep -f "$EXE_MATCH" >/dev/null && die "旧实例进程仍存活，无法安全部署（请手动检查 Activity Monitor）"
 
 # 2) 先把旧 app 改名备份到专用目录（避免在 /Applications 里乱放文件夹）。
 #    用 mv 而不是 rm -rf + ditto 的好处：保留旧文件，且若 ditto 拷贝中途失败仍有完整旧版可用。
