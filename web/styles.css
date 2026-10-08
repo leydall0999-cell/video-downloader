@@ -938,6 +938,9 @@ main > .panel { margin-top: 3rem; }
 .modal::backdrop { background: rgba(15, 23, 42, .45); backdrop-filter: blur(2px); }
 @keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
 .modal-card { padding: 1.2rem 1.25rem 1.4rem; }
+/* 登录弹窗定宽 400px：此前 dialog 本体宽 560px、而内部卡片带内联 max-width:400px，
+   两者不一致会在右侧固定留白 160px（观感「右边空太多」）。改由弹窗本体定宽、卡片撑满。 */
+#authModal { width: min(400px, 100% - 2rem); max-width: 400px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .modal-head h2 { font-size: 1.05rem; font-weight: 700; }
 .modal-close {

@@ -111,6 +111,7 @@ run_node test_app_intro_entries.mjs        # 网页版「更多功能」页：24
 run_node test_platform_count_label.mjs     # 平台数对外口径：两端徽章走 fmtPlatformCount，116→100+（2026-09-30）
 run_node test_member_page.mjs              # 网页版会员购买页：免登录可见价目/三轨/登录后自动续单/弹窗在顶层（2026-09-30）
 run_node test_profile_login_single.mjs     # 个人中心未登录：页内登录表单优先，禁止与全局登录弹窗同屏（2026-10-08 用户反馈）
+run_node test_auth_modal_width.mjs         # 登录弹窗定宽 400 无右侧留白 + 登录方式文案「电话号码/QQ邮箱」（2026-10-08 用户反馈）
 run_one test_member_plans_source.py        # 1/3/7 天档 + 套餐价格单一真源：超管改价/改天数在展示/下单/发放三处同步（2026-09-30）
 run_one test_flash_phase.py                # 秒杀窗口三态：窗口过了必须自动收起「限时秒杀」角标与「秒杀至…」（2026-10-03）
 run_one test_share_token.py                # 网页版分享凭据端点：登录门禁/SHARE_UNAVAILABLE/每日限次/计数/挂载（2026-09-30 受限版分享）
