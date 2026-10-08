@@ -109,6 +109,9 @@ PRICE_MAP: dict[str, dict[str, Any]] = {
 PLAN_SOURCE_URL = os.environ.get(
     "VDL_PLAN_SOURCE_URL", "http://127.0.0.1:8902/api/license/plans")
 PLAN_CACHE_TTL = 300.0
+# 拉取失败时的退避（<< TTL）：授权中心一次抖动不应把旧价锁死整整 5 分钟。
+# 改价后正是「页面已显示新价、收款仍按旧价」的高发窗口，必须快速重试。
+PLAN_CACHE_RETRY_TTL = 15.0
 _PLAN_CACHE: dict[str, Any] = {"at": 0.0, "map": {}}
 # 与 server/membership.py::PLAN_MODES 保持一致
 PLAN_MODES = ("normal", "flash_sale", "limited", "event")
@@ -159,15 +162,19 @@ def _sales_state(plan: dict[str, Any], now: float) -> dict[str, Any]:
     }
 
 
-def _cloud_plans() -> dict[str, dict]:
+def _cloud_plans(force: bool = False) -> dict[str, dict]:
     """拉授权中心档位覆盖表 → {plan_code: {price_cny, mode, flash_price, ...}}。
 
     授权中心返回是**两层**结构：{"plans": {"download_plans": {code: {...}}, ...}}，
-    code 分布在各子表下，因此这里遍历所有子表收集。失败返回上次缓存（可能为空），
-    缓存期内不再请求。
+    code 分布在各子表下，因此这里遍历所有子表收集。失败保留上次缓存。
+
+    🔴 `force=True` 跳过 TTL 直连授权中心 —— **下单金额必须走这条路**（2026-10-09）。
+       展示侧（worker）的 `_CLOUD_PLANS_TTL=15s`，本服务原为 300s ⇒ 改价后页面 ≤15s
+       就显示新价、收款却仍按旧价，最长 285s「展示价 ≠ 实收价」（真实客诉场景）。
+       下单是低频动作，强制取一次新鲜价的代价可忽略。
     """
     now = time.time()
-    if now - float(_PLAN_CACHE.get("at") or 0.0) <= PLAN_CACHE_TTL:
+    if not force and now - float(_PLAN_CACHE.get("at") or 0.0) <= PLAN_CACHE_TTL:
         return dict(_PLAN_CACHE.get("map") or {})
     try:
         req = urllib.request.Request(
@@ -184,19 +191,24 @@ def _cloud_plans() -> dict[str, dict]:
                     out[str(code)] = dict(meta)
         if out:
             _PLAN_CACHE["map"] = out
+        _PLAN_CACHE["at"] = now
     except Exception:
-        pass  # 授权中心暂不可达：保留上次缓存，兜底走 PRICE_MAP
-    _PLAN_CACHE["at"] = now
+        # 授权中心暂不可达：保留上次缓存，兜底走 PRICE_MAP。
+        # ⚠️ 只退避 PLAN_CACHE_RETRY_TTL（不是整个 TTL）—— 否则一次抖动会把旧价
+        #    锁死 5 分钟，恰好制造「页面新价 / 收款旧价」。
+        _PLAN_CACHE["at"] = now - PLAN_CACHE_TTL + PLAN_CACHE_RETRY_TTL
     return dict(_PLAN_CACHE.get("map") or {})
 
 
-def plan_quote(plan_code: str) -> dict[str, Any]:
+def plan_quote(plan_code: str, force: bool = False) -> dict[str, Any]:
     """下单报价：{price, buyable, reason, source}。
 
     - 授权中心可达 → 按其覆盖表用 _sales_state 算有效价与可购性（source=cloud）；
     - 不可达/该档无覆盖 → 回落本地 PRICE_MAP（source=local，视为可购）。
+
+    `force=True` 直连授权中心取新鲜价（**下单路径必须用**；见 _cloud_plans 的说明）。
     """
-    meta = _cloud_plans().get(str(plan_code or ""))
+    meta = _cloud_plans(force=force).get(str(plan_code or ""))
     if isinstance(meta, dict) and meta:
         st = _sales_state(meta, time.time())
         return {"price": f"{float(st['price']):.2f}", "buyable": st["buyable"],
@@ -632,7 +644,9 @@ class Handler(BaseHTTPRequestHandler):
             client = ("mobile" if any(k in ua for k in ("iphone", "ipad", "android", "mobile"))
                       else "desktop")
         # 金额与可购性取授权中心真源（与前端展示同源）：含秒杀有效价 + 下架/活动窗口/售罄。
-        quote = plan_quote(plan_code)
+        # 🔴 force=True：下单**必须取新鲜价**，不能吃 300s 缓存 —— 展示侧（worker）是 15s TTL，
+        #    吃缓存会在改价后制造「页面已显示新价 / 收款仍按旧价」（2026-10-09 客诉）。
+        quote = plan_quote(plan_code, force=True)
         if not quote["buyable"]:
             return self._json(400, {"ok": False,
                                     "error": quote["reason"] or "该套餐当前不可购买",

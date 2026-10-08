@@ -165,6 +165,66 @@ def test_unknown_code_not_sellable() -> None:
     check("未知 code → 0.00", PS.plan_price("no_such_plan") == "0.00")
 
 
+def test_order_price_is_never_stale() -> None:
+    """🔴 2026-10-09 客诉「价格对不上」：展示侧（worker）`_CLOUD_PLANS_TTL=15s`，
+    支付侧原为 `PLAN_CACHE_TTL=300s` ⇒ 管理员改价后页面 ≤15s 就显示新价，收款却
+    仍按旧价，最长 285s「展示价 ≠ 实收价」。修法：**下单路径 force 取新鲜价**。
+
+    本用例同时钉住"缓存本身仍在"（非 force 吃 TTL 是设计内），避免有人为了修这个
+    问题把缓存整个删掉（那会让每次轮询都打授权中心）。
+    """
+    print("[5] 下单取价：force 绕过缓存（防「页面新价 / 收款旧价」）")
+
+    box = {"price": 2.99}
+
+    def _fake(req, timeout=6):   # noqa: ARG001
+        return _Resp(json.dumps({"ok": True, "plans": {"download_plans": {
+            "download_3day": {"price_cny": box["price"]}}}}).encode("utf-8"))
+
+    _real = urllib.request.urlopen
+    urllib.request.urlopen = _fake
+    PS._PLAN_CACHE["at"] = 0.0
+    PS._PLAN_CACHE["map"] = {}
+    try:
+        # ① 首次取价（管理员当时的价 2.99），缓存随之建立
+        first = PS.plan_quote("download_3day")
+        check("首次取价 = 云端 2.99（source=cloud）",
+              first["price"] == "2.99" and first["source"] == "cloud", str(first))
+
+        # ② 管理员改价 → 云端变 1.50（页面 ≤15s 就会显示 1.50）
+        box["price"] = 1.50
+
+        # ③ 非 force：TTL 内仍吃缓存（设计内行为，此处显式记录）
+        cached = PS.plan_quote("download_3day")
+        check("非 force 在 TTL 内吃缓存 → 仍 2.99", cached["price"] == "2.99", str(cached))
+
+        # ④ force（下单路径）：必须拿到新鲜价 1.50
+        fresh = PS.plan_quote("download_3day", force=True)
+        check("force=True（下单路径）→ 取新鲜价 1.50", fresh["price"] == "1.50", str(fresh))
+
+        # ⑤ 源码口径：下单 handler 必须带 force=True（防回归改回去）
+        src = (REPO / "deploy" / "pay_server.py").read_text(encoding="utf-8")
+        check("下单 handler 调用 plan_quote(..., force=True)",
+              "quote = plan_quote(plan_code, force=True)" in src)
+
+        # ⑥ 拉取失败只退避 RETRY_TTL（不是整个 TTL）——否则一次抖动把旧价锁死 5 分钟
+        def _boom(req, timeout=6):   # noqa: ARG001
+            raise OSError("network down")
+
+        urllib.request.urlopen = _boom
+        PS._PLAN_CACHE["at"] = 0.0
+        PS._PLAN_CACHE["map"] = {"download_3day": {"price_cny": 2.99}}
+        t0 = time.time()
+        PS._cloud_plans()
+        age = t0 - float(PS._PLAN_CACHE.get("at") or 0.0)
+        check("拉取失败后按 RETRY_TTL(15s) 重试，不锁死整个 TTL",
+              age >= PS.PLAN_CACHE_TTL - PS.PLAN_CACHE_RETRY_TTL - 2, "age=%.1fs" % age)
+    finally:
+        urllib.request.urlopen = _real
+        PS._PLAN_CACHE["at"] = 0.0
+        PS._PLAN_CACHE["map"] = {}
+
+
 def main() -> int:
     print("=" * 46)
     print("支付服务价格同源守卫（deploy/pay_server.py ↔ server/membership.py）")
@@ -173,6 +233,7 @@ def main() -> int:
     test_flash_price_used()
     test_plan_quote_cloud_and_fallback()
     test_unknown_code_not_sellable()
+    test_order_price_is_never_stale()
     print("=" * 46)
     if FAILS:
         print("❌ 失败 %d 项：" % len(FAILS))
