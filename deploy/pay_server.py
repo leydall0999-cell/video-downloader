@@ -35,6 +35,12 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs
 import urllib.parse
+# 🔴 必须显式导入子模块：`import urllib.parse` 只绑定包名，不会把 urllib.request
+#    挂上去。虎皮椒下单 `_place_xunhu()` 用 urllib.request.Request/urlopen，
+#    若依赖 `_grant()` 里那处函数级 import 的副作用，则「本进程尚未发过货」时
+#    必报 `module 'urllib' has no attribute 'request'`（2026-10-09 实测踩中）。
+import urllib.error
+import urllib.request
 
 # ── 配置 ──────────────────────────────────────────────────────────────────── #
 PORT = int(os.environ.get("VDL_PAY_PORT") or "8903")
@@ -182,12 +188,59 @@ _xunhu_err = ""
 
 
 def _xunhu_sign(params: dict[str, Any], appsecret: str) -> str:
-    """虎皮椒签名：ksort(params) → key=value&...（urlencode 值）→ +appsecret → md5。"""
-    qs = "&".join(
-        f"{k}={urllib.parse.quote_plus(str(params[k]))}"
-        for k in sorted(params.keys())
-    )
+    """虎皮椒签名（等价官方 PHP generate_xh_hash）：
+    ksort(键 ASCII 升序) → 逐项拼 `key=value` 用 `&` 连接 → 末尾**直接**拼 appsecret → md5(32 位小写)。
+
+    🔴 两处必须照抄官方，2026-10-09 实测踩中：
+      1. **值不做 urlencode**：官方是 `$arg .= "$key=$val"` 取原值。早期实现用
+         quote_plus 编码值 —— 本服务标题含中文（"视频工坊·下载会员1天卡"）、
+         notify_url 含 `:` `/`，编码后 hash 与服务端算出的不一致。
+      2. **空值不参与签名**（官方 `is_null($val) || $val === ''` 跳过），`hash` 自身不参与。
+    """
+    items = [(k, params[k]) for k in sorted(params.keys())
+             if k != "hash" and params[k] is not None and str(params[k]) != ""]
+    qs = "&".join(f"{k}={v}" for k, v in items)
     return hashlib.md5((qs + appsecret).encode("utf-8")).hexdigest()
+
+
+def _xunhu_native_code(url_qrcode: str) -> str:
+    """把 `url_qrcode` 还原成微信原生支付链接 `weixin://wxpay/bizpayurl?pr=…`。
+
+    官方口径：返回值里 `url` 是手机端专用跳转，`url_qrcode` 是 PC 端二维码。
+    实测（2026-10-09）`url_qrcode` 会 **302** 到
+    `…/qrcode/<appid>.html?data=<base64(weixin://wxpay/bizpayurl?pr=…)>&…`，
+    把 `data` 做 base64 解码即得原生支付链接 —— 扫这个码可直接调起微信支付，
+    比让用户扫码后跳网页收银台更稳。取不到时返回空串，调用方回落到收银台 URL。
+    """
+    def _from_query(u: str) -> str:
+        try:
+            data = urllib.parse.parse_qs(urllib.parse.urlparse(u).query).get("data", [""])[0]
+        except Exception:
+            return ""
+        if not data:
+            return ""
+        try:
+            s = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", "ignore")
+        except Exception:
+            return ""
+        return s if s.startswith("weixin://") else ""
+
+    direct = _from_query(url_qrcode)
+    if direct:
+        return direct
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):  # noqa: D102
+            return None
+
+    try:
+        urllib.request.build_opener(_NoRedirect).open(
+            urllib.request.Request(url_qrcode, method="GET"), timeout=10)
+    except urllib.error.HTTPError as he:
+        return _from_query(he.headers.get("Location") or "")
+    except Exception:
+        return ""
+    return ""
 
 
 def get_xunhu() -> Any:
@@ -223,9 +276,14 @@ def get_xunhu() -> Any:
 def _place_xunhu(subject: str, order_id: str, price: str, client: str) -> dict[str, Any]:
     """虎皮椒下单：返回 {mode, qr_code, pay_url}。
 
-    - payment 固定 'alipay'：桌面/移动端都用支付宝收银台（扫码或打开浏览器均可付）；
-      微信 JSAPI 需 openid 回调，复杂度高，暂不走。
-    - 返回 url（收银台）即作为 pay_url；桌面端把它生成二维码，用户用支付宝扫码付款。
+    - **不传 `payment`**：本账号渠道为「微信支付四」，网关按渠道自动返回微信收银台。
+      实测（2026-10-09）传 `payment=alipay` / `wechat` / 不传，返回 `url` 一律为
+      `payments/wechat/…`，该参数对结果无影响且会污染签名集合。
+    - `time`（秒级时间戳）与 `nonce_str`（随机串）是**官方必填项**，缺任一项网关直接报
+      「缺少参数appid,time,hash或他们的值不合法」（2026-10-09 实测踩中）。
+    - `url_qrcode` 还原为 `weixin://wxpay/bizpayurl?pr=…` 原生码，交上层 `_qr_png()`
+      生成二维码 —— 桌面端扫码即可直接调起微信支付（主路径）；
+      `url`（收银台）作为 `pay_url` 供「在浏览器中打开收银台」兜底。
     """
     cfg = get_xunhu()
     if isinstance(cfg, str):
@@ -235,9 +293,10 @@ def _place_xunhu(subject: str, order_id: str, price: str, client: str) -> dict[s
         "version": "1.1",
         "appid": appid,
         "trade_order_id": order_id,
-        "payment": "alipay",
         "total_fee": price,
         "title": subject,
+        "time": str(int(time.time())),
+        "nonce_str": secrets.token_hex(16),
         "notify_url": notify_base + "/api/pay/xunhupay/notify",
         "return_url": notify_base + "/api/pay/return",
     }
@@ -251,9 +310,10 @@ def _place_xunhu(subject: str, order_id: str, price: str, client: str) -> dict[s
     if resp.get("errcode") != 0:
         raise RuntimeError("虎皮椒下单失败: %s" % (resp.get("errmsg") or "未知错误"))
     pay_url = resp.get("url") or ""
-    if not pay_url:
-        raise RuntimeError("虎皮椒未返回收银台地址")
-    return {"mode": "xunhupay", "qr_code": "", "pay_url": pay_url}
+    qr_code = _xunhu_native_code(resp.get("url_qrcode") or "")
+    if not qr_code and not pay_url:
+        raise RuntimeError("虎皮椒未返回收银台/二维码地址")
+    return {"mode": "xunhupay", "qr_code": qr_code, "pay_url": pay_url}
 
 
 # ── 订单存储 ──────────────────────────────────────────────────────────────── #

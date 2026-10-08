@@ -322,6 +322,15 @@ run_one test_payment_router.py
 #       零测试 → 与 test_static_undefined_names.py 互补，构成 deploy/ 回归网。
 run_one test_pay_order_mode.py
 
+#  30c. test_payment_xunhu.py —— 虎皮椒（xunhupay）聚合通道（2026-10-09）：签名必须按
+#       官方 PHP `generate_xh_hash` 取**原值**（不 urlencode）、空值/hash 不参与；
+#       下单必须带官方必填 `time` + `nonce_str`（缺则网关报「缺少参数appid,time,hash
+#       或他们的值不合法」）；`url_qrcode` 要还原成 `weixin://` 原生码、取不到时
+#       回落收银台 URL 而**不得**返回空码。
+#       🔴 本文件此前**从未登记**（等于零执行），且断言写的是「urlencode 版」错误口径 ——
+#       这就是两个缺陷溜进线上的原因。改 `_xunhu_sign` / `_place_xunhu` 后必须跑它。
+run_one test_payment_xunhu.py
+
 #  31. test_credential_store.py —— 账号 token 凭据存储（2026-09-30，P2 加固）：
 #      token 不再以明文落在 ~/.video-downloader/membership*.json（拷走文件即可
 #      冒充用户调云端）。钉死三点：Keychain 存取往返、磁盘 JSON 无明文但内存态
