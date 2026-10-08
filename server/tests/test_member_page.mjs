@@ -120,9 +120,10 @@ assert.ok(/pfBuy\(code, el\.memStatus\)/.test(mb), '已登录应复用 pfBuy 下
 const resumeCalls = (appJs.match(/_memResumePending\(\);/g) || []).length;
 assert.ok(resumeCalls >= 2, `登录成功后自动续下单要接在两处登录路径（会员页登录框 / 顶栏登录弹窗），实际 ${resumeCalls} 处`);
 
-// ---- ⑤b 通道未开通时的诚实降级（线上 vdl-web 未配 VDL_PAY_PROVIDER → mock，返回里没有 qr_png）----
-// 契约事实：/api/cloud/pay/create 只保证 qr_content / pay_url；qr_png 是真通道（云端支付服务）才有的。
-// 早期实现写的是 `el.payQr.src = r.qr_png || ''` —— 于是线上每个人点开通都是「裂图 + 永久等待支付」。
+// ---- ⑤b 未接通道时的诚实降级（离线 / 未接真通道时后端不返回 qr_png）----
+// 契约事实：真通道（网页版后端已转发 VPS 支付服务，2026-10-09）返回 qr_png + qr；
+// 离线 / 未接通道时两者都缺。早期实现写的是 `el.payQr.src = r.qr_png || ''` ——
+// 于是每个人点开通都是「裂图 + 永久等待支付」。
 assert.ok(/const hasQr = !!r\.qr_png;/.test(appJs), 'pfBuy 必须显式判断 qr_png 是否存在');
 assert.ok(/if \(!hasQr\) return;/.test(appJs), '没有二维码时必须就此返回（不空转轮询）');
 assert.ok(/el\.payQr\.hidden = true;/.test(appJs) && /el\.payQr\.removeAttribute\('src'\)/.test(appJs),

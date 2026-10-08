@@ -251,12 +251,21 @@ def check_remote(code: str, fingerprint: str = "", base_url: Optional[str] = Non
 PAY_BASE = "https://pay.hanyuxz.top"
 
 
-def pay_create_remote(token: str, plan_code: str, base_url: str = PAY_BASE,
-                      timeout: float = 15.0,
+def pay_create_remote(token: str, plan_code: str, client: str = "",
+                      base_url: str = PAY_BASE, timeout: float = 15.0,
                       opener: Optional[Callable] = None) -> dict[str, Any]:
-    """下单：拿支付宝当面付二维码。返回 {ok, order_id, qr_png, amount, plan_code}。"""
-    return _post("/api/pay/create", {"token": token, "plan_code": plan_code},
-                 base_url, timeout, opener)
+    """下单：拿支付二维码 / 收银台地址。
+
+    返回 {ok, order_id, mode, qr_png, qr, pay_url, amount, plan_code}。
+
+    client 显式声明 'desktop' | 'mobile'：支付服务据此决定收银台形态；不传时
+    支付服务按 User-Agent 兜底判定，而本客户端 UA 是 VDL-LicenseClient/2.0，
+    会被判为 desktop —— 因此**由后端转发时必须显式传 client**，否则移动端拿不到 wap。
+    """
+    payload: dict[str, Any] = {"token": token, "plan_code": plan_code}
+    if client:
+        payload["client"] = client
+    return _post("/api/pay/create", payload, base_url, timeout, opener)
 
 
 def pay_query_remote(order_id: str, base_url: str = PAY_BASE,

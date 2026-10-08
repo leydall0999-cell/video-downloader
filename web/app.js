@@ -7446,13 +7446,22 @@
     say('');
     if (el.payAmount) el.payAmount.textContent = `¥${(Number(r.amount) || 0).toFixed(2)}`;
     if (el.payPlanName) el.payPlanName.textContent = r.plan_name || code;
-    // 后端契约是 qr_content（原始二维码内容）/ pay_url；真通道云端服务才会多返一个
-    // qr_png（base64 data URI）。当前线上 VDL_PAY_PROVIDER 未配 → 走 mock 通道，没有 qr_png。
-    // 此时**必须显式告知**，而不是塞个空 src 让用户对着裂图干等（2026-09-30）。
+    // 后端契约：真通道（转发 VPS 支付服务）返回 qr_png（base64 data URI）+ qr（原始内容）；
+    // 离线 / 未接通道时才没有 qr_png。没有码时**必须显式告知**，而不是塞个空 src
+    // 让用户对着裂图干等（2026-09-30）。
     const hasQr = !!r.qr_png;
+    // 通道文案（2026-10-09）：真通道当前为虎皮椒·微信（qr 前辍 weixin://），
+    // 写死「支付宝」会与二维码对不上 —— 按 qr 原始内容判定扫码 App。
+    const isWechat = String(r.qr || '').indexOf('weixin://') === 0;
     if (el.payQr) {
       if (hasQr) { el.payQr.src = r.qr_png; el.payQr.hidden = false; }
       else { el.payQr.removeAttribute('src'); el.payQr.hidden = true; }
+      el.payQr.alt = isWechat ? '微信支付二维码' : '支付二维码';
+    }
+    if (el.payTip) {
+      el.payTip.textContent = isWechat
+        ? '请使用微信扫码付款，支付成功后权益自动到账'
+        : '请使用支付宝或微信扫码付款，支付成功后权益自动到账';
     }
     // 标题 / 扫码提示也要跟着切，否则「通道未开通」的页面上还挂着「扫码支付」「请扫码付款」自相矛盾
     if (el.payModalTitle) el.payModalTitle.textContent = hasQr ? '扫码支付开通会员' : '订单已创建';
