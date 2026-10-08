@@ -16952,6 +16952,10 @@ el.dwVidPlayer.hidden = true;
     }
     window.open(url, '_blank');
   }
+  // 微信通道徽标图标（自绘 SVG，2026-10-09）：白色双气泡 + evenodd 镂空眼睛，
+  // 置于 #07c160 实心徽标上。自绘而非引外部图标库，避免打包/离线场景缺图。
+  const PAY_CHAN_SVG_WECHAT = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M9.4 8.9m-7.1 0a7.1 6.1 0 1 0 14.2 0a7.1 6.1 0 1 0 -14.2 0zM6.8 7.5m-1.15 0a1.15 1.15 0 1 0 2.3 0a1.15 1.15 0 1 0 -2.3 0zM11.4 7.5m-1.15 0a1.15 1.15 0 1 0 2.3 0a1.15 1.15 0 1 0 -2.3 0z"/><path d="M5.9 12.9 3.4 16.6l4.2-1.5z"/><path fill-rule="evenodd" d="M17.4 15.5m-5.4 0a5.4 4.7 0 1 0 10.8 0a5.4 4.7 0 1 0 -10.8 0zM15.6 14.6m-0.95 0a0.95 0.95 0 1 0 1.9 0a0.95 0.95 0 1 0 -1.9 0zM19.2 14.6m-0.95 0a0.95 0.95 0 1 0 1.9 0a0.95 0.95 0 1 0 -1.9 0z"/><path d="M21.2 18.5 23 21.7l-4-1.2z"/></svg>';
+
   function openPayModal(r) {
     closePayModal();
     const orderId = r.order_id;
@@ -16973,14 +16977,22 @@ el.dwVidPlayer.hidden = true;
     const payTipText = _chan === 'wechat' ? '请使用微信扫码付款，支付成功后自动开通'
       : (_chan === 'alipay' ? '请使用支付宝扫码付款，支付成功后自动开通'
         : '请扫码付款，支付成功后自动开通');
+    // 通道徽标（2026-10-09 用户要求「微信支付要明显一点」）：只有判出具体通道才显示，
+    // generic（判不出）不硬贴标签 —— 避免重演「支付宝或微信」那种误导性兜底。
+    const payChanBadge = _chan === 'wechat'
+      ? `<div class="vdl-pay-chan vdl-pay-chan-wechat">${PAY_CHAN_SVG_WECHAT}<span>微信支付</span></div>`
+      : (_chan === 'alipay'
+        ? `<div class="vdl-pay-chan vdl-pay-chan-alipay"><span>支付宝</span></div>`
+        : '');
     const overlay = document.createElement('div');
     overlay.className = 'vdl-pay-overlay';
     overlay.innerHTML = `
       <div class="vdl-pay-modal">
         <div class="vdl-pay-title">扫码支付开通会员</div>
         <div class="vdl-pay-amt">¥${(Number(amount) || 0).toFixed(2)} · ${planCode}</div>
-        ${qrPng ? `<img class="vdl-pay-qr" src="${qrPng}" alt="${payQrAlt}"/>` : ''}
-        <div class="vdl-pay-tip">${payTipText}</div>
+        ${payChanBadge}
+        ${qrPng ? `<img class="vdl-pay-qr${_chan === 'wechat' ? ' vdl-pay-qr-wechat' : ''}" src="${qrPng}" alt="${payQrAlt}"/>` : ''}
+        <div class="vdl-pay-tip vdl-pay-tip-${_chan}">${payTipText}</div>
         ${payUrl ? `<button type="button" class="btn btn-primary vdl-pay-openbrowser" id="vdlPayOpenBrowser">扫码不便？在浏览器中打开收银台</button>` : ''}
         <div class="vdl-pay-status" id="vdlPayStatus">等待支付…</div>
         <button type="button" class="btn btn-ghost vdl-pay-close" id="vdlPayClose">关闭</button>

@@ -170,8 +170,10 @@ def test_frontend_channel_text_matches_real_channel():
     虎皮椒·微信（码体是 `weixin://wxpay/bizpayurl?pr=…` 原生微信码），支付宝根本扫不了。
     文案与码不一致 ⇒ 用户按字面拿支付宝去扫，看到报错只会以为产品坏了。
 
-    守卫三点：①不得再出现写死的「支付宝或微信」提示；②须按 qr 前辍 / mode 判通道；
-    ③判不出通道时用中性文案，**不得**回退到「支付宝或微信」这个会误导人的兜底。
+    守卫四点：①不得再出现写死的「支付宝或微信」提示；②须按 qr 前辍 / mode 判通道；
+    ③判不出通道时用中性文案，**不得**回退到「支付宝或微信」这个会误导人的兜底；
+    ④通道须**可见**——微信绿徽标 + 二维码描边 + 提示文案三层同指一个通道（2026-10-09
+    用户要求「微信支付要明显一点」）。
     """
     appjs = open(os.path.join(REPO, "web", "app.js"), encoding="utf-8").read()
     j = appjs.index("function openPayModal")
@@ -185,6 +187,17 @@ def test_frontend_channel_text_matches_real_channel():
         "qr 缺失时应能用 mode 兜底判定（xunhupay＝微信），否则会掉到中性文案"
     assert "请使用微信扫码付款" in body and "请使用支付宝扫码付款" in body, \
         "两个通道的文案都要在（支付宝通道将来签约后零改动即生效）"
+    # 通道可见性（2026-10-09 用户要求「微信支付要明显一点」）：此前弹窗只有一行 11.8px
+    # 灰字，用户看完整屏只记得二维码、不知道该用哪个 App 扫。现要求「徽标 + 码描边 +
+    # 提示」三层同指通道，且徽标只在判出具体通道时出现（generic 不硬贴标签）。
+    assert "vdl-pay-chan-wechat" in body and "微信支付" in body, \
+        "缺微信通道徽标 —— 用户已明确要求「微信支付要明显一点」（2026-10-09）"
+    assert "PAY_CHAN_SVG_WECHAT" in body, \
+        "徽标必须带自绘微信图标（只给文字达不到「明显」；也不引外部图标库，防离线缺图）"
+    assert "vdl-pay-qr-wechat" in body, \
+        "二维码描边须跟着通道走，让「这码用微信扫」写在码本身上"
+    assert "vdl-pay-tip-${_chan}" in body or "vdl-pay-tip-" in body, \
+        "提示文案样式须跟着通道走，与徽标同源"
 
 
 if __name__ == "__main__":

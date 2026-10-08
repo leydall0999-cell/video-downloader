@@ -6887,7 +6887,7 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .com-done-note b { color: var(--text); }
 .com-done-saved { color: #15803d; font-weight: 600; }
 
-/* ---------------- 支付宝购买弹窗 ---------------- */
+/* ---------------- 扫码支付弹窗（微信 / 支付宝） ---------------- */
 .vdl-pay-overlay {
   position: fixed; inset: 0; z-index: 9999;
   display: flex; align-items: center; justify-content: center;
@@ -6901,11 +6901,32 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 }
 .vdl-pay-title { font-size: 1.02rem; font-weight: 700; color: var(--text, #1f2937); }
 .vdl-pay-amt { margin-top: .35rem; font-size: .85rem; color: var(--text-mute, #6b7280); }
+/* 通道徽标（2026-10-09 用户要求「微信支付要明显一点」）。此前弹窗里只有一行 11.8px
+   灰字「请使用微信扫码付款」，视觉权重几乎为零 —— 用户看完整屏只记得一个二维码，
+   不知道该用哪个 App 扫。现在把通道做成实心徽标（微信绿 + 自绘双气泡图标），
+   与二维码描边、提示文案三层同指一个通道。 */
+.vdl-pay-chan {
+  display: inline-flex; align-items: center; gap: .32rem;
+  margin-top: .7rem; padding: .3rem .72rem .3rem .56rem;
+  border-radius: 999px; line-height: 1;
+  font-size: .8rem; font-weight: 700; letter-spacing: .02em;
+}
+.vdl-pay-chan svg { width: 17px; height: 17px; display: block; flex: none; }
+.vdl-pay-chan-wechat { background: #07c160; color: #fff; box-shadow: 0 3px 12px rgba(7, 193, 96, .34); }
+.vdl-pay-chan-alipay { background: #1677ff; color: #fff; box-shadow: 0 3px 12px rgba(22, 119, 255, .30); }
 .vdl-pay-qr {
   display: block; margin: 1rem auto .7rem; width: 220px; height: 220px;
   border: 1px solid var(--line, #e5e7eb); border-radius: 8px; background: #fff;
 }
+/* 徽标在场时收紧二维码上间距，避免「徽标—码」被拉开 */
+.vdl-pay-chan + .vdl-pay-qr { margin-top: .62rem; }
+/* 二维码描边跟着通道走：把「这码用微信扫」写到码本身上 */
+.vdl-pay-qr-wechat {
+  border-color: rgba(7, 193, 96, .55);
+  box-shadow: 0 0 0 4px rgba(7, 193, 96, .12);
+}
 .vdl-pay-tip { font-size: .74rem; line-height: 1.5; color: var(--text-mute, #6b7280); }
+.vdl-pay-tip-wechat { font-size: .78rem; color: #0a8f4b; font-weight: 600; }
 .vdl-pay-openbrowser { margin-top: .6rem; width: 100%; }
 .vdl-pay-status { margin-top: .55rem; font-size: .82rem; font-weight: 600; color: #1d9e75; min-height: 1.1rem; }
 .vdl-pay-close { margin-top: .9rem; width: 100%; }
