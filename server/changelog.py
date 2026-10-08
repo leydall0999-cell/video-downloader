@@ -18,6 +18,14 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.46",
+        "date": "2026-10-08",
+        "items": [
+            "修复：点「立即更新」后进度一直停在 10% 的问题 —— 以前下载过程中不上报进度，"
+            "现在百分比会随下载实时增长（下载完到 80%，准备安装到 100%）",
+        ],
+    },
+    {
         "version": "1.0.45",
         "date": "2026-10-07",
         "items": [
