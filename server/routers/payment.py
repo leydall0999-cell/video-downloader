@@ -114,3 +114,63 @@ def pay_simulate(payload: dict[str, Any] = Body(...), request: Request = None) -
             order_id, grant_fn=lambda pc, oid: _grant_with(request, pc, oid))
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
+
+
+# ---- 真通道网关：/api/pay/*（前端默认入口）--------------------------------- #
+# 🔴 2026-10-09 修复「点购买没反应」：
+#   2aed1e4 把前端从「调本机 /api/cloud/pay/*」改成「直连公网 pay.hanyuxz.top」，
+#   但**没有携带云端令牌** —— 支付服务 parse_token("") 直接 401 BAD_TOKEN，
+#   前端只显示一句「登录态失效，请重新登录」，用户感知就是「点了没反应」。
+#   令牌只存在于后端（明文 → 已迁移到系统 Keychain），前端拿不到、也不该拿到。
+#   正解：前端 → 本机后端（凭 Authorization 认出用户）→ 后端取该账号云端令牌
+#   → 转发 VPS 支付服务。对外路径与 VPS 保持一致（/api/pay/create|query），
+#   前端只需把 PAY_API_BASE 置空即可复用，无需改第二处。
+PAY_GATEWAY_BASE = os.environ.get("VDL_PAY_GATEWAY_BASE", "https://pay.hanyuxz.top")
+
+
+def _cloud_token_of(request: Optional[Request]) -> str:
+    """当前用户（或全局）云端账号令牌；未登录云端账号时返回空串。"""
+    try:
+        from routers.quota import _cloud_token as _quota_cloud_token
+        return str(_quota_cloud_token(request) or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+@router.post("/api/pay/create")
+def pay_gateway_create(payload: dict[str, Any] = Body(...), request: Request = None) -> dict:
+    """下单转发：带云端令牌调 VPS 支付服务（虎皮椒 / 支付宝）。"""
+    plan_code = str(payload.get("plan_code") or "").strip()
+    if not plan_code:
+        return {"ok": False, "error": "缺少套餐", "code": "NO_PLAN"}
+    token = _cloud_token_of(request)
+    if not token:
+        return {"ok": False, "error": "请先登录账号后再购买", "code": "NO_CLOUD_TOKEN"}
+    client = str(payload.get("client") or "").strip().lower()
+    if client not in ("desktop", "mobile"):
+        client = ""
+    try:
+        import license_client
+        r = license_client.pay_create_remote(token, plan_code, client=client,
+                                             base_url=PAY_GATEWAY_BASE)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"支付服务不可用：{e}", "code": "PAY_GATEWAY_ERROR"}
+    if not isinstance(r, dict):
+        return {"ok": False, "error": "支付服务返回异常", "code": "PAY_GATEWAY_BAD_RESP"}
+    return r
+
+
+@router.post("/api/pay/query")
+def pay_gateway_query(payload: dict[str, Any] = Body(...)) -> dict:
+    """订单状态轮询转发（付款成功由 VPS 异步回调发货，前端只查状态）。"""
+    order_id = str(payload.get("order_id") or "").strip()
+    if not order_id:
+        return {"ok": False, "error": "缺少订单号", "code": "NO_ORDER"}
+    try:
+        import license_client
+        r = license_client.pay_query_remote(order_id, base_url=PAY_GATEWAY_BASE)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"支付服务不可用：{e}", "code": "PAY_GATEWAY_ERROR"}
+    if not isinstance(r, dict):
+        return {"ok": False, "error": "支付服务返回异常", "code": "PAY_GATEWAY_BAD_RESP"}
+    return r

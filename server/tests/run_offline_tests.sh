@@ -330,6 +330,9 @@ run_one test_pay_order_mode.py
 #       🔴 本文件此前**从未登记**（等于零执行），且断言写的是「urlencode 版」错误口径 ——
 #       这就是两个缺陷溜进线上的原因。改 `_xunhu_sign` / `_place_xunhu` 后必须跑它。
 run_one test_payment_xunhu.py
+# 2026-10-09「点购买没反应」回归守卫：本机网关 /api/pay/* 必须带**云端令牌**转发 VPS，
+# 且前端 PAY_API_BASE 默认不得退回直连公网（直连 = 无令牌 = 必然 401）。
+run_one test_pay_gateway.py
 
 #  31. test_credential_store.py —— 账号 token 凭据存储（2026-09-30，P2 加固）：
 #      token 不再以明文落在 ~/.video-downloader/membership*.json（拷走文件即可

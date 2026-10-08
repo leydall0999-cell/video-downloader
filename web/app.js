@@ -16900,8 +16900,13 @@ el.dwVidPlayer.hidden = true;
   // ---- 在线支付购买（下单 → 二维码/收银台弹窗 → 轮询自动开通）----
   // 🔴 支付真通道统一走 VPS 支付服务（异步回调必须公网可达，桌面本地 127.0.0.1 收不到）。
   //    前端只改「打哪」，本地 /api/cloud/pay/* 的 mock 仅留作开发兜底（见下方 fallback）。
-  //    PAY_API_BASE 可经 window.VDL_PAY_API_BASE 注入覆盖（例如内网/沙箱），默认公网入口。
-  const PAY_API_BASE = (window.VDL_PAY_API_BASE || 'https://pay.hanyuxz.top').replace(/\/+$/, '');
+  // 🔴 2026-10-09：「默认公网入口」这个旧口径是错的 —— 直连 VPS 的请求里**没有云端令牌**
+  //    （令牌存在后端明文/系统 Keychain，前端拿不到也不该拿），支付服务 parse_token("")
+  //    一律 401 BAD_TOKEN，前端只弹一句「登录态失效」，用户感知就是「点购买没反应」。
+  //    默认改为空串 = 走**本机后端**同名路由 /api/pay/*，由后端凭 Authorization 认出用户、
+  //    取该账号云端令牌后转发 VPS（见 server/routers/payment.py 的真通道网关）。
+  //    window.VDL_PAY_API_BASE 仍可覆盖（内网/沙箱/离线直连）。
+  const PAY_API_BASE = (window.VDL_PAY_API_BASE || '').replace(/\/+$/, '');
   let _payTimer = null;
   async function payCreate(planCode) {
     if (!el.memberModal) return;
@@ -16913,10 +16918,17 @@ el.dwVidPlayer.hidden = true;
       r = await request('/api/pay/create', {
         method: 'POST', body: JSON.stringify({ plan_code: planCode, client }) }, PAY_API_BASE);
     } catch (e) {
-      _memberMsg('❌ 下单失败：网络错误', true); return;
+      _memberMsg('❌ 下单失败：网络错误', true);
+      showToast('❌ 下单失败：网络错误');
+      return;
     }
     if (!r || !r.ok) {
-      _memberMsg('❌ ' + ((r && r.error) || '下单失败'), true); return;
+      // 🔴 订单提示条在弹窗底部（member-activate 区），用户常常看不到 —— 必须同时弹 toast，
+      //    否则「点了没反应」的观感依旧（2026-10-09 实测反馈）。
+      const _msg = (r && r.error) || '下单失败';
+      _memberMsg('❌ ' + _msg, true);
+      showToast('❌ ' + _msg);
+      return;
     }
     _memberMsg('');
     openPayModal(r);

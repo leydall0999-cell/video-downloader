@@ -96,6 +96,62 @@ PRICE_MAP: dict[str, dict[str, Any]] = {
     "credits_15000":      {"price": "99.00",  "subject": "视频工坊·15000积分包"},
 }
 
+# ── 金额「单一真源」＝授权中心，本地 PRICE_MAP 仅作兜底 ────────────────────── #
+# 🔴 2026-10-09 修复「前端展示价 ≠ 实收价」：本服务原以硬编码 PRICE_MAP 收款，而
+#    前端/后台改价后展示的是授权中心下发的价，两边会分叉（实测 3 天档展示 ¥2.99、
+#    实际按 ¥4.90 收款 —— 属**多收**，会引发投诉与退款）。
+#    现在改为：下单时向授权中心取该档 price_cny，取不到才回落本地 PRICE_MAP。
+#    ⚠️ 已知局限：只取 price_cny（常态价），**不解析限时秒杀/活动价**——若某档正处于
+#    秒杀生效窗口，实收会高于展示价。开秒杀前请先把 price_cny 调到位，或同步本处逻辑。
+PLAN_SOURCE_URL = os.environ.get(
+    "VDL_PLAN_SOURCE_URL", "http://127.0.0.1:8902/api/license/plans")
+PLAN_CACHE_TTL = 300.0
+_PLAN_CACHE: dict[str, Any] = {"at": 0.0, "map": {}}
+
+
+def _cloud_prices() -> dict[str, str]:
+    """拉授权中心价格表 → {plan_code: "1.99"}；失败返回上次缓存（可能为空）。
+
+    授权中心返回是**两层**结构：{"plans": {"download_plans": {code: {...}}, ...}}，
+    code 分布在各子表下，因此这里遍历所有子表收集。
+    """
+    now = time.time()
+    if now - float(_PLAN_CACHE.get("at") or 0.0) <= PLAN_CACHE_TTL:
+        return dict(_PLAN_CACHE.get("map") or {})
+    try:
+        req = urllib.request.Request(
+            PLAN_SOURCE_URL, data=b"{}",
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=6) as r:
+            payload = json.loads(r.read().decode("utf-8"))
+        out: dict[str, str] = {}
+        for table in (payload.get("plans") or {}).values():
+            if not isinstance(table, dict):
+                continue
+            for code, meta in table.items():
+                if not isinstance(meta, dict):
+                    continue
+                cny = meta.get("price_cny")
+                if cny in (None, ""):
+                    continue
+                try:
+                    out[str(code)] = f"{float(cny):.2f}"
+                except (TypeError, ValueError):
+                    continue
+        _PLAN_CACHE["map"] = out
+    except Exception:
+        pass  # 授权中心暂不可达：保留上次缓存，兜底走 PRICE_MAP
+    _PLAN_CACHE["at"] = now
+    return dict(_PLAN_CACHE.get("map") or {})
+
+
+def plan_price(plan_code: str) -> str:
+    """该档应收金额（元，两位小数字符串）：云端真源优先，本地兜底。"""
+    p = _cloud_prices().get(str(plan_code or ""))
+    if p:
+        return p
+    return str((PRICE_MAP.get(plan_code) or {}).get("price") or "0.00")
+
 # ── 登录 token 解析（与授权中心同算法，共享 secret）─────────────────────────── #
 def _b64u_decode(s: str) -> str:
     pad = "=" * (-len(s) % 4)
@@ -517,7 +573,8 @@ class Handler(BaseHTTPRequestHandler):
             ua = (self.headers.get("User-Agent") or "").lower()
             client = ("mobile" if any(k in ua for k in ("iphone", "ipad", "android", "mobile"))
                       else "desktop")
-        price = PRICE_MAP[plan_code]["price"]
+        # 金额取授权中心真源（与前端展示同源），缺价才回落本地 PRICE_MAP。
+        price = plan_price(plan_code)
         subject = PRICE_MAP[plan_code]["subject"]
         order_id = _gen_order_id()
         if PAY_CHANNEL == "xunhupay":
