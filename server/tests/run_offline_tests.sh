@@ -333,6 +333,10 @@ run_one test_payment_xunhu.py
 # 2026-10-09「点购买没反应」回归守卫：本机网关 /api/pay/* 必须带**云端令牌**转发 VPS，
 # 且前端 PAY_API_BASE 默认不得退回直连公网（直连 = 无令牌 = 必然 401）。
 run_one test_pay_gateway.py
+# 2026-10-09 价格同源守卫：支付服务 deploy/pay_server.py 的「有效价/可购性」必须与
+# App 侧 membership.plan_sales_state 逐条一致（含秒杀窗口、下架、活动窗口、售罄）——
+# 防「前端展示价 ≠ 实收价」再次分叉（曾发生 3 天档展示 ¥2.99 / 实收 ¥4.90）。
+run_one test_pay_price_source.py
 
 #  31. test_credential_store.py —— 账号 token 凭据存储（2026-09-30，P2 加固）：
 #      token 不再以明文落在 ~/.video-downloader/membership*.json（拷走文件即可

@@ -96,24 +96,75 @@ PRICE_MAP: dict[str, dict[str, Any]] = {
     "credits_15000":      {"price": "99.00",  "subject": "视频工坊·15000积分包"},
 }
 
-# ── 金额「单一真源」＝授权中心，本地 PRICE_MAP 仅作兜底 ────────────────────── #
+# ── 金额与可购性「单一真源」＝授权中心，本地 PRICE_MAP 仅作兜底 ────────────── #
 # 🔴 2026-10-09 修复「前端展示价 ≠ 实收价」：本服务原以硬编码 PRICE_MAP 收款，而
 #    前端/后台改价后展示的是授权中心下发的价，两边会分叉（实测 3 天档展示 ¥2.99、
 #    实际按 ¥4.90 收款 —— 属**多收**，会引发投诉与退款）。
-#    现在改为：下单时向授权中心取该档 price_cny，取不到才回落本地 PRICE_MAP。
-#    ⚠️ 已知局限：只取 price_cny（常态价），**不解析限时秒杀/活动价**——若某档正处于
-#    秒杀生效窗口，实收会高于展示价。开秒杀前请先把 price_cny 调到位，或同步本处逻辑。
+#    现在改为：下单时向授权中心取该档**当前有效价**，取不到才回落本地 PRICE_MAP。
+# 🔴 同日补修：此前只取 price_cny（常态价），**不解析限时秒杀** —— 若某档处于秒杀
+#    窗口内，前端展示 flash_price（更低）而本服务仍按 price_cny 收，属**多收**。
+#    现将「有效价」与「可购性」按 App 侧同一份规则重算（见 _sales_state，镜像
+#    server/membership.py::plan_sales_state）；两侧一致性由
+#    server/tests/test_pay_price_source.py 交叉断言兜住，防止规则分叉。
 PLAN_SOURCE_URL = os.environ.get(
     "VDL_PLAN_SOURCE_URL", "http://127.0.0.1:8902/api/license/plans")
 PLAN_CACHE_TTL = 300.0
 _PLAN_CACHE: dict[str, Any] = {"at": 0.0, "map": {}}
+# 与 server/membership.py::PLAN_MODES 保持一致
+PLAN_MODES = ("normal", "flash_sale", "limited", "event")
 
 
-def _cloud_prices() -> dict[str, str]:
-    """拉授权中心价格表 → {plan_code: "1.99"}；失败返回上次缓存（可能为空）。
+def _ts(v: Any) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _sales_state(plan: dict[str, Any], now: float) -> dict[str, Any]:
+    """一档的当前有效价与可购性（镜像 server/membership.py::plan_sales_state）。
+
+    只取本服务用得到的字段：有效价 price、可购性 buyable、不可购原因 reason。
+    规则必须与 App 侧逐条一致，否则「展示价/实收价」会再次分叉。
+    """
+    p = dict(plan or {})
+    mode = str(p.get("mode") or "normal")
+    if mode not in PLAN_MODES:
+        mode = "normal"
+    on_sale = p.get("on_sale", True)
+    on_sale = True if on_sale is None else bool(on_sale)
+    base_price = _ts(p.get("price_cny"))
+    start_at = _ts(p.get("start_at"))
+    end_at = _ts(p.get("end_at"))
+    fs = _ts(p.get("flash_start"))
+    fe = _ts(p.get("flash_end"))
+    flash_price = _ts(p.get("flash_price"))
+    in_flash = bool(flash_price > 0 and fs and fe and fs <= now <= fe)
+    stock = int(p.get("stock") or 0)
+    sold = int(p.get("sold") or 0)
+    reason = ""
+    if not on_sale:
+        reason = "已下架"
+    elif start_at and now < start_at:
+        reason = "活动未开始"
+    elif end_at and now > end_at:
+        reason = "活动已结束"
+    elif stock > 0 and sold >= stock:
+        reason = "已售罄"
+    return {
+        "price": (flash_price if in_flash else base_price),
+        "buyable": (reason == ""),
+        "reason": reason,
+        "is_flash": in_flash,
+    }
+
+
+def _cloud_plans() -> dict[str, dict]:
+    """拉授权中心档位覆盖表 → {plan_code: {price_cny, mode, flash_price, ...}}。
 
     授权中心返回是**两层**结构：{"plans": {"download_plans": {code: {...}}, ...}}，
-    code 分布在各子表下，因此这里遍历所有子表收集。
+    code 分布在各子表下，因此这里遍历所有子表收集。失败返回上次缓存（可能为空），
+    缓存期内不再请求。
     """
     now = time.time()
     if now - float(_PLAN_CACHE.get("at") or 0.0) <= PLAN_CACHE_TTL:
@@ -124,33 +175,40 @@ def _cloud_prices() -> dict[str, str]:
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=6) as r:
             payload = json.loads(r.read().decode("utf-8"))
-        out: dict[str, str] = {}
+        out: dict[str, dict] = {}
         for table in (payload.get("plans") or {}).values():
             if not isinstance(table, dict):
                 continue
             for code, meta in table.items():
-                if not isinstance(meta, dict):
-                    continue
-                cny = meta.get("price_cny")
-                if cny in (None, ""):
-                    continue
-                try:
-                    out[str(code)] = f"{float(cny):.2f}"
-                except (TypeError, ValueError):
-                    continue
-        _PLAN_CACHE["map"] = out
+                if isinstance(meta, dict):
+                    out[str(code)] = dict(meta)
+        if out:
+            _PLAN_CACHE["map"] = out
     except Exception:
         pass  # 授权中心暂不可达：保留上次缓存，兜底走 PRICE_MAP
     _PLAN_CACHE["at"] = now
     return dict(_PLAN_CACHE.get("map") or {})
 
 
+def plan_quote(plan_code: str) -> dict[str, Any]:
+    """下单报价：{price, buyable, reason, source}。
+
+    - 授权中心可达 → 按其覆盖表用 _sales_state 算有效价与可购性（source=cloud）；
+    - 不可达/该档无覆盖 → 回落本地 PRICE_MAP（source=local，视为可购）。
+    """
+    meta = _cloud_plans().get(str(plan_code or ""))
+    if isinstance(meta, dict) and meta:
+        st = _sales_state(meta, time.time())
+        return {"price": f"{float(st['price']):.2f}", "buyable": st["buyable"],
+                "reason": st["reason"], "source": "cloud"}
+    local = PRICE_MAP.get(plan_code) or {}
+    return {"price": str(local.get("price") or "0.00"), "buyable": True,
+            "reason": "", "source": "local"}
+
+
 def plan_price(plan_code: str) -> str:
-    """该档应收金额（元，两位小数字符串）：云端真源优先，本地兜底。"""
-    p = _cloud_prices().get(str(plan_code or ""))
-    if p:
-        return p
-    return str((PRICE_MAP.get(plan_code) or {}).get("price") or "0.00")
+    """该档应收金额（元，两位小数字符串）。保留给探针/自检，下单请用 plan_quote。"""
+    return str(plan_quote(plan_code)["price"])
 
 # ── 登录 token 解析（与授权中心同算法，共享 secret）─────────────────────────── #
 def _b64u_decode(s: str) -> str:
@@ -573,8 +631,13 @@ class Handler(BaseHTTPRequestHandler):
             ua = (self.headers.get("User-Agent") or "").lower()
             client = ("mobile" if any(k in ua for k in ("iphone", "ipad", "android", "mobile"))
                       else "desktop")
-        # 金额取授权中心真源（与前端展示同源），缺价才回落本地 PRICE_MAP。
-        price = plan_price(plan_code)
+        # 金额与可购性取授权中心真源（与前端展示同源）：含秒杀有效价 + 下架/活动窗口/售罄。
+        quote = plan_quote(plan_code)
+        if not quote["buyable"]:
+            return self._json(400, {"ok": False,
+                                    "error": quote["reason"] or "该套餐当前不可购买",
+                                    "code": "PLAN_UNAVAILABLE"})
+        price = quote["price"]
         subject = PRICE_MAP[plan_code]["subject"]
         order_id = _gen_order_id()
         if PAY_CHANNEL == "xunhupay":
