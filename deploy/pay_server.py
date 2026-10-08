@@ -34,6 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs
+import urllib.parse
 
 # ── 配置 ──────────────────────────────────────────────────────────────────── #
 PORT = int(os.environ.get("VDL_PAY_PORT") or "8903")
@@ -50,6 +51,14 @@ GRANT_URL = (os.environ.get("VDL_GRANT_URL")
              or "http://127.0.0.1:8902/api/license/grant")
 ALIPAY_CFG = Path(os.environ.get("VDL_ALIPAY_CFG") or "/opt/vdl-license/alipay.json")
 TOKEN_TTL = float(os.environ.get("VDL_LICENSE_TOKEN_TTL_DAYS") or "30") * 86400.0
+
+# 支付渠道选择（2026-10-08 新增「虎皮椒」第三方聚合，个人免执照可用）
+# ------------
+#   alipay   = 官方支付宝（当面付/电脑网站/手机网站，按 PAY_MODE 自动选；需商户资质+密钥）
+#   xunhupay = 虎皮椒聚合（个人实名即用，无需营业执照/ICP 备案；支付宝+微信都支持，
+#              异步回调验签后自动发货，与支付宝同款 UX：返回收银台 URL 或扫码）
+#   默认 alipay（保持既有行为不变）；拿到虎皮椒密钥后设 VDL_PAY_CHANNEL=xunhupay 即切换。
+PAY_CHANNEL = (os.environ.get("VDL_PAY_CHANNEL") or "alipay").strip().lower()
 
 # 支付产品选择
 # ------------
@@ -162,6 +171,89 @@ def _ensure_pem(key: str, kind: str) -> str:
         return ("-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(lines)
                 + "\n-----END RSA PRIVATE KEY-----\n")
     return "-----BEGIN PUBLIC KEY-----\n" + "\n".join(lines) + "\n-----END PUBLIC KEY-----\n"
+
+
+# ── 虎皮椒（xunhupay）聚合支付：个人免执照通道 ─────────────────────────────── #
+# 文档：https://www.xunhupay.com/  接入：POST https://api.xunhupay.com/payment/do.html
+# 签名：所有参与参数按 key 升序拼接为 key=value&...（值做 urlencode，与 PHP
+#       http_build_query 一致），末尾拼接 appsecret 后取 md5。验签同理（移除 hash）。
+_xunhu_cfg = None
+_xunhu_err = ""
+
+
+def _xunhu_sign(params: dict[str, Any], appsecret: str) -> str:
+    """虎皮椒签名：ksort(params) → key=value&...（urlencode 值）→ +appsecret → md5。"""
+    qs = "&".join(
+        f"{k}={urllib.parse.quote_plus(str(params[k]))}"
+        for k in sorted(params.keys())
+    )
+    return hashlib.md5((qs + appsecret).encode("utf-8")).hexdigest()
+
+
+def get_xunhu() -> Any:
+    """返回 (appid, appsecret, gateway, notify_base) 或错误字符串。
+
+    配置默认读 /opt/vdl-license/xunhupay.json：{appid, appsecret,
+    gateway?(默认 https://api.xunhupay.com/payment/do.html),
+    notify_base?(默认 https://pay.hanyuxz.top)}。
+    """
+    global _xunhu_cfg, _xunhu_err
+    if _xunhu_cfg is not None or _xunhu_err:
+        return _xunhu_cfg or _xunhu_err
+    p = Path(os.environ.get("VDL_XUNHU_CFG") or "/opt/vdl-license/xunhupay.json")
+    if not p.exists():
+        _xunhu_err = f"虎皮椒配置缺失: {p}"
+        return _xunhu_err
+    try:
+        c = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        _xunhu_err = f"虎皮椒配置解析失败: {e}"
+        return _xunhu_err
+    appid = (c.get("appid") or "").strip()
+    appsecret = (c.get("appsecret") or "").strip()
+    if not appid or not appsecret:
+        _xunhu_err = "虎皮椒配置不完整(需 appid + appsecret)"
+        return _xunhu_err
+    gateway = (c.get("gateway") or "https://api.xunhupay.com/payment/do.html").strip()
+    notify_base = (c.get("notify_base") or "https://pay.hanyuxz.top").rstrip("/")
+    _xunhu_cfg = (appid, appsecret, gateway, notify_base)
+    return _xunhu_cfg
+
+
+def _place_xunhu(subject: str, order_id: str, price: str, client: str) -> dict[str, Any]:
+    """虎皮椒下单：返回 {mode, qr_code, pay_url}。
+
+    - payment 固定 'alipay'：桌面/移动端都用支付宝收银台（扫码或打开浏览器均可付）；
+      微信 JSAPI 需 openid 回调，复杂度高，暂不走。
+    - 返回 url（收银台）即作为 pay_url；桌面端把它生成二维码，用户用支付宝扫码付款。
+    """
+    cfg = get_xunhu()
+    if isinstance(cfg, str):
+        raise RuntimeError(cfg)
+    appid, appsecret, gateway, notify_base = cfg
+    params: dict[str, Any] = {
+        "version": "1.1",
+        "appid": appid,
+        "trade_order_id": order_id,
+        "payment": "alipay",
+        "total_fee": price,
+        "title": subject,
+        "notify_url": notify_base + "/api/pay/xunhupay/notify",
+        "return_url": notify_base + "/api/pay/return",
+    }
+    params["hash"] = _xunhu_sign(params, appsecret)
+    data = urllib.parse.urlencode(params).encode("utf-8")
+    req = urllib.request.Request(
+        gateway, data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        resp = json.loads(r.read().decode("utf-8"))
+    if resp.get("errcode") != 0:
+        raise RuntimeError("虎皮椒下单失败: %s" % (resp.get("errmsg") or "未知错误"))
+    pay_url = resp.get("url") or ""
+    if not pay_url:
+        raise RuntimeError("虎皮椒未返回收银台地址")
+    return {"mode": "xunhupay", "qr_code": "", "pay_url": pay_url}
 
 
 # ── 订单存储 ──────────────────────────────────────────────────────────────── #
@@ -328,7 +420,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         p = self.path.split("?")[0]
         if p in ("/healthz", "/api/pay/healthz"):
-            self._json(200, {"ok": True, "service": "vdl-pay"})
+            self._json(200, {"ok": True, "service": "vdl-pay",
+                             "channel": PAY_CHANNEL, "mode": PAY_MODE})
         elif p == "/api/pay/return":
             # 网页支付同步回跳落地页（付完回 App 的提示）
             self._html(200, _pay_return_html())
@@ -341,6 +434,8 @@ class Handler(BaseHTTPRequestHandler):
             self._create()
         elif p == "/api/pay/alipay/notify":
             self._notify()
+        elif p == "/api/pay/xunhupay/notify":
+            self._xunhu_notify()
         elif p == "/api/pay/query":
             self._query()
         else:
@@ -357,9 +452,6 @@ class Handler(BaseHTTPRequestHandler):
         if not email:
             return self._json(401, {"ok": False, "error": "登录态失效，请重新登录",
                                     "code": "BAD_TOKEN"})
-        alipay, err = get_alipay()
-        if err:
-            return self._json(500, {"ok": False, "error": err, "code": "ALIPAY_CFG"})
         # 桌面/移动判定：前端传 client 优先，否则按 UA 兜底（决定用 page 还是 wap）
         if client not in ("mobile", "desktop"):
             ua = (self.headers.get("User-Agent") or "").lower()
@@ -368,13 +460,23 @@ class Handler(BaseHTTPRequestHandler):
         price = PRICE_MAP[plan_code]["price"]
         subject = PRICE_MAP[plan_code]["subject"]
         order_id = _gen_order_id()
-        try:
-            # notify_url 由 SDK 从 app_notify_url 自动注入（AliPay._app_notify_url），
-            # 不要显式传 alipay.app_notify_url —— SDK 未暴露该公有属性，会 AttributeError。
-            res = _place_order(alipay, subject, order_id, price, client)
-        except Exception as e:
-            return self._json(400, {"ok": False, "error": f"支付宝下单失败: {e}",
-                                    "code": "ALIPAY_REJECT"})
+        if PAY_CHANNEL == "xunhupay":
+            try:
+                res = _place_xunhu(subject, order_id, price, client)
+            except Exception as e:
+                return self._json(400, {"ok": False, "error": f"虎皮椒下单失败: {e}",
+                                        "code": "XUNHU_REJECT"})
+        else:
+            alipay, err = get_alipay()
+            if err:
+                return self._json(500, {"ok": False, "error": err, "code": "ALIPAY_CFG"})
+            try:
+                # notify_url 由 SDK 从 app_notify_url 自动注入（AliPay._app_notify_url），
+                # 不要显式传 alipay.app_notify_url —— SDK 未暴露该公有属性，会 AttributeError。
+                res = _place_order(alipay, subject, order_id, price, client)
+            except Exception as e:
+                return self._json(400, {"ok": False, "error": f"支付宝下单失败: {e}",
+                                        "code": "ALIPAY_REJECT"})
         mode = res["mode"]
         qr_code = res.get("qr_code") or ""
         pay_url = res.get("pay_url") or ""
@@ -452,6 +554,63 @@ class Handler(BaseHTTPRequestHandler):
                     o[order_id]["trade_no"] = trade_no
                 _save_orders(o)
             # 仍回 success 避免支付宝无限重试；后台可查 GRANT_FAILED 补单
+            return self._text(200, "success")
+
+    def _xunhu_notify(self):
+        # 虎皮椒异步通知：form-urlencoded POST。验签（md5）确认真付款后调授权中心发货。
+        # 字段：trade_order_id / transaction_id / total_fee / type / status(OD=已付) / hash
+        try:
+            ln = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(ln).decode("utf-8")
+        except Exception:
+            return self._text(500, "failure")
+        params = {k: v[0] for k, v in parse_qs(raw).items()}
+        cfg = get_xunhu()
+        if isinstance(cfg, str):
+            return self._text(500, "failure")
+        appid, appsecret, gateway, notify_base = cfg
+        recv_hash = params.pop("hash", "")
+        params.pop("sign", None)  # 兼容字段
+        calc = _xunhu_sign(params, appsecret)
+        if not hmac.compare_digest(calc, recv_hash):
+            return self._text(400, "failure")
+        order_id = (params.get("trade_order_id")
+                    or params.get("out_trade_order_id") or "")
+        status = params.get("status", "")
+        # 非终态（WP 等）也回 success，避免虎皮椒无谓重试；不发货
+        if status not in ("OD", "TRADE_SUCCESS", "PAID"):
+            return self._text(200, "success")
+        with _LOCK:
+            o = _load_orders()
+            ordr = o.get(order_id)
+            if not ordr:
+                return self._text(200, "success")
+            if ordr.get("status") == "PAID":
+                return self._text(200, "success")  # 幂等
+            email = ordr["email"]
+            plan_code = ordr["plan_code"]
+            ordr["status"] = "GRANTING"
+            _save_orders(o)
+        try:
+            _grant(email, plan_code, note=f"xunhupay-auto:{order_id}")
+            with _LOCK:
+                o = _load_orders()
+                o[order_id]["status"] = "PAID"
+                o[order_id]["paid_at"] = time.time()
+                if params.get("transaction_id"):
+                    o[order_id]["trade_no"] = params["transaction_id"]
+                _save_orders(o)
+            return self._text(200, "success")
+        except Exception as e:
+            with _LOCK:
+                o = _load_orders()
+                o[order_id]["status"] = "GRANT_FAILED"
+                o[order_id]["err"] = str(e)[:200]
+                o[order_id]["paid_at"] = time.time()
+                if params.get("transaction_id"):
+                    o[order_id]["trade_no"] = params["transaction_id"]
+                _save_orders(o)
+            # 已收款仅发货失败 —— 对账口径 GRANT_FAILED = 已收款未发货，会告警补发
             return self._text(200, "success")
 
     def _query(self):

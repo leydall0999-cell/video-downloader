@@ -16897,8 +16897,8 @@ el.dwVidPlayer.hidden = true;
     } catch (_) { /* 静默 */ }
   }
   // 卡密通道已下线（2026-09-26）：activateMember 已移除，充值一律走 payCreate（支付宝/微信在线支付）
-  // ---- 支付宝购买（下单 → 二维码弹窗 → 轮询自动开通）----
-  // 🔴 支付真通道统一走 VPS 支付服务（支付宝异步回调必须公网可达，桌面本地 127.0.0.1 收不到）。
+  // ---- 在线支付购买（下单 → 二维码/收银台弹窗 → 轮询自动开通）----
+  // 🔴 支付真通道统一走 VPS 支付服务（异步回调必须公网可达，桌面本地 127.0.0.1 收不到）。
   //    前端只改「打哪」，本地 /api/cloud/pay/* 的 mock 仅留作开发兜底（见下方 fallback）。
   //    PAY_API_BASE 可经 window.VDL_PAY_API_BASE 注入覆盖（例如内网/沙箱），默认公网入口。
   const PAY_API_BASE = (window.VDL_PAY_API_BASE || 'https://pay.hanyuxz.top').replace(/\/+$/, '');
@@ -16946,8 +16946,8 @@ el.dwVidPlayer.hidden = true;
       <div class="vdl-pay-modal">
         <div class="vdl-pay-title">扫码支付开通会员</div>
         <div class="vdl-pay-amt">¥${(Number(amount) || 0).toFixed(2)} · ${planCode}</div>
-        ${qrPng ? `<img class="vdl-pay-qr" src="${qrPng}" alt="支付宝支付二维码"/>` : ''}
-        <div class="vdl-pay-tip">请使用支付宝扫码付款，支付成功后自动开通</div>
+        ${qrPng ? `<img class="vdl-pay-qr" src="${qrPng}" alt="支付二维码"/>` : ''}
+        <div class="vdl-pay-tip">请使用支付宝或微信扫码付款，支付成功后自动开通</div>
         ${payUrl ? `<button type="button" class="btn btn-primary vdl-pay-openbrowser" id="vdlPayOpenBrowser">扫码不便？在浏览器中打开收银台</button>` : ''}
         <div class="vdl-pay-status" id="vdlPayStatus">等待支付…</div>
         <button type="button" class="btn btn-ghost vdl-pay-close" id="vdlPayClose">关闭</button>
