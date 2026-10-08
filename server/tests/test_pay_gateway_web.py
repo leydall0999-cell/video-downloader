@@ -218,6 +218,18 @@ def test_frontend_channel_label() -> None:
     check("HTML 不再写死「支付宝支付二维码」", "支付宝支付二维码" not in html)
     check("HTML 不再写死「请使用支付宝扫码付款」", "请使用支付宝扫码付款" not in html)
     check("无码时的诚实降级仍保留（不返回未接通道的假象）", "支付通道尚未开通" in appjs)
+    # 2026-10-09 补：判不出通道时**不得**回退到「支付宝或微信」，且须能用 mode 兜底
+    # （VPS 组装 `src = qr_code or pay_url`，qr_code 空时 r.qr 为空串 → 只按前辍判会误报）
+    check("不再回退到会误导的「支付宝或微信」兜底",
+          "请使用支付宝或微信扫码付款" not in appjs and "支付宝或微信扫码" not in appjs)
+    check("qr 缺失时用 mode 兜底判定（xunhupay＝微信）", "r.mode === 'xunhupay'" in appjs)
+    check("判不出通道时用中性文案", "请扫码付款" in appjs)
+    # 两侧口径必须同源：桌面端与网页版用同一表达式
+    app_appjs = (REPO.parent / "video-downloader-app" / "web" / "app.js")
+    if app_appjs.exists():
+        a = app_appjs.read_text(encoding="utf-8")
+        check("桌面端与网页版通道判据同源",
+              "r.mode === 'xunhupay'" in a and "indexOf('weixin://')" in a)
 
 
 def main() -> int:

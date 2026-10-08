@@ -7450,18 +7450,24 @@
     // 离线 / 未接通道时才没有 qr_png。没有码时**必须显式告知**，而不是塞个空 src
     // 让用户对着裂图干等（2026-09-30）。
     const hasQr = !!r.qr_png;
-    // 通道文案（2026-10-09）：真通道当前为虎皮椒·微信（qr 前辍 weixin://），
-    // 写死「支付宝」会与二维码对不上 —— 按 qr 原始内容判定扫码 App。
-    const isWechat = String(r.qr || '').indexOf('weixin://') === 0;
+    // 通道文案（2026-10-09）：真通道当前为虎皮椒·微信（qr 前辍 weixin://，mode=xunhupay），
+    // 写死「支付宝」会与二维码对不上 —— 按 qr 原始内容 / mode 判定扫码 App。
+    // ⚠️ 判不出通道时必须用**中性**文案：VPS 组装是 `src = qr_code or pay_url`，qr_code 为空
+    //    时会用**收银台 URL** 生成二维码，此时 r.qr 是空串 —— 若回退到「支付宝或微信」就会
+    //    重演「用户拿支付宝扫微信码」的报障。与桌面端同口径（vdl-alipay-pay-diagnosis 4.8/4.9）。
+    const _qrRaw = String(r.qr || '');
+    const _chan = (_qrRaw.indexOf('weixin://') === 0 || r.mode === 'xunhupay') ? 'wechat'
+      : (/alipay|alipays:\/\//.test(_qrRaw) ? 'alipay' : 'generic');
     if (el.payQr) {
       if (hasQr) { el.payQr.src = r.qr_png; el.payQr.hidden = false; }
       else { el.payQr.removeAttribute('src'); el.payQr.hidden = true; }
-      el.payQr.alt = isWechat ? '微信支付二维码' : '支付二维码';
+      el.payQr.alt = _chan === 'wechat' ? '微信支付二维码'
+        : (_chan === 'alipay' ? '支付宝支付二维码' : '支付二维码');
     }
     if (el.payTip) {
-      el.payTip.textContent = isWechat
-        ? '请使用微信扫码付款，支付成功后权益自动到账'
-        : '请使用支付宝或微信扫码付款，支付成功后权益自动到账';
+      el.payTip.textContent = _chan === 'wechat' ? '请使用微信扫码付款，支付成功后权益自动到账'
+        : (_chan === 'alipay' ? '请使用支付宝扫码付款，支付成功后权益自动到账'
+          : '请扫码付款，支付成功后权益自动到账');
     }
     // 标题 / 扫码提示也要跟着切，否则「通道未开通」的页面上还挂着「扫码支付」「请扫码付款」自相矛盾
     if (el.payModalTitle) el.payModalTitle.textContent = hasQr ? '扫码支付开通会员' : '订单已创建';

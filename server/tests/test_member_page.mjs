@@ -133,7 +133,7 @@ assert.ok(appJs.includes('支付通道尚未开通'), '无二维码时要明确�
 assert.ok(indexHtml.includes('id="payTip"'), '扫码提示缺少 #payTip（无法按状态切换）');
 assert.ok(/el\.payModalTitle\.textContent = hasQr \? '扫码支付开通会员' : '订单已创建';/.test(appJs),
   '无二维码时弹窗标题应改为「订单已创建」，不要继续写「扫码支付」');
-assert.ok(/el\.payTip\.hidden = !hasQr;/.test(appJs), '无二维码时应隐藏「请使用支付宝扫码付款」提示');
+assert.ok(/el\.payTip\.hidden = !hasQr;/.test(appJs), '无二维码时应隐藏「请扫码付款」提示（文案已按通道动态切换，不再写死支付宝）');
 
 // ---- ⑥ 扫码弹窗必须在顶层：否则未登录态下它落在 hidden 的 pfUserBox 里 ----
 const nPay = (indexHtml.match(/id="payModal"/g) || []).length;
