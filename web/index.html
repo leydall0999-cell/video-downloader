@@ -1854,6 +1854,13 @@
     <div class="pay-body">
       <div class="pay-amt" id="payAmount">¥--</div>
       <div class="pay-plan" id="payPlanName">—</div>
+      <!-- 通道徽标（2026-10-09 用户要求「微信支付要明显一点」，与桌面端同款视觉）：
+           只在**判出具体通道且有二维码**时显示；判不出（generic）保持隐藏，避免重演
+           「支付宝或微信」那种误导性兜底。 -->
+      <div class="pay-chan pay-chan-wechat" id="payChanWechat" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M9.4 8.9m-7.1 0a7.1 6.1 0 1 0 14.2 0a7.1 6.1 0 1 0 -14.2 0zM6.8 7.5m-1.15 0a1.15 1.15 0 1 0 2.3 0a1.15 1.15 0 1 0 -2.3 0zM11.4 7.5m-1.15 0a1.15 1.15 0 1 0 2.3 0a1.15 1.15 0 1 0 -2.3 0z"/><path d="M5.9 12.9 3.4 16.6l4.2-1.5z"/><path fill-rule="evenodd" d="M17.4 15.5m-5.4 0a5.4 4.7 0 1 0 10.8 0a5.4 4.7 0 1 0 -10.8 0zM15.6 14.6m-0.95 0a0.95 0.95 0 1 0 1.9 0a0.95 0.95 0 1 0 -1.9 0zM19.2 14.6m-0.95 0a0.95 0.95 0 1 0 1.9 0a0.95 0.95 0 1 0 -1.9 0z"/><path d="M21.2 18.5 23 21.7l-4-1.2z"/></svg><span>微信支付</span>
+      </div>
+      <div class="pay-chan pay-chan-alipay" id="payChanAlipay" hidden><span>支付宝</span></div>
       <img class="pay-qr" id="payQr" src="" alt="支付二维码" />
       <div class="pay-tip" id="payTip">请使用手机扫码付款，支付成功后权益自动到账</div>
       <div class="pay-status" id="payStatus" aria-live="polite">等待支付…</div>

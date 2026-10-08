@@ -224,12 +224,51 @@ def test_frontend_channel_label() -> None:
           "请使用支付宝或微信扫码付款" not in appjs and "支付宝或微信扫码" not in appjs)
     check("qr 缺失时用 mode 兜底判定（xunhupay＝微信）", "r.mode === 'xunhupay'" in appjs)
     check("判不出通道时用中性文案", "请扫码付款" in appjs)
-    # 两侧口径必须同源：桌面端与网页版用同一表达式
-    app_appjs = (REPO.parent / "video-downloader-app" / "web" / "app.js")
+    # 2026-10-09 用户要求「微信支付要明显一点」：通道必须**可见**（徽标 + 二维码描边 +
+    # 提示文案三层同指一个通道），且徽标只能在「有码且判出具体通道」时点亮 ——
+    # 未接通道 / 判不出通道时不得硬贴标签。
+    check("网页版有微信通道徽标节点（含图标与文案）",
+          'id="payChanWechat"' in html and "微信支付" in html and "<svg" in html)
+    check("网页版有支付宝通道徽标节点", 'id="payChanAlipay"' in html)
+    check("徽标默认隐藏（未判出通道前不贴标签）",
+          'id="payChanWechat" hidden' in html and 'id="payChanAlipay" hidden' in html)
+    check("徽标带自绘微信双气泡图标（不引外部图标库，防离线缺图）",
+          "M9.4 8.9m-7.1" in html)
+    check("徽标显隐由「有码 且 判出通道」驱动",
+          "el.payChanWechat.hidden = !(hasQr && _chan === 'wechat')" in appjs
+          and "el.payChanAlipay.hidden = !(hasQr && _chan === 'alipay')" in appjs)
+    check("二维码描边 / 提示样式跟着通道走",
+          "pay-qr-wechat" in appjs and "pay-tip-wechat" in appjs)
+    scss = (REPO / "web" / "styles.css").read_text(encoding="utf-8")
+    # ⚠️ 徽标靠 hidden 属性切换，而 .pay-chan 设了 display:inline-flex（作者样式优先于 UA 的
+    #    [hidden]{display:none}）—— 不显式兜住，被「隐藏」的徽标照样会显示。
+    check("CSS 兜住 [hidden]（否则隐藏的徽标照样显示）", ".pay-chan[hidden]" in scss)
+    check("微信徽标为实心微信绿", ".pay-chan-wechat" in scss and "#07c160" in scss)
+    # 二维码必须居中：本文件顶部有全局 `img { display: block }`，块级子元素不受父级
+    # text-align:center 影响 —— 少了 margin:auto 二维码会贴左，与上方居中的金额/徽标错位
+    # （2026-10-09 实测发现，属既有缺陷；桌面端 .vdl-pay-qr 本来就有 `margin: 1rem auto .7rem`）。
+    _qr_rule = scss[scss.index(".pay-qr {"):scss.index("}", scss.index(".pay-qr {"))]
+    check("二维码须 margin:0 auto 居中（全局 img{display:block} 会让 text-align:center 失效）",
+          "margin: 0 auto" in _qr_rule)
+
+    # 两侧口径必须同源：桌面端与网页版用同一表达式 + 同一徽标视觉
+    app_web = REPO.parent / "video-downloader-app" / "web"
+    app_appjs = app_web / "app.js"
     if app_appjs.exists():
         a = app_appjs.read_text(encoding="utf-8")
         check("桌面端与网页版通道判据同源",
               "r.mode === 'xunhupay'" in a and "indexOf('weixin://')" in a)
+        app_scss = app_web / "styles.css"
+        if app_scss.exists():
+            ac = app_scss.read_text(encoding="utf-8")
+            check("桌面端与网页版微信徽标视觉同源",
+                  "vdl-pay-chan-wechat" in ac and "#07c160" in ac)
+            _aq = ac[ac.index(".vdl-pay-qr {"):ac.index("}", ac.index(".vdl-pay-qr {"))]
+            check("桌面端二维码同样居中（两侧同源）", "auto" in _aq)
+        else:
+            print("   ⚠️ 未找到桌面端样式表：**跨端视觉同源未校验**（不是通过，是未校验）")
+    else:
+        print("   ⚠️ 未找到桌面端 app.js：**跨端判据同源未校验**（不是通过，是未校验）")
 
 
 def main() -> int:

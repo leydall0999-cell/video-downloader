@@ -453,6 +453,7 @@
     payModal: $('payModal'), payModalClose: $('payModalClose'), payAmount: $('payAmount'),
     payPlanName: $('payPlanName'), payQr: $('payQr'), payStatus: $('payStatus'),
     payModalTitle: $('payModalTitle'), payTip: $('payTip'),
+    payChanWechat: $('payChanWechat'), payChanAlipay: $('payChanAlipay'),
     // 网页版独立会员页（2026-09-30）：免登录看价目，购买动作才要登录
     memberView: $('memberView'), tabMember: $('tabMember'),
     memTop: $('memTop'), memTracks: $('memTracks'), memNote: $('memNote'), memStatus: $('memStatus'), memSeg: $('memSeg'),
@@ -7463,12 +7464,18 @@
       else { el.payQr.removeAttribute('src'); el.payQr.hidden = true; }
       el.payQr.alt = _chan === 'wechat' ? '微信支付二维码'
         : (_chan === 'alipay' ? '支付宝支付二维码' : '支付二维码');
+      el.payQr.classList.toggle('pay-qr-wechat', hasQr && _chan === 'wechat');
     }
     if (el.payTip) {
       el.payTip.textContent = _chan === 'wechat' ? '请使用微信扫码付款，支付成功后权益自动到账'
         : (_chan === 'alipay' ? '请使用支付宝扫码付款，支付成功后权益自动到账'
           : '请扫码付款，支付成功后权益自动到账');
+      el.payTip.classList.toggle('pay-tip-wechat', hasQr && _chan === 'wechat');
     }
+    // 通道徽标（2026-10-09 用户要求「微信支付要明显一点」，与桌面端同款）：只在**有码且判出
+    // 具体通道**时点亮对应徽标；判不出（generic）或无码一律隐藏，不硬贴标签。
+    if (el.payChanWechat) el.payChanWechat.hidden = !(hasQr && _chan === 'wechat');
+    if (el.payChanAlipay) el.payChanAlipay.hidden = !(hasQr && _chan === 'alipay');
     // 标题 / 扫码提示也要跟着切，否则「通道未开通」的页面上还挂着「扫码支付」「请扫码付款」自相矛盾
     if (el.payModalTitle) el.payModalTitle.textContent = hasQr ? '扫码支付开通会员' : '订单已创建';
     if (el.payTip) el.payTip.hidden = !hasQr;

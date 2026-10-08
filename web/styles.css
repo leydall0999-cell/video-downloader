@@ -2131,9 +2131,28 @@ main > .panel { margin-top: 3rem; }
 .pay-body { text-align: center; padding: .5rem 0 .2rem; }
 .pay-amt { font-size: 1.6rem; font-weight: 800; color: var(--brand); line-height: 1.2; }
 .pay-plan { font-size: .82rem; color: var(--text-mute); margin-bottom: .6rem; }
-.pay-qr { width: 190px; height: 190px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; }
+/* ⚠️ 必写 margin:0 auto：全局重置 `img { display: block }`（见本文件顶部）把二维码变成
+   块级元素，父级 `.pay-body` 的 text-align:center 对块级子元素无效 ⇒ 二维码会贴着左边，
+   与上方居中的金额/通道徽标错位（桌面端 `.vdl-pay-qr` 有 `margin: 1rem auto .7rem`，故不缺）。 */
+.pay-qr { width: 190px; height: 190px; margin: 0 auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; }
 .pay-tip { font-size: .78rem; color: var(--text-mute); margin-top: .55rem; }
 .pay-status { font-size: .82rem; margin-top: .35rem; }
+/* 通道徽标（2026-10-09 用户要求「微信支付要明显一点」）—— 与桌面端同款视觉：
+   实心微信绿 + 自绘双气泡图标 + 二维码描边 + 提示文案，三层同指一个通道。 */
+.pay-chan {
+  display: inline-flex; align-items: center; gap: .32rem;
+  padding: .3rem .72rem .3rem .56rem; border-radius: 999px;
+  line-height: 1; font-size: .8rem; font-weight: 700; letter-spacing: .02em;
+  margin: 0 0 .5rem;
+}
+/* ⚠️ 必写：徽标靠 `hidden` 属性切换显隐，而 .pay-chan 设了 display:inline-flex（作者样式
+   优先于 UA 的 [hidden]{display:none}），不显式兜住会导致「隐藏」的徽标照样显示。 */
+.pay-chan[hidden] { display: none; }
+.pay-chan svg { width: 17px; height: 17px; display: block; flex: none; }
+.pay-chan-wechat { background: #07c160; color: #fff; box-shadow: 0 3px 12px rgba(7, 193, 96, .34); }
+.pay-chan-alipay { background: #1677ff; color: #fff; box-shadow: 0 3px 12px rgba(22, 119, 255, .30); }
+.pay-qr-wechat { border-color: rgba(7, 193, 96, .55); box-shadow: 0 0 0 4px rgba(7, 193, 96, .12); }
+.pay-tip-wechat { color: #0a8f4b; font-weight: 600; }
 
 /* —— 网页版会员页（#memberView，2026-09-30）：免登录可看价目与权益，点「立即开通」才要登录 ——
    栅格 minmax(240px,1fr)：880px 正文宽下正好 3 列（6 档 = 3×2，与桌面端会员中心同版式）；
