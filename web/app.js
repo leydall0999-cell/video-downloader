@@ -16959,14 +16959,28 @@ el.dwVidPlayer.hidden = true;
     const amount = r.amount;
     const planCode = r.plan_code;
     const payUrl = r.pay_url || '';
+    // 通道文案（2026-10-09 用户报障「支付宝扫不上、微信可以」）：原写死「请使用支付宝或
+    // 微信扫码付款」，而当前唯一在线通道＝虎皮椒·微信 —— 二维码本体是 `weixin://wxpay/
+    // bizpayurl?pr=…` 原生微信码，支付宝扫它只会提示「请对准支付宝二维码」。文案必须与
+    // 码的真实通道一致，否则用户按字面拿支付宝去扫，看到报错只会以为产品坏了。
+    // 判据与 web 版同口径：先看 qr 前辍，再看 mode（qr 缺失但 mode=xunhupay 时仍可判微信）；
+    // 两者都判不出才用中性文案 —— 绝不再回退到「支付宝或微信」这个会误导人的兜底。
+    const _qrRaw = String(r.qr || '');
+    const _chan = (_qrRaw.indexOf('weixin://') === 0 || r.mode === 'xunhupay') ? 'wechat'
+      : (/alipay|alipays:\/\//.test(_qrRaw) ? 'alipay' : 'generic');
+    const payQrAlt = _chan === 'wechat' ? '微信支付二维码'
+      : (_chan === 'alipay' ? '支付宝支付二维码' : '支付二维码');
+    const payTipText = _chan === 'wechat' ? '请使用微信扫码付款，支付成功后自动开通'
+      : (_chan === 'alipay' ? '请使用支付宝扫码付款，支付成功后自动开通'
+        : '请扫码付款，支付成功后自动开通');
     const overlay = document.createElement('div');
     overlay.className = 'vdl-pay-overlay';
     overlay.innerHTML = `
       <div class="vdl-pay-modal">
         <div class="vdl-pay-title">扫码支付开通会员</div>
         <div class="vdl-pay-amt">¥${(Number(amount) || 0).toFixed(2)} · ${planCode}</div>
-        ${qrPng ? `<img class="vdl-pay-qr" src="${qrPng}" alt="支付二维码"/>` : ''}
-        <div class="vdl-pay-tip">请使用支付宝或微信扫码付款，支付成功后自动开通</div>
+        ${qrPng ? `<img class="vdl-pay-qr" src="${qrPng}" alt="${payQrAlt}"/>` : ''}
+        <div class="vdl-pay-tip">${payTipText}</div>
         ${payUrl ? `<button type="button" class="btn btn-primary vdl-pay-openbrowser" id="vdlPayOpenBrowser">扫码不便？在浏览器中打开收银台</button>` : ''}
         <div class="vdl-pay-status" id="vdlPayStatus">等待支付…</div>
         <button type="button" class="btn btn-ghost vdl-pay-close" id="vdlPayClose">关闭</button>

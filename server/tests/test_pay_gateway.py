@@ -162,6 +162,31 @@ def test_frontend_pay_layer_above_member_dialog():
         "setTimeout 直接传 closePayModal 会把定时器参数当开关；须写 () => closePayModal(true)"
 
 
+def test_frontend_channel_text_matches_real_channel():
+    """源码口径守卫：支付弹窗文案必须与二维码的**真实通道**一致（2026-10-09 用户报障）。
+
+    用户拿**支付宝**扫桌面端二维码 → 支付宝提示「请对准支付宝二维码」；微信可扫。
+    根因：弹窗把提示**写死**成「请使用支付宝或微信扫码付款」，而当前唯一在线通道＝
+    虎皮椒·微信（码体是 `weixin://wxpay/bizpayurl?pr=…` 原生微信码），支付宝根本扫不了。
+    文案与码不一致 ⇒ 用户按字面拿支付宝去扫，看到报错只会以为产品坏了。
+
+    守卫三点：①不得再出现写死的「支付宝或微信」提示；②须按 qr 前辍 / mode 判通道；
+    ③判不出通道时用中性文案，**不得**回退到「支付宝或微信」这个会误导人的兜底。
+    """
+    appjs = open(os.path.join(REPO, "web", "app.js"), encoding="utf-8").read()
+    j = appjs.index("function openPayModal")
+    k = appjs.index("// restoreMemberCenter", j)
+    body = appjs[j:k]
+    assert "请使用支付宝或微信扫码付款" not in body, \
+        "文案又写死「支付宝或微信」—— 当前唯一在线通道是微信，支付宝扫不了（用户已报障）"
+    assert "String(r.qr || '')" in body and "'weixin://'" in body, \
+        "必须按二维码内容前辍判通道，否则文案会与码的真实通道不一致"
+    assert "r.mode === 'xunhupay'" in body, \
+        "qr 缺失时应能用 mode 兜底判定（xunhupay＝微信），否则会掉到中性文案"
+    assert "请使用微信扫码付款" in body and "请使用支付宝扫码付款" in body, \
+        "两个通道的文案都要在（支付宝通道将来签约后零改动即生效）"
+
+
 if __name__ == "__main__":
     test_create_requires_plan_code()
     test_create_requires_cloud_token()
@@ -172,4 +197,5 @@ if __name__ == "__main__":
     test_query_forwards_order_id()
     test_frontend_default_gateway_is_local_not_public()
     test_frontend_pay_layer_above_member_dialog()
+    test_frontend_channel_text_matches_real_channel()
     print("ALL PAY GATEWAY TESTS PASSED")
