@@ -57,4 +57,23 @@ assert.ok(dw && /margin-inline\s*:\s*auto/.test(dw[1]),
 assert.ok(/\.uc-subtabs\s*\{[^}]*margin\s*:\s*3rem\s+0\s+1rem/.test(stylesCss),
   '.uc-subtabs 的 3rem 上间距（参考版式基准）不应被改动');
 
-console.log(`✅ 顶层视图卡片/顶栏间距回归通过（${expected.length} 个顶层视图卡片，规则 margin-top: 3rem）`);
+// ⑤ 个人中心（2026-10-08 补）：#profileView 是**唯一没有 `.panel` 类的顶层视图**（轻量版，
+//    不套外层卡片），所以上面的 `main > .panel` 命中不到它 ⇒ 标题 #pfTitle 会直接贴住吸顶顶栏
+//    （实测 viewTop = 61px = 顶栏底边，间距 0px；memberView / musicConvertView 均为 48px）。
+//    不变式：它必须自带一条 `#profileView { margin-top: 3rem }`（若哪天给它加了 class="panel"，
+//    则自动落到 ① 的作用域里，这两条断言会提示你并入 expected 列表）。
+const hasPfPanelClass = /^ {2}<section id="profileView"[^>]*class="panel"/m.test(indexHtml);
+const pfRule = stylesCss.match(/#profileView\s*\{([^}]*)\}/);
+if (hasPfPanelClass) {
+  assert.ok(!pfRule || !/(^|[;\s])margin\s*:/.test(pfRule[1]),
+    `#profileView 已带 .panel、由 main > .panel 兜底，就不得再用 margin 简写把上间距重置掉：${pfRule[1].trim()}`);
+} else {
+  assert.ok(pfRule, '#profileView 必须自带 margin-top 规则（它没有 .panel 类，命中不到 main > .panel）');
+  assert.ok(/margin-top\s*:\s*3rem/.test(pfRule[1]),
+    `#profileView 的 margin-top 应为 3rem（对齐其他顶层视图），实际：${pfRule[1].trim()}`);
+  assert.ok(!/(^|[;\s])margin\s*:/.test(pfRule[1]),
+    `#profileView 不得使用 margin 简写（会重置上下边距），实际：${pfRule[1].trim()}`);
+}
+
+console.log(`✅ 顶层视图卡片/顶栏间距回归通过（${expected.length} 个顶层视图卡片，规则 margin-top: 3rem，`
+  + `个人中心 ${hasPfPanelClass ? '随 main > .panel' : '自带 #profileView 规则'}）`);

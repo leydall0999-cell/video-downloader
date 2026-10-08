@@ -111,6 +111,11 @@ a.badge-link { display: inline-flex; align-items: center; text-decoration: none;
    紧贴顶栏下边框（实测间距仅 1px），视觉上像「顶栏 + 卡片」两块粘在一起。
    取 3rem，与参考版式「视频处理」的 .uc-subtabs 上间距一致，各视图首屏内容起始线对齐。 */
 main > .panel { margin-top: 3rem; }
+/* 个人中心是**唯一没有 `.panel` 类的顶层视图**（轻量版，不套外层卡片），所以上面那条命中不到它
+   ⇒ 标题 #pfTitle 直接贴住吸顶顶栏（2026-10-08 实测：profileView top = 61px = 顶栏底边，
+   间距 0px；memberView / musicConvertView 均为 48px）。补一条等值上边距，
+   让各视图首屏内容起始线对齐。 */
+#profileView { margin-top: 3rem; }
 
 /* ---- 通用卡片：全站统一浅色容器（去水印 .dw-card 复用此规范） ---- */
 .card {
@@ -602,6 +607,9 @@ main > .panel { margin-top: 3rem; }
   background: #fafbfd; border: 1px solid var(--line);
   border-radius: var(--radius-md); padding: .85rem .95rem; margin-bottom: .9rem;
 }
+/* 个人中心未登录：登录卡居中（2026-10-08，原来 420px 卡贴在左侧留大片空白）
+   注意只用 margin-inline，别用 margin 简写 —— 简写会把 .uc-bulk 的 margin-bottom 重置为 0 */
+.pf-auth-card { max-width: 460px; margin-inline: auto; padding: 1.35rem 1.45rem 1.15rem; }
 /* 拼接面板：输出设置与片段列表视觉分区（用户反馈「没有跟上方区分开」） */
 .mc-output { margin-top: 1rem; }
 .mc-output-title {

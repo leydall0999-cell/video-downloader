@@ -429,6 +429,7 @@
     pfAuthBox: $('pfAuthBox'), pfAuthModeTitle: $('pfAuthModeTitle'),
     pfIdentifier: $('pfIdentifier'), pfPassword: $('pfPassword'),
     pfAuthSubmit: $('pfAuthSubmit'), pfAuthSwitch: $('pfAuthSwitch'), pfAuthStatus: $('pfAuthStatus'),
+    pfAuthHint: $('pfAuthHint'),
     pfUserBox: $('pfUserBox'),
     // 子导航 + 分面板（2026-09-30 对齐 App 个人中心）
     pfSubnav: $('pfSubnav'),
@@ -6183,7 +6184,11 @@
     if (isCom) loadCommentary();
     if (isUp) { el.ucStatus.textContent = ''; }
     if (isSt) { el.sbStatus.textContent = ''; }
-    if (isProfile) pfLoad();
+    if (isProfile) {
+      // 切到个人中心时先关掉可能残留的全局登录框，避免与其页内登录表单同屏重复（2026-10-08）
+      if (el.authModal && el.authModal.open) { try { el.authModal.close(); } catch (_e) { /* ignore */ } }
+      pfLoad();
+    }
     if (isMem) memRender();
     if (isMem) memRender();
     if (isShare && _sharePane === 'shareqr') sqrRenderLimits();
@@ -7276,7 +7281,12 @@
     el.pfAuthBox.hidden = logged;
     el.pfUserBox.hidden = !logged;
     renderAuthHeader();
-    if (!logged) return;
+    if (!logged) {
+      // 兜底（2026-10-08）：个人中心未登录态一律只用页内登录表单 ⇒ 关掉任何残留的全局登录弹窗，
+      // 保证同屏永远只有一套登录 UI（switchView 里那道是即时关，这里这道覆盖异步期间新开的）。
+      if (el.authModal && el.authModal.open) { try { el.authModal.close(); } catch (_e) { /* ignore */ } }
+      return;
+    }
     // 总览头
     if (el.pfName) el.pfName.textContent = me.identifier || me.user_id || '已登录';
     if (el.pfTag) {
@@ -8281,8 +8291,21 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   };
 
   // —— 登录弹窗（下载被拦 / 右上角入口共用）——
+  // 2026-10-08：个人中心未登录时页内已有一整套登录表单（#pfAuthBox）⇒ 统一走页内表单，
+  // 不再叠一层全局弹窗。此前在个人中心点右上角「登录 / 注册」会叠出两个登录框
+  // （弹窗压住页内表单），用户截图反馈。
   let amIsRegister = false;
+  const pfAuthInlineShown = () => !!(el.profileView && !el.profileView.hidden
+    && el.pfAuthBox && !el.pfAuthBox.hidden);
   const openAuthModal = (hint) => {
+    if (pfAuthInlineShown()) {
+      // 页内表单优先：把拦截原因写进页内提示行并聚焦输入框，绝不叠加第二套登录 UI
+      if (hint && el.pfAuthHint) el.pfAuthHint.textContent = hint;
+      if (el.amStatus) el.amStatus.textContent = '';
+      try { if (el.pfIdentifier) el.pfIdentifier.focus(); } catch (_e) { /* ignore */ }
+      try { el.profileView.scrollIntoView({ block: 'start' }); } catch (_e) { /* ignore */ }
+      return;
+    }
     if (el.authModalHint && hint) el.authModalHint.textContent = hint;
     if (el.amStatus) el.amStatus.textContent = '';
     try { el.authModal.showModal(); } catch (_e) { /* 已打开 */ }
