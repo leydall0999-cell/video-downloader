@@ -16931,6 +16931,13 @@ el.dwVidPlayer.hidden = true;
       return;
     }
     _memberMsg('');
+    // 🔴 2026-10-09：「用户说点购买没反应」的第二层根因（接口修好后依然存在）：
+    //    会员中心是 showModal() 的 <dialog>，会进入浏览器的 **top layer**，渲染在
+    //    一切 z-index 之上；而支付层只是个 appendChild 到 body 的普通 div
+    //    （即使 z-index:9999、铺满视口也无效）。不先关掉这个 dialog，二维码就被
+    //    整块压在下面 —— 实测 elementFromPoint(视口中心) 命中的仍是会员弹窗里的
+    //    购买按钮，用户「什么都看不到」。故下单成功后必须先关 dialog，再开支付层。
+    try { if (el.memberModal && el.memberModal.open) el.memberModal.close(); } catch (_) {}
     openPayModal(r);
   }
   // 打开外链：桌面壳 WKWebView 会**静默拦截 window.open**（见 desktop_launcher
@@ -16965,8 +16972,8 @@ el.dwVidPlayer.hidden = true;
         <button type="button" class="btn btn-ghost vdl-pay-close" id="vdlPayClose">关闭</button>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) closePayModal(); });
-    overlay.querySelector('#vdlPayClose').addEventListener('click', closePayModal);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closePayModal(true); });
+    overlay.querySelector('#vdlPayClose').addEventListener('click', () => closePayModal(true));
     const openBtn = overlay.querySelector('#vdlPayOpenBrowser');
     if (openBtn) openBtn.addEventListener('click', () => _openExternalUrl(payUrl));
     const statusEl = overlay.querySelector('#vdlPayStatus');
@@ -16980,15 +16987,25 @@ el.dwVidPlayer.hidden = true;
           showToast('会员开通成功');
           await renderMemberStatus();
           await renderCloudAccount();
-          setTimeout(closePayModal, 1200);
+          setTimeout(() => closePayModal(true), 1200);
         }
       } catch (_) { /* 轮询失败静默重试 */ }
     }, 2500);
   }
-  function closePayModal() {
+  // restoreMemberCenter：仅在「用户主动关掉支付层 / 支付成功」时为 true，把会员中心
+  // 还回来（下单前被 close() 掉了）。openPayModal 开头的清理调用**必须**为 false，
+  // 否则会先把 dialog 重开、再去插支付层，二维码又被压回下面。
+  function closePayModal(restoreMemberCenter) {
     if (_payTimer) { clearInterval(_payTimer); _payTimer = null; }
     const o = document.querySelector('.vdl-pay-overlay');
     if (o) o.remove();
+    if (restoreMemberCenter) {
+      try {
+        if (el.memberModal && !el.memberModal.open && typeof openMemberCenter === 'function') {
+          openMemberCenter();
+        }
+      } catch (_) { /* 还原失败不影响主流程 */ }
+    }
   }
   // ---- 云端账号（会员归属 + 最多 2 台设备）----
   function _fmtAgo(ts) {

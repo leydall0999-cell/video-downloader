@@ -138,6 +138,30 @@ def test_frontend_default_gateway_is_local_not_public():
     assert "showToast('❌ ' + _msg)" in appjs, "下单失败必须同时弹 toast，否则又是「点了没反应」"
 
 
+def test_frontend_pay_layer_above_member_dialog():
+    """源码口径守卫：支付层必须能盖住会员中心（top-layer 遮挡，2026-10-09 第二层根因）。
+
+    `<dialog showModal()>` 会进入浏览器 **top layer**，渲染在一切 z-index 之上；而支付层
+    只是 appendChild 到 body 的普通 div（z-index:9999、铺满视口也无效）⇒ 若下单后不先
+    关掉 dialog，二维码被整块压在下面，用户「什么都看不到」。
+    实测：elementFromPoint(视口中心) 命中的仍是会员弹窗里的 `.member-buy` 按钮。
+    """
+    appjs = open(os.path.join(REPO, "web", "app.js"), encoding="utf-8").read()
+    i_pay = appjs.index("async function payCreate")
+    i_open = appjs.index("function openPayModal", i_pay)
+    body = appjs[i_pay:i_open]
+    assert "el.memberModal.close()" in body, \
+        "payCreate 必须先关掉会员中心 dialog，否则支付层被 top layer 压住（用户看不到二维码）"
+    assert body.index("el.memberModal.close()") < body.index("openPayModal(r)"), \
+        "关 dialog 必须在 openPayModal 之前；顺序反了同样看不到二维码"
+    # 关闭支付层后应把会员中心还回来（点「关闭」不该被弹回主界面）
+    assert "function closePayModal(restoreMemberCenter)" in appjs, \
+        "closePayModal 需要 restoreMemberCenter 开关（openPayModal 内部清理必须传假值，否则死循环式遮挡）"
+    assert "closePayModal(true)" in appjs, "用户主动关闭 / 支付成功时应还原会员中心"
+    assert "setTimeout(closePayModal, 1200)" not in appjs, \
+        "setTimeout 直接传 closePayModal 会把定时器参数当开关；须写 () => closePayModal(true)"
+
+
 if __name__ == "__main__":
     test_create_requires_plan_code()
     test_create_requires_cloud_token()
@@ -147,4 +171,5 @@ if __name__ == "__main__":
     test_query_requires_order_id()
     test_query_forwards_order_id()
     test_frontend_default_gateway_is_local_not_public()
+    test_frontend_pay_layer_above_member_dialog()
     print("ALL PAY GATEWAY TESTS PASSED")
