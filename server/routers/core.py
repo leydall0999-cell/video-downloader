@@ -1339,18 +1339,30 @@ def ecs_license_alerts_ack(payload: dict, request: app.Request):
         raise app.HTTPException(status_code=502, detail=f"确认告警失败：{e}")
 
 
+# 查账区间（2026-10-09 用户要求「入账可查 1 天/3 天/7 天/1 个月/半年/1 年」）：
+# 默认 7 天（与授权中心自扫窗口一致），上限 400 天（前端最大 365 = 近 1 年）。
+# 🔴 与桌面 App `server/routers/core.py`、授权中心 `deploy/license_server.py` 的
+#    RECON_DAYS_MAX **必须同值**，否则大区间会被上游先截断，且**静默**（不报错、只给少）。
+_RECON_DAYS_DEFAULT = 7
+_RECON_DAYS_MAX = 400
+
+
 @router.post("/api/license-recon")
 def ecs_license_recon(payload: dict, request: app.Request):
-    """每日入账/充值对账报告转发（超管专用）。"""
+    """每日入账/充值对账报告转发（超管专用）。
+
+    `days` = 查账区间天数（前端给 1/3/7/30/180/365），按 `_RECON_DAYS_MAX` 钳制。
+    """
     _require_admin(request)
     try:
-        days = int(payload.get("days") or 7)
+        days = int(payload.get("days") or _RECON_DAYS_DEFAULT)
     except (TypeError, ValueError):
-        days = 7
+        days = _RECON_DAYS_DEFAULT
     try:
         resp = app.requests.post(
             f"{_license_base()}/api/license/recon",
-            json={"token": _license_admin_token(), "days": max(1, min(days, 60))},
+            json={"token": _license_admin_token(),
+                  "days": max(1, min(days, _RECON_DAYS_MAX))},
             timeout=15,
         )
         return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
