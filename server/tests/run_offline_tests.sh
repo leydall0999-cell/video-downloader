@@ -615,6 +615,15 @@ run_one test_web_quota_single_source.py
 #      /api/system/update/status 的 progress 必须随时间变化。
 run_one test_update_progress.py
 
+#  45. test_admin_recon_tab.py —— 后台「每日对账」独立成 tab + 日期精确到分
+#      （2026-10-09 用户截图要求）。① 对账原先压在运维监控页最底部，访客/事件/告警
+#      三块占两屏，钱账要滚到底才看得到 ⇒ 提为同级独立 tab（排在运维监控右侧）；
+#      ② 对账明细日期只到「天」，逐条核对时对不上发货日志 ⇒ 授权中心 4 处 detail 全改
+#      `_bj_dt`（YYYY-MM-DD HH:MM，北京时间），但**账期汇总键与告警去重键必须仍用
+#      `_bj_day`** —— 改过头会把同一天的差异拆成多条告警、汇总表裂成多行。
+#      8 处变异全红（含「只改一处明细」「app.js 侧容器 id 改名」这两处最隐蔽的）。
+run_one test_admin_recon_tab.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

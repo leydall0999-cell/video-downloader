@@ -20958,6 +20958,8 @@ el.dwVidPlayer.hidden = true;
       else if (name === 'config') { loadConfig(); loadAiCosts(); }
       else if (name === 'aiaccounts') { loadAiAccounts(); loadAiCosts(); }
       else if (name === 'monitor') loadMonitor();
+      // 每日对账（2026-10-09）：已从运维监控页提出，独立成 tab，按需拉报告
+      else if (name === 'recon') loadMonitorRecon();
     };
 
     const loadAll = () => {
@@ -20969,6 +20971,23 @@ el.dwVidPlayer.hidden = true;
     };
 
     // ---- 监控告警（2026-09-26）：异常告警 + 每日入账对账（从运维看板提权到管理后台）----
+    // 北京时间·精确到分（2026-10-09 用户要求「日期精确到分」）：对账是钱账，只到天没法定位到
+    // 具体那几分钟，逐条核对时和日志对不上。统一输出 YYYY-MM-DD HH:MM。
+    const _monMinute = (ts) => {
+      const n = Number(ts);
+      if (!n) return '';
+      try {
+        const parts = new Intl.DateTimeFormat('zh-CN', {
+          timeZone: 'Asia/Shanghai', hour12: false,
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit',
+        }).formatToParts(new Date(n * 1000));
+        const g = (t) => (parts.find((x) => x.type === t) || {}).value || '';
+        return `${g('year')}-${g('month')}-${g('day')} ${g('hour')}:${g('minute')}`;
+      } catch (_) {
+        return new Date(n * 1000).toLocaleString('zh-CN', { hour12: false });
+      }
+    };
     const _MON_ALERT_KINDS = {
       recharge_burst: '🚨 连续充值', high_value_recharge: '⚠️ 大额充值',
       redeem_bruteforce: '🚨 卡密爆破', negative_balance: '🚨 积分负余额',
@@ -21027,6 +21046,10 @@ el.dwVidPlayer.hidden = true;
           headers: { 'Content-Type': 'application/json' } });
         const mismatches = (d && d.mismatches) || [];
         const dayRows = (d && d.day_rows) || [];
+        // 核对时刻精确到分（2026-10-09）：授权中心每 10 分钟自扫，只显示日期看不出这份报告
+        // 是哪一分钟拉的 —— 逐条核对时无法判断「是不是刚拉的」。
+        const ckBox = $('adminReconChecked');
+        if (ckBox) ckBox.textContent = (d && d.checked_at) ? ('最后核对：' + _monMinute(d.checked_at)) : '';
         const totalRedeems = dayRows.reduce((s, x) => s + (x.redeems || 0), 0);
         const rows = dayRows.map((x) =>
           `<tr><td>${esc(x.date)}</td><td>¥${(x.income_yuan || 0).toFixed(2)}</td>` +
@@ -21061,6 +21084,8 @@ el.dwVidPlayer.hidden = true;
       } catch (e) {
         box.innerHTML = `<div class="admin-empty">对账加载失败：${esc((e && (e.message || e.hint)) || e)}</div>`;
         if (mis) mis.innerHTML = '';
+        const ckBox = $('adminReconChecked');
+        if (ckBox) ckBox.textContent = '';
       }
     };
     // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
@@ -21219,7 +21244,8 @@ el.dwVidPlayer.hidden = true;
       // 首次进入也把当前范围显示出来（与按钮高亮一致，避免「看不出在筛什么」）
       const cur = document.querySelector('.admin-mon-range.is-active');
       if (cur) _monShowRangeLabel(cur.textContent || '');
-      loadMonitorVisits(); loadMonitorEvents(); loadMonitorAlerts(); loadMonitorRecon();
+      // 每日对账已独立成 tab（2026-10-09），不再随运维监控一起拉
+      loadMonitorVisits(); loadMonitorEvents(); loadMonitorAlerts();
     };
     // 2026-09-26：连点版本号 5 次 / 告警红横幅的直达入口——运维看板已并入后台，
     // 统一改开管理面板并落在「运维监控」tab（openAdmin 自带登录+is_admin 门禁）。
@@ -21227,12 +21253,17 @@ el.dwVidPlayer.hidden = true;
       openAdminMonitor: () => { openAdmin(); switchAdminView('monitor'); },
     });
     const _adminViewMonitorEl = $('adminViewMonitor');
+    const _adminViewReconEl = $('adminViewRecon');
     const _adminMonitorTimer = setInterval(() => {
-      // 仅当管理面板打开且停留在运维监控页时自动刷新
-      if (!overlay.hidden && !_adminViewMonitorEl.hidden) loadMonitorAlerts();
+      // 仅当管理面板打开、且停留在对应 tab 时才自动刷新（2026-10-09：对账独立成 tab，
+      // 两条链路各自只在被看见时拉，避免在别的 tab 上白刷接口）
+      if (overlay.hidden) return;
+      if (_adminViewMonitorEl && !_adminViewMonitorEl.hidden) loadMonitorAlerts();
+      if (_adminViewReconEl && !_adminViewReconEl.hidden) loadMonitorRecon();
     }, 30 * 1000);
     if ($('adminMonitorRefresh')) $('adminMonitorRefresh').addEventListener('click', loadMonitor);
     if ($('adminMonitorAckAll')) $('adminMonitorAckAll').addEventListener('click', () => ackMonitorAlerts([]));
+    if ($('adminReconRefresh')) $('adminReconRefresh').addEventListener('click', loadMonitorRecon);
 
     // ---- AI 大模型账户 ----
     const aiStatusLabel = (s) => ({

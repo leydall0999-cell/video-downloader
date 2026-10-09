@@ -1389,6 +1389,17 @@ def _bj_day(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(float(ts) + 8 * 3600))
 
 
+def _bj_dt(ts: float) -> str:
+    """精确到分（北京时间 YYYY-MM-DD HH:MM）：2026-10-09 用户要求「日期精确到分」。
+
+    对账明细是钱账，只到「天」没法跟发货日志/授权中心流水对上——一条差异要查明
+    得知道是那一分钟发的货。⚠️ 只用于**展示文案**：账期日切（day_rows 汇总键、
+    告警去重键 `recon_seen`）必须继续用 `_bj_day`，两者不可互替（改了会把同一天
+    的差异拆成多条、汇总表也会裂成多行）。
+    """
+    return time.strftime("%Y-%m-%d %H:%M", time.gmtime(float(ts) + 8 * 3600))
+
+
 def _read_recon_events(path: Path, kinds: set) -> list:
     """读全量审计流水（events.jsonl），只挑指定 kind。文件缺失/损坏行静默跳过。"""
     out = []
@@ -1464,7 +1475,7 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
                 mismatches.append({
                     "kind": "plan_amount_mismatch", "order_id": oid, "at": _paid_at(o),
                     "email": str(g.get("email") or ""),
-                    "detail": f"订单 {oid} 实付「{o.get('plan_code')}」{_amount(o)} 元，"
+                    "detail": f"订单 {oid}（{_bj_dt(_paid_at(o))}）实付「{o.get('plan_code')}」{_amount(o)} 元，"
                               f"但发货「{g.get('plan_code')}」—— 金额与权益不符，请人工核对"})
 
     # pass 2：兜底（升级前的老订单/老 note 没有 order_id）—— 按 (账号,套餐) 时间就近配对
@@ -1488,7 +1499,7 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
             "kind": "paid_no_grant", "order_id": o["order_id"], "at": _paid_at(o),
             "email": str(o.get("email") or ""),
             "detail": f"订单 {o['order_id']} 已收款 {_amount(o)} 元"
-                      f"（{o.get('plan_code')}，{_bj_day(_paid_at(o))}，状态 {o.get('status')}）"
+                      f"（{o.get('plan_code')}，{_bj_dt(_paid_at(o))}，状态 {o.get('status')}）"
                       f"但没有对应发货 —— 用户花了钱没拿到权益，请立即补发"
                       f"（grant note 带 {_grant_prefix_for(o)}:{o['order_id']} 即可自动对账销号）"})
     for g in grants:
@@ -1497,7 +1508,7 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
         mismatches.append({
             "kind": "grant_no_pay", "order_id": "", "at": float(g.get("at", 0)),
             "email": str(g.get("email") or ""),
-            "detail": f"{_bj_day(float(g.get('at', 0)))} 给 {g.get('email')} 自动发货"
+            "detail": f"{_bj_dt(float(g.get('at', 0)))} 给 {g.get('email')} 自动发货"
                       f"「{g.get('plan_code')}」但找不到已收款订单 —— 疑似绕过支付/伪造发货调用"})
 
     # 按天汇总（展示用；差异在行内带明细）
@@ -1538,7 +1549,7 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
             "at": _paid_at(o), "email": str(o.get("email") or ""),
             "detail": f"订单 {o.get('order_id')} 用户已付 "
                       f"{str(o.get('amount') or plan_price(state, str(o.get('plan_code'))) or '?')} 元"
-                      f"（{o.get('plan_code')}，{_bj_day(_paid_at(o))}），但该档每人限购已满，"
+                      f"（{o.get('plan_code')}，{_bj_dt(_paid_at(o))}），但该档每人限购已满，"
                       f"属超限重复购买 —— **请按订单退款**，不要补发"})
     for e in _read_recon_events(EVENT_LOG_PATH, {"recharge"}):
         if now - float(e.get("at", 0)) <= horizon:
