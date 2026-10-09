@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""守卫：1/3/7 天下载会员档 + 套餐价格单一真源（展示 / 下单 / 发放同源）。
+"""守卫：1/3/7 天VIP会员档 + 套餐价格单一真源（展示 / 下单 / 发放同源）。
 
 背景（2026-09-30 用户需求）：充值新增 1/3/7 天会员档，价格由超管在后台写。
 
@@ -71,7 +71,7 @@ def test_override_price_and_days_take_effect() -> None:
     check("[展示] 7 天档 days 变 5、价变 12.34",
           int(dl["download_7day"]["days"]) == 5
           and abs(float(dl["download_7day"]["price_cny"]) - 12.34) < 1e-9)
-    check("[展示] 缺省字段回落默认 label", dl["download_7day"].get("label") == "下载会员·7天")
+    check("[展示] 缺省字段回落默认 label", dl["download_7day"].get("label") == "VIP会员·7天")
     check("[展示] 其他档未被吞掉",
           all(c in dl for c in ORDER if c != "download_7day"))
 
@@ -116,7 +116,7 @@ def test_no_injection_falls_back() -> None:
 def test_override_only_extra_plan_works() -> None:
     print("\n[D] 超管自定义新档（只存在于覆盖层）可展示 / 下单 / 激活")
     M.save_plan_overrides({"download_plans": {"download_15day": {
-        "price_cny": 15.0, "days": 15, "label": "下载会员·15天"}}})
+        "price_cny": 15.0, "days": 15, "label": "VIP会员·15天"}}})
     check("覆盖层新增档出现在生效表", "download_15day" in effective_plans()["download_plans"])
     check("覆盖层新增档出现在下单表", "download_15day" in effective_pay_plans())
     st = _store("m_d.json", 2000.0)

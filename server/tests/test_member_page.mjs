@@ -42,7 +42,7 @@ const seg = mem.slice(mem.indexOf('id="memSeg"'), mem.indexOf('id="memTracks"'))
 for (const t of ['download', 'ai', 'credits']) {
   assert.ok(seg.includes(`data-memtrack="${t}"`), `分段条缺少 data-memtrack="${t}" 按钮`);
 }
-assert.ok(/class="mem-seg-btn is-active"/.test(seg), '分段条默认应高亮「下载会员」');
+assert.ok(/class="mem-seg-btn is-active"/.test(seg), '分段条默认应高亮「VIP会员」');
 assert.ok(appJs.includes("memSeg: $('memSeg')"), 'app.js 的 el 表缺少 memSeg 引用');
 assert.ok(/const memRenderTrack = \(\) => \{/.test(appJs), '缺少按轨渲染函数 memRenderTrack');
 assert.ok(/const memSyncSeg = \(\) => \{/.test(appJs), '缺少分段条状态同步 memSyncSeg');
@@ -154,7 +154,7 @@ assert.ok(/@media \(max-width: 560px\) \{\s*\.mem-tracks \.pf-plans \{ grid-temp
   '窄屏（≤560px）应退化为单列，否则卡片被挤到 240px 以下');
 
 // ---- ⑧ 个人中心里原有的充值卡不许被顺手删掉（两处入口都要在）----
-assert.ok(indexHtml.includes('id="pfPlans"'), '个人中心「开通 / 续费下载会员」卡不该被移除');
+assert.ok(indexHtml.includes('id="pfPlans"'), '个人中心「开通 / 续费VIP会员」卡不该被移除');
 assert.ok(appJs.includes('try { pfRenderPlans(); }'), 'pfRenderPlans 接线被移除（个人中心充值卡会变空白）');
 
 console.log('✅ 会员购买页回归守卫通过：免登录可见价目 / 三轨齐备 / 登录门禁与自动续单 / 弹窗在顶层 / 3 列栅格');

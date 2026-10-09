@@ -1,15 +1,15 @@
 """VDL 会员引擎（V1，照搬 DataTool.vip 三轨结构）。
 
 三轨：
-  1) download_member  下载会员（1/3/7/30/180/365 天订阅；含下载类权益配额表）
-  2) ai_member        AI 会员（月订阅 + 一次性积分池；自动捆绑下载会员权益）
+  1) download_member  VIP会员（1/3/7/30/180/365 天订阅；含下载类权益配额表）
+  2) ai_member        AI 会员（月订阅 + 一次性积分池；自动捆绑VIP会员权益）
   3) permanent_credits 永久积分包（纯按次计费，不与订阅绑定）
 
 设计要点：
   - 纯标准库、零外部依赖（engine 不 import app / fastapi），可独立单测。
   - 时间与存储路径全部可注入（now_fn / path），测试无需 mock 系统时钟。
   - 激活续费顺延：expire_at = max(now, 当前到期) + 时长，不吞已有天数。
-  - AI 会员激活时自动把下载会员权益覆盖到同一到期日（捆绑，无「纯 AI」档）。
+  - AI 会员激活时自动把VIP会员权益覆盖到同一到期日（捆绑，无「纯 AI」档）。
   - 积分消耗顺序：先扣 AI 订阅积分（随会员到期清零），再扣永久积分。
   - 日配额惰性重置：daily_usage.date 非当日时自动清零重计。
 
@@ -35,12 +35,12 @@ from typing import Any, Callable, Optional
 
 # download member: 时长（天）、折算锚点
 DOWNLOAD_PLANS: dict[str, dict[str, Any]] = {
-    "download_1day":       {"price_cny": 1.90,   "days": 1,    "label": "下载会员·1天",   "saving": 0.0},
-    "download_3day":       {"price_cny": 4.90,   "days": 3,    "label": "下载会员·3天",   "saving": 0.0},
-    "download_7day":       {"price_cny": 9.90,   "days": 7,    "label": "下载会员·7天",   "saving": 0.0},
-    "download_month":      {"price_cny": 29.80,  "days": 30,   "label": "下载会员·月",    "saving": 0.0},
-    "download_half_year":  {"price_cny": 99.90,  "days": 180,  "label": "下载会员·180天", "saving": 0.44},
-    "download_year":       {"price_cny": 179.00, "days": 365,  "label": "下载会员·年",    "saving": 0.50, "best": True},
+    "download_1day":       {"price_cny": 1.90,   "days": 1,    "label": "VIP会员·1天",   "saving": 0.0},
+    "download_3day":       {"price_cny": 4.90,   "days": 3,    "label": "VIP会员·3天",   "saving": 0.0},
+    "download_7day":       {"price_cny": 9.90,   "days": 7,    "label": "VIP会员·7天",   "saving": 0.0},
+    "download_month":      {"price_cny": 29.80,  "days": 30,   "label": "VIP会员·月",    "saving": 0.0},
+    "download_half_year":  {"price_cny": 99.90,  "days": 180,  "label": "VIP会员·180天", "saving": 0.44},
+    "download_year":       {"price_cny": 179.00, "days": 365,  "label": "VIP会员·年",    "saving": 0.50, "best": True},
 }
 
 # AI member: 积分池大小
@@ -95,12 +95,12 @@ UNLIMITED_QUOTA: tuple[str, ...] = ()
 # ⚠️ **网页端与桌面端的清单必须分开写**：桌面端有自动解说（routers/commentary.py
 #    + commentary-pipeline，LLM_API_KEY 硬依赖）与一键抠图（routers/matting.py），
 #    网页端两者都没有（已 grep 核实）。把桌面端能力抄到网页端 = 承诺做不到的功能。
-# 网页端目前唯一与 AI 相关的真实能力是「赠送积分随购买额到账」+「捆绑下载会员权益」。
+# 网页端目前唯一与 AI 相关的真实能力是「赠送积分随购买额到账」+「捆绑VIP会员权益」。
 # ⚠️ 措辞守则：不得出现「本地」这类实现口径字眼（用户 2026-10-04 定档）。
 AI_FEATURES: list[str] = [
     "赠送积分 5500 / 15000，30 天有效",
     "积分可用于按量计费的高级功能",
-    "包含下载会员全部权益",
+    "包含VIP会员全部权益",
 ]
 
 # 个人中心「今日使用」功能配额表（与前端表格四列对应：功能/体验剩余/权益余额/积分单价）
@@ -832,7 +832,7 @@ _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
 
 
 def download_benefits() -> list[dict[str, str]]:
-    """下载会员权益清单：配额项自动跟随 DAILY_QUOTA_LIMITS + 不限项 + 静态说明。
+    """VIP会员权益清单：配额项自动跟随 DAILY_QUOTA_LIMITS + 不限项 + 静态说明。
 
     2026-10-04 起不再有隐藏名单：条目全部保留，只把「云端/算力/AI/本地」几个字
     从文案里去掉了（见 _BENEFIT_FROM_LIMITS 上方注释）。
@@ -1030,6 +1030,43 @@ class MembershipStore:
 
         acc = st.setdefault("meta", {}).setdefault("account", {})
         acc["banned"] = bool(auth.get("banned"))
+
+        # 购买记录落户（2026-10-09）：权威快照（authority）只带会员**字段**、不带流水，
+        # 而「购买记录」是读本机 meta.history 的 ⇒ 网页/云端付款后本机 history 永远为空，
+        # 用户看到的是「买过但记录里没有」。这里把云端 purchases（id/plan_code/at）
+        # 按 id **幂等**并入 history。
+        # 🔴 只写展示流水，**绝不**再调 activate() —— 权益效果已由上面的快照字段体现，
+        #    再 activate 一次会把会员天数重复叠加（多送时长）。
+        # 与 apply_cloud_purchases 共用 meta.account.purchases_applied 去重表，两条路径
+        # 互不重复落户。
+        cloud_purchases = acct.get("purchases")
+        if isinstance(cloud_purchases, list) and cloud_purchases:
+            applied = acc.setdefault("purchases_applied", [])
+            if not isinstance(applied, list):
+                applied = acc["purchases_applied"] = []
+            hist = st["meta"].setdefault("history", [])
+            if not isinstance(hist, list):
+                hist = st["meta"]["history"] = []
+            added = 0
+            for p in cloud_purchases:
+                if not isinstance(p, dict):
+                    continue
+                pid = str(p.get("id") or "").strip()
+                code = str(p.get("plan_code") or "").strip()
+                if not pid or not code or pid in applied:
+                    continue
+                try:
+                    at = float(p.get("at") or 0) or now
+                except (TypeError, ValueError):
+                    at = now
+                hist.append({"code": code, "via": "cloud", "at": at,
+                             "type": "activate", "purchase_id": pid})
+                applied.append(pid)
+                added += 1
+            if added:
+                st["meta"]["history"] = hist[-200:]  # 与 activate 同为只留最近 200 条
+                acc["purchases_applied"] = applied[-500:]
+
         st["meta"]["last_authority_sync"] = now
         self._persist()
         return {"ok": True, "banned": bool(auth.get("banned")),
@@ -1127,7 +1164,7 @@ class MembershipStore:
             },
             "ai_member": {
                 "plans": ai,
-                "bundle_note": "包含下载会员全部权益",
+                "bundle_note": "包含VIP会员全部权益",
                 "features": AI_FEATURES,
             },
             "credit_packs": cp,
@@ -1414,7 +1451,7 @@ class MembershipStore:
 
     # ---- 每日配额 ----
     def _is_download_active(self) -> bool:
-        """下载权益是否活跃（独立下载会员或 AI 会员捆绑）。"""
+        """下载权益是否活跃（独立VIP会员或 AI 会员捆绑）。"""
         st = self._state
         return bool(st["download_member"].get("active")) or bool(st["ai_member"].get("active"))
 
@@ -1476,7 +1513,7 @@ class MembershipStore:
             if q.get("tier") == "free":
                 if resource == "download":   # 保持下载文案不变（前端/测试依赖）
                     msg = (f"今日免费下载额度已用尽（{q['limit']}/日）"
-                           f"— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日")
+                           f"— 开通VIP会员可解锁 {q.get('member_limit', 0)} 次/日")
                 else:
                     # 🔴 2026-10-06 第二轮：8 个云端功能一一对应独立额度键，
                     # 超限文案必须报**具体功能名**，否则用户不知道是哪一项用完了。

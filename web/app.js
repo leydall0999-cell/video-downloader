@@ -7140,7 +7140,8 @@
   };
   const pfPlanName = (code) => {
     const MAP = {
-      download_month: '下载会员·月卡', download_half_year: '下载会员·180天', download_quarter: '下载会员·季卡', download_year: '下载会员·年卡',
+      download_1day: 'VIP会员·1天', download_3day: 'VIP会员·3天', download_7day: 'VIP会员·7天',
+      download_month: 'VIP会员·月卡', download_half_year: 'VIP会员·180天', download_quarter: 'VIP会员·季卡', download_year: 'VIP会员·年卡',
       ai_5500: 'AI会员·积分包', ai_15000: 'AI会员·月卡', ai_40000: 'AI会员·季卡', ai_150000: 'AI会员·年卡',
       credits_5000: '积分包 5000', credits_15000: '积分包 15000', credits_50000: '积分包 50000',
     };
@@ -7148,7 +7149,7 @@
   };
   const pfPurchaseType = (code) => {
     if (!code) return '其他';
-    if (code.startsWith('download_')) return '下载会员';
+    if (code.startsWith('download_')) return 'VIP会员';
     if (code.startsWith('ai_')) return 'AI 会员';
     if (code.startsWith('credits_')) return '积分包';
     return '其他';
@@ -7233,14 +7234,15 @@
       const t = h.at ? pfFmtDate(h.at, true) : '—';
       const name = escHtml(pfPlanName(h.code));
       const kind = escHtml(pfPurchaseType(h.code));
-      // via 映射：2026-10-04 后端改用 admin_direct（ui_test 时代的历史流水仍保留）
-      const viaMap = { ui_test: '激活码', admin_direct: '管理员补单' };
+      // via 映射：2026-10-04 后端改用 admin_direct（ui_test 时代的历史流水仍保留）；
+      // cloud = 网页/桌面在线购买（授权中心发放，2026-10-09 起落户本机）
+      const viaMap = { cloud: '在线购买', payment: '在线购买', ui_test: '激活码', admin_direct: '管理员补单' };
       const via = viaMap[h.via] || escHtml(h.via || '—');
       let expire = '—';
       if (h.code && h.code.startsWith('download_')) {
-        expire = dl.active ? `至 ${pfFmtDate(dl.expire_at)}` : '已过期';
+        expire = dl.active ? `至 ${pfFmtDate(dl.expire_at, true)}` : '已过期';
       } else if (h.code && h.code.startsWith('ai_')) {
-        expire = ai.active ? `至 ${pfFmtDate(ai.expire_at)}` : '已过期';
+        expire = ai.active ? `至 ${pfFmtDate(ai.expire_at, true)}` : '已过期';
       } else if (h.code && h.code.startsWith('credits_')) {
         expire = '永久';
       }
@@ -7302,7 +7304,7 @@
     if (member) {
       const dl = member.download_member || {}, ai = member.ai_member || {};
       const memberRows = [];
-      if (dl.active) memberRows.push(`<div class="pf-row"><span>下载会员</span><span>${escHtml('至 ' + pfFmtDate(dl.expire_at))}</span></div>`);
+      if (dl.active) memberRows.push(`<div class="pf-row"><span>VIP会员</span><span>${escHtml('至 ' + pfFmtDate(dl.expire_at))}</span></div>`);
       if (ai.active) memberRows.push(`<div class="pf-row"><span>AI 会员</span><span>${escHtml('至 ' + pfFmtDate(ai.expire_at))}</span></div>`);
       if (el.pfMemberCardList) {
         el.pfMemberCardList.innerHTML = memberRows.join('');
@@ -7562,7 +7564,7 @@
     try { m = await request('/api/member/status', { headers: pfAuthHeaders() }); } catch (_e) { /* 读不到就只留入口 */ }
     const dl = (m && m.download_member) || {}, ai = (m && m.ai_member) || {};
     const parts = [];
-    if (dl.active) parts.push(`下载会员至 ${pfFmtDate(dl.expire_at)}`);
+    if (dl.active) parts.push(`VIP会员至 ${pfFmtDate(dl.expire_at)}`);
     if (ai.active) parts.push(`AI 会员至 ${pfFmtDate(ai.expire_at)}`);
     if (m && m.credits_total != null) parts.push(`可用积分 ${Number(m.credits_total) || 0}`);
     // 免费用户「首次体验」余量（2026-10-05）：让用户**在撞 402 之前**就知道。
@@ -7588,7 +7590,7 @@
       el.memTracks.innerHTML = '<p class="pf-plan-empty">套餐加载失败，请稍后重试</p>';
       return;
     }
-    if (!memTrackData(_memTrack)) _memTrack = 'download';   // 当前轨没数据时回落到下载会员
+    if (!memTrackData(_memTrack)) _memTrack = 'download';   // 当前轨没数据时回落到VIP会员
     memSyncSeg();
     memRenderTrack();
     if (el.memNote) el.memNote.textContent = '支付成功后权益自动到账；同一账号最多 2 台设备同时登录，会员到期自动失效。';
@@ -7632,7 +7634,7 @@
   // 价目仍全部来自 /api/member/plans（单一真源不变）；切换分段不重新请求，只重渲染缓存。
   let _memPlans = null;
   let _memTrack = 'download';
-  // 2026-10-04：AI 轨的 note 原为「含下载会员全部权益」，与刚加的权益清单里
+  // 2026-10-04：AI 轨的 note 原为「含VIP会员全部权益」，与刚加的权益清单里
   // 那一项完全重复（页面上会连着出现两遍同一句）。改成讲积分的额度与有效期。
   const MEM_TRACK_META = {
     download: { note: '全速提取 · 网页端与桌面端共用' },
@@ -7661,7 +7663,7 @@
     const t = memTrackData(key);
     let head = '';
     // 2026-10-04：AI 轨也要渲染权益清单。此前只有 download 轨渲染 benefits，
-    // AI 会员页只有一行「含下载会员全部权益」——ai_member.features 一直在接口里，
+    // AI 会员页只有一行「含VIP会员全部权益」——ai_member.features 一直在接口里，
     // 前端从没显示过（用户反馈「AI 会员补充权益」）。
     // ⚠️ 两轨字段名不同：下载轨是 benefits（对象数组），AI 轨是 features（字符串数组）。
     const featList = key === 'download'

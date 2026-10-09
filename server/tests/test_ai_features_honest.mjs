@@ -4,7 +4,7 @@
 //  ① 后端 `AI_FEATURES` 写过「AI 字幕识别 / 视频总结 / 图片翻译体验」三项，
 //     全仓搜不到对应路由 = 拿不存在的功能做卖点（与「今日使用」占位行同源，V1 抄 DataTool）。
 //  ② 前端**从来没渲染过** `ai_member.features` —— 接口一直返回，AI 会员面板只有
-//     一行「含下载会员全部权益」+ 两张卡。用户反馈「AI 会员补充权益」才发现。
+//     一行「含VIP会员全部权益」+ 两张卡。用户反馈「AI 会员补充权益」才发现。
 //
 // 本守卫钉：
 //   ① 每条 AI_FEATURES 都能在 server/ 里找到**实现落点**（关键词命中真实文件/路由/常量）；
@@ -66,7 +66,7 @@ const LANDMARKS = [
   { kw: ['网关', '密钥', '吊销'], files: ['gateway_config'] },
   { kw: ['抠图'], files: ['matting'] },
   { kw: ['积分'], files: ['membership'] },
-  { kw: ['下载会员'], files: ['membership'] },
+  { kw: ['VIP会员'], files: ['membership'] },
 ];
 for (const f of M.features) {
   const hit = LANDMARKS.filter(l => l.kw.some(k => f.includes(k)));

@@ -23,12 +23,12 @@ from typing import Any, Callable, Optional
 #    决定，即「超管后台改价 → 下单金额跟随」。本表用于无注入时的独立单测。
 # grant 字段 = 会员引擎 activate() 接受的 code（与 plan_code 一致）。
 PAY_PLANS: dict[str, dict] = {
-    "download_1day":      {"price": 1.90,  "name": "下载会员·1天",   "grant": "download_1day"},
-    "download_3day":      {"price": 4.90,  "name": "下载会员·3天",   "grant": "download_3day"},
-    "download_7day":      {"price": 9.90,  "name": "下载会员·7天",   "grant": "download_7day"},
-    "download_month":     {"price": 29.80, "name": "下载会员·月",    "grant": "download_month"},
-    "download_half_year": {"price": 99.90, "name": "下载会员·半年",  "grant": "download_half_year"},
-    "download_year":      {"price": 179.00, "name": "下载会员·年",    "grant": "download_year"},
+    "download_1day":      {"price": 1.90,  "name": "VIP会员·1天",   "grant": "download_1day"},
+    "download_3day":      {"price": 4.90,  "name": "VIP会员·3天",   "grant": "download_3day"},
+    "download_7day":      {"price": 9.90,  "name": "VIP会员·7天",   "grant": "download_7day"},
+    "download_month":     {"price": 29.80, "name": "VIP会员·月",    "grant": "download_month"},
+    "download_half_year": {"price": 99.90, "name": "VIP会员·半年",  "grant": "download_half_year"},
+    "download_year":      {"price": 179.00, "name": "VIP会员·年",    "grant": "download_year"},
     "ai_5500":            {"price": 49.90, "name": "AI会员·5500积分", "grant": "ai_5500"},
     "ai_15000":           {"price": 99.90, "name": "AI会员·15000积分","grant": "ai_15000"},
     "credits_5000":       {"price": 50.00, "name": "积分包·5000",     "grant": "credits_5000"},

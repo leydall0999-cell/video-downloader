@@ -552,7 +552,7 @@ def _member_quota_gate(request, need: int = 1) -> dict:
             return {"mode": "local", "store": store, "remaining": q.get("remaining")}
         if q.get("tier") == "free":
             detail = (f"今日免费下载次数已用尽（{q['limit']}/日），"
-                      f"开通下载会员可解锁 {q.get('member_limit', 0)} 次/日")
+                      f"开通VIP会员可解锁 {q.get('member_limit', 0)} 次/日")
         else:
             detail = f"今日下载配额已用尽（{q['limit']}/日）"
         raise app.HTTPException(status_code=402, detail=detail)
@@ -630,7 +630,7 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
     gate = _member_quota_gate(request, need=len(urls))
     member_cap = gate.get('remaining') if isinstance(gate.get('remaining'), int) else len(urls)
     if member_cap is not None and member_cap <= 0:
-        raise app.HTTPException(status_code=402, detail='今日免费下载次数已用尽，开通下载会员可解锁更多次数')
+        raise app.HTTPException(status_code=402, detail='今日免费下载次数已用尽，开通VIP会员可解锁更多次数')
     if payload.concurrency > 0:
         app.scheduler.set_concurrency(payload.concurrency)
     retries = payload.retries if payload.retries >= 0 else app.BATCH_RETRIES_DEFAULT
