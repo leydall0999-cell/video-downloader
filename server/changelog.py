@@ -18,6 +18,13 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.47",
+        "date": "2026-10-09",
+        "items": [
+            "换 logo：应用图标与「关于」页更换为最终定稿 —— 「播放 + 下载箭头 + 声纹」品牌标识",
+        ],
+    },
+    {
         "version": "1.0.46",
         "date": "2026-10-09",
         "items": [
