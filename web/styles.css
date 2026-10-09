@@ -5528,6 +5528,32 @@ html.theme-dark .admin-btn.admin-mon-range.is-active, html.theme-dark .admin-btn
 .admin-ustats .admin-stat-card { min-width: 0; }
 
 .pf-update-btn:disabled { opacity: .6; cursor: default; }
+/* 官方网站入口行（2026-10-09）：整行可点，点后由系统默认浏览器打开。
+   样式按用户给的参考图复刻：白底列表行 —— 不加圆角与四边描边，只有上下各一条
+   分隔线；图标与文字用正文深色（非品牌色），右侧细箭头灰色。 */
+.pf-link-row {
+  display: flex; align-items: center; gap: .75rem; width: 100%;
+  margin: 0 0 1rem; padding: 1rem .15rem;
+  font-family: inherit; font-size: 1rem; text-align: left;
+  color: var(--text, #1f2937); cursor: pointer;
+  background: transparent;
+  border: none; border-radius: 0;
+  border-top: 1px solid var(--line, #e6e8f0);
+  border-bottom: 1px solid var(--line, #e6e8f0);
+  transition: background .15s;
+}
+.pf-link-row:hover { background: rgba(15, 23, 42, .035); }
+.pf-link-row:focus-visible { outline: 2px solid var(--brand, #4f46e5); outline-offset: 2px; }
+.pf-link-row-ic { flex: none; display: inline-flex; align-items: center; color: var(--text, #1f2937); }
+.pf-link-row-label { flex: 1 1 auto; min-width: 0; font-weight: 500; }
+.pf-link-row-arrow { flex: none; display: inline-flex; align-items: center; color: var(--text-mute, #9ca3af); }
+.pf-link-row:hover .pf-link-row-ic,
+.pf-link-row:hover .pf-link-row-arrow { color: var(--brand, #4f46e5); }
+html.theme-dark .pf-link-row {
+  border-top-color: rgba(255, 255, 255, .12);
+  border-bottom-color: rgba(255, 255, 255, .12);
+}
+html.theme-dark .pf-link-row:hover { background: rgba(255, 255, 255, .05); }
 .pf-about-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
 /* 错误上报弹窗 */
 .pf-report-modal {

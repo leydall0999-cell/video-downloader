@@ -634,6 +634,16 @@ run_one test_admin_recon_tab.py
 # 9 处变异全红。
 run_one test_recon_grant_aggregate.py
 
+# 46. test_profile_site_row.py —— 「关于」页「官方网站」入口（2026-10-09 用户要求）。
+#      两个必须钉死的坑：① 桌面壳是 WKWebView，**会静默拦截 `window.open`** —— 若
+#      有人把点击改回 window.open，网页版正常、桌面端点下去毫无反应且不报错，故
+#      必须走 `_openExternalUrl()`（原生桥优先）；② 不能用 `<a href>` 承载，
+#      桌面壳里锚点会尝试把**主框架**导航到外网（项目已有同类事故：二维码 blob）。
+#      另钉 HTML/JS 两处 URL 常量一致、图标与箭头结构、样式规则为**真规则行**
+#      （注释掉后全文仍含选择器，靠 contains 会假绿）。
+#      17 处变异全红（含「注释掉 -ic/-label/-arrow 规则」「改回 window.open」）。
+run_one test_profile_site_row.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

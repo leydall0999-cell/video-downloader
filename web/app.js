@@ -313,6 +313,7 @@
     psAttachClear: $('psAttachClear'),
     profAboutVersion: $('profAboutVersion'),
     profAboutBuild: $('profAboutBuild'),
+    profSiteRow: $('profSiteRow'),
     profUpdateBanner: $('profUpdateBanner'),
     profUpdateVer: $('profUpdateVer'),
     profUpdateNotes: $('profUpdateNotes'),
@@ -19322,6 +19323,15 @@ el.dwVidPlayer.hidden = true;
       if (el.profUpdateNowBtn) { el.profUpdateNowBtn.disabled = false; el.profUpdateNowBtn.textContent = '立即更新'; }
     }
   }
+
+  // 官方网站（2026-10-09）：点击用**系统默认浏览器**打开。
+  // 不能直接 window.open —— 桌面壳是 WKWebView，会静默拦截（见 _openExternalUrl 与
+  // desktop_launcher.VdlApi.open_external 的说明），表现为「点了没反应」。
+  // 统一走 _openExternalUrl：有原生桥用桥，网页版回退 window.open。
+  if (el.profSiteRow) el.profSiteRow.addEventListener('click', () => {
+    const url = el.profSiteRow.dataset.siteUrl || 'https://hanyuxz.top/';
+    _openExternalUrl(url);
+  });
 
   if (el.profCheckUpdateBtn) el.profCheckUpdateBtn.addEventListener('click', async () => {
     _aboutMsg('正在检查更新…');

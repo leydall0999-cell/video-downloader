@@ -2085,6 +2085,28 @@
             <ul class="pf-changelog-list" id="profChangelogList" data-page-node-id="pfChangelogList"></ul>
           </div>
 
+          <!-- 官方网站（2026-10-09）：点击用系统默认浏览器打开。
+               用 <button> 而非 <a href>：桌面壳是 WKWebView，<a target=_blank> 与
+               window.open 都会被静默拦截、甚至可能把主框架导航走（改由 JS 走原生桥打开）。 -->
+          <button type="button" class="pf-link-row" id="profSiteRow"
+                  data-site-url="https://hanyuxz.top/" data-page-node-id="pfSiteRow">
+            <span class="pf-link-row-ic" aria-hidden="true" data-page-node-id="pfSiteIcon">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M3.2 9h17.6M3.2 15h17.6"></path>
+                <path d="M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21c-2.4-2.5-3.6-5.5-3.6-9S9.6 5.5 12 3z"></path>
+              </svg>
+            </span>
+            <span class="pf-link-row-label" data-page-node-id="pfSiteLabel">官方网站</span>
+            <span class="pf-link-row-arrow" aria-hidden="true" data-page-node-id="pfSiteArrow">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                   stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9.5 5.5 16 12l-6.5 6.5"></path>
+              </svg>
+            </span>
+          </button>
+
           <div class="pf-about-actions" data-page-node-id="ByoTHXH6j2mB9FEUWnuDdQ">
             <button type="button" class="user-menu-btn" id="profCheckUpdateBtn" data-page-node-id="VNAPxG5uqVdgkUn3aXZ7PA">检查更新</button>
             <button type="button" class="user-menu-btn ghost" id="profErrorReportBtn" data-page-node-id="6IFhKBs1ngHAVhoKQ6bq5s">错误上报</button>
