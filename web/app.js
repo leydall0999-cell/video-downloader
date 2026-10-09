@@ -913,6 +913,18 @@
     dwOcrActions: $('dwOcrActions'),
     dwOcrCopy: $('dwOcrCopy'),
     dwOcrDownload: $('dwOcrDownload'),
+    idphotoView: $('idphotoView'),
+    idpFile: $('idpFile'),
+    idpSpec: $('idpSpec'),
+    idpLayout: $('idpLayout'),
+    idpColors: $('idpColors'),
+    idpBtn: $('idpBtn'),
+    idpDl: $('idpDl'),
+    idpStatus: $('idpStatus'),
+    idpPreviewWrap: $('idpPreviewWrap'),
+    idpPreview: $('idpPreview'),
+    sTabIdPhoto: $('sTabIdPhoto'),
+    tabIdPhoto: $('tabIdPhoto'),
     dwExpandBtn: $('dwExpandBtn'),
     dwExpandBtn2: $('dwExpandBtn2'),
     dwSelInfo: $('dwSelInfo'),
@@ -7693,6 +7705,134 @@
       el.dwOcrStatus.textContent = '无法访问剪贴板，已全选文本，请按 Cmd+C 复制';
     }
   });
+
+  // ───────────────── 证件照（2026-10-10 竞品对标水印云 certified） ─────────────────
+  // 规格表 = 像素真源（常用 + 考试/证件类），与竞品口径一致（300dpi 下的标准尺寸）。
+  const IDP_SPECS = [
+    { g: '常用', items: [
+      { name: '一寸', mm: '25×35mm', w: 295, h: 413 },
+      { name: '二寸', mm: '35×49mm', w: 413, h: 579 },
+      { name: '小一寸', mm: '22×32mm', w: 260, h: 378 },
+      { name: '大一寸', mm: '33×48mm', w: 390, h: 567 },
+      { name: '小二寸', mm: '35×45mm', w: 413, h: 531 },
+      { name: '大二寸', mm: '35×53mm', w: 413, h: 626 },
+      { name: '三寸', mm: '55×84mm', w: 650, h: 992 },
+      { name: '四寸', mm: '76×100mm', w: 898, h: 1181 },
+    ] },
+    { g: '考试 / 证件', items: [
+      { name: '社保卡', mm: '26×32mm', w: 358, h: 441 },
+      { name: '驾驶证', mm: '22×32mm', w: 260, h: 378 },
+      { name: '简历照片', mm: '25×35mm', w: 295, h: 413 },
+      { name: '教师资格证', mm: '35×49mm', w: 413, h: 579 },
+      { name: '退伍军人优待证', mm: '30×37mm', w: 352, h: 440 },
+      { name: '健康证', mm: '25×35mm', w: 295, h: 413 },
+      { name: '研究生考试', mm: '39×52mm', w: 480, h: 640 },
+      { name: '英语四六级', mm: '33×48mm', w: 390, h: 567 },
+      { name: '注册会计师', mm: '15×19mm', w: 178, h: 220 },
+      { name: '一级建造师', mm: '34×45mm', w: 401, h: 531 },
+      { name: '计算机等级考试', mm: '33×48mm', w: 390, h: 567 },
+      { name: '普通话水平测试', mm: '33×48mm', w: 390, h: 567 },
+      { name: '自考考试', mm: '12×16mm', w: 144, h: 192 },
+      { name: '成考高考', mm: '41×54mm', w: 480, h: 640 },
+      { name: '省考公务员（一寸）', mm: '25×35mm', w: 295, h: 413 },
+      { name: '省考公务员（二寸）', mm: '35×49mm', w: 413, h: 579 },
+      { name: '国家公务员（一寸）', mm: '25×35mm', w: 295, h: 413 },
+      { name: '国家公务员（小二寸）', mm: '35×45mm', w: 413, h: 531 },
+    ] },
+  ];
+  // 底色：与竞品色板对齐（透明 / 白 / 黑 / 灰 / 蓝系 / 红系）
+  const IDP_COLORS = [
+    { key: 'transparent', css: '', label: '透明底' },
+    { key: 'white', css: '#FFFFFF', label: '白底' },
+    { key: 'blue', css: '#3E54B9', label: '蓝底' },
+    { key: 'lightblue', css: '#93CEFA', label: '浅蓝底' },
+    { key: 'red', css: '#FE2B22', label: '红底' },
+    { key: 'darkred', css: '#8B1B1B', label: '深红底' },
+    { key: 'gray', css: '#999999', label: '灰底' },
+    { key: 'black', css: '#000000', label: '黑底' },
+  ];
+  let idpBg = 'blue';
+
+  const idpRenderSpecs = () => {
+    if (!el.idpSpec) return;
+    el.idpSpec.innerHTML = IDP_SPECS.map((grp) => (
+      `<optgroup label="${grp.g}">` + grp.items.map((it, i) => (
+        `<option value="${grp.g}|${i}">${it.name}（${it.mm}·${it.w}×${it.h}）</option>`
+      )).join('') + '</optgroup>'
+    )).join('');
+  };
+  const idpCurrentSpec = () => {
+    const [g, i] = (el.idpSpec.value || '常用|0').split('|');
+    const grp = IDP_SPECS.find((x) => x.g === g) || IDP_SPECS[0];
+    return grp.items[parseInt(i, 10) || 0] || grp.items[0];
+  };
+  const idpRenderColors = () => {
+    if (!el.idpColors) return;
+    el.idpColors.innerHTML = IDP_COLORS.map((c) => (
+      `<button type="button" class="idp-color${c.key === 'transparent' ? ' is-transparent' : ''}${c.key === idpBg ? ' is-active' : ''}" data-bg="${c.key}" title="${c.label}" aria-label="${c.label}"${c.css ? ` style="background:${c.css}"` : ''}></button>`
+    )).join('');
+  };
+  if (el.idpColors) {
+    el.idpColors.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-bg]');
+      if (!b) return;
+      idpBg = b.dataset.bg;
+      idpRenderColors();
+    });
+  }
+
+  const idpSetStatus = (msg, isErr) => {
+    el.idpStatus.textContent = msg || '';
+    el.idpStatus.classList.toggle('is-error', !!isErr);
+  };
+
+  const startIdPhoto = async () => {
+    const f = el.idpFile.files[0];
+    if (!f) { idpSetStatus('请先选择一张人像照片', true); return; }
+    const spec = idpCurrentSpec();
+    el.idpBtn.disabled = true;
+    el.idpDl.hidden = true;
+    el.idpPreviewWrap.hidden = true;
+    idpSetStatus('抠图换底中…（首次使用需下载抠图模型，请耐心等待）', false);
+    const form = new FormData();
+    form.append('file', f);
+    form.append('w', String(spec.w));
+    form.append('h', String(spec.h));
+    form.append('bg', idpBg);
+    form.append('layout', el.idpLayout.value || '1');
+    form.append('label', spec.name);
+    try {
+      const data = await request('/api/idphoto/make', { method: 'POST', body: form });
+      const job = data.job_id;
+      // 轮询：抠图是重算力任务，给足 5 分钟（首次还要下载模型）
+      let st = null;
+      for (let i = 0; i < 300; i += 1) {
+        st = await request(`/api/idphoto/${job}`);
+        if (st.status === 'completed' || st.status === 'failed') break;
+        if (st.progress) idpSetStatus(st.progress, false);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      if (!st || st.status === 'failed') {
+        idpSetStatus('失败：' + ((st && st.error) || '处理超时，请重试'), true);
+        return;
+      }
+      const url = `/api/idphoto/${job}/file`;
+      el.idpPreview.src = url;
+      el.idpPreviewWrap.hidden = false;
+      el.idpDl.href = url;
+      el.idpDl.setAttribute('download', st.filename || '证件照.png');
+      el.idpDl.hidden = false;
+      const d = st.detail || {};
+      idpSetStatus(`完成 ✅ ${spec.name} ${spec.w}×${spec.h}${d.layout > 1 ? ` · ${d.layout} 张排版` : ''}`, false);
+    } catch (error) {
+      idpSetStatus('失败：' + ((error && error.message) || '未知错误'), true);
+    } finally {
+      el.idpBtn.disabled = false;
+    }
+  };
+  idpRenderSpecs();
+  idpRenderColors();
+  if (el.idpBtn) el.idpBtn.addEventListener('click', startIdPhoto);
 
 
   // 当前拖拽目标：'preview' | 'modal'，用于全局 mousemove/mouseup 知道该用哪张图
@@ -15969,6 +16109,7 @@ el.dwVidPlayer.hidden = true;
     const isSt = view === 'subtitle';   // 字幕提取（区别于订阅 isSub）
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
+    const isIdPhoto = view === 'idphoto';   // 证件照（2026-10-10 竞品对标水印云）
     const isHome = view === 'home';   // 2026-09-12 首页：产品热门功能快捷入口（默认落地页）
     const isProfile = view === 'profile';                  // 个人资料总览
     const isProfilePurchases = view === 'profile_purchases';
@@ -15977,7 +16118,7 @@ el.dwVidPlayer.hidden = true;
     const isProfileAbout = view === 'profile_about';
     const isProfileSupport = view === 'profile_support';   // 客服消息工作台（仅超管）
     const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout || isProfileSupport;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isPage || isSt || isAppIntro || isBridge || isProfileGroup || isHome;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isPage || isSt || isAppIntro || isBridge || isProfileGroup || isHome || isIdPhoto;
     if (el.homeView) el.homeView.hidden = !isHome;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -15996,6 +16137,7 @@ el.dwVidPlayer.hidden = true;
     // 保留 src（不 release），用户在 dw 之间来回切时結果还能接着播。
     if (!isDw) dwStopAllVideos();
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
+    if (el.idphotoView) el.idphotoView.hidden = !isIdPhoto;
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
     if (el.profileView) el.profileView.hidden = !isProfileGroup;
     if (el.profileOverviewPanel) el.profileOverviewPanel.hidden = !isProfile;
@@ -16004,7 +16146,7 @@ el.dwVidPlayer.hidden = true;
     if (el.profileSecurityPanel) el.profileSecurityPanel.hidden = !isProfileSecurity;
     if (el.profileAboutPanel) el.profileAboutPanel.hidden = !isProfileAbout;
     if (el.profileSupportPanel) el.profileSupportPanel.hidden = !isProfileSupport;
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isBridge && !isProfileGroup);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isBridge && !isProfileGroup && !isIdPhoto);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -16022,7 +16164,7 @@ el.dwVidPlayer.hidden = true;
     if (el.sTabHome) el.sTabHome.classList.toggle('is-active', isHome);
     if (el.tabDw) el.tabDw.classList.toggle('is-active', isDw);
     if (el.tabAppIntro) el.tabAppIntro.classList.toggle('is-active', isAppIntro);
-    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isAppIntro && !isBridge && !isProfileGroup && !isHome;
+    const _isDefault = !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isAppIntro && !isBridge && !isProfileGroup && !isHome && !isIdPhoto;
     if (el.sTabDownload) el.sTabDownload.classList.toggle('is-active', _isDefault);
     if (el.sTabLibrary) el.sTabLibrary.classList.toggle('is-active', isLib);
     if (el.sTabSubscribe) el.sTabSubscribe.classList.toggle('is-active', isSub);
@@ -16046,6 +16188,8 @@ el.dwVidPlayer.hidden = true;
     if (el.sTabDwVideo) el.sTabDwVideo.classList.toggle('is-active', view === 'dwvideo');
     if (el.sTabMatting) el.sTabMatting.classList.toggle('is-active', view === 'matting');
     if (el.sTabBridge) el.sTabBridge.classList.toggle('is-active', isBridge);
+    if (el.sTabIdPhoto) el.sTabIdPhoto.classList.toggle('is-active', isIdPhoto);
+    if (el.tabIdPhoto) el.tabIdPhoto.classList.toggle('is-active', isIdPhoto);
     if (isLib) loadLibrary();
     if (isSub) loadSubscriptions();
     if (isCom) {
@@ -16538,6 +16682,7 @@ el.dwVidPlayer.hidden = true;
     [el.sTabDwPdf, 'dwpdf'],
     [el.sTabDwVideo, 'dwvideo'],
     [el.sTabMatting, 'matting'],
+    [el.sTabIdPhoto, 'idphoto'],
     [el.sTabSubscribe, 'subscribe'],
     [el.sTabTorrent, 'torrent'],
     [el.sTabMusicConvert, 'musicconvert'],

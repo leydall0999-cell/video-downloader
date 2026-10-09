@@ -117,6 +117,8 @@
       <!-- 2026-09-08 视频去水印 / 一键抠图从 dw 视图子模式拎出独立入口：进入 dw 视图并自动切对应子面板 -->
       <button type="button" class="sidebar-item" data-view="dwvideo" id="sTabDwVideo" title="视频去水印" data-page-node-id="jVhS3Dkixwig8F3PPuhe7P"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="BQRFH4dqC1Xi3CvTlS8Syz">🎞️</span><span class="sidebar-item-label" data-page-node-id="BpFkoYqYtdhAKugOWUWDdP">视频去水印</span></button>
       <button type="button" class="sidebar-item" data-view="matting" id="sTabMatting" title="一键抠图" data-page-node-id="MyN34NwHfszkvoykDJkeVV"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="a4M4KH8TIDejZAmNgW7i5z">✂️</span><span class="sidebar-item-label" data-page-node-id="BnBlDIvawoG4zEgWQKqEpJ">一键抠图</span></button>
+      <!-- 证件照（2026-10-10 竞品对标水印云）：上传生活照 → 抠人像 → 换标准底色 → 按规格出图 -->
+      <button type="button" class="sidebar-item" data-view="idphoto" id="sTabIdPhoto" title="证件照" data-page-node-id="sTabIdPhoto2026a"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="sTabIdPhotoIc2026a">🪪</span><span class="sidebar-item-label" data-page-node-id="sTabIdPhotoLb2026a">证件照</span></button>
     </div>
 
     <!-- 2026-09-08 媒体库移到侧栏最后（用户要求） -->
@@ -172,6 +174,7 @@
         <button type="button" class="tab" data-view="share" id="tabShare" data-page-node-id="sHareTabTop2026en01">📲 生成二维码</button>
         <button type="button" class="tab" data-view="page" id="tabPage" data-page-node-id="pAgeTabTop2026en01">🌐 生成网页</button>
     <button type="button" class="tab" data-view="dw" id="tabDw" data-page-node-id="N9RTDjwHrnMXbYAvIzTCdO">🧽 图片去水印</button>
+    <button type="button" class="tab" data-view="idphoto" id="tabIdPhoto">🪪 证件照</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe" data-page-node-id="rSafkSMroVCsnxtt3WE7up">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden data-page-node-id="bOI6hQq4T7ILw9Ning6dVw">🧲 种子</button>
     <button type="button" class="tab" data-view="profile" id="tabProfile" data-page-node-id="pnXFpJysLDFdRNWE1BgTwg">👤 个人中心</button>
@@ -281,6 +284,11 @@
             <span class="home-card-icon" aria-hidden="true">🔗</span>
             <span class="home-card-title">视频/音频桥接</span>
             <span class="home-card-desc">视频与音频互相合成 / 替换</span>
+          </button>
+          <button type="button" class="home-card" data-view="idphoto">
+            <span class="home-card-icon" aria-hidden="true">🪪</span>
+            <span class="home-card-title">证件照</span>
+            <span class="home-card-desc">抠人像换底色，一寸二寸一键出图</span>
           </button>
         </div>
       </div>
@@ -1988,6 +1996,56 @@
       </div>
       <span class="mat-lightbox-tip" data-page-node-id="WZGYnwdJ4AEUSjbAcB2Bf9">透明区域在「白底/黑底」下最易看清完整性 · 点击空白处或按 Esc 关闭</span>
     </div>
+    </div>
+  </section>
+
+  <!-- 证件照视图（2026-10-10 竞品对标水印云 certified）：上传生活照 → 抠人像 → 换标准底色 → 按规格出图 -->
+  <section id="idphotoView" class="panel" hidden aria-labelledby="idpTitle">
+    <h2 id="idpTitle" class="guide-title"><span class="guide-title-text">证件照</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
+    <details class="howto" data-howto="idphoto">
+      <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 证件照</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+      <div class="howto-body">
+        <ol class="howto-steps">
+          <li>在「照片文件」处选择一张人像清晰的正面照（背景杂乱也没关系，会自动抠出人像）。</li>
+          <li>选<b>尺寸规格</b>：一寸 / 二寸等常用尺寸，或社保卡、教师资格证等考试证件尺寸。</li>
+          <li>选<b>底色</b>：白底 / 蓝底 / 红底等标准色，也可以保留<b>透明底</b>。</li>
+          <li>选<b>排版</b>（单张 / 4 张 / 8 张冲印版），点「<b>生成证件照</b>」。</li>
+          <li>看预览，满意后点「<b>下载结果</b>」取回 300dpi PNG。</li>
+        </ol>
+        <p class="howto-note">出图自动按证件照构图（人像居中、顶部留白、底部对齐）；若原图背景太复杂导致抠图不理想，可先去「一键抠图」处理好再来。</p>
+        <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+      </div>
+    </details>
+
+    <label class="uc-field">
+      <span class="uc-label">照片文件</span>
+      <input type="file" id="idpFile" accept="image/*" />
+    </label>
+    <div class="idp-form">
+      <label class="uc-field">
+        <span class="uc-label">尺寸规格</span>
+        <select id="idpSpec"></select>
+      </label>
+      <label class="uc-field">
+        <span class="uc-label">排版张数</span>
+        <select id="idpLayout">
+          <option value="1">单张</option>
+          <option value="4">4 张（2×2 冲印版）</option>
+          <option value="8">8 张（2×4 冲印版）</option>
+        </select>
+      </label>
+      <div class="uc-field">
+        <span class="uc-label">底色</span>
+        <div class="idp-colors" id="idpColors"></div>
+      </div>
+    </div>
+    <div class="idp-actions">
+      <button type="button" class="uc-btn primary" id="idpBtn">生成证件照</button>
+      <a class="uc-btn" id="idpDl" hidden>下载结果</a>
+    </div>
+    <p class="idp-status" id="idpStatus"></p>
+    <div class="idp-preview" id="idpPreviewWrap" hidden>
+      <img id="idpPreview" alt="证件照预览" />
     </div>
   </section>
 

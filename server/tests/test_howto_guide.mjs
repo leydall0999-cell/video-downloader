@@ -60,7 +60,8 @@ const EXPECT = new Map([
   ['dw_img',        ['id="dwImgPane"', 'id="dwPdfPane"']],
   ['dw_pdf',        ['id="dwPdfPane"', 'id="dwVideoPane"']],
   ['dw_video',      ['id="dwVideoPane"', 'id="dwMattingPane"']],
-  ['matting',       ['id="dwMattingPane"', 'id="profileView"']],
+  ['matting',       ['id="dwMattingPane"', 'id="idphotoView"']],
+  ['idphoto',       ['id="idphotoView"', 'id="profileView"']],
   ['library',       ['id="libraryView"', 'id="commentaryView"']],
   ['commentary',    ['id="commentaryView"', 'id="subscribeView"']],
   ['subscribe',     ['id="subscribeView"', 'id="torrentView"']],
@@ -214,11 +215,11 @@ ok(/@keyframes howtoFlash\s*\{/.test(cssCode),
 // 背景：引导条只在首次进入时自动展开一次；没有这个按钮，用户忘了就没有入口。
 const BTN_RE = /<button type="button" class="howto-btn"[^>]*>\?<\/button>/g;
 const btnCount = (indexHtml.match(BTN_RE) || []).length;
-eq(btnCount, 15,
-  `「?」查看引导按钮应恰好 15 个（10 个纯标题视图 + 4 个 lib-head 视图 + 下载页），实际 ${btnCount} 个`);
+eq(btnCount, 16,
+  `「?」查看引导按钮应恰好 16 个（11 个纯标题视图 + 4 个 lib-head 视图 + 下载页），实际 ${btnCount} 个`);
 
 const TITLE_IDS = ['ucTitle', 'musTitle', 'imgTitle', 'cpTitle', 'srTitle',
-  'shareTitle', 'pageTitle', 'bridgeTitle', 'sbTitle', 'dwTitle'];
+  'shareTitle', 'pageTitle', 'bridgeTitle', 'sbTitle', 'dwTitle', 'idpTitle'];
 for (const id of TITLE_IDS) {
   const reBtn = new RegExp(`<h2 id="${id}"[^>]*>[\\s\\S]*?class="howto-btn"[\\s\\S]*?</h2>`);
   ok(reBtn.test(indexHtml),
@@ -380,5 +381,5 @@ ok(/howtoSyncButtons\(\)/.test(toggleSeg),
 
 console.log(`✅ 操作引导守卫生效：${EXPECT.size} 个功能入口全覆盖、位置正确、`
   + `文案与真实控件一致、首次展开机制与折叠样式在位、`
-  + `右上角「?」按钮 15 处落点、三态（隐藏→展开 / 收起→展开 / 展开→整条隐藏）、`
+  + `右上角「?」按钮 ${btnCount} 处落点、三态（隐藏→展开 / 收起→展开 / 展开→整条隐藏）、`
   + `「✕ 关闭引导」${EXPECT.size} 处且可被「?」重新打开（共 ${count} 项断言）`);

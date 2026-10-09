@@ -3742,6 +3742,8 @@ from routers import dewatermark as _dewatermark_rtr
 app.include_router(_dewatermark_rtr.router)
 from routers import matting as _matting_rtr
 app.include_router(_matting_rtr.router)
+from routers import idphoto as _idphoto_rtr
+app.include_router(_idphoto_rtr.router)
 from routers import subtitle as _subtitle_rtr
 app.include_router(_subtitle_rtr.router)
 from routers import core as _core_rtr

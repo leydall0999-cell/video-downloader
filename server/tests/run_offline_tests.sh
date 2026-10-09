@@ -116,6 +116,7 @@ run_one test_yt_pot_starved.py
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py
 run_one test_dewatermark_core.py
+run_one test_idphoto.py            # 证件照（2026-10-10 竞品对标水印云）：合成构图 / 底色 / 排版 + 前端接线 + 路由挂载
 run_one test_matting_forward.py
 run_one test_dewatermark_forward.py
 run_one test_dewatermark_diffusion.py
