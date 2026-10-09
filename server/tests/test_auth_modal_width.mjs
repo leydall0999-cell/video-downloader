@@ -42,17 +42,35 @@ assert.ok(/max-width\s*:\s*400px/.test(am[1]),
 assert.ok(/width\s*:\s*min\(\s*400px/.test(am[1]),
   `#authModal 的 width 应写成 min(400px, 100% - 2rem) 以兼容窄屏，实际：${am[1].trim()}`);
 
-// ---- ③ 登录方式文案（用户指定口径）----
-// 两处登录入口（个人中心页内表单 + 全局弹窗）都必须用新口径
-const labelCount = (indexHtml.match(/电话号码 \/ QQ邮箱/g) || []).length;
+// ---- ③ 登录方式文案（用户指定口径：电话号码 / QQ邮箱 / Gmail邮箱）----
+// 三处都挂这个口径：个人中心登录表单、重置密码表单、全局登录弹窗。
+const IDENT_LABEL = '电话号码 / QQ邮箱 / Gmail邮箱';
+const labelRe = new RegExp(IDENT_LABEL.replace(/\//g, '\\/'), 'g');
+const labelCount = (indexHtml.match(labelRe) || []).length;
 assert.ok(labelCount >= 2,
-  `两处登录入口的账号字段都应显示「电话号码 / QQ邮箱」，实际命中 ${labelCount} 处`);
+  `账号字段应显示「${IDENT_LABEL}」，实际命中 ${labelCount} 处`);
 assert.ok(!/邮箱 \/ 手机号/.test(indexHtml),
   '旧的「邮箱 / 手机号」口径已被用户指定替换，不应残留（含重置密码表单的「账号（…）」标签）');
-// 后端确实接受这两种形式，文案才站得住（邮箱含 @qq.com、或 11 位手机号）
+// 反回归：不得残留「未标注 Gmail」的旧文案（后面紧跟 " /" 的才是新文案）
+assert.ok(!/电话号码 \/ QQ邮箱(?!\s*\/)/.test(indexHtml),
+  '残留了未标注 Gmail 的旧文案「电话号码 / QQ邮箱」—— 用户这次就是要求补上 Gmail');
+
+// 文案承诺的每一种账号类型，后端必须真的接受，否则就是虚假宣传。
+// 做法：直接从 auth.py 抽出真正则（语法与 JS 兼容）在本地跑，属确定性纯函数验证。
 const authPy = readFileSync(join(repoRoot, 'server', 'routers', 'auth.py'), 'utf8');
-assert.ok(/@qq\.com/.test(authPy), 'auth.py 的注释应说明支持 QQ 邮箱（文案「QQ邮箱」的依据）');
+const emailReSrc = (authPy.match(/_EMAIL_RE = re\.compile\(r"([^"]+)"\)/) || [])[1];
+assert.ok(emailReSrc, 'auth.py 里找不到 _EMAIL_RE 定义（文案里「邮箱」一栏的依据）');
+const emailRe = new RegExp(emailReSrc);
+for (const addr of ['user@qq.com', 'user@foxmail.com', 'user@gmail.com', 'user@googlemail.com']) {
+  assert.ok(emailRe.test(addr),
+    `后端 ${'_EMAIL_RE'} 不接受 ${addr}，但文案承诺了这种邮箱 —— 文案与能力不符`);
+}
+for (const bad of ['user@', '@gmail.com', 'user', 'user@gmail', 'user @gmail.com']) {
+  assert.ok(!emailRe.test(bad), `后端不应把非法账号 ${JSON.stringify(bad)} 判为有效邮箱`);
+}
+assert.ok(/gmail\.com/i.test(authPy),
+  'auth.py 的注释应说明支持 Gmail 邮箱（文案「Gmail邮箱」的依据）');
 assert.ok(/_PHONE_RE = re\.compile\(r"\^1\[3-9\]\\d\{9\}\$"\)/.test(authPy),
   'auth.py 应支持 11 位手机号（文案「电话号码」的依据）');
 
-console.log('✅ 登录弹窗定宽与登录方式文案回归通过（无内联宽度 / #authModal 400px / 电话号码·QQ邮箱）');
+console.log('✅ 登录弹窗定宽与登录方式文案回归通过（无内联宽度 / #authModal 400px / 电话号码·QQ邮箱·Gmail邮箱）');
