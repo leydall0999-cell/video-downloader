@@ -1530,6 +1530,85 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
   .modal { animation: none; }
 }
 
+/* ---------------- 操作引导「怎么用」（2026-10-09）----------------
+   每个功能视图的上方一条折叠引导条：平时收起只占一行，不挤占操作区；
+   首次进入该功能时由 app.js 的 howtoAutoOpen() 自动展开一次，之后不再打扰。
+   刻意用原生 <details>/<summary> 实现折叠 —— 不依赖任何 JS，脚本异常时用户照样能点开。
+   底色用 color-mix 混 var(--surface)，明/暗两套主题自动跟随（暗色下 --surface 为 #1D1F24）。 */
+.howto {
+  margin: .1rem 0 1rem;
+  border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--brand) 5%, var(--surface));
+  overflow: hidden;
+}
+.howto-head {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .58rem .78rem; cursor: pointer; list-style: none;
+  font-size: .86rem; font-weight: 600; color: var(--brand-strong);
+  user-select: none;
+}
+.howto-head::-webkit-details-marker { display: none; }
+.howto-head:hover { color: var(--brand); }
+.howto-ic { font-size: .92rem; line-height: 1; }
+.howto-title { flex: 1; min-width: 0; }
+.howto-caret { font-size: .72rem; color: var(--text-mute); transition: transform .16s ease; }
+.howto[open] .howto-caret { transform: rotate(180deg); }
+.howto-body { padding: 0 .84rem .74rem; }
+.howto-steps {
+  margin: 0; padding-left: 1.2rem;
+  display: flex; flex-direction: column; gap: .36rem;
+}
+.howto-steps li { font-size: .84rem; line-height: 1.62; color: var(--text-mute); }
+.howto-steps li b { color: var(--text); font-weight: 600; }
+.howto-note {
+  margin: .6rem 0 0; padding-top: .52rem; border-top: 1px dashed var(--line);
+  font-size: .79rem; line-height: 1.6; color: var(--text-mute);
+}
+.howto-note b { color: var(--text); }
+
+/* 「?」查看引导按钮（2026-10-09）：
+   引导条只在首次进入时自动展开一次，用户忘了就没有入口 —— 每个功能的右上角常驻
+   这个小问号，点一下随时重新展开该功能的引导，再点收起。
+   落点分三类：① 纯标题视图放在 .guide-title 内（靠 margin-left:auto 推到最右）；
+   ② 媒体库/解说/订阅/种子放在 .lib-head 内（靠 h2 的 margin-right:auto 把按钮挤到最右）；
+   ③ 下载页 hero 是居中布局，单独绝对定位到右上角。 */
+.howto-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 22px; height: 22px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: .76rem; font-weight: 700; line-height: 1;
+  color: var(--text-mute);
+  background: transparent;
+  border: 1px solid var(--line); border-radius: 50%;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.howto-btn:hover {
+  color: var(--brand); border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 9%, transparent);
+}
+.howto-btn.is-active {          /* 该功能引导条正处于展开状态 */
+  color: var(--brand); border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+}
+/* 标题文字包一层 span，长标题也不会把右侧按钮挤掉或换行 */
+.guide-title-text { min-width: 0; overflow-wrap: anywhere; }
+/* lib-head 场景：让 h2 吃掉左侧剩余空间，右侧的按钮组与「?」才会一起靠右
+   （若这里用按钮的 margin-left:auto，两个 auto 会平分空间，把已有的按钮组挤到中间） */
+.lib-head > .guide-title { margin-right: auto; }
+.lib-head > .howto-btn { margin-left: 0; }
+/* 下载页 hero 居中，按钮绝对定位到右上角 */
+#downloadView .hero { position: relative; }
+#downloadView .hero .howto-btn { position: absolute; top: .5rem; right: 0; margin-left: 0; }
+/* 点「?」展开时闪一下边框，把视线引到上方的引导条 */
+@keyframes howtoFlash {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 0%, transparent); }
+  40%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--brand) 20%, transparent); }
+}
+.howto.is-flash { animation: howtoFlash .9s ease; }
+
 /* ---------------- guide ---------------- */
 .guide { padding-top: 1.15rem; padding-bottom: 1.15rem; }
 .guide-title {

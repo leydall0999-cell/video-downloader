@@ -302,6 +302,7 @@
   <div id="downloadView" data-page-node-id="xfGe7CUNBEVDFIKRLvD50O">
 
   <section class="hero" data-page-node-id="lajk8S2sg6Wn51Sw7Faseg">
+    <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
     <h1 data-page-node-id="JmxthMwGxuREFDmKd0QJOV">粘贴链接，直接保存视频</h1>
     <p data-page-node-id="S4ywX7Uc9DoIGtqRxkoHFU">支持 YouTube、哔哩哔哩、抖音等主流平台，自动识别清晰度，全程显示下载进度。</p>
     <p class="hero-link-wrap" data-page-node-id="52iPn7XM86PCEI5e6VVl3Z">
@@ -312,6 +313,18 @@
   </section>
 
   <!-- 输入区 -->
+<details class="howto" data-howto="download">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 视频下载</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>复制视频的<b>播放页链接</b>，粘贴到上方输入框（每行一个可批量；首页 / 列表页链接不行）。</li>
+      <li>点「<b>解析链接</b>」，自动识别标题、时长与可选清晰度。</li>
+      <li>选好画质后点「<b>开始下载</b>」，下方任务卡片实时显示进度与速度。</li>
+      <li>完成后点任务卡片上的「<b>保存文件</b>」取回本地（或让它留在媒体库）。</li>
+    </ol>
+    <p class="howto-note">需要登录才能看的平台（腾讯视频、抖音、B 站大会员等）在「<b>高级选项</b>」里选填 Cookie；解析不动可尝试切换线路。会员 / 付费视频受版权保护无法解析。</p>
+  </div>
+</details>
   <section class="panel input-panel" aria-labelledby="inputTitle" data-page-node-id="836LyXuADXO58SxFJwDWD1">
     <h2 id="inputTitle" class="sr-only" data-page-node-id="3yAYopfr2Bt39MHR0ABTgP">输入视频链接</h2>
     <form id="resolveForm" autocomplete="off" data-page-node-id="FBLjhJDKLOxa8isUq1LcTs">
@@ -561,7 +574,7 @@
 
   <!-- 上传转换视图（多文件批量：参考 DataTool 风格，每个文件单独一行 + 独立输出格式） -->
   <section id="uploadConvertView" class="panel" hidden aria-labelledby="ucTitle" data-page-node-id="6uneMZqJOufq3Nxadr155J">
-    <h2 id="ucTitle" class="guide-title" data-page-node-id="pH0M1R1kluC0SRfuqfEuvf">视频格式转换</h2>
+    <h2 id="ucTitle" class="guide-title" data-page-node-id="pH0M1R1kluC0SRfuqfEuvf"><span class="guide-title-text">视频格式转换</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
 
     <!-- 桥接已独立为「媒体处理 → 视频/音频桥接」，此处保留入口提示 -->
     <p class="uc-tip" id="ucBridgeHint" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;" data-page-node-id="K6Sz6BB9Ycuaph7IucHFGD">
@@ -574,6 +587,18 @@
     </p>
 
     <!-- 工具栏：添加 / 清空 / 计数 -->
+<details class="howto" data-howto="uploadconvert">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 视频格式转换</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「添加文件」选视频（可多选），每个文件独立一行。</li>
+      <li>在「默认输出」里选目标格式与参数，点「<b>应用到未开始</b>」（也可逐行单独设）。</li>
+      <li>点「<b>开始批量转换</b>」，每行独立显示进度。</li>
+      <li>完成后逐行保存或存入媒体库。</li>
+    </ol>
+    <p class="howto-note">单个文件最大 10GB；桌面端点「添加文件」直选本地文件可跳过上传。</p>
+  </div>
+</details>
     <div class="uc-toolbar" data-page-node-id="Q2uqptrXpfoPemdyj01v93">
       <button type="button" class="btn btn-primary" id="ucAddBtn" data-page-node-id="NtDAmx3SmtFpXL2TXbvd4g">添加文件</button>
       <input type="file" id="ucFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.ts,.wmv,.mp3,.m4a,.aac,.wav" multiple hidden data-page-node-id="DLs1HtsjH23SqqfgtWcrG8" />
@@ -660,12 +685,23 @@
 
   <!-- 音乐格式转换视图（独立 tab；复用后端音频转码，支持各平台下载音乐转格式） -->
   <section id="musicConvertView" class="panel" hidden aria-labelledby="musTitle" data-page-node-id="HORCBHZlwqCk839nI5EJ3N">
-    <h2 id="musTitle" class="guide-title" data-page-node-id="5A5uBxTp8LWb9vN6poRwHX">🎵 音乐格式转换</h2>
+    <h2 id="musTitle" class="guide-title" data-page-node-id="5A5uBxTp8LWb9vN6poRwHX"><span class="guide-title-text">🎵 音乐格式转换</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;" data-page-node-id="8XLVXvcevkCYl7Z4X5ksvE">
       把下载的各平台音乐（或视频里的音轨）转成你想要的格式与音质。本地完成，不上传云端。
       支持 MP3 / FLAC / M4A / WAV / AAC / Opus / WMA / MP2。
     </p>
 
+<details class="howto" data-howto="musicconvert">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 音乐转换</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「添加文件」选音乐（也能从视频里抽音轨）。</li>
+      <li>选输出格式（MP3 / FLAC / M4A / WAV 等）与音质，点「<b>应用到未开始</b>」。</li>
+      <li>点「<b>开始转换</b>」，完成后逐行取回。</li>
+    </ol>
+    <p class="howto-note">全程本地完成，不上传云端。</p>
+  </div>
+</details>
     <div class="uc-toolbar" data-page-node-id="jPkKNDKu1Ro01QmFeG31Tu">
       <button type="button" class="btn btn-primary" id="musAddBtn" data-page-node-id="Lyrshpp4zE5EaKs9ACL0tc">添加文件</button>
       <input type="file" id="musFileInput" accept="audio/*,video/*,.mkv,.mov,.webm,.avi,.flv,.ts,.wmv,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus" multiple hidden data-page-node-id="uS3UojfeWeT3iqonULyR2D" />
@@ -717,12 +753,23 @@
 
   <!-- 图片格式转换视图（独立 tab；LGPL ffmpeg 单帧转码，PNG/JPG/WebP/BMP/TIFF/GIF） -->
   <section id="imageConvertView" class="panel" hidden aria-labelledby="imgTitle" data-page-node-id="AGsSZ1eyNpNW669ZNqCHEN">
-    <h2 id="imgTitle" class="guide-title" data-page-node-id="xI6RGaFsDfQbM6LxtkrUEi">🖼️ 图片格式转换</h2>
+    <h2 id="imgTitle" class="guide-title" data-page-node-id="xI6RGaFsDfQbM6LxtkrUEi"><span class="guide-title-text">🖼️ 图片格式转换</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;" data-page-node-id="26o8J2rPaVoUkQzaSzd5CR">
       在 PNG / JPG / WebP / BMP / TIFF / GIF 之间互转。可调质量、按长边缩放；
       转 JPG/BMP 时透明区自动填白底（可关）。本地完成，不上传云端。
     </p>
 
+<details class="howto" data-howto="imageconvert">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 图片格式转换</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「添加图片」选图（可多选）。</li>
+      <li>选输出格式、质量与尺寸（长边），点「<b>应用到未开始</b>」。</li>
+      <li>点「<b>开始转换</b>」，完成后逐行取回。</li>
+    </ol>
+    <p class="howto-note">转 JPG / BMP 时透明区默认填白底，取消勾选可保留透明；全程本地完成。</p>
+  </div>
+</details>
     <div class="uc-toolbar" data-page-node-id="Vq0iimIjVFPBSf8vqVdFAO">
       <button type="button" class="btn btn-primary" id="imgAddBtn" data-page-node-id="OpdxhAgVfTAdeq1ks73OFk">添加图片</button>
       <input type="file" id="imgFileInput" accept="image/*,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.gif" multiple hidden data-page-node-id="6oBOGUZWVgztzRXkm24SfK" />
@@ -785,7 +832,7 @@
 
   <!-- 高效压缩视图（视觉无损档：画质肉眼无差；极致档：体积优先、画质有损） -->
   <section id="compressView" class="panel" hidden aria-labelledby="cpTitle" data-page-node-id="RXHBYtcLFTkmV9vHXDSoqm">
-    <h2 id="cpTitle" class="guide-title" data-page-node-id="HGiwBW8YF1CsxQYuRD0FoT">🗜️ 高效压缩</h2>
+    <h2 id="cpTitle" class="guide-title" data-page-node-id="HGiwBW8YF1CsxQYuRD0FoT"><span class="guide-title-text">🗜️ 高效压缩</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;" data-page-node-id="q115W5wdT0kZmQKufCUl80">
       图片（PNG/JPG/WebP/AVIF）与视频（mp4/mov/mkv/webm 等）一键瘦身：画质几乎不变、体积大幅变小。
       视频可选 <b data-page-node-id="PLEHPLOjaOzvwRz98lDesS">HEVC</b>（同画质体积再小约 30-45%、硬件加速）；图片可转 <b data-page-node-id="LDg3pQv2H1k3lTzIpodcpA">JPG / PNG / WebP / AVIF</b>（每行也能单独选）。
@@ -794,6 +841,17 @@
       <br data-page-node-id="m3beag6AXYd99lXQH2Ca1u"><span style="color:var(--brand);" data-page-node-id="vmrVV5LW19BuBcbyymfQBl">注：轻度 / 推荐档为「视觉无损」（肉眼无差，像素不完全一致），极致档为有损压缩；仅原格式 PNG 是严格逐字节无损。</span>
     </p>
 
+<details class="howto" data-howto="compress">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 高效压缩</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「添加文件」选图片或视频（可多选）。</li>
+      <li>选压缩强度（推荐「推荐档」）与视频编码；图片可转 WebP / AVIF。</li>
+      <li>点「<b>开始压缩</b>」，完成后逐行取回。</li>
+    </ol>
+    <p class="howto-note">轻度 / 推荐档为视觉无损；极致档有损但体积最小；产物一定小于原文件。</p>
+  </div>
+</details>
     <div class="uc-toolbar" data-page-node-id="R25GDhGK3TrFeHAYxLkskF">
       <button type="button" class="btn btn-primary" id="cpAddBtn" data-page-node-id="TfFF8F3bg4LRwtchC7VuP2">添加文件</button>
       <input type="file" id="cpFileInput" accept="video/*,image/*,.mp4,.mov,.mkv,.webm,.avi,.flv,.m4v,.ts,.wmv,.mpeg,.mpg,.3gp,.png,.jpg,.jpeg,.webp" multiple hidden data-page-node-id="nlzMjKzSPl3Gf2Qd8YiHHb" />
@@ -847,7 +905,7 @@
 
   <!-- 高清修复视图（图片：快速档 Lanczos 放大+锐化；AI 档 Real-ESRGAN 超分；两档均全程本地） -->
   <section id="srView" class="panel" hidden aria-labelledby="srTitle" data-page-node-id="YBXfTzRqvR8mfTM3EM8Mnc">
-    <h2 id="srTitle" class="guide-title" data-page-node-id="XaHFsCoxhQ5gv8WEfW6g0j">✨ 高清修复</h2>
+    <h2 id="srTitle" class="guide-title" data-page-node-id="XaHFsCoxhQ5gv8WEfW6g0j"><span class="guide-title-text">✨ 高清修复</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
 
     <style>
       .sr-kind-tabs { display: flex; gap: 6px; margin: 8px 0 2px; }
@@ -879,6 +937,17 @@
       <br data-page-node-id="piC6t93C965j02SnfBoC3T"><span style="color:var(--brand);" data-page-node-id="gHrQgrFxqRoCmx3UsFH9Jk">注：本功能面向<b data-page-node-id="lHjbke6SxBGQY0BmPBj4n0">低清片修复</b>（短边 ≤540px，如 480p 及以下）。高分辨率片放大后体积成倍上涨而观感提升有限，会被拒绝；<b data-page-node-id="qmACEh4YLXnFlcJVYwU0Ah">降噪对平台压过的低码率片价值有限</b>（问题在压缩伪影不是噪点），一般选标准档即可。</span>
     </p>
 
+<details class="howto" data-howto="sr">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 高清修复</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>先用上方标签选「🖼️ 图片」或「🎬 视频」。</li>
+      <li>点「添加图片」（切到视频档后按钮变成「添加视频」）选素材。</li>
+      <li>选修复档位与放大倍率（<b>×2</b> 推荐），点「<b>开始修复</b>」。</li>
+    </ol>
+    <p class="howto-note">AI 档首次使用需下载约 64MB 模型；视频档面向低清片（短边 ≤540px）。</p>
+  </div>
+</details>
     <div class="uc-toolbar" data-page-node-id="64qZ94RB8gq5F9foPsS3dN">
       <button type="button" class="btn btn-primary" id="srAddBtn" data-page-node-id="dHNpWXqZeKMui7XNJ8PGqf">添加图片</button>
       <input type="file" id="srFileInput" accept="image/png,image/jpeg,image/webp,image/bmp,.png,.jpg,.jpeg,.webp,.bmp" multiple hidden data-page-node-id="wJwu4oXSFcer7lbQb3ueHg" />
@@ -932,7 +1001,7 @@
   <!-- 视频/音频桥接视图（桌面端独立入口；网页端也能从视频格式转换页进入） -->
   <!-- 2026-09-20 新增：生成二维码 —— 本机文件 → 短链 + 二维码（服务端见 desktop/vps-share/） -->
   <section id="shareView" class="panel" hidden aria-labelledby="shareTitle">
-    <h2 id="shareTitle" class="guide-title">📲 生成二维码</h2>
+    <h2 id="shareTitle" class="guide-title"><span class="guide-title-text">📲 生成二维码</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
 
     <p class="uc-tip" style="color:var(--text-mute,#6b7280);font-size:12.5px;">
       分享<b>文件原件</b>（图片 / 视频 / PDF / 压缩包…任意格式，不压缩、不改内容）→ 上传 → 生成二维码。
@@ -943,6 +1012,18 @@
       <br><span style="color:var(--brand,#2563eb);">要把<b>多个文件合成一页</b>发人？用「🌐 生成网页」。</span>
     </p>
 
+<details class="howto" data-howto="share">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 生成二维码</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「选择文件」挑要分享的文件（任意格式，单文件最大 2GB）。</li>
+      <li>选「有效期」（默认永久）。</li>
+      <li>上传完成后出现二维码与链接，点「<b>保存二维码</b>」或「复制链接」发给对方。</li>
+      <li>对方用微信 / QQ / 浏览器扫码即可查看；在下方「我的分享」里可随时删除。</li>
+    </ol>
+    <p class="howto-note">视频用 mp4 才能在手机里直接播放；要把多个文件合成一页用「生成网页」。</p>
+  </div>
+</details>
     <div class="uc-toolbar">
       <button type="button" class="btn btn-primary" id="shareAddBtn">选择文件</button>
       <label class="share-expire" for="shareExpireSel"
@@ -1018,7 +1099,7 @@
        选多个文件合成**一个网页** → 自动上传到分享节点 → 给**在线链接 + 二维码**（对方点开/扫码即看）。
        同时在本机留一份自包含 HTML（离线也能打开）。服务端见 server/routers/pagetool.py。 -->
   <section id="pageView" class="panel" hidden aria-labelledby="pageTitle">
-    <h2 id="pageTitle" class="guide-title">🌐 生成网页</h2>
+    <h2 id="pageTitle" class="guide-title"><span class="guide-title-text">🌐 生成网页</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
 
     <p class="uc-tip" style="color:var(--text-mute,#6b7280);font-size:12.5px;">
       把<b>多个文件合成一个网页</b>（图片 / PDF / 视频 / 音乐…可多选）→ 给出<b>一条在线链接</b> + 二维码。
@@ -1028,6 +1109,17 @@
       <br><span style="color:var(--brand,#2563eb);">只发<b>一个</b>文件（尤其视频、PDF）？用「📲 生成二维码」更快更保真。</span>
     </p>
 
+<details class="howto" data-howto="page">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 生成网页</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「选择文件」选多个文件（图片 / PDF / 视频 / 音乐）。</li>
+      <li>（可选）填「页面标题」，留空用第一个文件名。</li>
+      <li>点「<b>生成网页</b>」，得到一条在线链接 + 二维码，另存一份可离线打开的本地文件。</li>
+    </ol>
+    <p class="howto-note">单文件限 80MB、合计 200MB；内容内嵌会变大约 1/3，且无有效期。只发一个文件用「生成二维码」更保真。</p>
+  </div>
+</details>
     <div class="uc-toolbar">
       <button type="button" class="btn btn-primary" id="pageAddBtn">选择文件</button>
       <label class="share-expire" for="pageTitleInput"
@@ -1078,9 +1170,20 @@
   </section>
 
   <section id="bridgeView" class="panel" hidden aria-labelledby="bridgeTitle" data-page-node-id="ECOOrJK2Zis9UFCRDlOx9K">
-    <h2 id="bridgeTitle" class="guide-title" data-page-node-id="55PJ754JwtfqHi091VbICl">视频 / 音频桥接</h2>
+    <h2 id="bridgeTitle" class="guide-title" data-page-node-id="55PJ754JwtfqHi091VbICl"><span class="guide-title-text">视频 / 音频桥接</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
     <p class="uc-tip" data-page-node-id="yTUtXFtCdtQfsBWJJ0Ft6P">添加多个视频或音频片段，按顺序排列合并为一个文件。全部为音频时输出单个音频，含视频时输出视频（无损优先，编码/分辨率不一致时自动转码兜底）。</p>
     <p class="uc-tip" style="color:var(--brand);margin-top:.25rem;" data-page-node-id="81iGVanShfJ3mbPu0w6JdC">桌面端请点击「添加文件」按钮选择本地文件，可跳过上传、直接桥接；拖拽文件会走普通上传。</p>
+<details class="howto" data-howto="bridge">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 视频 / 音频桥接</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「添加文件」按顺序加入多个片段（<b>顺序即合并顺序</b>，可下拉调整）。</li>
+      <li>选输出格式、填输出文件名。</li>
+      <li>点「<b>开始桥接</b>」，等待合并完成。</li>
+    </ol>
+    <p class="howto-note">全部为音频时输出音频；编码 / 分辨率不一致时会自动转码兜底。</p>
+  </div>
+</details>
     <div class="uc-toolbar" data-page-node-id="uGBQbIPd6MxP9jZdnKjNJ2">
       <button type="button" class="btn btn-primary" id="mcAddBtn" data-page-node-id="bmRH8X5AaTarjO9SccnuVZ">添加文件</button>
       <input type="file" id="mcFileInput" accept="video/*,audio/*,.mkv,.mov,.webm,.avi,.flv,.m4v,.ts,.wmv,.mpeg,.mpg,.3gp,.ogv,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus" multiple hidden data-page-node-id="mMw1fJKPMaerB6GJmRDthe" />
@@ -1108,12 +1211,24 @@
 
   <!-- 本地视频字幕提取（faster-whisper ASR，MIT 可商用；VAD 逐句精准分段，输出 SRT/TXT） -->
   <section id="subtitleView" class="panel" hidden aria-labelledby="sbTitle" data-page-node-id="j2dLchV24A2XACOuLUWNYd">
-    <h2 id="sbTitle" class="guide-title" data-page-node-id="hjc9zwp1bp2LCDMgOynt1t">📝 本地视频 / 音频字幕提取</h2>
+    <h2 id="sbTitle" class="guide-title" data-page-node-id="hjc9zwp1bp2LCDMgOynt1t"><span class="guide-title-text">📝 本地视频 / 音频字幕提取</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;" data-page-node-id="iDHJ8eZpZo1EPMc6C49kL2">
       本地 AI 语音识别，把视频 / 音频里的对话逐句转成带时间戳的字幕，按停顿精准断句，输出 SRT / TXT。
       支持视频（mp4/mkv/mov…）与音频（mp3/m4a/wav/flac…）。全程本地完成，不上传云端；识别模型首次使用会自动下载（base≈145MB / small≈484MB / medium≈1.5GB / large-v3≈3GB）。对话、录音、英文、嘈杂环境均直接听写；已收录的出版歌曲可额外命中官方歌词库（逐字准确）。
     </p>
 
+<details class="howto" data-howto="subtitle">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 本地字幕提取</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「选取视频 / 音频」挑文件，视频与音频都支持。</li>
+      <li>选识别模型（推荐 <b>medium</b>）与语言；文件长可勾「快速模式」。</li>
+      <li>点「<b>开始提取</b>」，进度走完后下方出现逐句预览。</li>
+      <li>按需下载：「<b>SRT 字幕</b>」带时间轴，「<b>TXT 纯文本</b>」只有台词。</li>
+    </ol>
+    <p class="howto-note">识别模型首次使用会自动下载；会员满速提取。</p>
+  </div>
+</details>
     <div class="uc-toolbar" data-page-node-id="U4w8iSTGBqGBfLHouBBTDr">
       <button type="button" class="btn btn-primary" id="sbPickBtn" data-page-node-id="YoMXuzmfm2WESN9amTdbFp">选取视频 / 音频</button>
       <input type="file" id="sbFileInput" accept="video/*,.mp4,.mkv,.mov,.webm,.avi,.flv,.ts,.m4v,audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.wma" hidden data-page-node-id="DZa7wVLQiG4CoVxjxRiq1e" />
@@ -1192,10 +1307,22 @@
        2026-09-08 子模式全部拎到侧栏独立入口（图片/PDF/视频/抠图），
        视图内 dw-tabs 切换按钮行已按用户要求删除 -->
   <section id="dwView" class="panel" hidden aria-labelledby="dwTitle" data-page-node-id="5YWnQhsPLEkWUNBG5XIkaF">
-    <h2 id="dwTitle" class="guide-title" data-page-node-id="l31BKkWDVYjj3GL7kaF2dR">图片去水印</h2>
+    <h2 id="dwTitle" class="guide-title" data-page-node-id="l31BKkWDVYjj3GL7kaF2dR"><span class="guide-title-text">图片去水印</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
 
     <!-- 图片模式 -->
     <div id="dwImgPane" data-page-node-id="btcEN9SoUAW0tcRBZNCGUE">
+<details class="howto" data-howto="dw_img">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 图片去水印</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「选择图片」载入图片。</li>
+      <li>用鼠标在预览图上<b>框选</b>要去掉的水印区域（可框多处）。</li>
+      <li>选处理引擎与参数，点「<b>开始去水印</b>」。</li>
+      <li>对比原图 / 处理后，点「<b>下载结果</b>」取回。</li>
+    </ol>
+    <p class="howto-note">点「🔍 放大编辑」可精修选区；结果能一键「丢到抠图区」继续处理。</p>
+  </div>
+</details>
       <div class="dw-layout" data-page-node-id="Au4luKiBDnRCHQnVsF5fpE">
         <div class="dw-main" data-page-node-id="Htky7dCe7KDo7lQqKLLdFG">
           <label class="uc-field" data-page-node-id="GayNzD0vWnXQ6yoDKs4HZm">
@@ -1305,6 +1432,18 @@
 
     <!-- PDF 模式 -->
     <div id="dwPdfPane" hidden data-page-node-id="TW5ZVKPd2WV3qvoAdGnbAr">
+<details class="howto" data-howto="dw_pdf">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · PDF 去水印</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>选择 PDF 文件。</li>
+      <li>选处理方式：<b>「注释型」</b>（无损删 Watermark 注释，适合水印以注释层存在时）或 <b>「栅格化」</b>（扫描件 / 内容流内嵌水印）。</li>
+      <li>选「栅格化」时，需填水印所在的 X / Y / 宽 / 高 百分比。</li>
+      <li>点「<b>开始去水印</b>」，完成后点「下载结果 PDF」。</li>
+    </ol>
+    <p class="howto-note">稀疏文本水印优先用文本层删除，文字可选可搜索。</p>
+  </div>
+</details>
       <div class="dw-card" data-page-node-id="titHFqenwezfs47Qdlnez9">
         <h3 class="dw-card-title" data-page-node-id="1aaDy4lNihFECsNUCDsEB7">PDF 去水印</h3>
         <label class="uc-field" data-page-node-id="kc5o78xKDXGcM5wF0Cz2Eb">
@@ -1348,6 +1487,18 @@
 
     <!-- 视频模式 -->
     <div id="dwVideoPane" hidden data-page-node-id="dWmw9RW1rIh0xtfVLy0pEz">
+<details class="howto" data-howto="dw_video">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 视频去水印</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「视频文件」选择本地视频（mp4 / mov / mkv 均可）。</li>
+      <li>在首帧画面上<b>框选</b>水印区域。</li>
+      <li>在时间轴上拖动绿色手柄选出水印出现的区间，点「<b>＋ 添加该区间</b>」；漂动水印用「添加关键帧」。</li>
+      <li>点「<b>开始去水印</b>」，完成后可放大查看或下载。</li>
+    </ol>
+    <p class="howto-note">非 mp4 格式启用视频预览需服务端转码，约 30-60 秒。</p>
+  </div>
+</details>
       <div class="dw-layout" data-page-node-id="DxIWvjPRcTqQDLV9lP6a6u">
         <div class="dw-main" id="dwVidMain" data-page-node-id="eMP8VrjECmU0OZz8ocTlv7">
           <div class="dw-vid-work" id="dwVidWork" data-page-node-id="Bf3LsVzPiL1bJacI4NhYNV">
@@ -1596,6 +1747,17 @@
       </div>
     <!-- 一键抠图模式（AI 去背景，输出透明 PNG） -->
     <div id="dwMattingPane" hidden data-page-node-id="mKblgPmZode0rnErb7f9O6">
+<details class="howto" data-howto="matting">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 一键抠图</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点选择按钮载入图片。</li>
+      <li>选抠图模型；需要更精细可勾选「启用 AI 画质增强」并选增强档位。</li>
+      <li>点「<b>开始抠图</b>」，输出透明底 PNG。</li>
+    </ol>
+    <p class="howto-note">可输入文字描述要抠的主体（如「人像」「商品」）提升准确度。</p>
+  </div>
+</details>
       <div class="dw-layout-mat" data-page-node-id="wEa2dtTTfPqAVASK5NzTnO">
         <div class="mat-two-col" data-page-node-id="C6v8GSKh64ttubvflGC8eJ">
         <div class="mat-col-l" data-page-node-id="H8GjsY6BrV5tB9E8JMEs4T">
@@ -2157,9 +2319,21 @@
         <button type="button" class="btn btn-ghost btn-sm" id="libShowQueue" hidden data-page-node-id="79Zpfv7dHBRXHFvk7u75dY">📋 队列</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libRefresh" data-page-node-id="mjzz3CRpt8Xxu8XRrtlN4E">刷新</button>
       </div>
+    <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
     </div>
     <div class="card" data-page-node-id="NFMrixTp6jQfbIhZG8KwY1">
       <h3 class="card-title" data-page-node-id="nk9l7FnLNRiFyGmbsfiXck">筛选与操作</h3>
+<details class="howto" data-howto="library">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 媒体库</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>用搜索框 + 平台 / 类型筛选快速找文件。</li>
+      <li>点卡片查看详情、播放、保存到本机或删除。</li>
+      <li>勾选多个文件后点「<b>批量处理</b>」，在「队列」里看进度。</li>
+    </ol>
+    <p class="howto-note">顶部「🧹 自动清理」「🔐 保险箱」分别管理存储时效与加密。</p>
+  </div>
+</details>
     <div class="lib-controls" data-page-node-id="qawA1205NGI1Mf87IXZZmQ">
       <input id="libSearch" class="adv-input" type="search" placeholder="搜索标题 / 作者 / 文件名" data-page-node-id="Jc1EIo0oQrjCBGIvJeSVCi" />
       <select id="libPlatform" class="adv-input" data-page-node-id="kgqwSHnt7GE2aJN6EU3roS"><option value="" data-page-node-id="UNVYvC8rlbds9d8veMOrHu">全部平台</option></select>
@@ -2198,11 +2372,24 @@
       <div class="lib-head-actions" data-page-node-id="m6bsIWQl3CYftjkG5PFFi8">
         <button type="button" class="btn btn-ghost btn-sm" id="comRefresh" data-page-node-id="4jtKVLl2yzPG0H0spLNPOb">刷新</button>
       </div>
+    <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
     </div>
     <!-- ===== v2 剪映式三栏改版（2026-09-17）：subbar(入口+历史按钮) → 左栏(正剧范围+片头片尾处理)
          / 中栏(大预览+操作条+时间轴) / 右栏(参数检查器)。所有元素 id 保持不变，功能零删减。
          改版前完整备份：web_backup_改版前_2026-09-17/（git 亦有提交可回滚） ===== -->
     <div id="comEnvStatus" class="com-env-status" hidden></div>
+<details class="howto" data-howto="commentary">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 视频解说</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>左栏「素材来源」选一部媒体库里的视频，或点「<b>📁 从本地文件生成</b>」。</li>
+      <li>在「预览与正剧范围」里拖动滑块标出正片起止（默认自动检测，可留空）。</li>
+      <li>右栏选解说类型与音色，点中栏「<b>生成脚本</b>」。</li>
+      <li>在审核面板里逐句修改解说词，确认无误后点「<b>🎬 生成成片</b>」。</li>
+    </ol>
+    <p class="howto-note">首次使用需下载解说环境（约 2.4GB）；历史成片可在「📂 解说历史」里找回。</p>
+  </div>
+</details>
     <div class="com-v2">
       <button type="button" class="com-edge-tab com-edge-tab-l" id="comLeftTab" title="收起/展开左栏"></button>
       <button type="button" class="com-edge-tab com-edge-tab-r" id="comRightTab" title="收起/展开右栏"></button>
@@ -3129,7 +3316,20 @@
   <section id="subscribeView" class="panel" hidden aria-labelledby="subTitle" data-page-node-id="seT3WdkHH47WdZVxhSZtE1">
     <div class="lib-head" data-page-node-id="q7JD5qcEuJXyaPxrRCrNkF">
       <h2 id="subTitle" class="guide-title" data-page-node-id="EAnVPnAEFqx5C2pH9nLl4N">🔔 订阅追更</h2>
+    <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
     </div>
+<details class="howto" data-howto="subscribe">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 订阅追更</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>在「添加频道」里粘贴频道<b>主页链接</b>（如 B 站 / YouTube 频道 URL），可填备注名。</li>
+      <li>选好下载画质：最高画质 / 1080p / 720p / 仅音频。</li>
+      <li>保持「<b>自动检查</b>」勾选，点「添加订阅」。</li>
+      <li>之后该频道有新视频会自动下载到媒体库。</li>
+    </ol>
+    <p class="howto-note">不想自动更新时取消勾选「自动检查」即可；下方列表可随时删除订阅。</p>
+  </div>
+</details>
     <p class="sub-tip" data-page-node-id="yNpOA1aFsDBfn6Yl3e2s9L">粘贴频道主页链接，新发布的视频会自动下载到媒体库。</p>
     <div class="card" data-page-node-id="JcERFdF1RKJ9OWUUrTGuD9">
       <h3 class="card-title" data-page-node-id="BBKgmzKimBrugCBE4FTJtU">添加频道</h3>
@@ -3156,7 +3356,20 @@
     <div class="lib-head" data-page-node-id="ZPQJG4aGVwiw8VX4HTCEQ1">
       <h2 id="torTitle" class="guide-title" data-page-node-id="ycTrQxGF36SCJf5A876rz2">🧲 种子下载</h2>
       <p class="tor-hint" data-page-node-id="uZkvF9KarN5LXneti4dVB7">支持 magnet 链接、.torrent 文件或 .torrent 直链；下载到本地媒体库，完成后可在「媒体库」查看。</p>
+    <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
     </div>
+<details class="howto" data-howto="torrent">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 种子下载</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>粘贴 <b>magnet</b> 链接或 .torrent 直链；也可点「选择 .torrent」挑本地文件。</li>
+      <li>（可选）填「保存子目录」，留空则存到媒体库根目录。</li>
+      <li>点「<b>＋ 添加种子</b>」，列表里实时显示进度与速度。</li>
+      <li>完成后到「媒体库」查看。</li>
+    </ol>
+    <p class="howto-note">仅用于下载合法授权的内容。</p>
+  </div>
+</details>
     <div class="tor-add" data-page-node-id="uZ8Si44Evzi5y4tz8M2SDA">
       <input id="torAddInput" class="adv-input" type="text" placeholder="magnet:?xt=urn:btih:... 或 https://.../x.torrent" data-page-node-id="3XAVR26YfhLRHFf74RSHHn" />
       <label class="tor-file-label btn btn-ghost btn-sm" data-page-node-id="oDXZbZofv0FlxRxSJBVBli">

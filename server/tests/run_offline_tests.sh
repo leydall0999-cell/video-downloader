@@ -680,6 +680,19 @@ run_one test_profile_site_row.py
 #      11 处变异全红。
 run_node test_placeholder_contrast.mjs
 
+# 48. test_howto_guide.mjs —— 每个功能的「怎么用」操作引导（2026-10-09 用户要求
+#      「给每个功能加上操作引导」）。18 个功能入口（含去水印 4 个子面板）各一条
+#      原生 <details class="howto"> 折叠条，首次进入该功能时由 switchView 里的
+#      howtoAutoOpen() 自动展开一次，已读记录存 localStorage.vdl_howto_seen。
+#      守卫钉死：① 18 条齐全且 key 不重复、每条默认收起（写死 open 就等于没有"首次"）；
+#      ② 每条必须落在自己所属的视图/子面板区间内（挪到别的页 = 串台）；
+#      ③ 引导里用「」标注的每个控件名，都必须在 index.html / app.js 里真实存在
+#         —— 且**出处库要先剥掉引导条自身**，否则引导里写什么库里就有什么，断言自证成真；
+#      ④ JS 断言同样要剥注释后再比对（注释里也写着 d.closest('[hidden]') 之类字样）。
+#      18 处变异全红，含「把按钮名改成不存在的控件」「引导整块挪去别的功能页」
+#      「只在注释里保留 closest([hidden])」三个自证/定位类用例。
+run_node test_howto_guide.mjs
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

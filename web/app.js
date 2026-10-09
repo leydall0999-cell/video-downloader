@@ -2471,7 +2471,7 @@
       const f = c.closest('.uc-field');
       if (f) f.hidden = on;
     });
-    if (el.ucTitle) el.ucTitle.textContent = on ? '音乐格式转换（仅音频）' : '视频格式转换';
+    setGuideTitle(el.ucTitle, on ? '音乐格式转换（仅音频）' : '视频格式转换');
     el.ucStatus.textContent = on
       ? '已切到「仅音频」：选输出格式 + 音质即可转各大平台下载的音乐'
       : '';
@@ -5992,7 +5992,7 @@
   // 导致单看「图片去水印」时也显示另外两个功能 —— 用户要求「图片去水印只保留图片」。
   const DW_PANE_TITLE = { img: '图片去水印', pdf: 'PDF 去水印', video: '视频去水印', matting: '一键抠图' };
   const dwSwitchPane = (mode) => {
-    if (el.dwTitle) el.dwTitle.textContent = DW_PANE_TITLE[mode] || '图片去水印';
+    setGuideTitle(el.dwTitle, DW_PANE_TITLE[mode] || '图片去水印');
     el.dwImgPane.hidden = mode !== 'img';
     el.dwPdfPane.hidden = mode !== 'pdf';
     el.dwVideoPane.hidden = mode !== 'video';
@@ -15650,6 +15650,76 @@ el.dwVidPlayer.hidden = true;
   const libFileUrl = (id) => `/api/library/file/${encodeURIComponent(id)}?play=1`;
   const libEncFileUrl = (id) => `/api/library/encfile/${encodeURIComponent(id)}`;
 
+  // 操作引导「怎么用」的首次自动展开（2026-10-09）
+  // 规则：当前可见视图里的 details.howto 若尚未被看过，展开一次并记为已读；
+  //       已读的完全不碰（尊重用户此刻手动开合的状态，也避免每次切页都弹）。
+  // 可见性判定用 d.closest('[hidden]') —— 视图 section 与去水印子面板都是靠 hidden 属性切换，
+  // 所以「去水印」这一个视图内的 4 条引导会各自跟随所属子面板显隐，天然互不串台。
+  // 任何异常（localStorage 被禁、JSON 损坏）都吞掉，绝不影响主流程。
+  const HOWTO_SEEN_KEY = 'vdl_howto_seen';
+  function howtoAutoOpen() {
+    let seen;
+    try { seen = JSON.parse(localStorage.getItem(HOWTO_SEEN_KEY) || '[]'); } catch (_) { seen = []; }
+    if (!Array.isArray(seen)) seen = [];
+    let changed = false;
+    document.querySelectorAll('details.howto[data-howto]').forEach((d) => {
+      if (d.closest('[hidden]')) return;
+      const k = d.getAttribute('data-howto');
+      if (!k || seen.indexOf(k) >= 0) return;
+      d.open = true;
+      seen.push(k);
+      changed = true;
+    });
+    if (changed) { try { localStorage.setItem(HOWTO_SEEN_KEY, JSON.stringify(seen)); } catch (_) {} }
+  }
+
+  // 改功能标题文案时只换文字、保留标题右侧的「?」按钮。
+  // 🔴 「视频格式转换」与「去水印」这两个标题的文案是 JS 动态改的（切换音频模式 /
+  //    切换图片·PDF·视频·抠图子面板），早期写法 `h2.textContent = ...` 会连按钮一起
+  //    抹掉（textContent 清空全部子节点）⇒ 所以标题文字单独包在 .guide-title-text 里。
+  function setGuideTitle(h2, text) {
+    if (!h2) return;
+    const label = h2.querySelector('.guide-title-text');
+    if (label) label.textContent = text; else h2.textContent = text;
+  }
+
+  // 每个功能右上角「?」按钮：随时重新展开 / 收起该功能的操作引导。
+  // 定位用「按钮所在视图内当前可见的那条引导」，所以去水印 4 个子功能共用一个按钮
+  // 也能各点各的（子面板靠 hidden 属性切换，可见的那条天然唯一）。
+  const howtoScopeOf = (btn) => btn.closest('#downloadView, section[id]') || document.body;
+  const visibleHowtoIn = (scope) => [...scope.querySelectorAll('details.howto')]
+    .find((d) => !d.closest('[hidden]')) || null;
+
+  function howtoSyncButtons() {
+    document.querySelectorAll('.howto-btn').forEach((btn) => {
+      const d = visibleHowtoIn(howtoScopeOf(btn));
+      btn.hidden = !d;                                  // 该视图没有引导条时不显示按钮
+      btn.classList.toggle('is-active', !!(d && d.open));
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest ? e.target.closest('.howto-btn') : null;
+    if (!btn) return;
+    const d = visibleHowtoIn(howtoScopeOf(btn));
+    if (!d) return;
+    d.open = !d.open;
+    if (d.open) {
+      try { d.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (_) {}
+      d.classList.remove('is-flash');
+      void d.offsetWidth;            // 强制重排，连点两次也能重新触发动画
+      d.classList.add('is-flash');
+      setTimeout(() => d.classList.remove('is-flash'), 1100);
+    }
+    howtoSyncButtons();
+  });
+
+  // <details> 的 toggle 事件不冒泡 ⇒ 用捕获在 document 上监听，
+  // 保证用户直接点引导条标题开合时，右上角按钮的激活态也跟着变
+  document.addEventListener('toggle', (e) => {
+    if (e.target && e.target.classList && e.target.classList.contains('howto')) howtoSyncButtons();
+  }, true);
+
   function switchView(view) {
     const isLib = view === 'library';
     const isSub = view === 'subscribe';
@@ -15775,6 +15845,10 @@ el.dwVidPlayer.hidden = true;
       const activeSbGroup = activeSbItem.closest('.sidebar-group');
       if (activeSbGroup) activeSbGroup.classList.remove('collapsed');
     }
+    // 视图已切完、hidden 已复位，此刻展开本页「怎么用」引导（首次进入才展开）
+    try { howtoAutoOpen(); } catch (_) {}
+    // 同步右上角「?」按钮的显示与激活态（去水印切子面板后按钮要跟着换目标）
+    try { howtoSyncButtons(); } catch (_) {}
   };
 
 
