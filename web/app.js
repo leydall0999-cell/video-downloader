@@ -17014,6 +17014,17 @@ el.dwVidPlayer.hidden = true;
           await renderMemberStatus();
           await renderCloudAccount();
           setTimeout(() => closePayModal(true), 1200);
+        } else if (q && q.ok && (q.status === 'LIMIT_REJECTED'
+                                 || q.status === 'GRANT_FAILED')) {
+          // 🔴 LIMIT_REJECTED：钱已收但该档每人限购已满（超限重复购买）→ 会退款，
+          //    必须停下来明确告知，否则用户对着「等待支付…」干等、以为没付成功。
+          //    GRANT_FAILED：已付款、发货故障 → 后台会补发。
+          clearInterval(_payTimer); _payTimer = null;
+          const _st = q.status === 'LIMIT_REJECTED'
+            ? '❌ 该活动每账号限购 1 次，本单款项将原路退回'
+            : '❌ 已付款但开通失败，请联系客服补发';
+          statusEl.textContent = _st;
+          showToast(_st);
         }
       } catch (_) { /* 轮询失败静默重试 */ }
     }, 2500);

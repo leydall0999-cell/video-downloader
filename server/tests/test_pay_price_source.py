@@ -40,6 +40,13 @@ _spec = importlib.util.spec_from_file_location(
 PS = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(PS)
 
+# 授权中心（deploy/license_server.py）同样加载：用于钉「活动档判定两侧同口径」。
+# 该文件模块级只有常量赋值（服务在 __main__ 里才启动），加载无副作用。
+_lspec = importlib.util.spec_from_file_location(
+    "vdl_license_probe", str(REPO / "deploy" / "license_server.py"))
+LIC = importlib.util.module_from_spec(_lspec)
+_lspec.loader.exec_module(LIC)
+
 FAILS: list[str] = []
 
 
@@ -160,6 +167,110 @@ def test_plan_quote_cloud_and_fallback() -> None:
         PS._PLAN_CACHE["map"] = {}
 
 
+def test_activity_scope_agrees() -> None:
+    """🔴 2026-10-09 客诉「活动每人限购一份没有生效」。
+
+    现场：download_1day 的 `price_cny = flash_price = 0.10`（管理员没把价格恢复），
+    秒杀窗口 00:27–02:35。窗口过后仍按 ¥0.10 卖，却因 `is_flash=False` 被判
+    「非活动」⇒ 活动档默认限购 1 失效 ⇒ 已购账号可无限次重复下单
+    （实测 `/api/pay/create` 返回 200 出码；`plan_usage` 回 `limit=0, allowed=true`）。
+
+    修法：把「限购用的活动档判定」与「价格用的 is_flash」分开，新增 `is_activity`：
+    窗口内算活动；**窗口外若秒杀价未回升到常态价之上**（用户看到的仍是活动价）
+    也算。本用例同时钉住**收款侧 pay_server 与授权中心硬闸 license_server 的口径
+    必须一致** —— 否则会出现「下单被拦 / 发货放行」的分叉。
+    """
+    print("[5] 活动档判定：窗口外价格未回升仍算活动（收款侧 ↔ 授权中心同口径）")
+    cases = [
+        ("窗口内(0.1/0.1)",
+         {"price_cny": 0.10, "flash_price": 0.10,
+          "flash_start": NOW - 10, "flash_end": NOW + 10}, True),
+        ("窗口外·价格未回升(0.1/0.1)  ← 本次客诉场景",
+         {"price_cny": 0.10, "flash_price": 0.10,
+          "flash_start": NOW - 200, "flash_end": NOW - 100}, True),
+        ("窗口外·价格已回升(0.1/1.9)",
+         {"price_cny": 1.90, "flash_price": 0.10,
+          "flash_start": NOW - 200, "flash_end": NOW - 100}, False),
+        ("窗口内(0.1/1.9)",
+         {"price_cny": 1.90, "flash_price": 0.10,
+          "flash_start": NOW - 10, "flash_end": NOW + 10}, True),
+        ("无秒杀价",
+         {"price_cny": 1.90, "flash_price": 0,
+          "flash_start": NOW - 10, "flash_end": NOW + 10}, False),
+        ("无窗口·价未回升",
+         {"price_cny": 0.10, "flash_price": 0.10}, True),
+        ("无窗口·价已回升",
+         {"price_cny": 1.90, "flash_price": 0.10}, False),
+    ]
+    for name, plan, want in cases:
+        pay = bool(PS._sales_state(dict(plan), NOW).get("is_activity"))
+        lic = bool(LIC._spec_in_activity(dict(plan), NOW))
+        check(f"{name}：期望={want}", pay == want and lic == want,
+              f"pay_server={pay} license={lic} want={want}")
+    # 源码口径：plan_quote 必须取 _sales_state.is_activity，不许退回 is_flash
+    src = (REPO / "deploy" / "pay_server.py").read_text(encoding="utf-8")
+    check('plan_quote 取 _sales_state.is_activity（不是 is_flash）',
+          'bool(st.get("is_activity"))' in src)
+
+    # 端到端：注入云端覆盖表 → plan_quote() 的 is_activity 必须是新口径。
+    # ⚠️ plan_quote 内部用 time.time()，故这里的窗口要以**真实当前时刻**为基准
+    #    （上面那组用固定 NOW，只喂 _sales_state / _spec_in_activity）。
+    #    这一组才是真正能抓住「有人把 plan_quote 改回 is_flash」的断言。
+    live = time.time()
+
+    def _mock(plan: dict) -> object:
+        payload = {"ok": True, "plans": {"download_plans": {"download_1day": plan}}}
+
+        def _fake(req, timeout=6):   # noqa: ARG001
+            return _Resp(json.dumps(payload).encode("utf-8"))
+        return _fake
+
+    live_cases = [
+        ("窗口内", {"price_cny": 0.10, "flash_price": 0.10,
+                 "flash_start": live - 10, "flash_end": live + 10}, True),
+        ("窗口外·价格未回升", {"price_cny": 0.10, "flash_price": 0.10,
+                       "flash_start": live - 200, "flash_end": live - 100}, True),
+        ("窗口外·价格已回升", {"price_cny": 1.90, "flash_price": 0.10,
+                       "flash_start": live - 200, "flash_end": live - 100}, False),
+    ]
+    _real = urllib.request.urlopen
+    try:
+        for name, plan, want in live_cases:
+            urllib.request.urlopen = _mock(plan)
+            PS._PLAN_CACHE["at"] = 0.0
+            got = PS.plan_quote("download_1day", force=True)["is_activity"]
+            check(f"plan_quote 端到端 {name}：期望 is_activity={want}", got == want,
+                  f"got={got}")
+    finally:
+        urllib.request.urlopen = _real
+        PS._PLAN_CACHE["at"] = 0.0
+        PS._PLAN_CACHE["map"] = {}
+
+
+def test_limit_reject_is_refund_not_regrant() -> None:
+    """🔴 修好「活动限购」后暴露的连带问题：漏洞期遗留的 PENDING 单若被支付，
+    授权中心硬闸会以 409 LIMIT_REACHED 拒绝发货。若这笔和普通发货故障一样标成
+    `GRANT_FAILED`，对账会按「已收款未发货」告警**补发** —— 等于给已经超限的
+    账号又发一次权益。必须单独标 `LIMIT_REJECTED` 并提示**退款**。
+    """
+    print("[7] 限购拒绝 → LIMIT_REJECTED（退款），不是 GRANT_FAILED（补发）")
+    check("限购拒绝 → LIMIT_REJECTED",
+          PS._grant_failure_status(
+              'grant rejected: {"ok": false, "code": "LIMIT_REACHED"}') == "LIMIT_REJECTED")
+    check("其他发货故障 → GRANT_FAILED（仍走补发）",
+          PS._grant_failure_status("network down") == "GRANT_FAILED")
+    _lic = (REPO / "deploy" / "license_server.py").read_text(encoding="utf-8")
+    check("对账把 LIMIT_REJECTED 单列为退款告警",
+          "limit_rejected_refund" in _lic
+          and '"status") == "LIMIT_REJECTED"' in _lic)
+    _seg = _lic[_lic.index("in_money = ["): _lic.index("in_money +=")]
+    check("in_money 白名单不含 LIMIT_REJECTED（否则会误告警「请立即补发」）",
+          "LIMIT_REJECTED" not in _seg)
+    check("两个支付回调都走同一个判定函数",
+          (REPO / "deploy" / "pay_server.py").read_text(encoding="utf-8")
+          .count("_grant_failure_status(e)") == 2)
+
+
 def test_unknown_code_not_sellable() -> None:
     print("[4] 未知 code：本地兜底价 0.00（handler 另有 PRICE_MAP 白名单拦截）")
     check("未知 code → 0.00", PS.plan_price("no_such_plan") == "0.00")
@@ -173,7 +284,7 @@ def test_order_price_is_never_stale() -> None:
     本用例同时钉住"缓存本身仍在"（非 force 吃 TTL 是设计内），避免有人为了修这个
     问题把缓存整个删掉（那会让每次轮询都打授权中心）。
     """
-    print("[5] 下单取价：force 绕过缓存（防「页面新价 / 收款旧价」）")
+    print("[6] 下单取价：force 绕过缓存（防「页面新价 / 收款旧价」）")
 
     box = {"price": 2.99}
 
@@ -231,6 +342,8 @@ def main() -> int:
     print("=" * 46)
     test_rules_agree()
     test_flash_price_used()
+    test_activity_scope_agrees()
+    test_limit_reject_is_refund_not_regrant()
     test_plan_quote_cloud_and_fallback()
     test_unknown_code_not_sellable()
     test_order_price_is_never_stale()

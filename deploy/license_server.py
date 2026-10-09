@@ -326,6 +326,10 @@ def _authority_view(user: dict[str, Any], now: float) -> dict[str, Any]:
         "banned": bool(user.get("banned")),
         "usage_date": today,
         "usage": usage,
+        # 账号级云端免费额度（2026-10-06）：客户端据此回灌本机 quota.json 缓存，
+        # 避免「重装系统 → 计数归零 → 又白嫖 3 次」。函数体在本文件更下方定义，
+        # 运行期才求值（与 daily 同理），故这里可直接调用。
+        "cloud_quota": _cloud_quota_view(user, now),
     }
 
 
@@ -428,6 +432,300 @@ def daily_impl(state: dict[str, Any], token: str, items: Any, now: float,
     if applied > 0:
         _log_event(state, "daily", now, email=uid, applied=applied)
     return {"ok": True, "applied": applied, "authority": _authority_view(user, now)}
+
+
+def _trial_key(op: str, mode: str) -> str:
+    """免费体验名额键：once 口径按账号计（"*"），per_op 口径按功能计。
+
+    与两端 membership._trial_key 保持同一套语义，保证「本地键 == 云端键」。
+    """
+    return "*" if str(mode or "once") == "once" else str(op)
+
+
+def trial_claim_impl(state: dict[str, Any], token: str, op: str, mode: str,
+                     now: float, secret: str, ip: str = "") -> dict[str, Any]:
+    """免费体验名额跨端原子领取：同一账号在 App / 网页版共享同一份「首免」名额。
+
+    调用方（两端 `trial_consume`）在「本机积分不够、且本机试用名额仍显示可用」时，
+    先来这里做一次**原子领取**：
+      · 返回 already=False → 本端成功领取到全局唯一名额（放行、不扣积分）；
+      · 返回 already=True  → 另一台设备/网页已领走（本端应拒绝，走 402）；
+    断网 / 授权中心不可达由调用方按 fail-open 处理（视为本端领取）。
+
+    额度领取是幂等的：同一 key 重复上报只记一次（无需客户端 id）。
+    """
+    uid = parse_token(token, secret, now)
+    user = _users(state).get(uid)
+    if not user:
+        raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
+    if user.get("banned"):
+        raise ApiError(403, "ACCOUNT_BANNED", "账号已被停用，如有疑问请联系客服")
+    key = _trial_key(str(op or ""), str(mode or "once"))
+    trials = user.setdefault("free_trials", {})
+    already = key in trials
+    if not already:
+        trials[key] = now
+        _log_event(state, "trial_claim", now, email=uid, op=op, mode=mode)
+    return {"ok": True, "claimed": True, "already": already,
+            "authority": _authority_view(user, now)}
+
+
+# 免费云端额度上限（账号级终身 / 每日 auto）。与两端 quota.py 的
+# LIFETIME_CLOUD_EVENTS / DAILY_AUTO_RUNS 必须一致 —— 中心是唯一真源。
+# 🔴 2026-10-06 拆池：8 个云端功能各自独立「终身免费次数」，每个功能独立计、独立 cap。
+#   默认值仍各 3 次（与旧总池一致），只是按功能各一份。
+#   CLOUD_LIFETIME_LIMIT 是旧单值（向后兼容旧字段），新客户端走字典。
+# 🔴 2026-10-06 第二轮（用户「剩下没拆的全部拆开」）：上一轮只把「转码/字幕/去水印」
+#   各自拆开，但每档内部还塞着多个功能（在线转码里含拼接、字幕里含烧录与翻译、
+#   去水印里含 PDF）。本轮把 8 个功能彻底拆开，一个键 = 一个用户可见功能。
+CLOUD_LIFETIME_LIMIT = 3
+CLOUD_LIFETIME_LIMITS = {
+    "cloud_commentary": 3,        # 视频解说
+    "cloud_convert": 3,           # 在线转码
+    "cloud_concat": 3,            # 在线拼接（视频/音频片段合并）
+    "cloud_dewatermark": 3,       # 在线去水印（图片）
+    "cloud_dewatermark_pdf": 3,   # 在线去水印（PDF）
+    "cloud_subtitle": 3,          # 在线字幕提取/识别
+    "cloud_subtitle_burn": 3,     # 字幕烧录
+    "cloud_subtitle_translate": 3,  # 字幕翻译
+}
+_CLOUD_RESOURCES = tuple(CLOUD_LIFETIME_LIMITS.keys())
+# 每日 auto 护栏：同样按功能独立（一个键一份），整数为旧写法（全部功能同一值）。
+CLOUD_DAILY_AUTO_LIMIT = 1
+CLOUD_DAILY_AUTO_LIMITS = {r: CLOUD_DAILY_AUTO_LIMIT for r in _CLOUD_RESOURCES}
+
+
+def _free_quota_overrides(st: dict[str, Any]) -> dict[str, Any]:
+    """管理员下发的免费额度覆盖（state["free_quota_overrides"]）。"""
+    fq = (st or {}).get("free_quota_overrides")
+    return fq if isinstance(fq, dict) else {}
+
+
+def effective_cloud_limits(st: dict[str, Any]) -> dict[str, int]:
+    """**当前生效**的 per-resource 终身免费次数：覆盖层 > 代码常量。
+
+    🔴 2026-10-06：后台「终身免费次数」此前只写客户端本机 plans.json，中心是
+    硬编码常量 ⇒ 管理员改了不生效（承诺了做不到）。现在后台保存会下发到中心，
+    中心按本函数判定放行/拒绝，与后台显示一致。
+    覆盖写法两种（与客户端 plans.json 对齐）：整数 = 全部功能同一值；字典 = 按功能。
+    """
+    limits = {r: int(CLOUD_LIFETIME_LIMIT) for r in _CLOUD_RESOURCES}
+    v = _free_quota_overrides(st).get("cloud_lifetime")
+    if isinstance(v, dict):
+        for r in _CLOUD_RESOURCES:
+            if r in v:
+                try:
+                    n = int(v[r])
+                    if n >= 0:
+                        limits[r] = n
+                except (TypeError, ValueError):
+                    pass
+    elif v is not None:
+        try:
+            n = int(v)
+            if n >= 0:
+                limits = {r: n for r in _CLOUD_RESOURCES}
+        except (TypeError, ValueError):
+            pass
+    return limits
+
+
+def _cloud_quota_view(user: dict[str, Any], now: float,
+                      limits: dict[str, int] | None = None) -> dict[str, Any]:
+    """账号级云端免费额度快照（客户端用它回灌本地 quota.json 缓存）。
+
+    🔴 2026-10-06 拆池：lifetime 与 daily 都从「扁平总池」升级为「按 resource 字典」。
+    旧客户端（未升级）仍读 lifetime_used / daily_auto_used（= 总池和 / 单值），
+    新客户端读 lifetime / daily（字典）。
+    """
+    cq = user.get("cloud_quota") or {}
+    daily = cq.get("daily") or {}
+    today = _bj_day(now)
+    is_today = str(daily.get("date") or "") == today
+    _auto = daily.get("auto")
+    if isinstance(_auto, dict):                      # 新：按 resource 记
+        daily_dict = {r: (max(0, int(_auto.get(r) or 0)) if is_today else 0)
+                      for r in _CLOUD_RESOURCES}
+    else:                                            # 旧：单值总池 → 归默认键
+        legacy_daily = max(0, int(_auto or 0)) if is_today else 0
+        daily_dict = {r: (legacy_daily if r == "cloud_commentary" else 0)
+                      for r in _CLOUD_RESOURCES}
+    daily_used = sum(daily_dict.values())
+    _life = cq.get("lifetime")
+    if isinstance(_life, dict):
+        life_dict = {r: max(0, int(_life.get(r) or 0)) for r in _CLOUD_RESOURCES}
+        life_used = sum(life_dict.values())          # 旧字段：总池和
+    else:
+        life_used = max(0, int(_life or 0))
+        life_dict = {r: (life_used if r == "cloud_commentary" else 0)
+                     for r in _CLOUD_RESOURCES}
+    lim = limits or {r: int(CLOUD_LIFETIME_LIMIT) for r in _CLOUD_RESOURCES}
+    life_remaining = {r: max(0, int(lim.get(r, CLOUD_LIFETIME_LIMIT)) - life_dict[r])
+                      for r in _CLOUD_RESOURCES}
+    daily_remaining = {r: max(0, CLOUD_DAILY_AUTO_LIMITS[r] - daily_dict[r])
+                       for r in _CLOUD_RESOURCES}
+    return {
+        "lifetime": life_dict,                        # 新：字典
+        # 🔴 2026-10-06 新增：生效上限字典。管理员可在后台改终身次数（覆盖层），
+        #   客户端 402 文案不能再写死「终身 3 次」—— 改完配置就会报错数字。
+        #   旧客户端忽略本字段，新客户端用它渲染文案。
+        "lifetime_limits": {r: int(lim.get(r, CLOUD_LIFETIME_LIMIT)) for r in _CLOUD_RESOURCES},
+        "lifetime_used": life_used,                    # 旧：总池和（兼容旧客户端）
+        "lifetime_limit": CLOUD_LIFETIME_LIMIT,        # 旧：单值
+        "lifetime_remaining": life_remaining,          # 新：字典
+        "daily": daily_dict,                          # 新：按 resource 字典
+        "daily_auto_used": daily_used,                 # 旧：总池和
+        "daily_auto_limit": CLOUD_DAILY_AUTO_LIMIT,
+        "daily_auto_remaining": daily_remaining,       # 新：字典
+        "date": today,
+    }
+
+
+def cloud_quota_impl(state: dict[str, Any], token: str, now: float, secret: str,
+                     lifetime: int = 0, daily: int = 0, refund: bool = False,
+                     resource: str = "", ip: str = "") -> dict[str, Any]:
+    """免费云端额度跨端原子扣减 / 退还（2026-10-06）。
+
+    🔴 为什么必须有这个端点：桌面端原先把「终身 3 次云端额度」记在**本机**
+    `~/.video-downloader/quota.json`，授权中心完全不知道。于是免费用户重装系统 /
+    换台电脑 → 计数归零 → 又白嫖 3 次真实云端大模型调用（commentary_llm 单次
+    成本 ¥0.04~0.19），且可无限重复。网页端当时走的是积分墙，只有桌面端漏，
+    但根治必须让两端共用同一份账号级计数。
+
+    语义：
+      · lifetime/daily > 0 → 扣减（原子：先判余额再改，超额不落账并返回 allowed=False）
+      · refund=True       → 退还（任务失败补偿，绝不超退到 0 以下）
+      · 两者都不传         → 只查询当前余额（客户端冷启动/心跳回灌用）
+
+    日切按北京时间（与 daily_impl / _authority_view 的 usage_date 一致）。
+    断网时由调用方按 fail-open 处理（沿用本机计数），故本端点只在能连通时调用。
+    """
+    uid = parse_token(token, secret, now)
+    user = _users(state).get(uid)
+    if not user:
+        raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
+    if user.get("banned"):
+        raise ApiError(403, "ACCOUNT_BANNED", "账号已被停用，如有疑问请联系客服")
+
+    try:
+        life_n = int(lifetime or 0)
+        day_n = int(daily or 0)
+    except (TypeError, ValueError):
+        raise ApiError(400, "BAD_BODY", "lifetime/daily 必须是整数")
+    if refund:
+        life_n, day_n = -abs(life_n), -abs(day_n)
+    if life_n < 0 and day_n < 0 and not refund:
+        raise ApiError(400, "BAD_BODY", "扣减数不能为负，退还请传 refund=true")
+
+    cq = user.setdefault("cloud_quota", {})
+    today = _bj_day(now)
+    daily_state = cq.get("daily") or {}
+    if str(daily_state.get("date") or "") != today:
+        daily_state = {"date": today, "auto": {}}      # 自然日重置（按 resource 字典）
+
+    # 🔴 2026-10-06 拆池：lifetime 从扁平 int 升级为按 resource 字典。
+    # 旧数据（int）迁移进 cloud_commentary（历史唯一云端功能），其余归 0。
+    _legacy = cq.get("lifetime")
+    if isinstance(_legacy, dict):
+        life_dict = {r: max(0, int(_legacy.get(r) or 0)) for r in _CLOUD_RESOURCES}
+    else:
+        life_dict = {r: 0 for r in _CLOUD_RESOURCES}
+        if _legacy:
+            life_dict["cloud_commentary"] = max(0, int(_legacy))
+    # daily 同样从标量升级为字典；旧标量迁移进 cloud_commentary。
+    _auto = daily_state.get("auto")
+    if isinstance(_auto, dict):
+        day_dict = {r: max(0, int(_auto.get(r) or 0)) for r in _CLOUD_RESOURCES}
+    else:
+        day_dict = {r: 0 for r in _CLOUD_RESOURCES}
+        if _auto:
+            day_dict["cloud_commentary"] = max(0, int(_auto))
+
+    # 🔴 2026-10-06 拆池：决定落到哪个 resource（旧调用方不传 → 默认 cloud_commentary）。
+    res = str(resource or "").strip() or "cloud_commentary"
+    if res not in _CLOUD_RESOURCES:
+        res = "cloud_commentary"
+
+    limits = effective_cloud_limits(state)
+    if life_n > 0:
+        _lim = int(limits.get(res, CLOUD_LIFETIME_LIMIT))
+        if life_dict[res] + life_n > _lim:
+            return {"ok": True, "allowed": False, "reason": "lifetime_exhausted",
+                    "applied": {"lifetime": 0, "daily": 0},
+                    "cloud_quota": _cloud_quota_view(user, now, limits),
+                    "authority": _authority_view(user, now)}
+    if day_n > 0 and day_dict[res] + day_n > CLOUD_DAILY_AUTO_LIMITS.get(res, CLOUD_DAILY_AUTO_LIMIT):
+        return {"ok": True, "allowed": False, "reason": "daily_auto_exhausted",
+                "applied": {"lifetime": 0, "daily": 0},
+                "cloud_quota": _cloud_quota_view(user, now, limits),
+                "authority": _authority_view(user, now)}
+
+    life_dict[res] = max(0, life_dict[res] + life_n)
+    day_dict[res] = max(0, day_dict[res] + day_n)
+    cq["lifetime"] = life_dict
+    daily_state["auto"] = day_dict
+    cq["daily"] = daily_state
+    user["cloud_quota"] = cq
+
+    if life_n or day_n:
+        _log_event(state, "cloud_quota", now, email=uid, resource=res,
+                   lifetime=life_n, daily=day_n, refund=bool(refund),
+                   life_used=life_dict[res], day_used=day_dict[res])
+    return {"ok": True, "allowed": True, "refunded": bool(refund),
+            "applied": {"lifetime": life_n, "daily": day_n},
+            "cloud_quota": _cloud_quota_view(user, now, limits),
+            "authority": _authority_view(user, now)}
+
+
+_UNSET = object()   # 区分「调用方没传」与「显式传 null 清除覆盖」
+
+
+def free_quota_impl(state: dict[str, Any], now: float,
+                    cloud_lifetime: Any = _UNSET) -> dict[str, Any]:
+    """管理员下发「免费额度」覆盖（目前只有终身免费次数）。
+
+    与 `plans_set` 分开的原因：plans_set 的入参契约是**套餐价格**（每档必须含
+    `price_cny` 并逐条 round(2)），额度是 `{resource: 次数}` 形状，走同一条路会被
+    价格校验拒掉。
+    传 `cloud_lifetime=null` = 清除覆盖（回到代码常量）。
+
+    🔴 鉴权说明：与 plans_set 一样，**管理员身份由 dispatch 的 `_require_admin`
+    校验**（本函数只处理已鉴权后的写入），因此这里不再解析令牌 ——
+    管理员令牌（license_admin）与用户令牌（parse_token）本来就是两套，
+    误用 parse_token 会把合法的后台保存判成「登录已失效」。
+    """
+    if cloud_lifetime is _UNSET:
+        pass                      # 只查询，不改
+    elif cloud_lifetime is None:
+        # 显式清除：回到代码常量（后台「恢复默认」按钮走这条路）
+        fq = dict(_free_quota_overrides(state))
+        fq.pop("cloud_lifetime", None)
+        state["free_quota_overrides"] = fq
+        _save_state(state)
+    else:
+        if isinstance(cloud_lifetime, dict):
+            clean: dict[str, int] = {}
+            for k, v in cloud_lifetime.items():
+                try:
+                    n = int(v)
+                except (TypeError, ValueError):
+                    raise ApiError(400, "BAD_LIMITS", f"{k} 的次数必须是整数")
+                if n < 0:
+                    raise ApiError(400, "BAD_LIMITS", f"{k} 的次数不能为负")
+                clean[str(k)] = n
+            fq = dict(_free_quota_overrides(state))
+            fq["cloud_lifetime"] = clean
+        elif isinstance(cloud_lifetime, int):
+            fq = dict(_free_quota_overrides(state))
+            fq["cloud_lifetime"] = int(cloud_lifetime)
+        else:
+            raise ApiError(400, "BAD_LIMITS",
+                           "cloud_lifetime 必须是整数、{resource: 次数} 字典或 null")
+        state["free_quota_overrides"] = fq
+        _save_state(state)
+    return {"ok": True, "free_quota_overrides": _free_quota_overrides(state),
+            "effective_cloud_limits": effective_cloud_limits(state),
+            "updated_at": now}
 
 
 def _admin_find_user(state: dict[str, Any], email: str, now: float) -> dict[str, Any]:
@@ -723,6 +1021,22 @@ def grant_impl(state: dict[str, Any], email: str, plan: str, now: float,
             "user_id": uid, "email": uid, "salt": "", "pw_hash": "",
             "created_at": now, "devices": [], "purchases": [], "no_password": True,
         }
+    # 🔴 每人限购硬闸（2026-10-09）：活动价档可设 limit_per_user。
+    #    收款前的拦截在 pay_server（正常路径根本走不到这里）；本闸只用于兜住
+    #    「并发多单 / 直接调 grant」的绕过。仅对**支付驱动**的发货生效
+    #    （note 形如 xunhupay-auto:XXX）—— 管理员手动补发不受限，避免误拦补单。
+    if _is_auto_grant_note(note):
+        _lim = _plan_limit(state, plan_code, now)
+        if _lim > 0:
+            _already = sum(1 for p in (user.get("purchases") or [])
+                           if p.get("plan_code") == plan_code)
+            if _already >= _lim:
+                _raise_alert(state, "limit_exceeded", "critical", uid, "",
+                             f"套餐 {plan_code} 每人限购 {_lim} 次，该账号已购 "
+                             f"{_already} 次；本笔支付驱动发货被拦截（note={str(note)[:60]}）。"
+                             f"若已收款属超限重复购买，请按订单退款。", now)
+                raise ApiError(409, "LIMIT_REACHED",
+                               f"该活动每个账号限购 {_lim} 次（已购 {_already} 次）")
     pid = secrets.token_hex(6)
     user.setdefault("purchases", []).append(
         {"id": pid, "plan_code": plan_code, "at": now, "note": note[:120]})
@@ -732,6 +1046,88 @@ def grant_impl(state: dict[str, Any], email: str, plan: str, now: float,
     _log_event(state, "grant", now, email=uid, plan_code=plan_code, note=note[:120])
     return {"ok": True, "user_id": uid, "plan_code": plan_code, "purchase_id": pid,
             "account": _public_user(user)}
+
+
+def _spec_in_activity(spec: Any, now: float) -> bool:
+    """该档此刻是否算**活动档**（供「活动价每人限购一次」）。
+
+    与 pay_server::_sales_state::is_activity 严格同口径：
+      1) `flash_price > 0` 且当前时刻落在 `[flash_start, flash_end]` 内 → 是
+         （忽略 mode，这样 mode=limited 但配了秒杀窗口的档也能被识别）；
+      2) **窗口外**，若秒杀价**未回升到常态价之上**（`flash_price >= price_cny`）
+         → 也算。例：`price_cny = flash_price = 0.10`（管理员没有恢复价格），
+         窗口过后用户看到的仍是 ¥0.10，此时若判「非活动」就会放行重复购买。
+    🔴 2026-10-09 实测漏洞：download_1day 窗口 00:27–02:35，窗口后价格仍 0.10，
+       旧口径判「非活动」⇒ 限购失效 ⇒ 已购账号可无限次重复下单。
+
+    未显式配置 limit_per_user 的活动档默认限购 1。
+    口径必须与收款侧一致，否则会出现「下单被拦 / 发货放行」的分叉。
+    """
+    if not isinstance(spec, dict):
+        return False
+    try:
+        fp = float(spec.get("flash_price") or 0)
+        fs = float(spec.get("flash_start") or 0)
+        fe = float(spec.get("flash_end") or 0)
+        bp = float(spec.get("price_cny") or 0)
+    except (TypeError, ValueError):
+        return False
+    if fp <= 0:
+        return False
+    if fs and fe and fs <= now <= fe:
+        return True
+    return fp >= bp
+
+
+def _plan_limit(state: dict[str, Any], plan_code: str,
+                now: Optional[float] = None) -> int:
+    """该档「每人限购次数」（0 = 不限）。读云端套餐覆盖表，容错非数字。
+
+    与 plans_set 写入侧同源：limit_per_user 随套餐 spec 原样透传（无白名单）。
+    覆盖表是**两级**结构 {类目: {code: spec}}，故需遍历类目。
+
+    优先级：显式 `limit_per_user` > **活动档默认 1** > 0（不限）。
+    🔴 第二档就是「活动价格每个用户仅限购一次」的落地处；调用方**必须**传 now，
+       否则活动档会被当成不限购（漏拦）。
+    """
+    now = float(now if now is not None else time.time())
+    for cat in (_plan_overrides(state) or {}).values():
+        if isinstance(cat, dict) and plan_code in cat:
+            spec = cat.get(plan_code)
+            if isinstance(spec, dict):
+                raw = spec.get("limit_per_user")
+                if raw not in (None, ""):
+                    try:
+                        return max(0, int(float(raw)))
+                    except (TypeError, ValueError):
+                        return 0
+                return 1 if _spec_in_activity(spec, now) else 0
+    return 0
+
+
+def plan_usage_impl(state: dict[str, Any], token: str, secret: str, now: float,
+                    plan_code: str = "") -> dict[str, Any]:
+    """当前账号各套餐的**已购次数** —— 活动价限购的取数源。
+
+    计数以 purchases 为准（每笔成功购买/发货追加一条，含管理员补发）。
+    plan_code 非空时额外回该档的限购上限与是否仍可购买（供收款前拦截）。
+    """
+    uid = parse_token(token, secret, now)
+    user = _users(state).get(uid)
+    if not user:
+        raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
+    counts: dict[str, int] = {}
+    for p in (user.get("purchases") or []):
+        c = str(p.get("plan_code") or "")
+        if c:
+            counts[c] = counts.get(c, 0) + 1
+    out: dict[str, Any] = {"ok": True, "counts": counts}
+    if plan_code:
+        lim = _plan_limit(state, plan_code, now)
+        n = counts.get(plan_code, 0)
+        out.update({"plan_code": plan_code, "count": n, "limit": lim,
+                    "allowed": (lim <= 0 or n < lim)})
+    return out
 
 
 def users_impl(state: dict[str, Any]) -> dict[str, Any]:
@@ -915,7 +1311,25 @@ RECON_INTERVAL = 600.0          # 后台 10 分钟自扫一轮（对账很轻：
 RECON_SEEN_CAP = 1000
 GRANTING_STUCK = 1800.0         # 订单卡在 GRANTING 超 30 分钟 = 发货挂了
 MATCH_FALLBACK_WINDOW = 172800.0  # 老数据无 order_id 时按 (账号,套餐) 就近配对的窗口 48h
-AUTO_NOTE_PREFIX = "alipay-auto"
+# 🔴 2026-10-09 修：原写死 "alipay-auto"，而 2026-10-09 起支付通道切为虎皮椒，
+#   自动发货 note 是 "xunhupay-auto:<order_id>" ⇒ 发货侧对账完全看不到发货，
+#   每笔真实付款都被误报「已收款未发货」critical（实测 2 条，其实均已发货）。
+#   改为识别任意 "<渠道>-auto:" 前缀：以后新增支付渠道零改动适配。
+AUTO_NOTE_PREFIX = "alipay-auto"          # 兼容旧引用（判定请用 _is_auto_grant_note）
+_AUTO_NOTE_RE = re.compile(r"^[A-Za-z0-9_]+-auto:")
+
+
+def _is_auto_grant_note(note: Any) -> bool:
+    """该 grant 是否由支付渠道自动发货写下（note = "<渠道>-auto:<order_id>"）。"""
+    return bool(_AUTO_NOTE_RE.match(str(note or "")))
+
+
+def _grant_prefix_for(order: dict[str, Any]) -> str:
+    """该订单对应的自动发货 note 前缀（按支付渠道），用于告警里的补发指引。"""
+    mode = str((order or {}).get("mode") or "").lower()
+    if "xunhu" in mode:
+        return "xunhupay-auto"
+    return AUTO_NOTE_PREFIX
 
 # 金额真源（与 deploy/pay_server.py PRICE_MAP 保持一致，单位元；对账报告估算用）
 PLAN_PRICE: dict[str, str] = {
@@ -941,16 +1355,24 @@ def _plan_overrides(st: dict) -> dict:
 
 
 def plan_price(st: dict, plan_code: str) -> str:
-    """取某档位金额：优先管理员下发的覆盖，其次内置默认。单位元、两位小数字符串。"""
+    """取某档位金额：优先管理员下发的覆盖，其次内置默认。单位元、两位小数字符串。
+
+    🔴 覆盖表是**两级**结构 {类目: {code: spec}}（plans_set 写入侧即如此），
+       早期实现直接 .get(plan_code) 恒取不到覆盖 ⇒ 对账金额一直用内置默认
+       （1/3/7 天档更因不在 PLAN_PRICE 里而恒为 0.00）。2026-10-09 修为**遍历类目取**。
+    """
     key = str(plan_code or "")
-    ov = _plan_overrides(st).get(key)
-    if isinstance(ov, dict):
-        price = ov.get("price_cny")
-        try:
-            if price not in (None, ""):
-                return f"{float(price):.2f}"
-        except (TypeError, ValueError):
-            pass
+    for cat in (_plan_overrides(st) or {}).values():
+        if isinstance(cat, dict) and key in cat:
+            ov = cat.get(key)
+            if isinstance(ov, dict):
+                price = ov.get("price_cny")
+                try:
+                    if price not in (None, ""):
+                        return f"{float(price):.2f}"
+                except (TypeError, ValueError):
+                    pass
+            break
     return PLAN_PRICE.get(key, "0.00")
 
 
@@ -1017,9 +1439,9 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
                  and now - float(o.get("created_at") or 0) > GRANTING_STUCK
                  and now - float(o.get("created_at") or 0) <= horizon]
 
-    # 发货侧：自动发货 grant 事件（管理员手动 grant 的 note 不是 alipay-auto，不计资金口径）
+    # 发货侧：自动发货 grant 事件（管理员手动 grant 的 note 无 "-auto:"，不计资金口径）
     grants = [e for e in _read_recon_events(EVENT_LOG_PATH, {"grant"})
-              if str(e.get("note") or "").startswith(AUTO_NOTE_PREFIX)
+              if _is_auto_grant_note(e.get("note"))
               and now - float(e.get("at", 0)) <= horizon]
 
     matched_orders: set = set()
@@ -1029,7 +1451,7 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
     def _amount(o: dict) -> str:
         return str(o.get("amount") or plan_price(state, str(o.get("plan_code"))) or "?")
 
-    # pass 1：order_id 精确对号（新版 note = "alipay-auto:<order_id>"）
+    # pass 1：order_id 精确对号（note = "<渠道>-auto:<order_id>"）
     by_oid = {o["order_id"]: o for o in in_money}
     for g in grants:
         note = str(g.get("note") or "")
@@ -1068,7 +1490,7 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
             "detail": f"订单 {o['order_id']} 已收款 {_amount(o)} 元"
                       f"（{o.get('plan_code')}，{_bj_day(_paid_at(o))}，状态 {o.get('status')}）"
                       f"但没有对应发货 —— 用户花了钱没拿到权益，请立即补发"
-                      f"（grant note 带 alipay-auto:{o['order_id']} 即可自动对账销号）"})
+                      f"（grant note 带 {_grant_prefix_for(o)}:{o['order_id']} 即可自动对账销号）"})
     for g in grants:
         if id(g) in matched_grants:
             continue
@@ -1083,7 +1505,8 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
 
     def _row(d: str) -> dict:
         return day_rows.setdefault(d, {"date": d, "income_yuan": 0.0, "paid_orders": 0,
-                                       "grant_failed": 0, "auto_grants": 0, "redeems": 0,
+                                       "grant_failed": 0, "limit_refund": 0,
+                                       "auto_grants": 0, "redeems": 0,
                                        "redeem_income_est": 0.0, "mismatch": 0})
 
     for o in in_money:
@@ -1098,6 +1521,25 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
             pass
     for g in grants:
         _row(_bj_day(float(g.get("at", 0))))["auto_grants"] += 1
+
+    # 🔴 限购拒绝单（2026-10-09）：钱已收，但按「活动价每人限购 1 次」**不该发货** ——
+    #    正确处置是**退款**，绝不能进 in_money（那会触发 paid_no_grant「请立即补发」，
+    #    等于给已经超限的账号又发一次权益）。这里单独列出并告警退款。
+    #    产生场景：修好限购前用户重复下单留下的 PENDING 单，若之后被支付就会走到这里。
+    limit_rejected = [o for o in orders
+                      if o.get("status") == "LIMIT_REJECTED"
+                      and now - _paid_at(o) <= horizon]
+    for o in limit_rejected:
+        r = _row(_bj_day(_paid_at(o)))
+        r["limit_refund"] += 1
+        # 超限单的款项会退回，故**不计入收入**（避免虚增营业额），只计数提示
+        mismatches.append({
+            "kind": "limit_rejected_refund", "order_id": o.get("order_id", ""),
+            "at": _paid_at(o), "email": str(o.get("email") or ""),
+            "detail": f"订单 {o.get('order_id')} 用户已付 "
+                      f"{str(o.get('amount') or plan_price(state, str(o.get('plan_code'))) or '?')} 元"
+                      f"（{o.get('plan_code')}，{_bj_day(_paid_at(o))}），但该档每人限购已满，"
+                      f"属超限重复购买 —— **请按订单退款**，不要补发"})
     for e in _read_recon_events(EVENT_LOG_PATH, {"recharge"}):
         if now - float(e.get("at", 0)) <= horizon:
             r = _row(_bj_day(float(e.get("at", 0))))
@@ -1215,7 +1657,9 @@ class Handler(BaseHTTPRequestHandler):
             # --- 管理员接口（不做 IP 限流，走 token）---
             if action in ("gen", "revoke", "grant", "users",
                           "ban", "adjust", "setstate", "usage",
-                          "alerts", "alerts_ack", "recon", "plans_set"):
+                          "alerts", "alerts_ack", "recon", "plans_set",
+                            # 🔴 2026-10-06 免费额度覆盖下发（终身免费次数）
+                            "free_quota_set"):
                 self._require_admin(data)
                 with _LOCK:
                     st = _load_state()
@@ -1304,6 +1748,15 @@ class Handler(BaseHTTPRequestHandler):
                         _save_state(st)
                         out = {"ok": True, "plans": clean,
                                "updated_at": now}
+                    elif action == "free_quota_set":
+                        # 🔴 2026-10-06 免费额度覆盖：后台改终身次数 → 下发中心，
+                        #   中心按覆盖值判定放行（此前只写客户端本机，改了不生效）。
+                        #   ⚠️ 用分支外已解析的 data，**不要**再 self._body()：
+                        #   body 流已被 _require_admin 消费过，二次读会阻塞等流（实测挂起）。
+                        out = free_quota_impl(
+                            st, now,
+                            cloud_lifetime=(data["cloud_lifetime"]
+                                            if "cloud_lifetime" in data else _UNSET))
                     else:
                         out = users_impl(st)
                 return self._json(200, out)
@@ -1363,6 +1816,26 @@ class Handler(BaseHTTPRequestHandler):
                 elif action == "daily":
                     out = daily_impl(st, str(data.get("token") or ""),
                                      data.get("items"), now, SECRET, ip=ip)
+                    _save_state(st)
+                elif action == "trial_claim":
+                    out = trial_claim_impl(st, str(data.get("token") or ""),
+                                          str(data.get("op") or ""),
+                                          str(data.get("mode") or "once"),
+                                          now, SECRET, ip=ip)
+                    _save_state(st)
+                elif action == "plan_usage":
+                    # 活动价限购取数：客户端 / 收款服务查该账号各档已购次数
+                    out = plan_usage_impl(st, str(data.get("token") or ""),
+                                          SECRET, now,
+                                          str(data.get("plan_code") or ""))
+                elif action == "cloud_quota":
+                    out = cloud_quota_impl(st, str(data.get("token") or ""),
+                                           now, SECRET,
+                                           lifetime=data.get("lifetime") or 0,
+                                           daily=data.get("daily") or 0,
+                                           refund=bool(data.get("refund")),
+                                           resource=str(data.get("resource") or ""),
+                                           ip=ip)
                     _save_state(st)
                 else:
                     return self._json(404, {"ok": False, "error": "unknown action"})

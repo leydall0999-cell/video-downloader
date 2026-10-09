@@ -14,7 +14,7 @@
                                 {order_id, mode, qr_png(base64), qr, pay_url, amount, plan_code}
                                 mode: face2face | page | wap
   POST /api/pay/alipay/notify                 支付宝异步通知，返回 success/failure（纯文本）
-  POST /api/pay/query           {order_id}     -> {status: PENDING|PAID|GRANT_FAILED}
+  POST /api/pay/query           {order_id}     -> {status: PENDING|PAID|GRANT_FAILED|LIMIT_REJECTED}
 
 依赖：python-alipay-sdk, qrcode, Pillow（ECS venv 安装）。
 """
@@ -159,11 +159,21 @@ def _sales_state(plan: dict[str, Any], now: float) -> dict[str, Any]:
         reason = "活动已结束"
     elif stock > 0 and sold >= stock:
         reason = "已售罄"
+    # 「活动档」判定（供「每人限购 1 次」）—— 与 is_flash 分开：
+    #   is_flash 管**价格**（窗口内才按秒杀价卖）；
+    #   is_activity 管**限购**：窗口内一定算活动；**窗口外若秒杀价没有回升到
+    #   常态价之上**（即管理员并未把价格恢复成正价，用户看到的仍是活动价），
+    #   也按活动处理。
+    # 🔴 2026-10-09 实测漏洞：download_1day（price_cny=flash_price=0.10，窗口
+    #    00:27–02:35）窗口过后仍按 ¥0.10 卖，却因 is_flash=False 判定「非活动」
+    #    ⇒ 不再限购 ⇒ 已购账号可无限次重复下单（用户报「活动每人限购一份没生效」）。
+    is_activity = bool(flash_price > 0 and (in_flash or flash_price >= base_price))
     return {
         "price": (flash_price if in_flash else base_price),
         "buyable": (reason == ""),
         "reason": reason,
         "is_flash": in_flash,
+        "is_activity": is_activity,
     }
 
 
@@ -213,17 +223,17 @@ def plan_quote(plan_code: str, force: bool = False) -> dict[str, Any]:
 
     `force=True` 直连授权中心取新鲜价（**下单路径必须用**；见 _cloud_plans 的说明）。
 
-    `is_activity`：该档**此刻是否正按活动价（秒杀 flash_price）在卖** —— 供「活动价
-    每人限购一次」判定。刻意只认 `is_flash`（活动价真正生效的窗口），而非 mode：
-    `mode=limited` 在窗口结束后仍会残留（如 download_1day），此时按常态价卖，
-    不应再限购。
+    `is_activity`：该档**此刻是否算「活动档」** —— 供「活动价每人限购一次」判定。
+    取 `_sales_state.is_activity`：窗口内算活动；窗口外但秒杀价未回升到常态价之上
+    （价格没恢复，用户看到的仍是活动价）也算。**刻意不认 `mode`**：`mode=limited`
+    在窗口结束后仍会残留（如 download_1day），单看 mode 会把常态档误判成活动档。
     """
     meta = _cloud_plans(force=force).get(str(plan_code or ""))
     if isinstance(meta, dict) and meta:
         st = _sales_state(meta, time.time())
         return {"price": f"{float(st['price']):.2f}", "buyable": st["buyable"],
                 "reason": st["reason"], "source": "cloud",
-                "is_activity": bool(st.get("is_flash"))}
+                "is_activity": bool(st.get("is_activity"))}
     local = PRICE_MAP.get(plan_code) or {}
     return {"price": str(local.get("price") or "0.00"), "buyable": True,
             "reason": "", "source": "local", "is_activity": False}
@@ -523,6 +533,20 @@ def _grant(email: str, plan_code: str, note: str = "alipay-auto") -> dict[str, A
     return out
 
 
+def _grant_failure_status(err: object) -> str:
+    """发货失败时的订单状态：**限购拒绝**与其他发货故障要分开。
+
+    - `LIMIT_REJECTED`：授权中心硬闸以 409 LIMIT_REACHED 拒绝（活动价超限重复购买）
+      —— 钱已收但**不该发货**，对账要提示**退款**；
+    - `GRANT_FAILED`：其余故障（授权中心抖动 / 网络）—— 已收款未发货，对账提示**补发**。
+
+    🔴 2026-10-09：不区分会让对账把「超限重复购买」当「待补发」去补，等于给已经
+       超过限购的账号又发一次权益。修「活动限购生效」后，漏洞期遗留的 PENDING 单
+       一旦被支付就会走到这条路径。
+    """
+    return "LIMIT_REJECTED" if "LIMIT_REACHED" in str(err) else "GRANT_FAILED"
+
+
 def _check_purchase_limit(token: str, plan_code: str,
                           is_activity: bool = False) -> tuple[Optional[bool], str]:
     """下单前查该账号对该档的已购次数与限购上限（活动价「每人限购」）。
@@ -801,9 +825,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             with _LOCK:
                 o = _load_orders()
-                o[order_id]["status"] = "GRANT_FAILED"
+                o[order_id]["status"] = _grant_failure_status(e)
                 o[order_id]["err"] = str(e)[:200]
-                # 已收款只是发货失败 —— 对账口径里 GRANT_FAILED = 已收款未发货，会告警补发
+                # GRANT_FAILED = 已收款未发货（告警补发）；LIMIT_REJECTED = 超限重复购买（告警退款）
                 o[order_id]["paid_at"] = time.time()
                 if trade_no:
                     o[order_id]["trade_no"] = trade_no
@@ -859,13 +883,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             with _LOCK:
                 o = _load_orders()
-                o[order_id]["status"] = "GRANT_FAILED"
+                o[order_id]["status"] = _grant_failure_status(e)
                 o[order_id]["err"] = str(e)[:200]
                 o[order_id]["paid_at"] = time.time()
                 if params.get("transaction_id"):
                     o[order_id]["trade_no"] = params["transaction_id"]
                 _save_orders(o)
-            # 已收款仅发货失败 —— 对账口径 GRANT_FAILED = 已收款未发货，会告警补发
+            # GRANT_FAILED = 已收款未发货（告警补发）；LIMIT_REJECTED = 超限重复购买（告警退款）
             return self._text(200, "success")
 
     def _query(self):
