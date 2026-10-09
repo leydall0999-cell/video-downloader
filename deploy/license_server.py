@@ -1417,6 +1417,69 @@ def _read_recon_events(path: Path, kinds: set) -> list:
     return out
 
 
+_GNO_MONEY_STATES = {"PAID", "GRANT_FAILED"}   # 与 recon_impl 的 in_money 口径同源
+
+
+def _grant_no_pay_hint(oids: list, all_by_oid: dict) -> str:
+    """给 grant_no_pay 差异「自证性质」：订单号根本不存在 vs 订单存在但未收款。
+
+    2026-10-09：原文案一律写「疑似绕过支付/伪造发货调用」，于是**探针留下的一笔**和
+    **真正的绕过支付**在面板上长得一模一样，用户只能来问「这两条红字是什么、有没有风险」。
+    归并后一行可能引用多个订单号，逐类判定：
+
+    - **不存在**：note 里的订单号在**全量订单表**（含未收款单）里也查不到 ⇒ 该订单号是编的，
+      可能是限购探针、也可能是有人直接调发货接口 —— 需核查调用来源，不可默认放过；
+    - **未进口径**：订单真实存在，但状态不是 PAID / GRANT_FAILED（PENDING 未付、EXPIRED
+      已过期、GRANTING 处理中等）⇒ 按状态给处置建议；
+    - **窗口外**：订单已是收款状态却未进 in_money ⇒ 只可能落在账期窗口外（非漏发）。
+
+    返回追加在 detail 后的说明文案；无单可查时返回「note 未携带订单号」的说明。
+    """
+    missing, paid_out, others = [], [], []
+    other_states: set = set()
+    for oid in dict.fromkeys(str(x) for x in oids):    # 同一订单号多笔只报一次
+        if not oid:
+            continue
+        o = all_by_oid.get(oid)
+        if o is None:
+            missing.append(oid)
+        elif str(o.get("status")) in _GNO_MONEY_STATES:
+            # 已是收款状态却没被配对 ⇒ 只可能落在账期窗口外（in_money 只取近 N 天）
+            paid_out.append(f"{oid}（{o.get('status')}）")
+        else:
+            other_states.add(str(o.get("status") or "").upper())
+            others.append(f"{oid}（{o.get('status')}：{_grant_no_pay_status_note(o.get('status'))}）")
+    if not missing and not paid_out and not others:
+        return "note 未携带订单号 —— 无法核对收款，请核查调用来源"
+    parts = []
+    if missing:
+        head = "、".join(missing[:3]) + ("…" if len(missing) > 3 else "")
+        parts.append(f"note 引用的订单号 {head} 在本机订单表中**不存在**"
+                     f" —— 该订单号是编的（探针或伪造发货调用），请核查调用来源")
+    if others:
+        head = "、".join(others[:3]) + ("…" if len(others) > 3 else "")
+        # GRANTING = 发货还在跑（下次重扫自动销号），再喊「核查付款是否未完成」会自相矛盾
+        tail = "" if other_states <= {"GRANTING"} else " —— 请核查付款是否未完成即发货"
+        parts.append(f"订单 {head} **真实存在但未进入已收款口径**{tail}")
+    if paid_out:
+        head = "、".join(paid_out[:3]) + ("…" if len(paid_out) > 3 else "")
+        parts.append(f"订单 {head} **已收款但落在账期窗口外** —— 属跨窗对账，非漏发；"
+                     f"窗口内若有发货请另核")
+    return "；".join(parts)
+
+
+def _grant_no_pay_status_note(status: str) -> str:
+    """未收款订单的状态白话对照表（用于 grant_no_pay 文案的处置建议）。"""
+    s = str(status or "").upper()
+    return {
+        "PENDING": "付款未完成 / 回调未达",
+        "GRANTING": "发货处理中，下次重扫（≤10 分钟）会自动销号",
+        "EXPIRED": "订单已过期，从未收款",
+        "REFUNDED": "订单已退款",
+        "LIMIT_REJECTED": "超限单，应退款而非发货",
+    }.get(s, "非已收款状态")
+
+
 def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
                now: Optional[float] = None) -> dict[str, Any]:
     """每日入账与充值对账：支付宝实付订单 vs 自动发货，差异即刻告警。
@@ -1464,6 +1527,9 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
 
     # pass 1：order_id 精确对号（note = "<渠道>-auto:<order_id>"）
     by_oid = {o["order_id"]: o for o in in_money}
+    # 全量订单表（含未收款单）：只用于 grant_no_pay 的「订单号到底存不存在」判定，
+    # 不参与配对 —— 配对必须只用 in_money，否则未收款单会把差异消化掉（漏报）。
+    all_by_oid = {o["order_id"]: o for o in orders}
     for g in grants:
         note = str(g.get("note") or "")
         oid = note.split(":", 1)[1].strip() if ":" in note else ""
@@ -1514,14 +1580,19 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
         if id(g) in matched_grants:
             continue
         at = float(g.get("at", 0))
+        _note = str(g.get("note") or "")
+        # note 形如 `xunhupay-auto:<order_id>`；探针能**伪造渠道前缀**，但编不出真实订单号，
+        # 所以把订单号收集起来，交给 _grant_no_pay_hint 自证差异性质。
+        _oid = _note.split(":", 1)[1].strip() if ":" in _note else ""
         key = (str(g.get("email") or ""), str(g.get("plan_code") or ""), _bj_day(at))
         it = unmatched.get(key)
         if it is None:
-            unmatched[key] = {"n": 1, "first": at, "last": at}
+            unmatched[key] = {"n": 1, "first": at, "last": at, "oids": [_oid]}
         else:
             it["n"] += 1
             it["first"] = min(it["first"], at)
             it["last"] = max(it["last"], at)
+            it["oids"].append(_oid)
     for (email, plan, day), it in unmatched.items():
         if it["n"] > 1:
             t1 = time.strftime("%H:%M:%S", time.gmtime(it["first"] + 8 * 3600))
@@ -1531,8 +1602,8 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
             when = _bj_dt(it["first"])
         mismatches.append({
             "kind": "grant_no_pay", "order_id": "", "at": it["last"], "email": email,
-            "detail": f"{when} 给 {email} 自动发货"
-                      f"「{plan}」但找不到已收款订单 —— 疑似绕过支付/伪造发货调用"})
+            "detail": f"{when} 给 {email} 自动发货「{plan}」但找不到已收款订单"
+                      f" —— {_grant_no_pay_hint(it.get('oids') or [], all_by_oid)}"})
 
     # 按天汇总（展示用；差异在行内带明细）
     day_rows: dict = {}

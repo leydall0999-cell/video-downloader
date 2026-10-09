@@ -246,6 +246,91 @@ def test_g_paid_no_grant_intact() -> None:
     check("补发的发货也不再算 grant_no_pay", not _gno(r2), str(_gno(r2)))
 
 
+# ── [H] 告警自证性质：订单号不存在（探针/伪造）vs 存在但未收款（真该查）────── #
+def test_h_hint_self_describes() -> None:
+    """原文案一律写「疑似绕过支付/伪造发货调用」⇒ 探针噪音与真事故长得一样。
+
+    修法：detail 追加 `_grant_no_pay_hint()` 的判定，逐订单号分三类写清：
+      不存在（订单号是编的）/ 存在但非收款状态（按状态给建议）/ 已是收款状态但窗口外。
+    钉住判据必须用**全量订单表**（all_by_oid），只看 in_money 会把 PENDING 误判成「不存在」。
+    """
+    print("[H] grant_no_pay 必须自证差异性质，不能一概喊「疑似绕过支付」")
+
+    print("      [H1] 订单号在全量订单表里根本不存在（探针/伪造调用）")
+    r = _run([_grant(MIN + 5, "probe@vdl.local", "download_1day",
+                     "xunhupay-auto:PROBE-FIRST")], {})
+    g = _gno(r)
+    check("仍报 1 条差异（自证≠免报）", len(g) == 1, str(g))
+    if not g:
+        return
+    d = g[0]["detail"]
+    print("        → " + d)
+    check("标注「不存在」", "不存在" in d, d)
+    check("点名「该订单号是编的」并回显订单号", "编的" in d and "PROBE-FIRST" in d, d)
+    check("不再一律甩「疑似绕过支付」", "疑似绕过支付" not in d, d)
+    check("要求核查调用来源", "核查调用来源" in d, d)
+
+    print("      [H2] 订单真实存在但状态 PENDING（未收款即发货，真该查）")
+    o = _order("VDLP-PEND-1", "p@x.com", "download_1day", "PENDING", MIN + 3)
+    r = _run([_grant(MIN + 5, "p@x.com", "download_1day", "xunhupay-auto:VDLP-PEND-1")],
+             {o[0]: o[1]})
+    g = _gno(r)
+    check("报 1 条差异", len(g) == 1, str(g))
+    if not g:
+        return
+    d = g[0]["detail"]
+    print("        → " + d)
+    check("标注「真实存在但未进入已收款口径」",
+          "真实存在" in d and "未进入已收款口径" in d, d)
+    check("带状态原文与白话处置", "PENDING" in d and "付款未完成" in d, d)
+    # 🔴 判据若只看 in_money（by_oid），PENDING 单会被误判成「订单号不存在」⇒ 冤枉成伪造调用
+    check("不得误标「不存在」（判据必须用全量订单表）", "不存在" not in d, d)
+
+    print("      [H3] 订单存在但仍在发货处理中（GRANTING 未满卡死阈值）")
+    o = _order("VDLP-GR-1", "g@x.com", "download_1day", "GRANTING", MIN + 3)
+    r = _run([_grant(MIN + 5, "g@x.com", "download_1day", "xunhupay-auto:VDLP-GR-1")],
+             {o[0]: o[1]})
+    d = _gno(r)[0]["detail"] if _gno(r) else ""
+    print("        → " + d)
+    check("说明会自动销号", "发货处理中" in d and "自动销号" in d, d)
+    # 自相矛盾检查：GRANTING 是发货还在跑，不能再喊「核查付款是否未完成即发货」
+    check("不得同时喊「付款未完成即发货」（自相矛盾）", "付款是否未完成" not in d, d)
+
+    print("      [H4] 一行内混合两种性质：编造的号 + 真实未收款号（同号重复出现要合并）")
+    o = _order("VDLP-MIX-REAL", "mix@x.com", "download_1day", "EXPIRED", MIN + 3)
+    r = _run([_grant(MIN + 5, "mix@x.com", "download_1day", "xunhupay-auto:VDLP-MIX-FAKE"),
+              _grant(MIN + 8, "mix@x.com", "download_1day", "xunhupay-auto:VDLP-MIX-REAL"),
+              _grant(MIN + 9, "mix@x.com", "download_1day", "xunhupay-auto:VDLP-MIX-REAL")],
+             {o[0]: o[1]})
+    g = _gno(r)
+    check("同日同账号同档仍归并 1 行", len(g) == 1, str([x["detail"][:40] for x in g]))
+    if not g:
+        return
+    d = g[0]["detail"]
+    print("        → " + d)
+    check("笔数为 3", "共 3 笔" in d, d)
+    check("两种性质都在同一行写明", "不存在" in d and "未进入已收款口径" in d, d)
+    check("同一订单号只报一次（去重）", d.count("VDLP-MIX-REAL") == 1, d)
+    check("伪编号也只报一次", d.count("VDLP-MIX-FAKE") == 1, d)
+    check("EXPIRED 带白话「已过期」", "已过期" in d, d)
+
+    print("      [H5] note 未携带订单号 → 明说无法核对，不猜")
+    r = _run([_grant(MIN + 5, "n@vdl.local", "download_1day", "xunhupay-auto:")], {})
+    d = _gno(r)[0]["detail"] if _gno(r) else ""
+    print("        → " + d)
+    check("明说「未携带订单号」", "未携带订单号" in d, d)
+    check("不得凭空断言「编的」", "编的" not in d, d)
+
+    print("      [H6] 订单已收款但落在账期窗口外 → 属跨窗对账，不是漏发")
+    o = _order("VDLP-OLD-1", "old@x.com", "download_1day", "PAID", MIN - 10 * DAY)
+    r = _run([_grant(MIN + 5, "old@x.com", "download_1day", "xunhupay-auto:VDLP-OLD-1")],
+             {o[0]: o[1]})
+    d = _gno(r)[0]["detail"] if _gno(r) else ""
+    print("        → " + d)
+    check("说明落在账期窗口外", "账期窗口外" in d, d)
+    check("不误判为「订单号不存在」", "不存在" not in d, d)
+
+
 def main() -> int:
     print("=" * 58)
     print("对账 grant_no_pay 归并守卫（deploy/license_server.py）")
@@ -259,6 +344,7 @@ def main() -> int:
         test_e_manual_notes_ignored()
         test_f_counts_agree()
         test_g_paid_no_grant_intact()
+        test_h_hint_self_describes()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print("=" * 58)
