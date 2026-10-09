@@ -10371,7 +10371,12 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       // 默认视图：始终停在下载（支持 #view=xxx 直达指定视图，如 #view=subtitle）
       // 启动竞态保护（2026-09-30）：若用户/深链在节点信息返回前已选中非默认视图，
       // 不再无条件覆盖（否则加载窗口期点「会员/个人中心」会被弹回下载视图）。
-      if (!document.querySelector('.tab.is-active:not(#tabDownload)')) {
+      // 🔴 2026-10-09 追加 !bootViewSet：上方同步兜底（L10411 附近）已 switchView 过一次
+      //    并把 bootViewSet 置真，这里再进一次是「同视图二次进入」——
+      //    操作引导的 howtoAutoOpen 会按「已读」把刚首见展开的引导条**当场收回去**
+      //    （实测：冷启动 ~2s 处 open=true → ~2.4s 被收走）。用户已切到别的视图时
+      //    仍由后面的查询守卫保护，本改动只去掉「用户什么都没做时的重复进入」。
+      if (!bootViewSet && !document.querySelector('.tab.is-active:not(#tabDownload)')) {
         const _hashView = (location.hash || '').replace(/^#view=/, '');
         switchView(_hashView || 'download');
       }

@@ -169,6 +169,12 @@ ok(appJsCode.indexOf('try { howtoApplyClosed(); }') < howtoFnStart
    && (appJsCode.match(/try \{ howtoApplyClosed\(\); \} catch \(_\) \{\}/g) || []).length >= 2,
   '缺少启动时的 howtoApplyClosed() 调用 —— 冷启动时已关闭的引导条会先闪一下再消失');
 
+// 🔴 init 的 /api/nodes 异步回调会再 switchView 一次默认视图：同步兜底已经进入过
+//    download（首见展开+写已读），二次进入会按「已读」把刚展开的引导**当场收走**
+//    （真机实测：冷启动 ~2s 展开 → ~2.4s 被收走）。异步重套用必须以 !bootViewSet 为前置。
+ok(/if \(!bootViewSet && !document\.querySelector\('\.tab\.is-active:not\(#tabDownload\)'\)\)/.test(appJsCode),
+  'init 异步回调里的默认视图重套用缺 !bootViewSet 前置 —— 同视图二次进入会触发已读收起，冷启动首见展开被当场收走（实测过的缺陷）');
+
 /* ---------------- ⑤ 样式必须能折叠成一行 ---------------- */
 const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, '');
 function ruleBody(selector) {
