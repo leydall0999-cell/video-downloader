@@ -124,9 +124,9 @@ def test_compose_rejects_empty_matting():
 
 
 def test_compose_subject_fits_canvas():
-    """构图（核心）：主体必须等比缩放进画布——不能原尺寸直通导致切头 / 切肩 / 溢出。
+    """构图（回退分支）：非人像结构（矩形主体）必须等比缩放进画布，不能原尺寸直通。
 
-    用「去掉底色后的主体 bbox」量化：宽 ≤ 画布 78%、高 ≤ 画布 86%，且四边都不贴边。
+    用「去掉底色后的主体 bbox」量化：宽 ≤ 画布 88%、高 ≤ 画布 90%，且四边都不贴边。
     只查单行像素（旧写法）钉不住缩放，变异测试已证实 scale=1.0 能存活。
     """
     src = _tmp_png(_subject_rgba(size=(400, 900)), "tall.png")
@@ -144,11 +144,109 @@ def test_compose_subject_fits_canvas():
                 ys.append(y)
     assert xs and ys, "画布里没有主体（合成失败）"
     bw, bh = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
-    assert bw <= int(295 * 0.80), f"主体宽 {bw} 超出 78% 构图上限（未缩放 / 被横向裁切）"
-    assert bh <= int(413 * 0.88), f"主体高 {bh} 超出 86% 构图上限（未缩放 / 被纵向裁切）"
+    assert bw <= int(295 * 0.90), f"主体宽 {bw} 超出 88% 构图上限（未缩放 / 被横向裁切）"
+    assert bh <= int(413 * 0.92), f"主体高 {bh} 超出 90% 构图上限（未缩放 / 被纵向裁切）"
     assert min(ys) > 0, "顶部必须留白，不能切到头顶"
     assert max(ys) < 413 - 1, "底部必须留白，主体不能贴底溢出"
-    print("✅ 构图：主体等比缩放、四边留白（宽≤78% / 高≤86%）")
+    print("✅ 构图（回退）：主体等比缩放、四边留白（宽≤88% / 高≤90%）")
+
+
+def _person_rgba(size=(600, 900), mark=False):
+    """造一张「头 + 颈 + 肩」形状的假抠图结果（行宽呈窄→宽→窄→骤宽，像人像）。
+
+    mark=True 时在右下角加一块**与主体不相连**的残留（模拟原图水印 / 签名被抠图
+    误判为主体），用于验证掩码清洗与 bbox 不受残留影响。
+    """
+    from PIL import ImageDraw
+    im = Image.new("RGBA", size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.ellipse([240, 120, 360, 300], fill=(230, 190, 160, 255))   # 头（宽 120）
+    d.rectangle([285, 295, 315, 340], fill=(230, 190, 160, 255))  # 颈（宽 30）
+    d.rectangle([150, 340, 450, 860], fill=(40, 60, 110, 255))    # 肩 / 身（宽 300）
+    if mark:
+        d.rectangle([470, 800, 580, 830], fill=(255, 0, 0, 255))  # 不相连的残留
+    return im
+
+
+def _head_metrics(out):
+    """量输出里「头部色」的占比：头宽 / 头高（含颈）/ 头顶留白。"""
+    im = Image.open(out).convert("RGB")
+    W, H = im.size
+    px = im.load()
+    hx, hy = [], []
+    for y in range(H):
+        for x in range(W):
+            if px[x, y] == (230, 190, 160):
+                hx.append(x)
+                hy.append(y)
+    assert hx, "输出里找不到头部（假人像没合成进去）"
+    return (max(hx) - min(hx) + 1) / W, (max(hy) - min(hy) + 1) / H, min(hy) / H
+
+
+def test_mask_cleanup_drops_residue():
+    """掩码清洗：与主体不相连的抠图残留（水印 / 签名）必须被清零，且不影响构图。
+
+    「残留把主体框撑大 ⇒ 人像被挤小、位置下移」是这次「人物偏小」的根因之一。
+    分两层钉：
+      ① 直接断言清洗结果——残留区在 strong/sel 里必须为 False，且主体框不含残留
+         （只靠合成后的像素断言不可靠：残留可能被裁到画布外，变异会存活）；
+      ② 断言有残留与无残留的输出构图一致。
+    """
+    import numpy as _np
+    person = _person_rgba(mark=True)
+    alpha = _np.array(person)[..., 3]
+    strong, sel = idp._mask_region(alpha)
+    # 残留块 (470~580, 800~830) 的中心：必须被排除出核心区，且不得保留像素
+    assert not bool(strong[815, 525]), "残留区没被排除出主体核心区（bbox 会被撑大）"
+    assert not bool(sel[815, 525]), "残留区像素没被清零（水印会印进证件照）"
+    assert bool(strong[210, 300]), "头部主体被误删（清洗把人也滤掉了）"
+    bbox = Image.fromarray((strong.astype(_np.uint8) * 255), "L").getbbox()
+    assert bbox and bbox[2] <= 460, f"残留把主体框撑大了：{bbox}（应为 x≤451）"
+
+    outs = []
+    for tag, m in (("with", True), ("without", False)):
+        src = _tmp_png(_person_rgba(mark=m), f"mark_{tag}.png")
+        out = str(Path(tempfile.gettempdir()) / f"_vdl_test_idp_res_{tag}.png")
+        idp.compose_id_photo(src, out, 295, 413, "white", 1)
+        rgb = Image.open(out).convert("RGB")
+        px = rgb.load()
+        red = sum(1 for y in range(rgb.height) for x in range(rgb.width)
+                  if px[x, y] == (255, 0, 0))
+        assert red == 0, f"残留（红色块）没被清掉：{red} 像素"
+        outs.append(_head_metrics(out))
+    assert outs[0] == outs[1], f"残留影响了构图：{outs[0]} vs {outs[1]}"
+    print("✅ 掩码清洗：不相连残留清零，且构图不受影响")
+
+
+def test_compose_head_dominant_for_portrait():
+    """构图（头主导）：人像结构可识别时，脸必须够大、头顶留白合规。
+
+    旧实现在半身照上只按整体 bbox 缩放，脸被缩到画布宽的 ~20%（用户反馈「人太小」）。
+    这里钉死：头宽 ≥45% 画布宽、头高（含颈）≥55% 画布高、头顶留白 ≥4%。
+    """
+    src = _tmp_png(_person_rgba(), "person.png")
+    out = str(Path(tempfile.gettempdir()) / "_vdl_test_idp_person.png")
+    idp.compose_id_photo(src, out, 295, 413, "white", 1)
+    hw, hh, top = _head_metrics(out)
+    assert hw >= 0.45, f"头宽只占 {hw:.2f}，脸太小（旧实现约 0.20）"
+    assert hh >= 0.55, f"头高（含颈）只占 {hh:.2f}，脸太小"
+    assert top >= 0.04, f"头顶留白只有 {top:.2f}，会显得切头"
+    print(f"✅ 构图（头主导）：头宽 {hw:.2f} / 头高 {hh:.2f} / 头顶留白 {top:.2f}")
+
+
+def test_find_head_rows_rejects_non_portrait():
+    """结构判据：矩形主体（无脖子收窄）必须判不出头，保证能落到回退构图。"""
+    import numpy as _np
+    rect = _np.zeros((400, 200), dtype=bool)
+    rect[20:380, 40:160] = True
+    assert idp._find_head_rows(rect) is None, "矩形主体不该被认成人像（回退分支会失效）"
+    person = _np.zeros((400, 200), dtype=bool)
+    person[20:150, 60:140] = True      # 头
+    person[150:190, 92:108] = True     # 颈（明显收窄）
+    person[190:380, 20:180] = True     # 肩
+    got = idp._find_head_rows(person)
+    assert got is not None, "头 + 颈 + 肩的结构应被识别"
+    print("✅ 结构判据：矩形拒绝 / 人像结构识别")
 
 
 # ---------------------------------------------------------------- 前端接线
@@ -238,6 +336,9 @@ if __name__ == "__main__":
     test_compose_layout_sheet()
     test_compose_rejects_empty_matting()
     test_compose_subject_fits_canvas()
+    test_mask_cleanup_drops_residue()
+    test_compose_head_dominant_for_portrait()
+    test_find_head_rows_rejects_non_portrait()
     test_frontend_wiring_present()
     test_routes_mounted()
     test_job_pipeline_e2e()
