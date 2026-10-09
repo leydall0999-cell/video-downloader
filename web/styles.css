@@ -1567,6 +1567,25 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 }
 .howto-note b { color: var(--text); }
 
+/* 引导条「关闭」出口（2026-10-09）：
+   用户原话「引导条打开要可以关闭，重新打开就点问号」。
+   ① 关闭按钮放在 .howto-body 末尾 ⇒ 浏览器只在展开时渲染它，天然就是「打开时才能关」；
+   ② 关掉 = 该条**整条消失**（.is-closed 走 display:none），不再占一行。
+   🔴 这里**不能用 hidden 属性**：visibleHowtoIn() 靠 closest('[hidden]') 判「本视图有没有引导条」，
+      一旦给 details 加 hidden，右上角「?」按钮会把自己也判成没内容而跟着隐藏 —— 用户就再也打不开了。
+      display:none 的元素不进 closest('[hidden]')，按钮照常常驻。 */
+.howto.is-closed { display: none; }
+.howto-foot { display: flex; align-items: center; gap: .5rem; margin-top: .62rem; }
+.howto-close {
+  flex: 0 0 auto; appearance: none; cursor: pointer; font: inherit;
+  font-size: .78rem; line-height: 1.2; padding: .2rem .52rem;
+  color: var(--brand-strong);
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--line));
+  border-radius: var(--radius-sm); background: transparent;
+}
+.howto-close:hover { background: color-mix(in srgb, var(--brand) 10%, transparent); }
+.howto-foot-hint { font-size: .76rem; color: var(--text-mute); }
+
 /* 「?」查看引导按钮（2026-10-09）：
    引导条只在首次进入时自动展开一次，用户忘了就没有入口 —— 每个功能的右上角常驻
    这个小问号，点一下随时重新展开该功能的引导，再点收起。

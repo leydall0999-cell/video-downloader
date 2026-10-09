@@ -262,6 +262,82 @@ ok(!/el\.ucTitle\.textContent\s*=/.test(appJsCode) && !/el\.dwTitle\.textContent
 ok(/function setGuideTitle\s*\(/.test(appJsCode),
   'app.js 缺少 setGuideTitle() —— 动态标题改文案时应只替换 .guide-title-text 的文字');
 
+/* ---------------- ⑦ 「✕ 关闭引导」：关掉整条消失，右上角「?」重新打开 ---------------- */
+// 用户原话：「引导条打开要可以关闭，重新打开就点问号」。
+const closeCount = (indexHtml.match(/class="howto-close"/g) || []).length;
+eq(closeCount, EXPECT.size,
+  `「✕ 关闭引导」按钮应恰好 ${EXPECT.size} 个（每条引导一个），实际 ${closeCount} 个`);
+
+for (const b of blocks) {
+  ok(/class="howto-close"/.test(b.html), `「${b.key}」没有「✕ 关闭引导」按钮 —— 用户打开了却关不掉`);
+  ok(/class="howto-foot"/.test(b.html), `「${b.key}」缺少 howto-foot 容器`);
+  const iSum = b.html.indexOf('</summary>');
+  const iBody = b.html.indexOf('<div class="howto-body">');
+  const iClose = b.html.indexOf('class="howto-close"');
+  ok(iBody > 0 && iClose > iBody,
+    `「${b.key}」的关闭按钮不在 .howto-body 内 —— 收起状态下也会露出来，且与标题行的开合点击打架`);
+  ok(iSum > 0 && iClose > iSum,
+    `「${b.key}」的关闭按钮落在 <summary> 里 —— 点它会同时触发标题行的开合`);
+  // 关闭区文案里不得出现「」引用：③ 段会把引导条内所有「」当成"界面真实控件名"去校验，
+  // 写个「问号按钮」之类进去会立刻假失败（属自证式噪音，不是真缺陷）。
+  const footSeg = b.html.slice(b.html.indexOf('class="howto-foot"'));
+  ok(!/「/.test(footSeg),
+    `「${b.key}」的关闭区文案里出现了「」引用 —— 会被 ③ 段当成控件名去 index.html/app.js 里找，必假失败`);
+}
+
+const closeCssNeed = [
+  ['.howto.is-closed {', /display:\s*none/, '关掉的引导条必须整条不显示（否则还占一行，等于没关掉）'],
+  ['.howto-foot {', /display:\s*flex/, '关闭区布局（按钮与提示文字同一行）'],
+  ['.howto-close {', /cursor:\s*pointer/, '关闭按钮要能被认出可点'],
+];
+for (const [sel, re, why] of closeCssNeed) {
+  const body = ruleBody(sel);
+  ok(body !== null, `styles.css 里缺少可用规则 ${sel} —— ${why}`);
+  ok(re.test(body), `styles.css 的 ${sel} 规则体缺少关键声明（${why}）`);
+}
+
+ok(/const HOWTO_CLOSED_KEY = 'vdl_howto_closed';/.test(appJsCode),
+  'app.js 缺少 HOWTO_CLOSED_KEY —— 关闭状态不会被记住，用户关掉后下次进来又被弹出来');
+ok(/function howtoApplyClosed\s*\(/.test(appJsCode),
+  'app.js 缺少 howtoApplyClosed() —— 已关闭的引导条不会真正隐藏');
+ok(/e\.target\.closest\('\.howto-close'\)/.test(appJsCode),
+  'app.js 没有绑定「✕ 关闭引导」的点击 —— 按钮点了没反应');
+ok(/classList\.add\('is-closed'\)/.test(appJsCode),
+  '关闭引导时没有打上 .is-closed —— 引导条不会消失');
+
+// 🔴 最要命的一条：关掉的引导条**绝不能用 hidden 属性**。
+//    howtoSyncButtons / visibleHowtoIn 靠 closest('[hidden]') 判「本视图有没有引导条」，
+//    一旦给 details 加 hidden，右上角「?」按钮会把自己也判成"本视图没有引导"而跟着隐藏
+//    ⇒ 用户再也打不开这条引导（正好废掉「重新打开就点问号」）。
+const closeSeg = appJsCode.slice(
+  appJsCode.indexOf("closest('.howto-close')"),
+  appJsCode.indexOf("closest('.howto-btn')"));
+ok(closeSeg.length > 100 && closeSeg.length < 900,
+  '定位「关闭引导」的处理逻辑失败（切片长度异常）');
+ok(!/\.hidden\s*=\s*true/.test(closeSeg) && !/setAttribute\(\s*'hidden'/.test(closeSeg),
+  '关闭引导时给元素加了 hidden 属性 —— 会让右上角「?」按钮把自己也判成没内容而隐藏，用户再也打不开');
+
+ok(/is-closed'\)\)\s*return/.test(howtoFn),
+  'howtoAutoOpen 没有跳过已关闭的引导 —— 用户关掉后切页回来又会被自动弹开');
+
+// 点「?」= 重新打开的入口：必须先摘掉 .is-closed，再展开
+const btnSeg = appJsCode.slice(
+  appJsCode.indexOf("closest('.howto-btn')"),
+  appJsCode.indexOf("closest('.howto-btn')") + 900);
+ok(/classList\.remove\('is-closed'\)/.test(btnSeg),
+  '点「?」时没有解除 .is-closed —— 关掉的引导条再也打不开（「重新打开就点问号」这条链路断掉）');
+ok(/classList\.remove\('is-closed'\)[\s\S]{0,500}?d\.open = true/.test(btnSeg),
+  '点「?」解除关闭后没有强制展开 —— 用户点一下只看到一行空壳，需要再点一下才展开');
+
+// switchView 里必须「先套用已关闭状态、再自动展开」，顺序反了会把刚关掉的又弹开
+const swClosed = appJsCode.indexOf('try { howtoApplyClosed(); }', swDef);
+const swCallAt = appJsCode.indexOf('try { howtoAutoOpen(); }', swDef);
+ok(swClosed > swDef,
+  'switchView 里没有调用 howtoApplyClosed() —— 切页时已关闭的引导条会重新露面');
+ok(swClosed > swDef && swCallAt > swClosed,
+  'switchView 里 howtoApplyClosed() 必须排在 howtoAutoOpen() 之前（顺序反了会把已关闭的引导又自动展开）');
+
 console.log(`✅ 操作引导守卫生效：${EXPECT.size} 个功能入口全覆盖、位置正确、`
   + `文案与真实控件一致、首次展开机制与折叠样式在位、`
-  + `右上角「?」按钮 15 处落点正确（共 ${count} 项断言）`);
+  + `右上角「?」按钮 15 处落点正确、`
+  + `「✕ 关闭引导」${EXPECT.size} 处且可被「?」重新打开（共 ${count} 项断言）`);

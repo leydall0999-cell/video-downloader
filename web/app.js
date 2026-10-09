@@ -15657,6 +15657,29 @@ el.dwVidPlayer.hidden = true;
   // 所以「去水印」这一个视图内的 4 条引导会各自跟随所属子面板显隐，天然互不串台。
   // 任何异常（localStorage 被禁、JSON 损坏）都吞掉，绝不影响主流程。
   const HOWTO_SEEN_KEY = 'vdl_howto_seen';
+  // 「✕ 关闭引导」过的功能：整条引导不显示（连收起态那一行也不占），
+  // 直到再点右上角「?」把它叫回来。与「已读」是两个互不干扰的集合。
+  const HOWTO_CLOSED_KEY = 'vdl_howto_closed';
+  const howtoReadClosed = () => {
+    try { const v = JSON.parse(localStorage.getItem(HOWTO_CLOSED_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+    catch (_) { return []; }
+  };
+  const howtoWriteClosed = (arr) => {
+    try { localStorage.setItem(HOWTO_CLOSED_KEY, JSON.stringify(arr)); } catch (_) {}
+  };
+
+  // 🔴 关掉的引导条用 class `.is-closed`（display:none），**不能用 hidden 属性**：
+  //    howtoSyncButtons / visibleHowtoIn 靠 closest('[hidden]') 判「本视图有没有引导条」，
+  //    给 details 加 hidden 会让右上角「?」按钮把自己也判成没内容而跟着隐藏 ⇒ 用户再也打不开。
+  function howtoApplyClosed() {
+    const closed = howtoReadClosed();
+    document.querySelectorAll('details.howto[data-howto]').forEach((d) => {
+      d.classList.toggle('is-closed', closed.indexOf(d.getAttribute('data-howto')) >= 0);
+    });
+  }
+  // 启动即套用一次（不依赖任何 switchView），保证冷启动时已关闭的引导条不会闪一下
+  try { howtoApplyClosed(); } catch (_) {}
+
   function howtoAutoOpen() {
     let seen;
     try { seen = JSON.parse(localStorage.getItem(HOWTO_SEEN_KEY) || '[]'); } catch (_) { seen = []; }
@@ -15664,6 +15687,7 @@ el.dwVidPlayer.hidden = true;
     let changed = false;
     document.querySelectorAll('details.howto[data-howto]').forEach((d) => {
       if (d.closest('[hidden]')) return;
+      if (d.classList.contains('is-closed')) return;   // 用户主动关掉的，绝不自动弹回来
       const k = d.getAttribute('data-howto');
       if (!k || seen.indexOf(k) >= 0) return;
       d.open = true;
@@ -15699,11 +15723,39 @@ el.dwVidPlayer.hidden = true;
   }
 
   document.addEventListener('click', (e) => {
-    const btn = e.target && e.target.closest ? e.target.closest('.howto-btn') : null;
+    if (!e.target || !e.target.closest) return;
+
+    // ① 引导条展开体里的「✕ 关闭引导」：关掉 = 该条整条不显示（并记住），
+    //    重新打开靠右上角「?」。用 class 而非 hidden，见 howtoApplyClosed 上方注释。
+    const closeBtn = e.target.closest('.howto-close');
+    if (closeBtn) {
+      const cd = closeBtn.closest('details.howto');
+      if (cd) {
+        const ck = cd.getAttribute('data-howto');
+        cd.open = false;
+        cd.classList.add('is-closed');
+        if (ck) {
+          const list = howtoReadClosed();
+          if (list.indexOf(ck) < 0) { list.push(ck); howtoWriteClosed(list); }
+        }
+        howtoSyncButtons();
+      }
+      return;
+    }
+
+    // ② 右上角「?」：若该功能的引导已被关掉，先取消关闭再展开；否则就是普通开合
+    const btn = e.target.closest('.howto-btn');
     if (!btn) return;
     const d = visibleHowtoIn(howtoScopeOf(btn));
     if (!d) return;
-    d.open = !d.open;
+    if (d.classList.contains('is-closed')) {
+      const k = d.getAttribute('data-howto');
+      d.classList.remove('is-closed');
+      if (k) howtoWriteClosed(howtoReadClosed().filter((x) => x !== k));
+      d.open = true;
+    } else {
+      d.open = !d.open;
+    }
     if (d.open) {
       try { d.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (_) {}
       d.classList.remove('is-flash');
@@ -15845,7 +15897,9 @@ el.dwVidPlayer.hidden = true;
       const activeSbGroup = activeSbItem.closest('.sidebar-group');
       if (activeSbGroup) activeSbGroup.classList.remove('collapsed');
     }
-    // 视图已切完、hidden 已复位，此刻展开本页「怎么用」引导（首次进入才展开）
+    // 视图已切完、hidden 已复位。先套用「已关闭」状态（关掉的整条不显示），
+    // 再展开本页「怎么用」引导（首次进入才展开；已关闭的会被 howtoAutoOpen 跳过）
+    try { howtoApplyClosed(); } catch (_) {}
     try { howtoAutoOpen(); } catch (_) {}
     // 同步右上角「?」按钮的显示与激活态（去水印切子面板后按钮要跟着换目标）
     try { howtoSyncButtons(); } catch (_) {}
