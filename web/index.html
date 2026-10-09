@@ -1868,6 +1868,23 @@
   </div>
 </dialog>
 
+<!-- 通用提示弹窗（2026-10-09）：下单失败 / 活动限购等「必须让用户明确知晓」的结果改用弹窗。
+     原先这类文案只写进页面底部的状态行（#memStatus / #pfMemberStatus），位置在价目卡片最下方、
+     常被滚动位置挡住，用户容易当成「点了没反应」，从而反复重复点击下单按钮。 -->
+<dialog id="noticeModal" class="modal" aria-labelledby="noticeTitle">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="noticeTitle">提示</h2>
+      <button type="button" class="modal-close" id="noticeClose" aria-label="关闭">✕</button>
+    </div>
+    <p class="notice-text" id="noticeBody"></p>
+    <p class="notice-hint" id="noticeHint" hidden></p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="noticeOk">知道了</button>
+    </div>
+  </div>
+</dialog>
+
 <!-- 时效自动清理：按保留期/容量上限清理下载目录 -->
 <dialog id="cleanModal" class="modal" aria-labelledby="cleanModalTitle">
   <div class="modal-card modal-wide">

@@ -454,6 +454,10 @@
     payPlanName: $('payPlanName'), payQr: $('payQr'), payStatus: $('payStatus'),
     payModalTitle: $('payModalTitle'), payTip: $('payTip'),
     payChanWechat: $('payChanWechat'), payChanAlipay: $('payChanAlipay'),
+    // 通用提示弹窗（2026-10-09）：下单失败 / 活动限购等「必须让用户明确知晓」的结果走它，
+    // 不再只写页面底部状态行（#memStatus / #pfMemberStatus）。
+    noticeModal: $('noticeModal'), noticeTitle: $('noticeTitle'), noticeBody: $('noticeBody'),
+    noticeHint: $('noticeHint'), noticeClose: $('noticeClose'), noticeOk: $('noticeOk'),
     // 网页版独立会员页（2026-09-30）：免登录看价目，购买动作才要登录
     memberView: $('memberView'), tabMember: $('tabMember'),
     memTop: $('memTop'), memTracks: $('memTracks'), memNote: $('memNote'), memStatus: $('memStatus'), memSeg: $('memSeg'),
@@ -858,6 +862,31 @@
     }, ms);
   };
 
+  // 通用提示弹窗（2026-10-09）：「下单失败 / 活动限购」这类**必须让用户明确知晓**的结果走它。
+  // 为什么不用 showToast：① toast 2.6 秒自动消失，付费受阻的信息必须由用户主动确认；
+  // ② 原先只写页面底部状态行（价目卡片最下方），滚不到就看不见，用户会当成「点了没反应」
+  //    而反复重复下单。降级：不支持 <dialog>.showModal 时回落 showToast（宁可弱一点也不能静默）。
+  const showNotice = (title, body, hint) => {
+    const dlg = el.noticeModal;
+    if (!dlg || typeof dlg.showModal !== 'function') {
+      showToast([title, body].filter(Boolean).join('：'));
+      return;
+    }
+    if (el.noticeTitle) el.noticeTitle.textContent = title || '提示';
+    if (el.noticeBody) el.noticeBody.textContent = body || '';
+    if (el.noticeHint) {
+      el.noticeHint.textContent = hint || '';
+      el.noticeHint.hidden = !hint;
+    }
+    if (!dlg.open) dlg.showModal();        // 已打开则只换内容，避免重复 showModal 抛错
+  };
+  const closeNotice = () => { if (el.noticeModal && el.noticeModal.open) el.noticeModal.close(); };
+  if (el.noticeClose) el.noticeClose.addEventListener('click', closeNotice);
+  if (el.noticeOk) el.noticeOk.addEventListener('click', closeNotice);
+  if (el.noticeModal) {
+    // 点遮罩关闭（与 payModal 同款交互）；Esc 由 <dialog> 原生处理
+    el.noticeModal.addEventListener('click', (e) => { if (e.target === el.noticeModal) closeNotice(); });
+  }
 
   const formatDuration = (seconds) => {
     if (!seconds || seconds <= 0) return '';
@@ -7439,11 +7468,24 @@
         method: 'POST', headers: pfAuthHeaders(), body: JSON.stringify({ plan_code: code }),
       });
     } catch (_e) {
-      say('下单失败：网络错误');
+      say('');
+      showNotice('下单失败', '网络错误，没能联系上服务器。请检查网络后重试。');
       return;
     }
     if (!r || !r.ok) {
-      say('❌ ' + ((r && r.error) || '下单失败'));
+      // 🔴 2026-10-09：失败文案改用**弹窗**。原先只写页面底部状态行（价目卡片最下方），
+      //    滚动位置一偏就看不见，用户会当成「点了没反应」而反复重复点击下单。
+      //    code 由支付服务端透传（license_client._post 会把 4xx 的 JSON body 原样带回）：
+      //    LIMIT_REACHED = 该档活动限购已满，**收款前就拦截**，未产生任何扣款。
+      say('');
+      if (((r && r.code) || '') === 'LIMIT_REACHED') {
+        showNotice('该套餐已限购', (r && r.error) || '该套餐每个账号限购 1 次，你已购买过。',
+          // 补充说明只讲「下一步怎么办」，不复述次数 —— 上限可由管理员配成 N 次（正文里已写明实际数字）
+          '限购按账号统计，本次未产生任何扣款。可改选其他档位购买；如需追加购买，请点右下角「反馈」联系我们。');
+      } else {
+        showNotice('下单失败', (r && r.error) || '暂时无法下单，请稍后重试。',
+          '若反复失败，可点右下角「反馈」留言，我们会尽快处理。');
+      }
       return;
     }
     say('');
@@ -7503,10 +7545,19 @@
           // 🔴 LIMIT_REJECTED：钱已收但该档每人限购已满（超限重复购买）→ 会退款。
           //    必须停下来明确告知，否则用户对着「等待支付…」干等、以为没付成功。
           //    GRANT_FAILED：已付款、发货故障 → 后台会补发。
-          if (_pfPayTimer) { clearInterval(_pfPayTimer); _pfPayTimer = null; }
-          say(q.status === 'LIMIT_REJECTED'
-            ? '❌ 该活动每账号限购 1 次，本单款项将原路退回'
-            : '❌ 已付款但开通失败，请联系客服补发');
+          // 2026-10-09：两者都改用弹窗（涉及已扣款，必须让用户主动确认），并**先关掉支付弹窗**
+          //            再开提示弹窗 —— 两个 <dialog> 同处 top layer 会让人分不清该点哪个「关闭」。
+          const _rej = q.status === 'LIMIT_REJECTED';
+          pfClosePayModal();               // 内含 clearInterval(_pfPayTimer)，此处无需重复清
+          say('');
+          if (_rej) {
+            showNotice('该套餐已限购，本单将退款',
+              '你已购买过该档位，本次支付不会开通新权益，款项将原路退回。',
+              `订单号 ${r.order_id || '—'}。到账时间以支付渠道为准，通常 1~3 个工作日。`);
+          } else {
+            showNotice('已付款但开通失败', '支付已成功，但会员权益开通出现异常。',
+              `订单号 ${r.order_id || '—'}。请点右下角「反馈」留言说明，我们会为你补发权益。`);
+          }
         }
       } catch (_e) { /* 轮询失败静默重试 */ }
     }, 2500);

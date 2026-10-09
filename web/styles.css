@@ -1833,6 +1833,11 @@ main > .panel { margin-top: 3rem; }
 .consent-err { margin: .6rem 0 0; font-size: .82rem; color: var(--danger, #dc2626); }
 .consent-note { margin: .9rem 0 0; font-size: .75rem; color: var(--text-mute); line-height: 1.5; }
 
+/* 通用提示弹窗正文（2026-10-09：下单失败 / 活动限购）。
+   正文用正常字号（.modal-sub 是 .8rem 小字，当正文太弱），补一行灰色说明承载「下一步怎么办」。 */
+.notice-text { margin: .55rem 0 0; font-size: .92rem; line-height: 1.6; color: var(--text); }
+.notice-hint { margin: .5rem 0 0; font-size: .8rem; line-height: 1.55; color: var(--text-mute); }
+
 /* 弹窗操作行（确认 / 取消按钮） */
 .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.1rem; }
 
