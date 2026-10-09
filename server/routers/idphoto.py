@@ -229,7 +229,11 @@ def _run(job_id: str, src: str, w: int, h: int, bg: str, layout: int, label: str
     rgba_path = app.DW_DIR / f"idp_src_{job_id}.png"
     try:
         job.update(phase="抠图", progress="正在分离人像与背景…")
-        mat.matting_image(app.Path(src), rgba_path, meta=job)
+        # 明确声明「人像」并关掉 AI 图片类型识别：证件照的输入必然是人，走自动模式会
+        # 先调 VLM 判类型（vision_client.classify_image，timeout=45s）——白等 45 秒，
+        # 且万一被判成海报/商品就会走错抠图通道。声明后直接进人像专用链路（更快更准）。
+        mat.matting_image(app.Path(src), rgba_path, vision_label="人像", auto_vlm=False,
+                          meta=job)
         if not rgba_path.exists() or rgba_path.stat().st_size == 0:
             raise RuntimeError("抠图未产出有效结果")
         job.update(phase="合成", progress="正在换底色并排版…")

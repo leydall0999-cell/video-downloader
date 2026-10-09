@@ -309,6 +309,10 @@ def test_job_pipeline_e2e():
         assert r.status_code == 200, r.text[:200]
         job = r.json()["job_id"]
         assert calls.get("src"), "抠图没被调用（任务链路断了）"
+        # 证件照必须显式声明人像并关掉 AI 图片类型识别：否则自动模式会先调 VLM
+        # 判类型（timeout=45s）——白等 45 秒，还可能被判成非人像走错通道。
+        assert calls["kw"].get("vision_label") == "人像", "证件照没声明人像标签（会白等 VLM 判断）"
+        assert calls["kw"].get("auto_vlm") is False, "auto_vlm 应为 False（跳过图片类型识别）"
         st = None
         for _ in range(60):
             st = c.get(f"/api/idphoto/{job}").json()
