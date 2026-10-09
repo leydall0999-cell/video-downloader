@@ -136,11 +136,14 @@
                   <li>把复制到的字符串粘贴到上方「会话 Cookie」文本框。</li>
                   <li><b>通用平台</b>（腾讯视频、抖音、快手、B站 等）：在对应网站<b>登录</b>后，按 <code>⌘⌥I</code>（Windows：<code>Ctrl+Shift+I</code>）打开开发者工具 → <b>Application</b> → <b>Cookies</b> 复制本站 Cookie，或在 <b>Console</b> 输入 <code>document.cookie</code> 复制整串，粘贴到上方文本框即可。</li>
                 </ol>
-                <p class="cookie-help-note">Cookie 默认会贡献到公共池、供其他访客共享复用（仅登录态、不含密码）；不想共享可在上方取消「贡献 Cookie 到公共池」勾选，则仅用于本次请求、不保存。VIP 账号需保持订阅有效才能拿到高画质。</p>
+                <p class="cookie-help-note">Cookie 会贡献到公共池、供其他访客共享复用（仅登录态、不含密码）。VIP 账号需保持订阅有效才能拿到高画质。</p>
                 <button type="button" id="cookieHelpCopy" class="cookie-help-copy">复制操作指引</button>
               </div>
             </details>
-            <label class="adv-checkbox" title="默认开启：把你本次的登录态共享到公共池，供网页版所有访客复用（仅登录态，不含密码）。取消勾选则只用于本次请求、不被保存。说明见下方「如何获取 / 复制浏览器 Cookie」。">
+            <!-- 2026-10-09 用户要求：该勾选框隐藏（行为不变，仍是默认贡献）。
+                 ⚠️ 只加 style="display:none"，**不要删元素**——web/app.js 会读 el.cookieContribute.checked
+                 （粘贴 Cookie 后自动贡献的两处判断），删了会抛 TypeError 且贡献静默失效。 -->
+            <label class="adv-checkbox" style="display:none" title="默认开启：把你本次的登录态共享到公共池，供网页版所有访客复用（仅登录态，不含密码）。说明见下方「如何获取 / 复制浏览器 Cookie」。">
               <input type="checkbox" id="cookieContribute" checked />
               贡献 Cookie 到公共池（默认开启）
             </label>

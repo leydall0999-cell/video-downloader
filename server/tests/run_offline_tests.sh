@@ -113,6 +113,7 @@ run_node test_member_page.mjs              # 网页版会员购买页：免登�
 run_node test_profile_login_single.mjs     # 个人中心未登录：页内登录表单优先，禁止与全局登录弹窗同屏（2026-10-08 用户反馈）
 run_node test_auth_modal_width.mjs         # 登录弹窗定宽 400 无右侧留白 + 登录方式文案「电话号码/QQ邮箱」（2026-10-08 用户反馈）
 run_node test_notice_modal.mjs             # 下单失败/活动限购改用弹窗：禁回退成「只写页面底部状态行」（2026-10-09 用户反馈）
+run_node test_cookie_contribute_hidden.mjs # 「贡献 Cookie 到公共池」勾选框隐藏：只 display:none 不删元素/仍默认勾选/不留悬空指引（2026-10-09 用户反馈）
 run_one test_member_plans_source.py        # 1/3/7 天档 + 套餐价格单一真源：超管改价/改天数在展示/下单/发放三处同步（2026-09-30）
 run_one test_pay_gateway_web.py            # 网页版支付真通道：后端带云端令牌转发 VPS 支付服务 / 无令牌必拒 / PAID 拉权益 / 离线回落 mock / 前端按通道切文案（2026-10-09）
 run_one test_purchase_history_sync.py       # 购买记录落户：apply_cloud_authoritative 幂等并入云端 purchases（按 id 去重） + 显示端 1/3/7 天档 + 到期精确到分 + 来源映射（cloud/ui_test/admin_direct）（2026-10-09）
