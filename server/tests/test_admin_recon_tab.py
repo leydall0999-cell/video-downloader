@@ -141,11 +141,19 @@ def main():
     body = ls[fi: ls.index("\ndef ", fi + 1)]
     dets = [body[m.start(): m.start() + 320] for m in re.finditer(r'"detail":', body)]
     check("对账明细共 4 处（新增/漏改都能看出来）", len(dets) == 4, f"实际 {len(dets)} 处")
-    check("4 处明细全部带分钟（_bj_dt）",
-          len(dets) == 4 and all("_bj_dt" in s for s in dets),
-          f"仍未到分：{[i for i, s in enumerate(dets) if '_bj_dt' not in s]}")
-    check("明细里不再出现只到天的 _bj_day",
-          not any("_bj_day" in s for s in dets))
+    # grant_no_pay（2026-10-09 归并改版）：明细改走 `{when}` —— 单笔 = _bj_dt（到分），
+    # 多笔 = 到秒区间（分钟级无从区分同分钟的多笔）。所以判据不再是「4 处都字面含 _bj_dt」，
+    # 而是「4 处都**不得**退回只到天」+ 另外 3 处直接到分 + when 的定义必须到分或更细。
+    check("4 处明细无一退回「只到天」（_bj_day）",
+          not any("_bj_day" in s for s in dets),
+          str([i for i, s in enumerate(dets) if "_bj_day" in s]))
+    check("其余 3 处明细直接带分钟（_bj_dt）",
+          sum(1 for s in dets if "_bj_dt" in s) == 3,
+          f"带 _bj_dt 的处数：{sum(1 for s in dets if '_bj_dt' in s)}")
+    check("grant_no_pay 明细走 when，且 when = 单笔到分 / 多笔到秒",
+          bool(re.search(r'when = _bj_dt\(it\["first"\]\)', body))
+          and "%H:%M:%S" in body and "{when}" in body,
+          "when 定义丢失或退回粗粒度")
     # ⚠️ 逐处校验而不是「数够 2 处就行」—— 2026-10-09 变异测试发现：只改其中一处
     # （把 _row(_bj_day(...)) 换成 _bj_dt）时，计数阈值式判据会漏判。
     row_calls = [body[m.end(): m.end() + 80] for m in re.finditer(r"_row\(", body)]

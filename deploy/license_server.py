@@ -1502,14 +1502,37 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
                       f"（{o.get('plan_code')}，{_bj_dt(_paid_at(o))}，状态 {o.get('status')}）"
                       f"但没有对应发货 —— 用户花了钱没拿到权益，请立即补发"
                       f"（grant note 带 {_grant_prefix_for(o)}:{o['order_id']} 即可自动对账销号）"})
+    # 🔴 2026-10-09 二次修：原先**一笔事件一行**。同一次异常若连发多笔（探针连发、
+    #   渠道重试、批量伪造），面板上就是 N 行**内容完全相同**的红字 —— 明细只到分，
+    #   13 秒内的两笔都渲染成同一个 HH:MM，既看不出是「N 笔」也看不出时间跨度，
+    #   用户只能看到「两条一模一样的告警」。改为按 (账号, 档位, 账期日) 归并成一行：
+    #   明细带**总笔数**，多笔时改用**到秒的时刻区间**（分钟级无从区分同分钟的多笔），
+    #   单笔时保持原来的分钟级文案。day_rows 的差异计数随之由「事件数」变为「异常次数」，
+    #   这才与 paid_no_grant 的口径一致（后者本就按 (订单,账号,天) 一行一条）。
+    unmatched: dict = {}
     for g in grants:
         if id(g) in matched_grants:
             continue
+        at = float(g.get("at", 0))
+        key = (str(g.get("email") or ""), str(g.get("plan_code") or ""), _bj_day(at))
+        it = unmatched.get(key)
+        if it is None:
+            unmatched[key] = {"n": 1, "first": at, "last": at}
+        else:
+            it["n"] += 1
+            it["first"] = min(it["first"], at)
+            it["last"] = max(it["last"], at)
+    for (email, plan, day), it in unmatched.items():
+        if it["n"] > 1:
+            t1 = time.strftime("%H:%M:%S", time.gmtime(it["first"] + 8 * 3600))
+            t2 = time.strftime("%H:%M:%S", time.gmtime(it["last"] + 8 * 3600))
+            when = f"{day} {t1} ~ {t2}（共 {it['n']} 笔）"
+        else:
+            when = _bj_dt(it["first"])
         mismatches.append({
-            "kind": "grant_no_pay", "order_id": "", "at": float(g.get("at", 0)),
-            "email": str(g.get("email") or ""),
-            "detail": f"{_bj_dt(float(g.get('at', 0)))} 给 {g.get('email')} 自动发货"
-                      f"「{g.get('plan_code')}」但找不到已收款订单 —— 疑似绕过支付/伪造发货调用"})
+            "kind": "grant_no_pay", "order_id": "", "at": it["last"], "email": email,
+            "detail": f"{when} 给 {email} 自动发货"
+                      f"「{plan}」但找不到已收款订单 —— 疑似绕过支付/伪造发货调用"})
 
     # 按天汇总（展示用；差异在行内带明细）
     day_rows: dict = {}
@@ -1907,6 +1930,16 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # 🔴 2026-10-09：对账的「入账侧」依赖 pay_server 的 pay_orders.json。该路径不是本服务
+    #    的自有数据，只能靠 VDL_PAY_ORDERS 显式指过来（默认落在本服务 data/ 下，那里通常
+    #    **没有**这个文件）。一旦环境变量丢失/改名，orders 会静默读成空表 ⇒ 收入恒为 ¥0、
+    #    paid_no_grant（已收款未发货）**永不告警** —— 收款链路整段失明却不报错。
+    #    这里在启动时显式吼一声，避免「对账看着一切正常、其实什么都没对」。
+    if not PAY_ORDERS_PATH.exists():
+        sys.stderr.write(
+            f"[license] ⚠️ 对账入账侧为空：订单文件不存在 {PAY_ORDERS_PATH}\n"
+            f"[license]   → 请确认 VDL_PAY_ORDERS 指向 pay_server 的 pay_orders.json；"
+            f"否则收入恒为 0 且「已收款未发货」不会告警。\n")
     # 每日入账/充值对账后台线程（10 分钟一轮，差异自动告警；失败不影响业务）
     threading.Thread(target=_recon_loop, daemon=True, name="recon").start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
