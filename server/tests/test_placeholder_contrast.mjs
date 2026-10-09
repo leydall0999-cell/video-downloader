@@ -9,6 +9,8 @@
 //   即：深浅不齐的根因不是「Cookie 框单独被写深」，而是**只有主输入框被显式调浅**，
 //   其余全部吃浏览器默认深灰（WKWebView 默认又偏浅 ⇒ 跨引擎也不一致）。
 //   修复方式：加一条全局兜底 `input::placeholder, textarea::placeholder { color: <基准>; opacity: 1 }`。
+//   基准迭代：首版 #a2acbd（亮度 171）→ 用户当日再反馈「再浅一点」→ 提浅为 #b8c2d2（亮度 193，
+//   对齐主流组件库 placeholder 档位 Element UI #C0C4CC / Ant Design 191）。
 //
 // 本守卫钉死四条工程约束（每条都对应一个真实会踩的坑）：
 //   ① 兜底规则必须存在、必须同时覆盖 input 与 textarea（只写 input 会漏掉 Cookie 会话框本身）。
@@ -79,11 +81,11 @@ const urlInputRule = rules.find((r) => /#urlInput::placeholder/.test(r.sel));
 ok(!!urlInputRule, '找不到 #urlInput::placeholder 规则（主输入框的浅灰基准被删了？）');
 const baseColor = urlInputRule.color;
 ok(baseColor && luminance(baseColor) !== null, `#urlInput::placeholder 的 color 无法解析：${baseColor}`);
-eq(luminance(baseColor), 171, `主输入框基准色亮度变了（期望 171 / #a2acbd，实际 ${baseColor}）`);
+eq(luminance(baseColor), 193, `主输入框基准色亮度变了（期望 193 / #b8c2d2，实际 ${baseColor}）`);
 eq((fallback.color || '').toLowerCase().replace(/\s+/g, ''), baseColor.toLowerCase().replace(/\s+/g, ''),
   `兜底规则色 ${fallback.color} 与 #urlInput 基准 ${baseColor} 不一致 —— 深浅又会错开（同源约束）`);
-ok(luminance(baseColor) >= 160,
-  `基准色 ${baseColor}（亮度 ${luminance(baseColor)}）偏深，不足以解决「字体颜色太深」的诉求`);
+ok(luminance(baseColor) >= 190,
+  `基准色 ${baseColor}（亮度 ${luminance(baseColor)}）偏深，不足以解决「字体颜色太深 / 再浅一点」的诉求`);
 ok(/opacity\s*:\s*1/.test(fallback.body),
   '兜底规则缺 opacity:1 —— Firefox 默认给 placeholder 叠 0.54 透明度，会比其他引擎再浅一档');
 
@@ -120,7 +122,7 @@ const sibling = join(repoRoot, '..', repoRoot.endsWith('-app') ? 'video-download
   'web', 'styles.css');
 if (existsSync(sibling)) {
   const sib = readFileSync(sibling, 'utf8');
-  ok(/input::placeholder\s*,[\s\S]{0,40}?textarea::placeholder\s*\{\s*color\s*:\s*#a2acbd/i.test(sib),
+  ok(/input::placeholder\s*,[\s\S]{0,40}?textarea::placeholder\s*\{\s*color\s*:\s*#b8c2d2/i.test(sib),
     `兄弟树 ${sibling} 未同步 placeholder 兜底规则 —— 网页版/桌面端灰度会再次分叉`);
 }
 

@@ -161,16 +161,18 @@ main > .panel { margin-top: 3rem; }
   font-family: inherit; border-radius: 14px; resize: vertical; line-height: 1.45;
   text-align: left;
 }
-#urlInput::placeholder { color: #a2acbd; }
+#urlInput::placeholder { color: #b8c2d2; }
 
-/* 文本输入框 placeholder 统一灰度（2026-10-09）
+/* 文本输入框 placeholder 统一灰度（2026-10-09 建立，#b8c2d2 二次提浅）
    背景：Chrome 默认 placeholder 为深灰 #757575（明显偏深），WKWebView 默认偏浅，跨引擎深浅不一；
    页面上原本只有主输入框 #urlInput 显式调浅，其余框（含「会话 Cookie」框）都吃浏览器默认 ⇒ 深浅不齐。
-   基准取 #a2acbd，凡未显式声明 placeholder 色的 input/textarea 统一到此值。
+   基准取 #b8c2d2（亮度 193），凡未显式声明 placeholder 色的 input/textarea 统一到此值。
+   该档位对齐主流组件库的 placeholder 灰度（Element UI #C0C4CC 亮度 196 / Ant Design 191），
+   比首版 #a2acbd（亮度 171）再浅一档 —— 首版在浅底上仍被反馈「偏深」。
    已有显式规则的保持原样：#urlInput::placeholder（含 id，权重更高）、
    .auth-input::placeholder 与 .com-retain-input input::placeholder（源码位置在后 / 权重更高）。 */
 input::placeholder,
-textarea::placeholder { color: #a2acbd; opacity: 1; }
+textarea::placeholder { color: #b8c2d2; opacity: 1; }
 
 .icon-btn {
   position: absolute; right: .45rem; width: 34px; height: 34px; display: grid; place-items: center;
