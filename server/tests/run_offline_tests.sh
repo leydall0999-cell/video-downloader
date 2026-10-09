@@ -74,6 +74,29 @@ run_one() {
   fi
 }
 
+# --- Node 解释器（前端结构守卫用；与 web-dev 侧同一套办法）---
+# 找不到就只跳过那几条，不让「本机没装 node」把整份套件染红。
+NODE=""
+for cand in /Users/suixindelang/.workbuddy/binaries/node/versions/*/bin/node \
+            "$(command -v node 2>/dev/null)"; do
+  if [ -n "$cand" ] && [ -x "$cand" ]; then NODE="$cand"; break; fi
+done
+
+run_node() {
+  local f="$1"
+  echo ""
+  echo "=== $f (node) ==="
+  if [ -z "$NODE" ]; then
+    echo "⏭ 跳过：未找到 node 解释器（前端结构守卫需要 node）"
+    return 0
+  fi
+  if "$NODE" "tests/$f" 2>&1; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+}
+
 run_one test_app_smoke.py
 run_one test_static_undefined_names.py
 run_one test_membership.py
@@ -643,6 +666,19 @@ run_one test_recon_grant_aggregate.py
 #      （注释掉后全文仍含选择器，靠 contains 会假绿）。
 #      17 处变异全红（含「注释掉 -ic/-label/-arrow 规则」「改回 window.open」）。
 run_one test_profile_site_row.py
+
+# 47. test_placeholder_contrast.mjs —— 输入框 placeholder 灰度统一（2026-10-09 用户反馈
+#      「会话 Cookie 框字体颜色太深」）。实测根因：Chrome 的 UA 默认 placeholder 是深灰
+#      #757575，而页面里**只有主输入框 #urlInput 被显式调浅**成 #a2acbd ⇒ 其余框（含 Cookie
+#      会话框）都吃默认深灰，WKWebView 默认又偏浅，两引擎深浅还各不相同。修法是加一条
+#      全局兜底 `input::placeholder, textarea::placeholder { color: #a2acbd; opacity: 1 }`。
+#      守卫钉死：① 兜底须同时覆盖 input 与 textarea（Cookie 框本身是 textarea）；
+#      ② 兜底色必须与 #urlInput 基准**同值**（同源约束，防只改一处又错开）；
+#      ③ 兜底（0-1-1）必须排在 .auth-input::placeholder（0-1-1）之前，否则同权重后写者胜、
+#         会悄悄改掉登录框既有的 #b8bec5；④ 任何 ::placeholder 都不得再出现 #757575，
+#         且 .adv-textarea/.adv-input 不得自挂色（会覆盖兜底）；⑤ 兄弟树须同步（防两树分叉）。
+#      11 处变异全红。
+run_node test_placeholder_contrast.mjs
 
 echo ""
 echo "========================================="

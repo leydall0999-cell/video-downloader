@@ -211,6 +211,15 @@ img { max-width: 100%; display: block; }
 }
 #urlInput::placeholder { color: #a2acbd; }
 
+/* 文本输入框 placeholder 统一灰度（2026-10-09）
+   背景：Chrome 默认 placeholder 为深灰 #757575（明显偏深），WKWebView 默认偏浅，跨引擎深浅不一；
+   页面上原本只有主输入框 #urlInput 显式调浅，其余框（含「会话 Cookie」框）都吃浏览器默认 ⇒ 深浅不齐。
+   基准取 #a2acbd，凡未显式声明 placeholder 色的 input/textarea 统一到此值。
+   已有显式规则的保持原样：#urlInput::placeholder（含 id，权重更高）、
+   .auth-input::placeholder 与 .com-retain-input input::placeholder（源码位置在后 / 权重更高）。 */
+input::placeholder,
+textarea::placeholder { color: #a2acbd; opacity: 1; }
+
 .icon-btn {
   position: absolute; right: .45rem; width: 34px; height: 34px; display: grid; place-items: center;
   border: 0; border-radius: 50%; background: #eceef5; color: var(--text-mute);
