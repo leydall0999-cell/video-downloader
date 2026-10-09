@@ -2267,3 +2267,92 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
   .self-promo { flex-direction: column; align-items: stretch; }
   .self-promo-acts .self-promo-btn { flex: 1; }
 }
+
+/* ---------------- 操作引导「怎么用」（2026-10-09，自 app-dev 移植）----------------
+   每个功能页上方一条折叠引导条：平时收起只占一行，不挤占操作区；
+   首次进入该功能时由 app.js 的 howtoAutoOpen() 自动展开一次，之后每次进入默认收起。
+   刻意用原生 <details>/<summary> 实现折叠 —— 不依赖任何 JS，脚本异常时用户照样能点开。 */
+.howto {
+  margin: .1rem 0 1rem;
+  border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--brand) 5%, var(--surface));
+  overflow: hidden;
+}
+.howto-head {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .58rem .78rem; cursor: pointer; list-style: none;
+  font-size: .86rem; font-weight: 600; color: var(--brand-strong);
+  user-select: none;
+}
+.howto-head::-webkit-details-marker { display: none; }
+.howto-head:hover { color: var(--brand); }
+.howto-ic { font-size: .92rem; line-height: 1; }
+.howto-title { flex: 1; min-width: 0; }
+.howto-caret { font-size: .72rem; color: var(--text-mute); transition: transform .16s ease; }
+.howto[open] .howto-caret { transform: rotate(180deg); }
+.howto-body { padding: 0 .84rem .74rem; }
+.howto-steps {
+  margin: 0; padding-left: 1.2rem;
+  display: flex; flex-direction: column; gap: .36rem;
+}
+.howto-steps li { font-size: .84rem; line-height: 1.62; color: var(--text-mute); }
+.howto-steps li b { color: var(--text); font-weight: 600; }
+.howto-note {
+  margin: .6rem 0 0; padding-top: .52rem; border-top: 1px dashed var(--line);
+  font-size: .79rem; line-height: 1.6; color: var(--text-mute);
+}
+.howto-note b { color: var(--text); }
+
+/* 引导条「关闭」出口：
+   ① 关闭按钮放在 .howto-body 末尾 ⇒ 浏览器只在展开时渲染它，天然就是「打开时才能关」；
+   ② 关掉 = 该条**整条消失**（.is-closed 走 display:none），不再占一行。
+   🔴 这里**不能用 hidden 属性**：可见性判定靠 closest('[hidden]') 找「本视图有没有引导条」，
+      一旦给 details 加 hidden，右上角「?」按钮会把自己也判成没内容而跟着隐藏 —— 用户就再也打不开了。 */
+.howto.is-closed { display: none; }
+.howto-foot { display: flex; align-items: center; gap: .5rem; margin-top: .62rem; flex-wrap: wrap; }
+.howto-close {
+  flex: 0 0 auto; appearance: none; cursor: pointer; font: inherit;
+  font-size: .78rem; line-height: 1.2; padding: .2rem .52rem;
+  color: var(--brand-strong);
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--line));
+  border-radius: var(--radius-sm); background: transparent;
+}
+.howto-close:hover { background: color-mix(in srgb, var(--brand) 10%, transparent); }
+.howto-foot-hint { font-size: .76rem; color: var(--text-mute); }
+
+/* 「?」查看引导按钮：
+   引导条只在首次进入时自动展开一次，用户忘了就没有入口 —— 每个功能的右上角常驻
+   这个小问号，点一下展开该功能的引导，再点整条隐藏（不是收起占一行）。
+   落点分三类：① 标题行（.guide-title 已是 flex，靠 margin-left:auto 推到最右）；
+   ② 「视频格式转换」页无标题，落在 .uc-subtabs 子页签行末；
+   ③ 下载页 hero 居中，单独绝对定位到右上角。 */
+.howto-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 22px; height: 22px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: .76rem; font-weight: 700; line-height: 1;
+  color: var(--text-mute);
+  background: transparent;
+  border: 1px solid var(--line); border-radius: 50%;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.howto-btn:hover {
+  color: var(--brand); border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 9%, transparent);
+}
+.howto-btn.is-active {          /* 该功能引导条正处于展开状态 */
+  color: var(--brand); border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+}
+/* 下载页 hero 居中，按钮绝对定位到右上角 */
+#downloadView .hero { position: relative; }
+#downloadView .hero .howto-btn { position: absolute; top: .5rem; right: 0; margin-left: 0; }
+/* 点「?」展开时闪一下边框，把视线引到引导条 */
+@keyframes howtoFlash {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 0%, transparent); }
+  40%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--brand) 20%, transparent); }
+}
+.howto.is-flash { animation: howtoFlash .9s ease; }

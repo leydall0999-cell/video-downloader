@@ -2672,6 +2672,7 @@
     el.dwModePdf.classList.toggle('is-active', !toImg);
     el.dwImgStatus.textContent = '';
     el.dwPdfStatus.textContent = '';
+    howtoAfterPaneSwitch();
   };
   el.dwModeImg.addEventListener('click', () => dwSwitchPane(true));
   el.dwModePdf.addEventListener('click', () => dwSwitchPane(false));
@@ -6163,6 +6164,157 @@
     if (el.tabs) el.tabs.hidden = false;
   }
 
+
+  // ===================== 操作引导「怎么用」（2026-10-09，自 app-dev 移植）=====================
+  // 规则：当前可见视图里的 details.howto —— 首次进入自动展开一次并记为已读；
+  //       已读的**每次进入都显式收起**（只剩一行标题，点一下才看到内容）。
+  // 可见性判定用 d.closest('[hidden]') —— 视图 section 与去水印子面板 / 分享子页
+  // 都靠 hidden 属性切换，所以同一个视图里的多条引导天然互不串台。
+  // 任何异常（localStorage 被禁、JSON 损坏）都吞掉，绝不影响主流程。
+  const HOWTO_SEEN_KEY = 'vdl_howto_seen';
+  // 被「✕ 关闭引导」掉的功能：整条不显示（连收起态那一行也不占），
+  // 直到再点右上角「?」把它叫回来。与「已读」是两个互不干扰的集合。
+  const HOWTO_CLOSED_KEY = 'vdl_howto_closed';
+  const howtoReadClosed = () => {
+    try { const v = JSON.parse(localStorage.getItem(HOWTO_CLOSED_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+    catch (_) { return []; }
+  };
+  const howtoWriteClosed = (arr) => {
+    try { localStorage.setItem(HOWTO_CLOSED_KEY, JSON.stringify(arr)); } catch (_) {}
+  };
+
+  // 🔴 关掉的引导条用 class `.is-closed`（display:none），**不能用 hidden 属性**：
+  //    howtoSyncButtons / visibleHowtoIn 靠 closest('[hidden]') 判「本视图有没有引导条」，
+  //    给 details 加 hidden 会让右上角「?」按钮把自己也判成没内容而跟着隐藏 ⇒ 用户再也打不开。
+  function howtoApplyClosed() {
+    const closed = howtoReadClosed();
+    document.querySelectorAll('details.howto[data-howto]').forEach((d) => {
+      d.classList.toggle('is-closed', closed.indexOf(d.getAttribute('data-howto')) >= 0);
+    });
+  }
+  // 启动即套用一次（不依赖任何 switchView），保证冷启动时已关闭的引导条不会闪一下
+  try { howtoApplyClosed(); } catch (_) {}
+
+  function howtoAutoOpen() {
+    let seen;
+    try { seen = JSON.parse(localStorage.getItem(HOWTO_SEEN_KEY) || '[]'); } catch (_) { seen = []; }
+    if (!Array.isArray(seen)) seen = [];
+    let changed = false;
+    document.querySelectorAll('details.howto[data-howto]').forEach((d) => {
+      if (d.closest('[hidden]')) return;
+      if (d.classList.contains('is-closed')) return;   // 用户主动隐藏的，绝不自动弹回来
+      const k = d.getAttribute('data-howto');
+      if (!k) return;
+      if (seen.indexOf(k) >= 0) {
+        // 已读：每次进入该功能都回到「收起」态（只剩一行标题，点一下才看得到内容）。
+        // 🔴 这里必须显式收起、不能只 return：SPA 不重建 DOM，上次展开着离开的话
+        //    切回来仍是展开的，就不满足「除第一次外默认收起」。
+        if (d.open) d.open = false;
+        return;
+      }
+      d.open = true;
+      seen.push(k);
+      changed = true;
+    });
+    if (changed) { try { localStorage.setItem(HOWTO_SEEN_KEY, JSON.stringify(seen)); } catch (_) {} }
+  }
+
+  // 每个功能右上角「?」按钮：**展开 / 整条隐藏**该功能的操作引导。
+  // 定位用「按钮所在视图内当前可见的那条引导」，所以去水印 2 个子面板、分享 2 个子页
+  // 共用一个按钮也能各点各的（子面板靠 hidden 属性切换，可见的那条天然唯一）。
+  // 🔴 is-closed 的条必须仍能被 visibleHowtoIn 找到（它只按 hidden 属性过滤），
+  //    否则隐藏后按钮自己也消失，用户就再也打不开了。
+  // 🔴 网页版与桌面版不同：shareQrView / pageGenView / downloadView 是 <div> 不是
+  //    <section>，用 app-dev 的 section[id] 会匹配不到 ⇒ 退化到 document.body，
+  //    靠「其它视图都隐藏」碰巧工作。这里统一按 id 后缀匹配（网页版全部视图
+  //    以 View 结尾、子面板以 Pane 结尾），就近取最小作用域。
+  const howtoScopeOf = (btn) => btn.closest('[id$="View"], [id$="Pane"]') || document.body;
+  const visibleHowtoIn = (scope) => [...scope.querySelectorAll('details.howto')]
+    .find((d) => !d.closest('[hidden]')) || null;
+
+  function howtoSyncButtons() {
+    document.querySelectorAll('.howto-btn').forEach((btn) => {
+      const d = visibleHowtoIn(howtoScopeOf(btn));
+      btn.hidden = !d;                                  // 该视图没有引导条时不显示按钮
+      // 激活态 = 引导条正展开着；已隐藏（is-closed）时即使 open 残留也绝不亮
+      btn.classList.toggle('is-active', !!(d && d.open && !d.classList.contains('is-closed')));
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!e.target || !e.target.closest) return;
+
+    // ① 引导条展开体里的「✕ 关闭引导」：关掉 = 该条整条不显示（并记住），
+    //    重新打开靠右上角「?」。用 class 而非 hidden，见 howtoApplyClosed 上方注释。
+    const closeBtn = e.target.closest('.howto-close');
+    if (closeBtn) {
+      const cd = closeBtn.closest('details.howto');
+      if (cd) {
+        const ck = cd.getAttribute('data-howto');
+        cd.classList.add('is-closed');   // 先打 class 再置 open，让 toggle 监听幂等跳过
+        cd.open = false;
+        if (ck) {
+          const list = howtoReadClosed();
+          if (list.indexOf(ck) < 0) { list.push(ck); howtoWriteClosed(list); }
+        }
+        howtoSyncButtons();
+      }
+      return;
+    }
+
+    // ② 右上角「?」：**三态**处理，绝不留「收起占一行」的中间态。
+    //    ① 已隐藏（is-closed）  → 显示 + 展开，一步到位
+    //    ② 可见但收起（初始态）  → 展开（🔴 不是隐藏！否则用户第一次点看到的还是空壳）
+    //    ③ 可见且已展开         → 整条隐藏（用户：「点第二次要隐藏啊，收起来占位置」）
+    const btn = e.target.closest('.howto-btn');
+    if (!btn) return;
+    const d = visibleHowtoIn(howtoScopeOf(btn));
+    if (!d) return;
+    const key = d.getAttribute('data-howto');
+    if (d.classList.contains('is-closed')) {
+      d.classList.remove('is-closed');
+      if (key) howtoWriteClosed(howtoReadClosed().filter((x) => x !== key));
+      d.open = true;
+    } else if (!d.open) {
+      d.open = true;
+    } else {
+      // 已展开 → 整条消失（不是收起）；先打 class 再置 open，让 toggle 监听幂等跳过
+      d.classList.add('is-closed');
+      d.open = false;
+      if (key) {
+        const list = howtoReadClosed();
+        if (list.indexOf(key) < 0) { list.push(key); howtoWriteClosed(list); }
+      }
+    }
+    if (!d.classList.contains('is-closed')) {
+      try { d.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (_) {}
+      d.classList.remove('is-flash');
+      void d.offsetWidth;            // 强制重排，连点两次也能重新触发动画
+      d.classList.add('is-flash');
+      setTimeout(() => d.classList.remove('is-flash'), 1100);
+    }
+    howtoSyncButtons();
+  });
+
+  // 切页内子面板（去水印 图片/PDF、分享 二维码/网页）后必须再跑一次：
+  //   · 自动展开 → 让刚露出来的那条引导按「首次展开 / 之后收起」处理
+  //   · 同步按钮 → 右上角「?」的激活态要跟着换目标
+  const howtoAfterPaneSwitch = () => {
+    try { howtoApplyClosed(); } catch (_) {}
+    try { howtoAutoOpen(); } catch (_) {}
+    try { howtoSyncButtons(); } catch (_) {}
+  };
+
+  // <details> 的 toggle 事件不冒泡 ⇒ 用捕获在 document 上监听，
+  // 保证用户直接点引导条标题开合时，右上角按钮的激活态也跟着变。
+  // 🔴 这里的职责只有「同步按钮状态」，**绝不能**把 open=false 顺手转成整条隐藏：
+  //    「收起」是合法默认态（除首次外每次进入都收起，只剩一行标题可点开），
+  //    一旦转隐藏，用户点标题行收起后就整条消失、再也看不到，只能靠「?」找回。
+  document.addEventListener('toggle', (e) => {
+    const t = e.target;
+    if (t && t.classList && t.classList.contains('howto')) howtoSyncButtons();
+  }, true);
+
   function switchView(view) {
     applyWebTabs();
     const isLib = view === 'library';
@@ -6225,6 +6377,13 @@
     if (isDw) { el.dwImgStatus.textContent = ''; el.dwPdfStatus.textContent = ''; }
     if (isTor) { loadTorrents(); startTorPoll(); }
     else stopTorPoll();
+
+    // 视图已切完、hidden 已复位。先套用「已关闭」状态（关掉的整条不显示），
+    // 再展开本页「怎么用」引导（首次进入才展开；已关闭的会被 howtoAutoOpen 跳过）
+    try { howtoApplyClosed(); } catch (_) {}
+    try { howtoAutoOpen(); } catch (_) {}
+    // 同步右上角「?」按钮的显示与激活态
+    try { howtoSyncButtons(); } catch (_) {}
   };
 
   // ====================================================================== 
@@ -9064,6 +9223,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       if (el.shareQrView) el.shareQrView.hidden = _sharePane !== 'shareqr';
       if (el.pageGenView) el.pageGenView.hidden = _sharePane !== 'pagegen';
       if (_sharePane === 'shareqr') sqrRenderLimits();
+      howtoAfterPaneSwitch();
     });
   });
   // 视频处理板块内：格式转换 / 拼接 两个并列子模块切换

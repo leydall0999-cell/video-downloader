@@ -61,6 +61,7 @@
   <div id="downloadView">
 
   <section class="hero">
+    <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
     <h1>粘贴链接，直接保存视频</h1>
     <p>支持 YouTube、TikTok、哔哩哔哩、抖音等主流平台，自动识别清晰度，全程显示下载进度。</p>
     <p class="hero-note">💡 网页版受网络环境限制，部分站点的解析能力受限，请前往桌面端体验更强大的功能。</p>
@@ -81,7 +82,21 @@
   </aside>
 
   <!-- 输入区 -->
-  <section class="panel input-panel" aria-labelledby="inputTitle">
+  <details class="howto" data-howto="download">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 视频下载</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>复制视频的<b>播放页链接</b>，粘贴到上方输入框（每行一个可批量；首页 / 列表页链接不行）。</li>
+      <li>点「<b>解析链接</b>」，自动识别标题、时长与可选清晰度。</li>
+      <li>选好画质后点「<b>开始下载</b>」，任务卡片实时显示进度与速度。</li>
+      <li>完成后点任务卡片上的「<b>保存到本机</b>」取回电脑。</li>
+    </ol>
+    <p class="howto-note">需要登录才能看的平台在高级选项里填写 Cookies；解析不动可点「<b>切换线路</b>」。网页版受网络环境限制，部分站点建议用桌面端；会员 / 付费视频受版权保护无法解析。</p>
+    <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+  </div>
+</details>
+
+<section class="panel input-panel" aria-labelledby="inputTitle">
     <h2 id="inputTitle" class="sr-only">输入视频链接</h2>
     <form id="resolveForm" autocomplete="off">
       <div class="input-row">
@@ -356,8 +371,22 @@
     <!-- 子模块切换：同一层级，在白色卡片外 -->
     <div class="uc-subtabs" id="ucSubTabs">
       <button type="button" class="uc-sub is-active" id="ucSubFormat">🎬 视频格式转换</button>
-      <button type="button" class="uc-sub" id="ucSubMerge">🔗 视频拼接</button>
+      <button type="button" class="uc-sub" id="ucSubMerge">🔗 视频拼接</button><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
     </div>
+
+<details class="howto" data-howto="uploadconvert">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 视频格式转换 / 拼接</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「<b>添加文件</b>」选视频（单个最大 1GB，大文件自动分片上传）。</li>
+      <li>在文件卡片上选目标格式与参数，也可用「<b>应用到未开始</b>」批量套用。</li>
+      <li>点「<b>开始批量转换</b>」等待完成，再点「<b>保存到本机</b>」取回。</li>
+      <li>「<b>视频拼接</b>」子页签里点「<b>添加片段</b>」按顺序加入，再点「<b>开始拼接</b>」合成一条。</li>
+    </ol>
+    <p class="howto-note">勾上「<b>完成后存入媒体库</b>」可留档；网页版转码在服务器进行，大文件建议用桌面端。</p>
+    <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+  </div>
+</details>
 
     <div class="panel">
     <!-- 子模块一：视频格式转换 -->
@@ -478,7 +507,20 @@
   <!-- ===== 2026-09-11 自 app-dev 移植：音乐转换 / 图片转换 / AI 字幕 ===== -->
 
   <section id="musicConvertView" class="panel" hidden aria-labelledby="musTitle">
-    <h2 id="musTitle" class="guide-title">🎵 音乐格式转换</h2>
+    <h2 id="musTitle" class="guide-title">🎵 音乐格式转换<button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
+
+<details class="howto" data-howto="musicconvert">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 音乐格式转换</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「<b>添加文件</b>」选音频（视频也行，会自动抽音轨）。</li>
+      <li>选「<b>输出格式</b>」（MP3 / FLAC / M4A / WAV / AAC / Opus / WMA / MP2）与「<b>音质</b>」。</li>
+      <li>点「<b>开始转换</b>」，完成后点「<b>保存到本机</b>」；勾「<b>完成后存入媒体库</b>」可留档。</li>
+    </ol>
+    <p class="howto-note">无损转有损会有损耗；「<b>应用到未开始</b>」可把当前格式与音质批量套给列表里还没开始的任务。</p>
+    <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+  </div>
+</details>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
       把下载的各平台音乐（或视频里的音轨）转成你想要的格式与音质。网页版：文件上传后由服务器转码。
       支持 MP3 / FLAC / M4A / WAV / AAC / Opus / WMA / MP2。
@@ -535,7 +577,20 @@
 
   <!-- 图片格式转换视图（独立 tab；LGPL ffmpeg 单帧转码，PNG/JPG/WebP/BMP/TIFF/GIF） -->
   <section id="imageConvertView" class="panel" hidden aria-labelledby="imgTitle">
-    <h2 id="imgTitle" class="guide-title">🖼️ 图片格式转换</h2>
+    <h2 id="imgTitle" class="guide-title">🖼️ 图片格式转换<button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
+
+<details class="howto" data-howto="imageconvert">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 图片格式转换</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「<b>添加图片</b>」选图片（可多选）。</li>
+      <li>选「<b>输出格式</b>」（PNG / JPG / WebP / BMP / TIFF / GIF），按需调「<b>质量（JPG/WebP）</b>」与「<b>尺寸（长边像素）</b>」。</li>
+      <li>点「<b>开始转换</b>」，完成后点「<b>保存到本机</b>」取回。</li>
+    </ol>
+    <p class="howto-note">转 JPG / BMP 时透明区默认自动填白底，不想填可关掉「<b>JPG/BMP 透明区填白底</b>」。</p>
+    <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+  </div>
+</details>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;">
       在 PNG / JPG / WebP / BMP / TIFF / GIF 之间互转。可调质量、按长边缩放；
       转 JPG/BMP 时透明区自动填白底（可关）。网页版：图片上传后由服务器转换。
@@ -602,7 +657,20 @@
   </section>
 
   <section id="subtitleView" class="panel" hidden aria-labelledby="sbTitle">
-    <h2 id="sbTitle" class="guide-title">📝 AI 字幕提取</h2>
+    <h2 id="sbTitle" class="guide-title">📝 AI 字幕提取<button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
+
+<details class="howto" data-howto="subtitle">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · AI 字幕提取</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「<b>选取音视频</b>」选本地视频或音频（网页版大文件自动分片上传）。</li>
+      <li>点「<b>开始提取</b>」，AI 逐句识别并按停顿精准断句。</li>
+      <li>完成后点「<b>下载 SRT 字幕</b>」或「<b>下载 TXT 纯文本</b>」取回。</li>
+    </ol>
+    <p class="howto-note">服务器同一时间处理一个识别任务，超出会自动排队，耐心等待即可。</p>
+    <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+  </div>
+</details>
     <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);">
       AI 语音识别，把视频/音频里的对话逐句转成带时间戳的字幕，按停顿精准断句，输出 SRT / TXT。
       网页版：音/视频上传后由服务器识别（大文件自动分片上传）；服务器同一时间处理一个识别任务，超出自动排队。
@@ -692,7 +760,21 @@
     </div>
 
   <div id="shareQrView" class="panel" hidden aria-labelledby="sqrTitle">
-    <h2 id="sqrTitle" class="guide-title">生成二维码</h2>
+
+<details class="howto" data-howto="share">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 生成二维码</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「<b>选择文件</b>」选图片 / 视频 / PDF（网页版单文件 ≤ 95MB）。</li>
+      <li>等上传完成，页面会给出一条分享链接与二维码。</li>
+      <li>点「<b>复制链接</b>」发给对方，或点「<b>保存二维码</b>」存图让对方扫码。</li>
+      <li>点「<b>打开</b>」可先自查一遍效果。</li>
+    </ol>
+    <p class="howto-note">网页版限额：单文件 ≤ 95MB、有效期最长 30 天、每天 20 次；桌面端支持 2GB / 永久。</p>
+    <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+  </div>
+</details>
+    <h2 id="sqrTitle" class="guide-title">生成二维码<button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
     <p class="uc-tip">把文件变成一条分享链接 + 二维码，对方扫码直接看图 / 看视频（可拖进度）、不打包不改内容。
       网页版限额：<b id="sqrLimitText">单文件 ≤ 95MB · 有效期最长 30 天 · 每天 20 次</b>（桌面端支持 2GB / 永久）。</p>
     <div class="uc-toolbar">
@@ -729,7 +811,21 @@
 
   <!-- 生成网页：浏览器端合成自包含 HTML，可转在线链接 -->
   <div id="pageGenView" class="panel" hidden aria-labelledby="pgTitle">
-    <h2 id="pgTitle" class="guide-title">生成网页</h2>
+
+<details class="howto" data-howto="page">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 生成网页</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>点「<b>添加文件</b>」把要展示的图片 / 视频加进来（可拖拽排序）。</li>
+      <li>填好标题后，点「<b>生成本机网页文件</b>」得到单文件 HTML，或点「<b>生成在线链接</b>」得到可分享的网址。</li>
+      <li>完成后点「<b>保存 .html 到本机</b>」存盘，或点「<b>复制链接</b>」分享。</li>
+      <li>点「<b>打开</b>」可预览成品。</li>
+    </ol>
+    <p class="howto-note">本机网页文件适合直接发给别人（无需联网）；在线链接方便随时更新与回收。</p>
+    <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+  </div>
+</details>
+    <h2 id="pgTitle" class="guide-title">生成网页<button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
     <p class="uc-tip">把多个文件（图片 / PDF / 音视频 / 文本）合并成<b>一个自包含的网页</b>：
       内容全部内嵌，把 .html 发给对方双击就能看；也可一键转成在线链接 + 二维码。
       网页版限额：合计 ≤ <b id="pgLimitText">60MB</b>。</p>
@@ -998,7 +1094,7 @@
 
   <!-- 去水印视图（需求文档模块二：PDF / 图片去水印） -->
   <section id="dwView" class="panel" hidden aria-labelledby="dwTitle">
-    <h2 id="dwTitle" class="guide-title">图片 / PDF 去水印</h2>
+    <h2 id="dwTitle" class="guide-title">图片 / PDF 去水印<button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
     <p class="dw-tip">仅处理你<b>自有或已授权</b>的内容（demo 水印、自己添加的标记、已购素材的预览水印等）。不应用于去除他人版权标识。</p>
     <div class="dw-tabs">
       <button type="button" class="dw-sub is-active" id="dwModeImg">🖼️ 图片去水印</button>
@@ -1007,6 +1103,20 @@
 
     <!-- 图片模式 -->
     <div id="dwImgPane">
+
+<details class="howto" data-howto="dw_img">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 图片去水印</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>在「<b>图片文件</b>」里选择本地图片。</li>
+      <li>在预览图上框出要去的区域，可切换 🆕新选区 / ➕加选 / ➖减选，点「<b>放大编辑</b>」能精修边缘。</li>
+      <li>在侧栏选「<b>修复引擎</b>」（OpenCV 经典快 / AI 无痕修复）与「<b>修复方法</b>」。</li>
+      <li>点「<b>开始去水印</b>」，完成后点「<b>下载结果</b>」取回。</li>
+    </ol>
+    <p class="howto-note">仅处理你自有或已授权的内容，不应用于去除他人版权标识。效果不满意可点「<b>重新加工</b>」回编辑器调整选区后重跑。</p>
+    <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+  </div>
+</details>
       <div class="dw-layout">
         <div class="dw-main">
           <label class="uc-field">
@@ -1135,6 +1245,20 @@
 
     <!-- PDF 模式 -->
     <div id="dwPdfPane" hidden>
+
+<details class="howto" data-howto="dw_pdf">
+  <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · PDF 去水印</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+  <div class="howto-body">
+    <ol class="howto-steps">
+      <li>在「<b>PDF 文件</b>」里选择 PDF。</li>
+      <li>选「<b>去水印模式</b>」：注释型（无损删 Watermark 注释）适合电子版；栅格化（扫描件 / 内容流内嵌水印）适合扫描件。</li>
+      <li>栅格化模式下先框选水印区域，调 X% / Y% / 宽% / 高%，再选「<b>修复方法</b>」与「<b>清晰度 DPI</b>」。</li>
+      <li>点「<b>开始去水印</b>」，完成后点「<b>下载结果 PDF</b>」取回。</li>
+    </ol>
+    <p class="howto-note">扫描件建议用栅格化 + 更高的 DPI；注释型只对带 Watermark 注释的电子版 PDF 有效。</p>
+    <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
+  </div>
+</details>
       <div class="dw-card">
         <h3 class="dw-card-title">PDF 去水印</h3>
         <label class="uc-field">

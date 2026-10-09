@@ -146,6 +146,11 @@ run_one e2e_ai_trial_check.py
 #    存在**的接口（它没有桌面端的 is_download_active / _cloud_token）。
 run_one test_cloud_quota_unified.py
 
+#  操作引导「怎么用」守卫（2026-10-09 自 app-dev 移植适配）：9 个功能入口
+#  每个有且仅有一条引导、落点不串台、文案引用真实控件、首次展开/已读收起/
+#  三态「?」/关闭整条消失/子面板切换同步，任一被改坏即红。
+run_node test_howto_guide.mjs
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
