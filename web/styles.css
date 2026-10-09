@@ -952,6 +952,14 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
   transform: translateX(-1px); box-shadow: 0 0 4px rgba(255,59,48,.6);
 }
 .dw-canvas { position: absolute; left: 0; top: 0; cursor: crosshair; pointer-events: none; }
+/* 消除笔（2026-10-09 竞品对标水印云）：笔刷涂抹层。仅消除笔模式接管指针（is-on），
+   非模式态 hidden + pointer-events:none 双保险，绝不干扰框选。 */
+.dw-brush-canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: .55; pointer-events: none; cursor: crosshair; touch-action: none; }
+.dw-brush-canvas.is-on { pointer-events: auto; }
+.dw-brush-canvas[hidden] { display: none; }
+/* 图片转文字（OCR）卡片：跟在去水印结果区下方，输出文本可滚动复制 */
+.dw-ocr-card { margin-top: .8rem; }
+.dw-ocr-card textarea { width: 100%; resize: vertical; font-size: .92rem; line-height: 1.55; white-space: pre-wrap; }
 /* SVG 选区蒙层：必须和 canvas 一样绝对定位叠在图片上，否则会作为静态元素
    占据 img.clientHeight 的流式空白（用户反馈"上传图片空余太多"的根因） */
 .dw-svg { position: absolute; left: 0; top: 0; pointer-events: none; }

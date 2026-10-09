@@ -21,6 +21,7 @@
 - `_cv2` / `_np` / `_fitz` 为 None → available()/pdf_available() 返回 False，
   上层路由据此返回 503，不影响进程启动（与 libtorrent 模式一致）。
 """
+import base64
 import logging
 from pathlib import Path
 
@@ -99,7 +100,9 @@ def normalize_regions(regions) -> list:
 
     入参 regions 应为 [{"x","y","w","h", "op": "add"|"subtract"}, ...]。
     每项经 normalize_region 收敛；op 缺省 "add"，非法值回退 "add"。
-    返回 [{"x","y","w","h","op"}]；空 / 非 list / 任一区域非法 → 返回 None（调用方据此报 400）。
+    另支持消除笔笔迹区域 {"png": <base64 PNG>}（2026-10-09 抄水印云消除笔）：
+    用户笔刷涂抹的任意形状掩码，跳过矩形校验原样透传。
+    返回 [{"x","y","w","h","op"} | {"png"}]；空 / 非 list / 任一区域非法 → 返回 None（调用方据此报 400）。
     """
     if not regions or not isinstance(regions, list):
         return None
@@ -107,6 +110,13 @@ def normalize_regions(regions) -> list:
     for r in regions:
         if not isinstance(r, dict):
             return None
+        # 消除笔笔迹：base64 PNG（含 data URL 前缀也可），单条上限 12MB 防滥用
+        png = r.get("png")
+        if png is not None:
+            if not isinstance(png, str) or not png or len(png) > 12_000_000:
+                return None
+            out.append({"png": png})
+            continue
         nr = normalize_region(r)
         if not nr:
             return None
@@ -118,16 +128,45 @@ def normalize_regions(regions) -> list:
         return None
     return out
 
+
+def _decode_mask_png(png_b64: str, w: int, h: int):
+    """消除笔笔迹 base64 PNG → 0/255 uint8 mask（尺寸对齐 (h,w)）。解码失败返回 None。
+
+    笔迹以透明度表达：优先取 alpha 通道；灰度/彩色则按亮度 ≥128 视为笔迹。
+    """
+    try:
+        buf = base64.b64decode(png_b64.split(",")[-1], validate=False)
+        arr = _np.frombuffer(buf, _np.uint8)
+        img = _cv2.imdecode(arr, _cv2.IMREAD_UNCHANGED)
+        if img is None:
+            return None
+        if img.ndim == 3:
+            img = img[:, :, 3] if img.shape[2] == 4 else _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
+        if img.shape[0] != h or img.shape[1] != w:
+            img = _cv2.resize(img, (w, h), interpolation=_cv2.INTER_NEAREST)
+        return _np.where(img >= 128, 255, 0).astype(_np.uint8)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _build_region_mask(regions, w: int, h: int):
     """把多区域合并为单张二值 mask（uint8）。
 
     先收集所有 add 区域为 255（重叠自然并集），再统一用 subtract 区域置 0 挖洞。
     subtract 始终从加选并集中扣除，不受 regions 传入顺序影响。
+    {"png"} 型消除笔笔迹在加选阶段按解码出的任意形状并入（用户笔迹即掩码，
+    不做 stroke/solid 检测——用户已亲自标好了）。
     任一区域像素矩形为空则跳过。返回全 0 表示没有有效加选区域。
     """
     mask = _np.zeros((h, w), dtype=_np.uint8)
     for r in regions:
         if r.get("op") != "subtract":
+            png = r.get("png")
+            if png:
+                m = _decode_mask_png(png, w, h)
+                if m is not None:
+                    mask[m > 0] = 255
+                continue
             x, y, rw, rh = _region_to_px(r, w, h)
             if rw <= 0 or rh <= 0:
                 continue
@@ -381,6 +420,17 @@ def plan_image_repair(img, regions, quality: str = "auto", **kw):
              "rect_px": 0, "repair_px": 0, "details": []}
     for r in regions or []:
         if r.get("op") == "subtract":
+            continue
+        # 消除笔笔迹：用户已亲自涂抹的任意形状掩码，直接并入（不做形态检测）
+        png = r.get("png")
+        if png:
+            m = _decode_mask_png(png, w, h)
+            if m is not None:
+                mask[m > 0] = 255
+                stats["regions"] += 1
+                stats["brush"] = stats.get("brush", 0) + 1
+                stats["repair_px"] = int((mask > 0).sum())
+                stats["details"].append({"brush": True, "px": int((m > 0).sum())})
             continue
         x, y, rw, rh = _region_to_px(r, w, h)
         if rw <= 0 or rh <= 0:

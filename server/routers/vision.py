@@ -143,3 +143,41 @@ def cloud_matting_config_save(req: CloudMattingConfigRequest) -> dict:
     }
     _cm.save_cloud_matting_config(data)
     return {"ok": True, "ready": _cm.is_cloud_matting_ready()}
+
+
+# ───────────────────────────── 图片转文字（OCR，2026-10-09 竞品对标水印云） ─────────────────────────────
+@router.post("/api/vision/ocr")
+def vision_ocr(
+    file: app.UploadFile = app._FastAPIFile(...),
+    request: app.Request = None,
+) -> dict:
+    """整图文字转录：上传图片 → 视觉模型转录全文 → 返回纯文本。
+
+    复用「设置 → 视觉模型」的 VLM 通道（vision_client.ocr_image）。
+    未配置视觉模型时返回 503 与配置指引；转写失败返回 502 与原因。
+    体验版暂不计 AI 积分（走全局限流 _check_rate_limit），后续进配额表再计。
+    """
+    import vision_client as _vc
+    app._check_rate_limit(request)
+    suffix = app.Path(file.filename or "upload.png").suffix.lower()
+    if suffix not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+        raise app.HTTPException(status_code=409, detail="请上传图片文件（png/jpg/webp/bmp）")
+    save_path = app.DW_DIR / f"ocr_{app.uuid.uuid4().hex[:12]}{suffix}"
+    try:
+        with save_path.open("wb") as f:
+            f.write(file.file.read())
+    except Exception as e:  # noqa: BLE001
+        raise app.HTTPException(status_code=500, detail=f"保存上传文件失败：{e}")
+    try:
+        result = _vc.ocr_image(str(save_path))
+    except RuntimeError as e:
+        msg = str(e)
+        code = 503 if "未配置" in msg else 502
+        raise app.HTTPException(status_code=code, detail=msg)
+    finally:
+        try:
+            save_path.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "text": result.get("text", ""),
+            "model": result.get("model", ""), "provider": result.get("provider", "")}

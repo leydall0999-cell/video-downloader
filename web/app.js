@@ -901,6 +901,18 @@
     dwImgPreview: $('dwImgPreview'),
     dwImgSvg: $('dwImgSvg'),
     dwImgCanvas: $('dwImgCanvas'),
+    dwBrushCanvas: $('dwBrushCanvas'),
+    dwBrushToggle: $('dwBrushToggle'),
+    dwBrushSizes: $('dwBrushSizes'),
+    dwBrushClear: $('dwBrushClear'),
+    dwOcrCard: $('dwOcrCard'),
+    dwOcrFile: $('dwOcrFile'),
+    dwOcrBtn: $('dwOcrBtn'),
+    dwOcrStatus: $('dwOcrStatus'),
+    dwOcrText: $('dwOcrText'),
+    dwOcrActions: $('dwOcrActions'),
+    dwOcrCopy: $('dwOcrCopy'),
+    dwOcrDownload: $('dwOcrDownload'),
     dwExpandBtn: $('dwExpandBtn'),
     dwExpandBtn2: $('dwExpandBtn2'),
     dwSelInfo: $('dwSelInfo'),
@@ -972,6 +984,7 @@
     dwVidSvg: $('dwVidSvg'),
     dwVidSelInfo: $('dwVidSelInfo'),
     dwVidClear: $('dwVidClear'),
+    dwVidSubPreset: $('dwVidSubPreset'),
     dwVidStart: $('dwVidStart'),
     dwVidEnd: $('dwVidEnd'),
     dwVidStartLabel: $('dwVidStartLabel'),
@@ -7544,6 +7557,8 @@
       if (el.dwModalZoomLabel) el.dwModalZoomLabel.textContent = '100%';
       dwResizeAll();
       dwDrawAll();
+      // 换图时重置消除笔画布为原图像素尺寸（笔迹坐标 = 原图像素，掩码免换算）
+      dwBrushReset();
     };
     el.dwImgPreview.onload = onload;
     el.dwModalImg.onload = onload;
@@ -7553,6 +7568,132 @@
     el.dwImgResult.hidden = true;
     el.dwImgStatus.textContent = '';
   });
+
+  // ───────────────── 消除笔（2026-10-09 竞品对标水印云） ─────────────────
+  // 笔刷在独立画布上涂抹，笔迹即修复掩码：提交时把画布导出为 base64 PNG，
+  // 以 {"png": ...} 区域混入 regions —— 后端 _build_region_mask / plan_image_repair
+  // 统一解码并入，OpenCV / LaMa / 扩散三个引擎自动全支持，掩码免二次换算。
+  let dwBrushOn = false;     // 消除笔模式开关
+  let dwBrushSize = 26;      // 笔刷直径（显示像素，按缩放比换算到原图像素）
+  let dwBrushInk = false;    // 是否有笔迹（决定提交校验与掩码上传）
+  let dwBrushDrawing = false;
+  let dwBrushLast = { x: 0, y: 0 };
+
+  const dwBrushReset = () => {
+    // 重置为原图像素尺寸并清空笔迹（换图 / 清空场景）
+    const cv = el.dwBrushCanvas;
+    if (!cv) return;
+    const nw = el.dwImgPreview.naturalWidth || 0;
+    const nh = el.dwImgPreview.naturalHeight || 0;
+    cv.width = nw || 1;
+    cv.height = nh || 1;
+    cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+    dwBrushInk = false;
+  };
+
+  const dwBrushSetMode = (on) => {
+    dwBrushOn = !!on;
+    const cv = el.dwBrushCanvas;
+    if (!cv) return;
+    if (dwBrushOn && cv.width <= 1) dwBrushReset();
+    cv.hidden = !dwBrushOn;
+    cv.classList.toggle('is-on', dwBrushOn);
+    el.dwBrushToggle.classList.toggle('is-active', dwBrushOn);
+    if (el.dwBrushSizes) el.dwBrushSizes.hidden = !dwBrushOn;
+    // 模式互斥：消除笔开启时画布接管指针（框选暂停），关闭后框选照旧
+    if (dwBrushOn && el.dwSelInfo) el.dwSelInfo.textContent = '消除笔模式：在图上涂抹要抹掉的水印';
+  };
+
+  el.dwBrushToggle.addEventListener('click', () => dwBrushSetMode(!dwBrushOn));
+  if (el.dwBrushSizes) {
+    el.dwBrushSizes.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-bs]');
+      if (!btn) return;
+      dwBrushSize = parseInt(btn.dataset.bs, 10) || 26;
+      el.dwBrushSizes.querySelectorAll('[data-bs]').forEach((b) => b.classList.toggle('is-active', b === btn));
+    });
+  }
+  el.dwBrushClear.addEventListener('click', () => { dwBrushReset(); if (dwBrushOn && el.dwSelInfo) el.dwSelInfo.textContent = '笔迹已清空'; });
+
+  const dwBrushPos = (e) => {
+    // 显示坐标 → 原图像素坐标（适应 / 缩放都按 rect 比例换算，天然支持放大后涂抹）
+    const cv = el.dwBrushCanvas;
+    const r = cv.getBoundingClientRect();
+    const sx = cv.width / Math.max(1, r.width);
+    const sy = cv.height / Math.max(1, r.height);
+    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+  };
+
+  const dwBrushStroke = (from, to) => {
+    const ctx = el.dwBrushCanvas.getContext('2d');
+    // 画布内部是原图像素，笔刷粗细按「显示像素」给手感 → 乘缩放比换算
+    const scale = el.dwImgPreview.naturalWidth / Math.max(1, el.dwImgPreview.clientWidth);
+    ctx.strokeStyle = '#ff2d78';
+    ctx.lineWidth = Math.max(2, dwBrushSize * scale);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+    dwBrushInk = true;
+  };
+
+  el.dwBrushCanvas.addEventListener('pointerdown', (e) => {
+    if (!dwBrushOn) return;
+    e.preventDefault();
+    dwBrushDrawing = true;
+    dwBrushLast = dwBrushPos(e);
+    try { el.dwBrushCanvas.setPointerCapture(e.pointerId); } catch (_e) {}
+    dwBrushStroke(dwBrushLast, { x: dwBrushLast.x + 0.01, y: dwBrushLast.y + 0.01 }); // 单击也留一个点
+  });
+  el.dwBrushCanvas.addEventListener('pointermove', (e) => {
+    if (!dwBrushDrawing) return;
+    const p = dwBrushPos(e);
+    dwBrushStroke(dwBrushLast, p);
+    dwBrushLast = p;
+  });
+  window.addEventListener('pointerup', () => { dwBrushDrawing = false; });
+
+  // ───────────────── 图片转文字 OCR（2026-10-09 竞品对标水印云） ─────────────────
+  // 复用「设置 → 视觉模型」的 VLM 通道（POST /api/vision/ocr）。
+  el.dwOcrBtn.addEventListener('click', async () => {
+    const f = el.dwOcrFile.files[0];
+    if (!f) { el.dwOcrStatus.textContent = '请先选择图片文件'; return; }
+    el.dwOcrBtn.disabled = true;
+    el.dwOcrStatus.textContent = '识别中…（约几秒到半分钟，取决于图片文字量）';
+    el.dwOcrText.hidden = true;
+    el.dwOcrActions.hidden = true;
+    const form = new FormData();
+    form.append('file', f);
+    try {
+      const data = await request('/api/vision/ocr', { method: 'POST', body: form });
+      const text = (data && data.text) || '';
+      el.dwOcrText.value = text;
+      el.dwOcrText.hidden = false;
+      el.dwOcrActions.hidden = false;
+      if (el.dwOcrDownload.href) URL.revokeObjectURL(el.dwOcrDownload.href);
+      el.dwOcrDownload.href = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+      el.dwOcrStatus.textContent = text ? '识别完成 ✅（下方全文可复制 / 下载 txt）' : '识别完成：图中未检出文字';
+    } catch (error) {
+      el.dwOcrStatus.textContent = '失败：' + ((error && error.message) || '未知错误');
+    } finally {
+      el.dwOcrBtn.disabled = false;
+    }
+  });
+  el.dwOcrCopy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(el.dwOcrText.value || '');
+      el.dwOcrStatus.textContent = '已复制到剪贴板 ✅';
+    } catch (_e) {
+      // WKWebView 剪贴板权限受限时兜底：选中文本让用户手动 Cmd+C
+      el.dwOcrText.hidden = false;
+      el.dwOcrText.focus();
+      el.dwOcrText.select();
+      el.dwOcrStatus.textContent = '无法访问剪贴板，已全选文本，请按 Cmd+C 复制';
+    }
+  });
+
 
   // 当前拖拽目标：'preview' | 'modal'，用于全局 mousemove/mouseup 知道该用哪张图
   let dwDragTarget = null;
@@ -7807,8 +7948,13 @@
     const file = el.dwImgFile.files[0];
     if (!file) { el.dwImgStatus.textContent = '请先选择图片文件'; return; }
     const valid = dwSelections.filter((s) => s.w > 0 && s.h > 0);
-    if (!valid.length) {
-      el.dwImgStatus.textContent = '请在预览图上拖拽框选水印区域'; return;
+    // 消除笔笔迹可与框选任一存在；有笔迹时导出为 {"png": base64} 掩码区域
+    let brushB64 = '';
+    if (dwBrushInk && el.dwBrushCanvas) {
+      brushB64 = el.dwBrushCanvas.toDataURL('image/png').split(',')[1] || '';
+    }
+    if (!valid.length && !brushB64) {
+      el.dwImgStatus.textContent = '请先框选水印区域，或打开「🖊 消除笔」涂抹'; return;
     }
     el.dwImgBtn.disabled = true;
     const startEngine = (el.dwImgEngine && el.dwImgEngine.value) || 'auto';
@@ -7819,12 +7965,14 @@
       : '去水印处理中…';
     el.dwImgResult.hidden = true;
     const form = new FormData();
-    form.append('file', file);
-    form.append('regions', JSON.stringify(valid.map((s) => ({
+    const regionList = valid.map((s) => ({
       x: +s.x.toFixed(4), y: +s.y.toFixed(4),
       w: +s.w.toFixed(4), h: +s.h.toFixed(4),
       op: s.op || 'add',
-    }))));
+    }));
+    if (brushB64) regionList.push({ png: brushB64 });
+    form.append('file', file);
+    form.append('regions', JSON.stringify(regionList));
     form.append('method', el.dwImgMethod.value);
     form.append('radius', el.dwImgRadius.value);
     form.append('engine', (el.dwImgEngine && el.dwImgEngine.value) || 'auto');
@@ -8409,6 +8557,14 @@ el.dwVidPlayer.hidden = true;
     dwVidDraw();
   });
   el.dwVidClear.addEventListener('click', () => { dwVidSel = null; dwVidDraw(); });
+  // 一键去字幕（2026-10-09 竞品对标水印云「视频去字幕」）：预设底部常见字幕带。
+  // 字幕几乎总在画面底部 8%~20% 高度带内 → 预设 x=4% y=84% w=92% h=13%，
+  // 用户可拖新框覆盖或直接提交；配合时间区间可只处理有字幕的片段。
+  el.dwVidSubPreset.addEventListener('click', () => {
+    dwVidSel = { x: 0.04, y: 0.84, w: 0.92, h: 0.13 };
+    dwVidDraw();
+    if (el.dwVidSelInfo) el.dwVidSelInfo.textContent = '已预设底部字幕带（可直接拖新框微调位置）';
+  });
   window.addEventListener('resize', () => { if (!el.dwVideoPane.hidden) { dwVidResize(); dwVidDraw(); } });
 
   // -------------------------------------------------- 时间分段（Segment）：双滑块（拖拽绿色手柄选区间）

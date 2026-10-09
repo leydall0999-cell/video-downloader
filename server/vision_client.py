@@ -762,3 +762,67 @@ def detect_text_blocks(image_path: str, max_side: int = 1024, timeout: int = 60)
     blocks.sort(key=_area, reverse=True)
     return blocks
 
+
+
+# ------------------------------------------------------------------ 图片转文字（OCR）
+#
+# 2026-10-09 竞品对标（水印云「图片转文字」）：复用现有 VLM 通道做整图文字转录。
+# 与 detect_text_blocks（定位框）不同，这里要的是**全文纯文本**，供复制/导出 txt。
+
+_OCR_SYSTEM = "你是一个精确的文字转录助手，只输出图片中出现的文字本身，不做任何解释。"
+
+_OCR_PROMPT = (
+    "请把这张图片里的所有文字逐字转录出来。\n"
+    "要求：\n"
+    "- 只输出图中文字本身，按阅读顺序（从上到下、从左到右）分段输出\n"
+    "- 不翻译、不解释、不总结、不添加图中没有的内容\n"
+    "- 保留原有换行与段落结构；表格可按行用空格分隔\n"
+    "- 图中没有文字时只输出一个空行"
+)
+
+
+def ocr_image(image_path: str, max_side: int = 2048, timeout: int = 120) -> dict:
+    """整图文字转录（OCR），返回 {"text", "model", "provider"}。失败抛 RuntimeError。
+
+    max_side 默认 2048：OCR 需要认小字，比定位类任务（1024）保留更多分辨率。
+    """
+    cfg = get_vision_config()
+    key = (cfg.get("api_key") or "").strip()
+    base_url = (cfg.get("base_url") or "").strip().rstrip("/")
+    model = (cfg.get("model") or "").strip()
+    provider = cfg.get("provider", "auto")
+    if not key or not base_url or not model:
+        raise RuntimeError(
+            "视觉模型未配置（请在「设置 → 视觉模型」里选择 DashScope 并填入 API Key）")
+
+    b64 = _compress_to_b64(image_path, max_side)
+    url = base_url + "/chat/completions"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _OCR_SYSTEM},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _OCR_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ],
+            },
+        ],
+        "temperature": 0.0,
+    }
+    try:
+        resp = _post_json(url, headers, payload, timeout=timeout)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"视觉模型调用失败：{e}") from e
+    try:
+        content = resp["choices"][0]["message"]["content"]
+    except Exception:  # noqa: BLE001
+        raise RuntimeError(f"视觉模型返回格式异常：{str(resp)[:200]}")
+    # 去掉可能的 markdown 代码块包裹（有的模型爱加 ``` 包裹）
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    return {"text": text.strip(), "model": model, "provider": provider}

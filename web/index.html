@@ -1324,11 +1324,11 @@
   <div class="howto-body">
     <ol class="howto-steps">
       <li>点「选择图片」载入图片。</li>
-      <li>用鼠标在预览图上<b>框选</b>要去掉的水印区域（可框多处）。</li>
+      <li>用鼠标在预览图上<b>框选</b>要去掉的水印区域（可框多处）；复杂水印可点「<b>🖊 消除笔</b>」直接涂抹。</li>
       <li>选处理引擎与参数，点「<b>开始去水印</b>」。</li>
       <li>对比原图 / 处理后，点「<b>下载结果</b>」取回。</li>
     </ol>
-    <p class="howto-note">点「🔍 放大编辑」可精修选区；结果能一键「丢到抠图区」继续处理。</p>
+    <p class="howto-note">半透明 / 贴图水印推荐用「🖊 消除笔」涂抹（笔迹即修复范围，与框选可叠加）；点「🔍 放大编辑」可精修选区；结果能一键「丢到抠图区」继续处理。</p>
     <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
   </div>
 </details>
@@ -1342,6 +1342,7 @@
             <img id="dwImgPreview" alt="预览" data-page-node-id="5ABsvVd6GDIY92WU3oDs3H" />
             <svg id="dwImgSvg" class="dw-svg" xmlns="http://www.w3.org/2000/svg" data-page-node-id="BfTfSl4DWMFKxoKbNiBcqN"></svg>
             <canvas id="dwImgCanvas" class="dw-canvas" data-page-node-id="SbXmXpXgPfS57EZECs9Ran"></canvas>
+            <canvas id="dwBrushCanvas" class="dw-brush-canvas" hidden data-page-node-id="dwBrushCanvas01"></canvas>
             <button type="button" class="dw-expand" id="dwExpandBtn" title="放大编辑" data-page-node-id="SzTiAkYhCiRGrCAfERgcG0">🔍 放大编辑</button>
           </div>
           <div class="dw-toolbar" data-page-node-id="YgEDeGFBVFRKlVIyqoZM9F">
@@ -1349,6 +1350,16 @@
               <button type="button" class="dw-mode is-active" data-mode="new" title="清空当前选区，重新开始框选" data-page-node-id="LiPREMdodv1o9Gmhf8PhbM"><span class="dw-ico" data-page-node-id="y0wKyyGZXa2JbQ0La87FlC">🆕</span>新选区</button>
               <button type="button" class="dw-mode" data-mode="add" title="在已有选区上叠加新区域" data-page-node-id="Q9IpYfJYbFprzLH5H7npx8"><span class="dw-ico" data-page-node-id="WD1jUyblXCjlfhz7YWIYdq">➕</span>加选</button>
               <button type="button" class="dw-mode" data-mode="subtract" title="从已选区域中抠除" data-page-node-id="xgKgZFc23QkoU8OYjYci43"><span class="dw-ico" data-page-node-id="Zq8jokBZ36MmEsVVF1UfuN">➖</span>减选</button>
+            </div>
+            <span class="dw-tooldiv" aria-hidden="true" data-page-node-id="nshKMkFxrIwJgFQHbm71JH"></span>
+            <div class="dw-toolgroup" role="group" aria-label="消除笔" data-page-node-id="dwBrushGroup01">
+              <button type="button" class="dw-mode" id="dwBrushToggle" title="消除笔模式：直接在图上涂抹要抹掉的复杂水印（半透明 / 贴图水印推荐），可与框选叠加" data-page-node-id="dwBrushToggle01"><span class="dw-ico" data-page-node-id="dwBrushIco01">🖊</span>消除笔</button>
+            </div>
+            <div class="dw-toolgroup" id="dwBrushSizes" hidden role="group" aria-label="笔刷粗细" data-page-node-id="dwBrushSizes01">
+              <button type="button" class="dw-mode" data-bs="12" title="细笔刷" data-page-node-id="dwBsS01">细</button>
+              <button type="button" class="dw-mode is-active" data-bs="26" title="中笔刷" data-page-node-id="dwBsM01">中</button>
+              <button type="button" class="dw-mode" data-bs="52" title="粗笔刷" data-page-node-id="dwBsL01">粗</button>
+              <button type="button" class="dw-mode" id="dwBrushClear" title="清空全部笔迹" data-page-node-id="dwBrushClear01"><span class="dw-ico" data-page-node-id="dwBrushClrIco01">🧽</span>清笔迹</button>
             </div>
             <span class="dw-tooldiv" aria-hidden="true" data-page-node-id="nshKMkFxrIwJgFQHbm71JH"></span>
             <div class="dw-toolgroup dw-zoomgroup" role="group" aria-label="缩放" data-page-node-id="eB6T2Tdn09nX0v4O85kMG0">
@@ -1433,6 +1444,24 @@
           <a class="btn btn-accent btn-sm" id="dwImgDownload" download data-page-node-id="rGFYfcLwq9kckrdlBOtlcQ">下载结果</a>
           <button type="button" class="btn btn-ghost btn-sm" id="dwImgOutZoom" title="全屏查看处理结果（滚轮缩放 / 拖动平移）" data-page-node-id="dwImgOutZoom01">🔍 放大查看</button>
           <button type="button" class="btn btn-primary btn-sm" id="dwImgToMatting" data-page-node-id="W2UGxpHdbTttQOVwizcAvE">🪄 丢到抠图区去抠图</button>
+        </div>
+      </div>
+
+      <!-- 图片转文字（OCR，2026-10-09 竞品对标水印云）：复用视觉模型通道 -->
+      <div class="dw-card dw-ocr-card" id="dwOcrCard" data-page-node-id="dwOcrCard01">
+        <h3 class="dw-card-title" data-page-node-id="dwOcrTitle01">🔤 图片转文字（OCR）</h3>
+        <div class="uc-form" data-page-node-id="dwOcrForm01">
+          <label class="uc-field" data-page-node-id="dwOcrFileField01">
+            <span class="uc-label" data-page-node-id="dwOcrFileLbl01">图片文件</span>
+            <input type="file" id="dwOcrFile" accept="image/*" data-page-node-id="dwOcrFile01" />
+          </label>
+          <button type="button" class="btn btn-primary btn-block" id="dwOcrBtn" data-page-node-id="dwOcrBtn01">开始识别文字</button>
+          <span class="convert-status" id="dwOcrStatus" data-page-node-id="dwOcrStatus01"></span>
+          <textarea id="dwOcrText" hidden rows="8" readonly title="识别结果（可全选复制）" data-page-node-id="dwOcrText01"></textarea>
+          <div class="dw-result-actions" id="dwOcrActions" hidden data-page-node-id="dwOcrActions01">
+            <button type="button" class="btn btn-primary btn-sm" id="dwOcrCopy" data-page-node-id="dwOcrCopy01">📋 复制全文</button>
+            <a class="btn btn-accent btn-sm" id="dwOcrDownload" download="ocr.txt" data-page-node-id="dwOcrDl01">下载 txt</a>
+          </div>
         </div>
       </div>
 
@@ -1547,6 +1576,7 @@
               <button type="button" class="btn btn-ghost btn-sm" id="dwVidSetStart" title="把当前播放位置设为水印开始时间" data-page-node-id="jIb60K9TMaHnYMOLjGEccR">⏱ 设为开始</button>
               <button type="button" class="btn btn-ghost btn-sm" id="dwVidSetEnd" title="把当前播放位置设为水印结束时间" data-page-node-id="vgXfkVzyrm6I4KiinjXNCA">⏱ 设为结束</button>
             </div>
+            <button type="button" class="dw-mode" id="dwVidSubPreset" title="自动框选底部常见字幕带（位置可再拖拽微调），配合时间区间只处理有字幕的片段" data-page-node-id="dwVidSubPreset01"><span class="dw-ico" data-page-node-id="dwVidSubPresetIco01">🔤</span>一键去字幕</button>
             <button type="button" class="dw-mode" id="dwVidClear" title="清空框选" data-page-node-id="ASEkYHvXwrRW25Qv3EWhmF"><span class="dw-ico" data-page-node-id="LVNLPkGdig5KQawmO1TFLe">🗑</span>清空框选</button>
           </div>
           </div>

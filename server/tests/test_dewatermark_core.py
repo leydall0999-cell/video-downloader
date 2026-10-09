@@ -1011,6 +1011,73 @@ def test_video_result_download_uses_native_save():
     assert 'suggested = "dewatered.mp4"' in launch, "video 默认建议文件名应为 dewatered.mp4"
     assert '"保存去水印视频"' in launch, "video 保存面板提示应为「保存去水印视频」"
     print("OK video result download uses native save: 禁用裸 <a download>，video 走 save_dw_file_dialog")
+# ---------------------------------------------------------------- 消除笔（2026-10-09 竞品对标水印云）
+def _tiny_png_b64(size=200, patch=64):
+    """模拟消除笔画布：size×size 全透明画布，中央 patch×patch 不透明笔迹，base64 PNG。
+
+    真实前端笔迹画布尺寸 = 原图尺寸，背景全透明、笔迹处 alpha=255——后端取
+    alpha 通道为掩码。这里等比模拟（后端无需 resize）。
+    """
+    import base64, io
+    from PIL import Image as _PILImage
+    from PIL import ImageDraw as _PILDraw
+    im = _PILImage.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = _PILDraw.Draw(im)
+    x0 = (size - patch) // 2
+    d.rectangle([x0, x0, x0 + patch, x0 + patch], fill=(255, 0, 90, 255))
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def test_normalize_regions_accepts_brush_png():
+    """消除笔 {"png"} 区域应原样透传（跳过矩形校验），非法类型返回 None。"""
+    regions = dwc.normalize_regions([{"png": _tiny_png_b64()}])
+    assert regions is not None and len(regions) == 1 and "png" in regions[0]
+    # 混合：矩形 + 笔迹
+    mixed = dwc.normalize_regions([{"x": 0.0, "y": 0.0, "w": 0.2, "h": 0.2, "op": "add"},
+                                   {"png": _tiny_png_b64()}])
+    assert mixed is not None and len(mixed) == 2
+    # 非法：png 非字符串 / 超长
+    assert dwc.normalize_regions([{"png": 12345}]) is None
+    assert dwc.normalize_regions([{"png": "x" * 13_000_000}]) is None
+    print("✅ normalize_regions 支持笔迹区域且非法输入被拒")
+
+
+def test_build_region_mask_with_brush_png():
+    """笔迹 PNG 应解码并入掩码：涂到哪修到哪，未涂处为 0。"""
+    if dwc._np is None or dwc._cv2 is None:
+        pytest.skip("numpy/cv2 未安装")
+    # 200×200 画布中央涂 64×64（与原图同尺寸，无需 resize）
+    m = dwc._build_region_mask([{"png": _tiny_png_b64(200, 64)}], 200, 200)
+    assert m.shape == (200, 200)
+    assert int((m == 255).sum()) == 65 * 65  # PIL rectangle 端点含闭区间：64+1=65 见方
+    # 四角必须没被涂上（笔迹居中）
+    assert m[0, 0] == 0 and m[199, 199] == 0
+    print("✅ 笔迹 PNG 正确并入掩码（涂到哪修到哪）")
+
+
+def test_build_region_mask_brush_plus_rect_subtract():
+    """笔迹 + 矩形混合：并集语义不变，subtract 仍能挖洞。"""
+    if dwc._np is None or dwc._cv2 is None:
+        pytest.skip("numpy/cv2 未安装")
+    regions = [{"png": _tiny_png_b64(200, 64)},
+               {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5, "op": "add"},
+               {"x": 0.0, "y": 0.0, "w": 0.1, "h": 0.1, "op": "subtract"}]
+    m = dwc._build_region_mask(regions, 100, 100)
+    assert m[0, 0] == 0            # subtract 挖洞生效
+    assert m[30, 30] == 255        # 矩形区在
+    assert m[50, 50] == 255        # 笔迹区在（200 画布 resize 到 100 后中央带 ≈34..66）
+    print("✅ 笔迹与矩形选区混合并集 / 减选语义正确")
+
+
+def test_decode_mask_png_invalid_returns_none():
+    """损坏的 base64 / 非图片数据应返回 None（不抛错，降级为忽略该笔迹）。"""
+    assert dwc._decode_mask_png("!!!not-a-png!!!", 100, 100) is None
+    assert dwc._decode_mask_png("", 100, 100) is None
+    print("✅ 非法笔迹数据安全降级为忽略")
+
+
 if __name__ == "__main__":
     test_normalize_region_passthrough()
     test_normalize_region_accepts_numeric_strings()
@@ -1037,6 +1104,10 @@ if __name__ == "__main__":
     test_mask_subtract_is_order_independent()
     test_mask_only_subtract_is_empty()
     test_mask_skips_zero_pixel_regions()
+    test_normalize_regions_accepts_brush_png()
+    test_build_region_mask_with_brush_png()
+    test_build_region_mask_brush_plus_rect_subtract()
+    test_decode_mask_png_invalid_returns_none()
 
     test_tile_weight_full_when_no_neighbor()
     test_tile_weight_feathers_interior()
