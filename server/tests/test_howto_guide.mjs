@@ -161,6 +161,10 @@ ok(/details\.howto\[data-howto\]/.test(howtoFn),
   'howtoAutoOpen 的选取器不再是 details.howto[data-howto] —— 引导条会被漏选或误选');
 ok(/seen\.indexOf\(k\)\s*>=\s*0/.test(howtoFn),
   'howtoAutoOpen 内部没有「已读过就跳过」的判断 —— 每次切页都会重新弹引导');
+// 🔴 已读的条必须**显式收起**，不能只 return：SPA 不重建 DOM，上次展开着离开
+//    再切回来仍是展开的，就不满足「除第一次外每次进入都默认收起」。
+ok(/if \(d\.open\) d\.open = false;/.test(howtoFn),
+  'howtoAutoOpen 对已读引导条只跳过、没有显式收起 —— 上次展开着离开，切回来还是展开的（应默认收起）');
 
 const swDef = appJsCode.indexOf('function switchView(');
 const swCall = appJsCode.indexOf('try { howtoAutoOpen(); }');
@@ -250,7 +254,7 @@ ok(/btn\.classList\.toggle\('is-active'/.test(appJsCode),
   '「?」按钮没有激活态同步逻辑（引导开着时按钮不会高亮）');
 ok(/howtoScopeOf\s*=\s*\(btn\)\s*=>\s*btn\.closest\('#downloadView, section\[id\]'\)/.test(appJsCode),
   'howtoScopeOf 的作用域定位被改动 —— 去水印 4 个子面板共用一个按钮会找错引导');
-ok(/addEventListener\('toggle',[\s\S]{0,160}?\}, true\)/.test(appJsCode),
+ok(/addEventListener\('toggle',[\s\S]{0,700}?\}, true\)/.test(appJsCode),
   '缺少对 details toggle 的捕获监听（toggle 事件不冒泡，必须用捕获）—— 手动开合引导时按钮状态会不同步');
 const swSync = appJsCode.indexOf('try { howtoSyncButtons(); }');
 ok(swSync > swDef,
@@ -320,14 +324,17 @@ ok(!/\.hidden\s*=\s*true/.test(closeSeg) && !/setAttribute\(\s*'hidden'/.test(cl
 ok(/is-closed'\)\)\s*return/.test(howtoFn),
   'howtoAutoOpen 没有跳过已关闭的引导 —— 用户关掉后切页回来又会被自动弹开');
 
-// 点「?」= 重新打开的入口：必须先摘掉 .is-closed，再展开
+// 点「?」= 显示 / 隐藏 二态开关（见下段 ⑧）：先摘掉 .is-closed 再展开，或可见时整条隐藏
 const btnSeg = appJsCode.slice(
   appJsCode.indexOf("closest('.howto-btn')"),
-  appJsCode.indexOf("closest('.howto-btn')") + 900);
+  appJsCode.indexOf("closest('.howto-btn')") + 1100);
 ok(/classList\.remove\('is-closed'\)/.test(btnSeg),
   '点「?」时没有解除 .is-closed —— 关掉的引导条再也打不开（「重新打开就点问号」这条链路断掉）');
-ok(/classList\.remove\('is-closed'\)[\s\S]{0,500}?d\.open = true/.test(btnSeg),
-  '点「?」解除关闭后没有强制展开 —— 用户点一下只看到一行空壳，需要再点一下才展开');
+// 🔴 必须把 d.open = true 限定在 is-closed 分支**内部**（到 } else if 为止）。
+//    否则后面那条 else-if 分支里的 d.open = true 会把这条断言「喂饱」，
+//    本分支被改成 open=false 也照样通过（变异测试实测过的漏网）。
+ok(/classList\.remove\('is-closed'\);[\s\S]{0,250}?d\.open = true;\s*\n\s*\} else if \(!d\.open\)/.test(btnSeg),
+  '点「?」解除关闭后没有在本分支内强制展开 —— 用户点一下只看到一行空壳，需要再点一下才展开');
 
 // switchView 里必须「先套用已关闭状态、再自动展开」，顺序反了会把刚关掉的又弹开
 const swClosed = appJsCode.indexOf('try { howtoApplyClosed(); }', swDef);
@@ -337,7 +344,41 @@ ok(swClosed > swDef,
 ok(swClosed > swDef && swCallAt > swClosed,
   'switchView 里 howtoApplyClosed() 必须排在 howtoAutoOpen() 之前（顺序反了会把已关闭的引导又自动展开）');
 
+/* ---------------- ⑧ 点第二次「?」必须整条隐藏，不能只是「收起」 ---------------- */
+// 🔴 用户反馈：「点第二次要隐藏啊，现在收起来是不对的，占位置了」。
+//    收起态（open=false 但仍可见）依旧占一行，等于没关掉。所以「?」是
+//    「可见 ⇄ 整条隐藏」二态开关，绝不能退化成 open = !open 的开合。
+ok(!/d\.open\s*=\s*!\s*d\.open/.test(btnSeg),
+  '点「?」又变回 open = !open 的开合 —— 第二次点击只会「收起」，引导条仍占一行（用户要的是整条隐藏）');
+ok(/classList\.add\('is-closed'\)[\s\S]{0,120}?d\.open = false;/.test(btnSeg),
+  '「已展开」态点「?」没有整条隐藏（缺 classList.add(is-closed) + open=false，且必须先打 class 再置 open）—— 会留下占一行的收起态');
+// 🔴 真机探针抓到的真缺陷：引导条初始就是「收起但可见」，若点「?」直接落到隐藏分支，
+//    用户第一次点开看到的反而是引导被关掉。必须有独立的「收起 → 展开」分支。
+ok(/\} else if \(!d\.open\) \{\s*\n\s*d\.open = true;\s*\n\s*\}/.test(btnSeg),
+  '缺少「收起态点「?」= 展开」的分支 —— 用户第一次点按钮会看到引导反而消失（真机探针实测过的缺陷）');
+ok(/if \(d\.classList\.contains\('is-closed'\)\) \{[\s\S]{0,400}?classList\.remove\('is-closed'\)/.test(btnSeg),
+  '「?」的打开分支结构被破坏（is-closed 判断与 remove 不再成对）—— 关掉的引导条打不开');
+// 隐藏时不得滚动 / 闪动：条已不可见，滚动只会让页面莫名跳一下
+ok(/if \(!d\.classList\.contains\('is-closed'\)\) \{[\s\S]{0,200}?scrollIntoView/.test(btnSeg),
+  '「?」隐藏引导条时仍执行 scrollIntoView —— 条已消失，滚动会让页面莫名跳动');
+ok(/is-active',\s*!!\(d && d\.open && !d\.classList\.contains\('is-closed'\)\)/.test(appJsCode),
+  'is-active 判定没有排除 is-closed —— 引导条已隐藏、「?」按钮却还亮着（状态自相矛盾）');
+
+// 点标题行收起（原生 toggle）也必须转成整条隐藏，否则同样留下占位态
+const toggleSeg = appJsCode.slice(
+  appJsCode.indexOf("addEventListener('toggle'"),
+  appJsCode.indexOf("addEventListener('toggle'") + 400);
+ok(toggleSeg.length > 150,
+  '定位 toggle 监听失败（找不到 addEventListener(\'toggle\') 片段）');
+// 🔴 反向要求：toggle 里**绝不能**把「收起」转成整条隐藏。
+//    「收起」是合法默认态（除首次外每次进入都收起、只剩一行标题可点开），
+//    一旦转隐藏，用户点标题行收起后整条就消失、再也看不到。
+ok(!/classList\.add\('is-closed'\)/.test(toggleSeg),
+  'toggle 监听里把「收起」转成了整条隐藏 —— 用户点标题行收起后整条消失，只能靠「?」找回（收起必须是合法态）');
+ok(/howtoSyncButtons\(\)/.test(toggleSeg),
+  'toggle 监听丢了 howtoSyncButtons() —— 手动开合引导时「?」按钮状态不同步');
+
 console.log(`✅ 操作引导守卫生效：${EXPECT.size} 个功能入口全覆盖、位置正确、`
   + `文案与真实控件一致、首次展开机制与折叠样式在位、`
-  + `右上角「?」按钮 15 处落点正确、`
+  + `右上角「?」按钮 15 处落点、三态（隐藏→展开 / 收起→展开 / 展开→整条隐藏）、`
   + `「✕ 关闭引导」${EXPECT.size} 处且可被「?」重新打开（共 ${count} 项断言）`);

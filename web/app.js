@@ -15687,9 +15687,16 @@ el.dwVidPlayer.hidden = true;
     let changed = false;
     document.querySelectorAll('details.howto[data-howto]').forEach((d) => {
       if (d.closest('[hidden]')) return;
-      if (d.classList.contains('is-closed')) return;   // 用户主动关掉的，绝不自动弹回来
+      if (d.classList.contains('is-closed')) return;   // 用户主动隐藏的，绝不自动弹回来
       const k = d.getAttribute('data-howto');
-      if (!k || seen.indexOf(k) >= 0) return;
+      if (!k) return;
+      if (seen.indexOf(k) >= 0) {
+        // 已读：每次进入该功能都回到「收起」态（只剩一行标题，点一下才看得到内容）。
+        // 🔴 这里必须显式收起、不能只 return：SPA 不重建 DOM，上次展开着离开的话
+        //    切回来仍是展开的，就不满足「除第一次外默认收起」。
+        if (d.open) d.open = false;
+        return;
+      }
       d.open = true;
       seen.push(k);
       changed = true;
@@ -15707,9 +15714,11 @@ el.dwVidPlayer.hidden = true;
     if (label) label.textContent = text; else h2.textContent = text;
   }
 
-  // 每个功能右上角「?」按钮：随时重新展开 / 收起该功能的操作引导。
+  // 每个功能右上角「?」按钮：**显示 / 隐藏**该功能的操作引导（二态开关，不是开合）。
   // 定位用「按钮所在视图内当前可见的那条引导」，所以去水印 4 个子功能共用一个按钮
   // 也能各点各的（子面板靠 hidden 属性切换，可见的那条天然唯一）。
+  // 🔴 is-closed 的条必须仍能被 visibleHowtoIn 找到（它只按 hidden 属性过滤），
+  //    否则隐藏后按钮自己也消失，用户就再也打不开了。
   const howtoScopeOf = (btn) => btn.closest('#downloadView, section[id]') || document.body;
   const visibleHowtoIn = (scope) => [...scope.querySelectorAll('details.howto')]
     .find((d) => !d.closest('[hidden]')) || null;
@@ -15718,7 +15727,8 @@ el.dwVidPlayer.hidden = true;
     document.querySelectorAll('.howto-btn').forEach((btn) => {
       const d = visibleHowtoIn(howtoScopeOf(btn));
       btn.hidden = !d;                                  // 该视图没有引导条时不显示按钮
-      btn.classList.toggle('is-active', !!(d && d.open));
+      // 激活态 = 引导条正展开着；已隐藏（is-closed）时即使 open 残留也绝不亮
+      btn.classList.toggle('is-active', !!(d && d.open && !d.classList.contains('is-closed')));
     });
   }
 
@@ -15732,8 +15742,8 @@ el.dwVidPlayer.hidden = true;
       const cd = closeBtn.closest('details.howto');
       if (cd) {
         const ck = cd.getAttribute('data-howto');
+        cd.classList.add('is-closed');   // 先打 class 再置 open，让 toggle 监听幂等跳过
         cd.open = false;
-        cd.classList.add('is-closed');
         if (ck) {
           const list = howtoReadClosed();
           if (list.indexOf(ck) < 0) { list.push(ck); howtoWriteClosed(list); }
@@ -15743,20 +15753,31 @@ el.dwVidPlayer.hidden = true;
       return;
     }
 
-    // ② 右上角「?」：若该功能的引导已被关掉，先取消关闭再展开；否则就是普通开合
+    // ② 右上角「?」：**三态**处理，绝不留「收起占一行」的中间态。
+    //    ① 已隐藏（is-closed）  → 显示 + 展开，一步到位
+    //    ② 可见但收起（初始态）  → 展开（🔴 不是隐藏！否则用户第一次点看到的还是空壳）
+    //    ③ 可见且已展开         → 整条隐藏（用户：「点第二次要隐藏啊，收起来占位置」）
     const btn = e.target.closest('.howto-btn');
     if (!btn) return;
     const d = visibleHowtoIn(howtoScopeOf(btn));
     if (!d) return;
+    const key = d.getAttribute('data-howto');
     if (d.classList.contains('is-closed')) {
-      const k = d.getAttribute('data-howto');
       d.classList.remove('is-closed');
-      if (k) howtoWriteClosed(howtoReadClosed().filter((x) => x !== k));
+      if (key) howtoWriteClosed(howtoReadClosed().filter((x) => x !== key));
+      d.open = true;
+    } else if (!d.open) {
       d.open = true;
     } else {
-      d.open = !d.open;
+      // 已展开 → 整条消失（不是收起）；先打 class 再置 open，让 toggle 监听幂等跳过
+      d.classList.add('is-closed');
+      d.open = false;
+      if (key) {
+        const list = howtoReadClosed();
+        if (list.indexOf(key) < 0) { list.push(key); howtoWriteClosed(list); }
+      }
     }
-    if (d.open) {
+    if (!d.classList.contains('is-closed')) {
       try { d.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (_) {}
       d.classList.remove('is-flash');
       void d.offsetWidth;            // 强制重排，连点两次也能重新触发动画
@@ -15767,9 +15788,13 @@ el.dwVidPlayer.hidden = true;
   });
 
   // <details> 的 toggle 事件不冒泡 ⇒ 用捕获在 document 上监听，
-  // 保证用户直接点引导条标题开合时，右上角按钮的激活态也跟着变
+  // 保证用户直接点引导条标题开合时，右上角按钮的激活态也跟着变。
+  // 🔴 这里的职责只有「同步按钮状态」，**绝不能**把 open=false 顺手转成整条隐藏：
+  //    「收起」是合法默认态（除首次外每次进入都收起，只剩一行标题可点开），
+  //    一旦转隐藏，用户点标题行收起后就整条消失、再也看不到，只能靠「?」找回。
   document.addEventListener('toggle', (e) => {
-    if (e.target && e.target.classList && e.target.classList.contains('howto')) howtoSyncButtons();
+    const t = e.target;
+    if (t && t.classList && t.classList.contains('howto')) howtoSyncButtons();
   }, true);
 
   function switchView(view) {
