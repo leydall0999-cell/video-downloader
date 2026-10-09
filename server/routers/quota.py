@@ -21,7 +21,7 @@ router = APIRouter()
 
 
 def _is_member(request: Optional[Request] = None) -> bool:
-    """当前用户是否为会员（下载会员或 AI 会员任一活跃即视为会员）。"""
+    """当前用户是否为会员（VIP会员或 AI 会员任一活跃即视为会员）。"""
     try:
         import app as _app
         store = _app.current_member_store(request) if request is not None else _app.member_store

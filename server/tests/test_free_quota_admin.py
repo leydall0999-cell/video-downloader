@@ -4,7 +4,7 @@
   ① `effective_daily_limits()` 覆盖生效且未覆盖的键保留默认（写死常量 → 可配）
   ② `free_quota` 在 `_SAVE_TABLE_KEYS` 白名单里（否则整条替换，改一处抹一处）
   ③ `_has_cost_gate` 的登记与真实代码一致（不误报/不漏报财务漏洞）
-     + 后台 4 个分栏都在（下载会员/AI会员/积分包/免费额度）
+     + 后台 4 个分栏都在（VIP会员/AI会员/积分包/免费额度）
 
 运行：python3 test_free_quota_admin.py
 """
@@ -644,7 +644,7 @@ def test_free_quota_shares_block_with_ai_cost():
     「左右排版，不要上下排版，参考会员那个」）。
 
     理由：那 11 项消耗积分的功能与成本表是**同一批 op**，拆开放要来回对照；
-    「首次体验」策略本来也在 AI 成本区里。形态对齐「下载会员/AI会员/积分包」
+    「首次体验」策略本来也在 AI 成本区里。形态对齐「VIP会员/AI会员/积分包」
     那套 admin-seg 切换器。
     """
     html = (_SERVER.parent / "web" / "index.html").read_text(encoding="utf-8")
@@ -670,7 +670,7 @@ def test_free_quota_shares_block_with_ai_cost():
     check('id="adminFqSave"' in html, "免费额度保存按钮")
     # 套餐分栏里不该再有 fq
     check('data-cat="fq"' not in html, "套餐分栏无 fq（不与套餐分开放）")
-    for cat, label in (("dl", "下载会员"), ("ai", "AI 会员"), ("cp", "积分包")):
+    for cat, label in (("dl", "VIP会员"), ("ai", "AI 会员"), ("cp", "积分包")):
         check(f'data-cat="{cat}"' in html, f"套餐分栏保留 {label}")
 
 

@@ -8,7 +8,7 @@
   1. 免费 + 2160/1440 → 402，前缀 MEMBER_QUOTA|，文案给出「最高 1080P」与会员引导
   2. 免费 + 2160 被拦时**不建任务、不烧配额**（门槛在建任务之前）
   3. 免费 + 1080/720/480/360/audio/webm/m4a/best → 全部放行（门槛只切超清档）
-  4. 激活下载会员后 + 2160 → 放行，任务 quality_key 记录真实档位
+  4. 激活VIP会员后 + 2160 → 放行，任务 quality_key 记录真实档位
   5. 批量（/api/batch）同规：免费 2160 → 402；免费 1080 → 放行
   6. 会员态读不到 → fail-open（绝不因后端异常误伤付费用户）
   7. _quality_height 折算：常量键不参与判档
@@ -86,7 +86,7 @@ def test_reject_free_above_1080():
         detail = r.json().get("detail", "")
         assert detail.startswith("MEMBER_QUOTA|"), detail
         assert "1080P" in detail, f"文案要说清上限：{detail}"
-        assert "开通下载会员" in detail, f"文案要给出会员引导：{detail}"
+        assert "开通VIP会员" in detail, f"文案要给出会员引导：{detail}"
         # 文案不能复用「次/日」配额口径（那是另一堵墙）
         assert "/日" not in detail, f"清晰度门槛不该出现配额口径：{detail}"
         assert _task_count() == before, f"{q} 被拦时不应建任务"
@@ -114,7 +114,7 @@ def test_allow_free_at_or_below_1080():
 
 
 def test_member_allows_4k():
-    """激活下载会员 → 2160 放行，任务记录真实档位。"""
+    """激活VIP会员 → 2160 放行，任务记录真实档位。"""
     _reset_state()
     _setup()
     assert _download("2160").status_code == 402, "前置：免费档应被拦"

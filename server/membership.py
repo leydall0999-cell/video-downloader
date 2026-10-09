@@ -1,15 +1,15 @@
 """VDL 会员引擎（V1，照搬 DataTool.vip 三轨结构）。
 
 三轨：
-  1) download_member  下载会员（1/3/7/30/180/365 天订阅；含下载类权益配额表）
-  2) ai_member        AI 会员（月订阅 + 一次性积分池；自动捆绑下载会员权益）
+  1) download_member  VIP会员（1/3/7/30/180/365 天订阅；含下载类权益配额表）
+  2) ai_member        AI 会员（月订阅 + 一次性积分池；自动捆绑VIP会员权益）
   3) permanent_credits 永久积分包（纯按次计费，不与订阅绑定）
 
 设计要点：
   - 纯标准库、零外部依赖（engine 不 import app / fastapi），可独立单测。
   - 时间与存储路径全部可注入（now_fn / path），测试无需 mock 系统时钟。
   - 激活续费顺延：expire_at = max(now, 当前到期) + 时长，不吞已有天数。
-  - AI 会员激活时自动把下载会员权益覆盖到同一到期日（捆绑，无「纯 AI」档）。
+  - AI 会员激活时自动把VIP会员权益覆盖到同一到期日（捆绑，无「纯 AI」档）。
   - 积分消耗顺序：先扣 AI 订阅积分（随会员到期清零），再扣永久积分。
   - 日配额惰性重置：daily_usage.date 非当日时自动清零重计。
 
@@ -37,12 +37,12 @@ import atomic_io
 
 # download member: 时长（天）、折算锚点
 DOWNLOAD_PLANS: dict[str, dict[str, Any]] = {
-    "download_1day":       {"price_cny": 1.90,   "days": 1,    "label": "下载会员·1天",   "saving": 0.0},
-    "download_3day":       {"price_cny": 4.90,   "days": 3,    "label": "下载会员·3天",   "saving": 0.0},
-    "download_7day":       {"price_cny": 9.90,   "days": 7,    "label": "下载会员·7天",   "saving": 0.0},
-    "download_month":      {"price_cny": 29.80,  "days": 30,   "label": "下载会员·月",    "saving": 0.0},
-    "download_half_year":  {"price_cny": 99.90,  "days": 180,  "label": "下载会员·180天", "saving": 0.44},
-    "download_year":       {"price_cny": 179.00, "days": 365,  "label": "下载会员·年",    "saving": 0.50, "best": True},
+    "download_1day":       {"price_cny": 1.90,   "days": 1,    "label": "VIP会员·1天",   "saving": 0.0},
+    "download_3day":       {"price_cny": 4.90,   "days": 3,    "label": "VIP会员·3天",   "saving": 0.0},
+    "download_7day":       {"price_cny": 9.90,   "days": 7,    "label": "VIP会员·7天",   "saving": 0.0},
+    "download_month":      {"price_cny": 29.80,  "days": 30,   "label": "VIP会员·月",    "saving": 0.0},
+    "download_half_year":  {"price_cny": 99.90,  "days": 180,  "label": "VIP会员·180天", "saving": 0.44},
+    "download_year":       {"price_cny": 179.00, "days": 365,  "label": "VIP会员·年",    "saving": 0.50, "best": True},
 }
 
 # AI member: 积分池大小
@@ -226,7 +226,7 @@ AI_FEATURES: list[str] = [
     "自动解说：写解说词 + 配音 + 出片",
     "高质量抠图：50 积分/次，效果更好",
     "赠送积分 5500 / 15000，30 天有效",
-    "包含下载会员全部权益",
+    "包含VIP会员全部权益",
 ]
 
 # 个人中心「今日使用」功能配额表（与前端表格四列对应：功能/体验剩余/权益余额/积分单价）
@@ -1190,7 +1190,7 @@ _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
 
 
 def download_benefits() -> list[dict[str, str]]:
-    """下载会员权益清单：配额项自动跟随 DAILY_QUOTA_LIMITS + 不限项 + 静态说明。
+    """VIP会员权益清单：配额项自动跟随 DAILY_QUOTA_LIMITS + 不限项 + 静态说明。
 
     2026-10-04 起不再有隐藏名单：条目全部保留，只把「云端/算力/AI/本地」几个字
     从文案里去掉了（见 _BENEFIT_FROM_LIMITS 上方注释）。
@@ -1370,7 +1370,7 @@ class MembershipStore:
             },
             "ai_member": {
                 "plans": ai,
-                "bundle_note": "包含下载会员全部权益",
+                "bundle_note": "包含VIP会员全部权益",
                 "features": AI_FEATURES,
             },
             "credit_packs": cp,
@@ -1933,7 +1933,7 @@ class MembershipStore:
 
     # ---- 每日配额 ----
     def _is_download_active(self) -> bool:
-        """下载权益是否活跃（独立下载会员或 AI 会员捆绑）。"""
+        """下载权益是否活跃（独立VIP会员或 AI 会员捆绑）。"""
         st = self._state
         return bool(st["download_member"].get("active")) or bool(st["ai_member"].get("active"))
 
@@ -2000,7 +2000,7 @@ class MembershipStore:
         if not q["allowed"]:
             if q.get("tier") == "free":
                 if resource == "download":   # 历史文案保持不变（test_membership 钉住）
-                    return {"ok": False, "error": f"今日免费下载额度已用尽（{q['limit']}/日）— 开通下载会员可解锁 {q.get('member_limit', 0)} 次/日",
+                    return {"ok": False, "error": f"今日免费下载额度已用尽（{q['limit']}/日）— 开通VIP会员可解锁 {q.get('member_limit', 0)} 次/日",
                             "resource": resource, "code": "MEMBER_QUOTA"}
                 return {"ok": False, "error": f"今日免费处理额度已用尽（{q['limit']}/日）— 开通会员可解锁 {q.get('member_limit', 0)} 次/日",
                         "resource": resource, "code": "MEMBER_QUOTA"}

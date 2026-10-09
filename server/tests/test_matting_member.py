@@ -103,7 +103,7 @@ def test_free_local_8_then_402():
 
 
 def test_member_unblocks_local():
-    """免费满 8 → 激活下载会员 → 恢复本地抠图，member 档 500/日。"""
+    """免费满 8 → 激活VIP会员 → 恢复本地抠图，member 档 500/日。"""
     _reset_state()
     _setup()
     for _ in range(8):
@@ -115,7 +115,7 @@ def test_member_unblocks_local():
     assert q["tier"] == "member" and q["limit"] == 500, q
     r = _post_matting(model="birefnet-general")
     assert r.status_code == 200, f"激活后应恢复：{r.text[:200]}"
-    print("✅ 免费满 8 → 激活下载会员 → 恢复本地抠图，member 档 500/日")
+    print("✅ 免费满 8 → 激活VIP会员 → 恢复本地抠图，member 档 500/日")
 
 
 def test_member_only_engine_gate():

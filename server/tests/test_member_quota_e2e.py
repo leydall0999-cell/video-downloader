@@ -4,7 +4,7 @@
   1. 解析不再设配额墙 —— 连续多次解析均 200，不受 10 次限制
   2. 免费下载 10 次/日成功计数 → 第 11 次 402 + MEMBER_QUOTA| 前缀（引导开会员）
   3. 下载任务创建失败不烧配额（无效清晰度 400 / 非法链接异常）
-  4. 免费满额后激活下载会员 → 恢复下载且档位 member（limit 1000）
+  4. 免费满额后激活VIP会员 → 恢复下载且档位 member（limit 1000）
 
 运行（独立进程，HOME 隔离）：
     cd server && python tests/test_member_quota_e2e.py
@@ -85,7 +85,7 @@ def test_download_free_10_then_402():
     assert r.status_code == 402, f"第 11 次应 402，实际 {r.status_code}"
     detail = r.json().get("detail", "")
     assert detail.startswith("MEMBER_QUOTA|"), detail
-    assert "开通下载会员可解锁 1000 次/日" in detail, detail
+    assert "开通VIP会员可解锁 1000 次/日" in detail, detail
     print("✅ 免费下载 10 次成功计数；第 11 次 402 + MEMBER_QUOTA| 引导开会员")
 
 
@@ -116,14 +116,14 @@ def test_activation_unblocks_download():
     for _ in range(10):
         assert client.post("/api/download", json=body).status_code == 200
     assert client.post("/api/download", json=body).status_code == 402
-    # 激活下载会员
+    # 激活VIP会员
     r = server_app.member_store.activate("download_month")
     assert r["ok"]
     q = server_app.member_store.quota_state("download")
     assert q["tier"] == "member" and q["limit"] == 1000
     r = client.post("/api/download", json=body)
     assert r.status_code == 200, f"激活后应恢复下载：{r.text[:200]}"
-    print("✅ 免费满 10 → 激活下载会员 → 恢复下载，member 档 1000/日")
+    print("✅ 免费满 10 → 激活VIP会员 → 恢复下载，member 档 1000/日")
 
 
 if __name__ == "__main__":

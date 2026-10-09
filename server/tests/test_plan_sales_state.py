@@ -113,7 +113,7 @@ def test_plans_carry_state() -> None:
     print("\n[F] plans() 每档带 state")
     plans = M.MembershipStore().plans()
     dl = plans.get("download_member", {}).get("plans", {})
-    check("[接线] 下载会员每档都有 state", all("state" in p for p in dl.values()))
+    check("[接线] VIP会员每档都有 state", all("state" in p for p in dl.values()))
     check("[接线] state 含 buyable/price/reason",
           all({"buyable", "price", "reason"} <= set(p["state"]) for p in dl.values()))
     ai = plans.get("ai_member", {}).get("plans", {})

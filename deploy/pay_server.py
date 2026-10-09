@@ -55,6 +55,11 @@ ADMIN_TOKEN = (os.environ.get("VDL_LICENSE_ADMIN_TOKEN") or "").strip()
 #    「已收款」的订单卡在 GRANT_FAILED，需人工对账补发。同机直连排除该故障面。
 GRANT_URL = (os.environ.get("VDL_GRANT_URL")
              or "http://127.0.0.1:8902/api/license/grant")
+# 活动价「每人限购」取数：收款前查该账号对某档的已购次数与限购上限。
+# 与授权中心同机（127.0.0.1:8902），直连 —— 与 GRANT_URL 同一条链路，
+# 不走公网回环（CF 抖动会让查限购失败、进而影响能否下单）。
+PLAN_USAGE_URL = (os.environ.get("VDL_PLAN_USAGE_URL")
+                  or "http://127.0.0.1:8902/api/license/plan_usage")
 ALIPAY_CFG = Path(os.environ.get("VDL_ALIPAY_CFG") or "/opt/vdl-license/alipay.json")
 TOKEN_TTL = float(os.environ.get("VDL_LICENSE_TOKEN_TTL_DAYS") or "30") * 86400.0
 
@@ -201,21 +206,27 @@ def _cloud_plans(force: bool = False) -> dict[str, dict]:
 
 
 def plan_quote(plan_code: str, force: bool = False) -> dict[str, Any]:
-    """下单报价：{price, buyable, reason, source}。
+    """下单报价：{price, buyable, reason, source, is_activity}。
 
     - 授权中心可达 → 按其覆盖表用 _sales_state 算有效价与可购性（source=cloud）；
     - 不可达/该档无覆盖 → 回落本地 PRICE_MAP（source=local，视为可购）。
 
     `force=True` 直连授权中心取新鲜价（**下单路径必须用**；见 _cloud_plans 的说明）。
+
+    `is_activity`：该档**此刻是否正按活动价（秒杀 flash_price）在卖** —— 供「活动价
+    每人限购一次」判定。刻意只认 `is_flash`（活动价真正生效的窗口），而非 mode：
+    `mode=limited` 在窗口结束后仍会残留（如 download_1day），此时按常态价卖，
+    不应再限购。
     """
     meta = _cloud_plans(force=force).get(str(plan_code or ""))
     if isinstance(meta, dict) and meta:
         st = _sales_state(meta, time.time())
         return {"price": f"{float(st['price']):.2f}", "buyable": st["buyable"],
-                "reason": st["reason"], "source": "cloud"}
+                "reason": st["reason"], "source": "cloud",
+                "is_activity": bool(st.get("is_flash"))}
     local = PRICE_MAP.get(plan_code) or {}
     return {"price": str(local.get("price") or "0.00"), "buyable": True,
-            "reason": "", "source": "local"}
+            "reason": "", "source": "local", "is_activity": False}
 
 
 def plan_price(plan_code: str) -> str:
@@ -512,6 +523,46 @@ def _grant(email: str, plan_code: str, note: str = "alipay-auto") -> dict[str, A
     return out
 
 
+def _check_purchase_limit(token: str, plan_code: str,
+                          is_activity: bool = False) -> tuple[Optional[bool], str]:
+    """下单前查该账号对该档的已购次数与限购上限（活动价「每人限购」）。
+
+    返回 (allowed, reason)：
+      True  → 允许（含「该档未设限购」）
+      False → 明确超限，必须拦（reason 是给用户看的文案）
+      None  → **查询失败**（授权中心不可达 / 契约不符）→ 调用方放行
+
+    有效上限 `eff`：**显式配置优先**（`limit_per_user>0`）；未配置但该档此刻正按
+    活动价卖（`is_activity`）→ **默认限购 1 次** —— 直接满足「活动价格每个用户
+    仅限购一次」，无需管理员逐档配置；两者皆无 → 不限（0）。
+
+    为什么失败要放行（fail-open）：本函数是「体验优化」，让用户在下单前就知道
+    买不了，避免付了钱才被拒。**正确性保证在授权中心 grant 侧的硬闸**
+    （`limit_per_user` 超限即 409 + critical 告警）+ 每日对账兜底；
+    反过来若这里 fail-closed，授权中心一次抖动就会让所有正常购买都下不了单，
+    代价更大。两侧属「一软一硬」，硬闸才是不可绕过的那个。
+    """
+    try:
+        body = json.dumps({"token": token, "plan_code": plan_code}).encode("utf-8")
+        req = urllib.request.Request(PLAN_USAGE_URL, data=body,
+                                     headers={"Content-Type": "application/json"},
+                                     method="POST")
+        with urllib.request.urlopen(req, timeout=6) as r:
+            out = json.loads(r.read().decode("utf-8"))
+        if not (isinstance(out, dict) and out.get("ok")):
+            return None, ""
+        limit = int(out.get("limit") or 0)
+        count = int(out.get("count") or 0)
+        eff = limit if limit > 0 else (1 if is_activity else 0)
+        if eff > 0 and count >= eff:
+            if limit > 0:
+                return False, f"该套餐每个账号限购 {limit} 次，你已购买 {count} 次"
+            return False, "该活动价每个账号限购 1 次，你已购买过了"
+        return True, ""
+    except Exception:
+        return None, ""
+
+
 # ── 下单：按可用支付产品自动选择（当面付 / 电脑网站支付 / 手机网站支付）────────── #
 def _place_order(alipay, subject: str, order_id: str, price: str, client: str) -> dict[str, Any]:
     """按可用支付产品下单，返回 {mode, qr_code, pay_url}。
@@ -651,6 +702,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False,
                                     "error": quote["reason"] or "该套餐当前不可购买",
                                     "code": "PLAN_UNAVAILABLE"})
+        # 🔴 活动价「每人限购」（2026-10-09）：收款前拦截，避免用户付了钱才被拒
+        #    （那时钱已进账、只能走退款）。仅在**明确超限**时拦；查不到（授权中心抖动）
+        #    放行，由 grant 侧硬闸 + 对账告警兜底 —— 详见 _check_purchase_limit。
+        #    传 is_activity：该档此刻正按活动价卖时，未显式配置也默认限购 1 次。
+        _allowed, _reason = _check_purchase_limit(
+            token, plan_code, is_activity=bool(quote.get("is_activity")))
+        if _allowed is False:
+            return self._json(409, {"ok": False,
+                                    "error": _reason or "该活动已达限购次数",
+                                    "code": "LIMIT_REACHED"})
         price = quote["price"]
         subject = PRICE_MAP[plan_code]["subject"]
         order_id = _gen_order_id()

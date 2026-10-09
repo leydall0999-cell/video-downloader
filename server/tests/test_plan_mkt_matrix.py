@@ -5,12 +5,14 @@
 纯字符串比较永远不匹配。
 
 这类「UI 元素凭空消失」的 bug 单测抓不到（本项目已踩 3 次），所以本守卫**直接解析
-web/app.js 里的三处真源**做交叉核对：
+web/app.js 里的四处真源**做交叉核对：
   1) PLAN_MODES 的四个 value；
   2) _MKT_BY_MODE 映射表（2026-10-03 起为「模式 → 分组数组」，活动模式同时要
      「定时开售」+「数量」两组）；
   3) 模板里的 data-mkt 标识集合；
-并模拟 4 个模式 × 3 个分组的显隐矩阵，任何一处新增模式没加映射 / 分组写成孤儿就红。
+  4) _MKT_GROUPS_UNIVERSAL（2026-10-09 起，独立于模式联动的全模式可见组，
+     例如「每人限购」任何模式都该显示，不放进 _MKT_BY_MODE 防止漏改）。
+并模拟 4 个模式 × 4 个分组的显隐矩阵，任何一处新增模式没加映射 / 分组写成孤儿就红。
 
 ⚠️ 同一个 UI 有两处模板（现有档位渲染 planBlock / 新增档位时插入的节点），
 两处都要有同样的分组，漏一处就会出现「新加的档位看不到数量框」。
@@ -24,7 +26,7 @@ import sys
 FAILS: list[str] = []
 
 APP_JS = pathlib.Path(__file__).resolve().parents[2] / "web" / "app.js"
-GROUPS = ("flash", "stock", "event")
+GROUPS = ("flash", "stock", "event", "limit")
 PLAN_MODE_VALUES = ("normal", "flash_sale", "limited", "event")
 
 
@@ -65,6 +67,15 @@ def _parse_group_ids(src: str) -> set[str]:
     return set(re.findall(r'data-mkt="([a-z]+)"', src))
 
 
+def _parse_universal(src: str) -> list[str]:
+    """_MKT_GROUPS_UNIVERSAL（独立于模式联动的全模式可见组，2026-10-09 起）。"""
+    i = src.find("_MKT_GROUPS_UNIVERSAL = [")
+    if i < 0:
+        return []
+    j = src.find("];", i)
+    return re.findall(r"'([a-z]+)'", src[i:j])
+
+
 def test_mode_list() -> None:
     print("\n[A] 模式清单")
     src = APP_JS.read_text(encoding="utf-8")
@@ -102,12 +113,16 @@ def test_no_orphan_groups() -> None:
     src = APP_JS.read_text(encoding="utf-8")
     mp = _parse_map(src)
     ids = _parse_group_ids(src)
-    check("模板里定义了 3 个分组", len(ids) == 3, f"实际 {sorted(ids)}")
+    universal = set(_parse_universal(src))
+    check("模板里定义了 4 个分组（flash/stock/event/limit）", len(ids) == 4,
+          f"实际 {sorted(ids)}")
     targets: set[str] = set()
     for lst in mp.values():
         targets.update(lst)
-    orphan = sorted(ids - targets)
-    check("每个分组都至少有一个模式能命中（无孤儿）", not orphan, f"孤儿 = {orphan}")
+    # 孤儿判定：模板里出现的分组，要么被某个模式映射到，要么显式列在 universal 组
+    orphan = sorted(ids - targets - universal)
+    check("每个分组要么被模式映射、要么是 universal 组（无孤儿）",
+          not orphan, f"孤儿 = {orphan}（被模式映射到的 = {sorted(targets)}, universal = {sorted(universal)}）")
     missing = sorted(targets - ids)
     check("映射表指向的分组都在模板里存在", not missing, f"缺失 = {missing}")
 
@@ -124,7 +139,7 @@ def test_groups_linked_to_mode() -> None:
     print("\n[D] 分组与模式联动（选什么模式只显示该模式参数）")
     src = APP_JS.read_text(encoding="utf-8")
     n = len(re.findall(r'data-mkt="([a-z]+)"', src))
-    check("模板里共 3 个分组 × 2 处（现有档位 + 新增档位）", n == 6, f"实际 {n} 处")
+    check("模板里共 4 个分组 × 2 处（现有档位 + 新增档位）", n == 8, f"实际 {n} 处")
     # 模板里不应把分组写死 hidden（否则初始渲染就全隐藏了）
     with_hidden = re.findall(r'data-mkt="([a-z]+)"[^>]*\shidden', src)
     check("模板里没有写死 hidden（初始渲染交由 JS 联动）", not with_hidden,
@@ -137,8 +152,9 @@ def test_groups_linked_to_mode() -> None:
     # JS 联动语句必须存在，且用映射表 + includes
     check("applyMktGroups 用映射表数组比较（不是直接比 data-mkt !== mode）",
           "_MKT_BY_MODE" in src and "!want.includes(g.dataset.mkt)" in src)
-    check("普通模式 want 为空数组 → 三组都隐藏",
-          "const want = _MKT_BY_MODE[mode] || [];" in src)
+    # 2026-10-09 起 universal 组（limit）通过 .concat() 强制全模式显示，不放进 _MKT_BY_MODE
+    check("universal 组通过 .concat() 强制全模式可见（不污染模式映射表）",
+          ".concat(..._MKT_GROUPS_UNIVERSAL)" in src or ".concat(_MKT_GROUPS_UNIVERSAL)" in src)
     check("change 与 click 双挂（WKWebView 下 change 未必冒泡成 click）",
           "addEventListener('change'" in src and "t.closest('.plan-mode')" in src)
     check("渲染后立即标注一次（不必等用户动下拉）",
@@ -146,22 +162,22 @@ def test_groups_linked_to_mode() -> None:
 
 
 def test_matrix() -> None:
-    print("\n[E] 4 模式 × 3 分组：显示矩阵")
+    print("\n[E] 4 模式 × 4 分组：显示矩阵")
     src = APP_JS.read_text(encoding="utf-8")
     modes = _parse_modes(src)
     mp = _parse_map(src)
+    universal = _parse_universal(src)
+    # 普通模式只显示 universal 组；其他模式叠加模式映射的组
     expect = {
-        "normal": [],
-        "flash_sale": ["flash"],
-        "limited": ["stock"],
-        "event": ["event", "stock"],     # 活动模式同时要数量（2026-10-03 用户要求）
+        "normal": list(universal),
+        "flash_sale": sorted(set(["flash"]) | set(universal)),
+        "limited": sorted(set(["stock"]) | set(universal)),
+        "event": sorted(set(["event", "stock"]) | set(universal)),
     }
     for m in modes:
-        want = mp.get(m) or []
-        shown = [g for g in GROUPS if g in want]     # 隐藏的是 not in want
-        # 比较集合（显示顺序由 DOM 决定，不参与判定）
-        check(f"模式 {m} → 只显示 {expect.get(m)}", set(shown) == set(expect.get(m) or []),
-              f"实际 {shown}")
+        want = sorted(set(mp.get(m) or []) | set(universal))
+        check(f"模式 {m} → 显示 {expect.get(m)}", want == expect.get(m),
+              f"实际 {want}")
 
 
 def test_event_mode_has_qty() -> None:

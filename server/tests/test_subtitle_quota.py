@@ -2,7 +2,7 @@
 
 隔离 HOME 下 TestClient：
   1. 免费本地字幕提取 2 次/日成功计数 → 第 3 次 402 + MEMBER_QUOTA|（引导开会员）
-  2. 激活下载会员 → 恢复本地字幕提取，member 档无限（不计日配额）
+  2. 激活VIP会员 → 恢复本地字幕提取，member 档无限（不计日配额）
   3. 会员专享档位不在此测（字幕提取无会员专享引擎）——只验证日配额墙
 
 运行（独立进程，HOME 隔离）：
@@ -90,7 +90,7 @@ def test_free_2_then_402():
 
 
 def test_member_unblocks():
-    """免费满 2 → 激活下载会员 → 恢复本地字幕提取，member 档无限（不计日配额）。"""
+    """免费满 2 → 激活VIP会员 → 恢复本地字幕提取，member 档无限（不计日配额）。"""
     _reset_state()
     _setup()
     for _ in range(2):
@@ -107,7 +107,7 @@ def test_member_unblocks():
         assert rr.status_code == 200, f"会员应恢复：{rr.text[:200]}"
     used = server_app.member_store.status()["daily_usage"].get("subtitle", 0)
     assert used == 2, f"会员档不应累计字幕提取日配额，实际 {used}"
-    print("✅ 免费满 2 → 激活下载会员 → 恢复本地字幕提取，member 档无限（日配额不累计）")
+    print("✅ 免费满 2 → 激活VIP会员 → 恢复本地字幕提取，member 档无限（日配额不累计）")
 
 
 def test_duplicate_submit_reuses_job():

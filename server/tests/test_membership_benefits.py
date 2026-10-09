@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""守卫：下载会员权益文案必须与配额表一致（2026-10-03）。
+"""守卫：VIP会员权益文案必须与配额表一致（2026-10-03）。
 
 背景：会员中心那条权益栏原先是**手写死的 6 条**，而配额表里还有
 matting（本地抠图 500/日）、cloud（云端算力 200/日）、app_compute（App 本地
@@ -11,7 +11,7 @@ FEATURE_USAGE_DEFS 自动生成，本守卫钉死：
   1) 配额表里每一条「会员可用」的配额，都必须在权益清单里出现（漏一条就红）；
   2) 免费为 0（不开放）的配额不得出现在会员权益里；
   3) 会员不限次（member_limit = -1）的功能必须出现且写明「不限」；
-  4) 必须写清「不含 AI 积分」，否则用户会以为下载会员也送积分；
+  4) 必须写清「不含 AI 积分」，否则用户会以为VIP会员也送积分；
   5) 关键说明项（清晰度、设备数、高速通道、客服）在列表里。
 """
 from __future__ import annotations
@@ -119,7 +119,7 @@ def test_benefits_key_notes() -> None:
     print("\n[C] 关键说明项（避免用户误解）")
     by_key = {str(i.get("key")): str(i.get("text")) for i in M.download_benefits()}
     # 2026-10-04：no_credits 仍在（条目不许删），只是措辞去掉了「AI / 云端」字眼 ——
-    # 「下载会员不送积分」这条关键说明不能丢。
+    # 「VIP会员不送积分」这条关键说明不能丢。
     check("[说明] no_credits 条目仍在", "no_credits" in by_key)
     check("[说明] no_credits 仍写明「不含积分额度」",
           "不含" in by_key.get("no_credits", "") and "积分" in by_key.get("no_credits", ""))
@@ -140,19 +140,19 @@ def test_plans_uses_generated_benefits() -> None:
     check("[接线] plans().download_member.benefits 非空", len(benefits) >= 10)
     check("[接线] 与 download_benefits() 条数一致", len(benefits) == len(M.download_benefits()))
     ai = plans.get("ai_member", {})
-    check("[接线] AI 会员仍带 plans + 捆绑说明", bool(ai.get("plans")) and "下载会员" in str(ai.get("bundle_note")))
+    check("[接线] AI 会员仍带 plans + 捆绑说明", bool(ai.get("plans")) and "VIP会员" in str(ai.get("bundle_note")))
 
 
 def test_download_plan_grants_no_credits() -> None:
-    print("\n[E] 下载会员不送积分（激活逻辑钉死）")
+    print("\n[E] VIP会员不送积分（激活逻辑钉死）")
     st = M.MembershipStore()
     st.activate("download_7day", via="test")
     s = st.status()
-    check("[激活] 下载会员激活后永久积分为 0", int(s.get("permanent_credits") or 0) == 0)
+    check("[激活] VIP会员激活后永久积分为 0", int(s.get("permanent_credits") or 0) == 0)
     check("[激活] AI 会员未激活", not (s.get("ai_member") or {}).get("active"))
     src = open(pathlib.Path(M.__file__).parent / "membership.py", encoding="utf-8").read()
     dl_branch = src.split('if code in _dl_plans:')[1].split('elif code in _ai_plans:')[0]
-    check("[激活] 下载会员分支不写任何积分字段",
+    check("[激活] VIP会员分支不写任何积分字段",
           "credits" not in dl_branch)
 
 

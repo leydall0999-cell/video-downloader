@@ -84,7 +84,7 @@ def _official_hash(params: dict, secret: str) -> str:
 def test_sign_uses_raw_values_and_skips_empty():
     """签名必须取原值（不得 urlencode），且空值与 hash 不参与。"""
     params = {"version": "1.1", "appid": APPID, "total_fee": "29.80",
-              "title": "视频工坊·下载会员月卡",
+              "title": "视频工坊·VIP会员月卡",
               "notify_url": NOTIFY_BASE + "/api/pay/xunhupay/notify",
               "trade_order_id": "VDLP1"}
     got = P._xunhu_sign(params, SECRET)
@@ -116,7 +116,7 @@ def test_place_xunhu_sends_required_params(tmp_path):
         ).encode())
 
     with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
-        res = P._place_xunhu("视频工坊·下载会员月卡", "VDLP1", "29.80", "desktop")
+        res = P._place_xunhu("视频工坊·VIP会员月卡", "VDLP1", "29.80", "desktop")
 
     p = {k: v[0] for k, v in sent["body"].items()}
     assert p["appid"] == APPID and p["total_fee"] == "29.80"

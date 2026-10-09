@@ -231,7 +231,7 @@ def _download_gate_error(request) -> str | None:
     if qs.get('allowed'):
         return None
     if qs.get('tier') == 'free':
-        return f"今日免费下载次数已用尽（{qs.get('limit', 10)}/日）— 开通下载会员可解锁 {qs.get('member_limit') or 1000} 次/日"
+        return f"今日免费下载次数已用尽（{qs.get('limit', 10)}/日）— 开通VIP会员可解锁 {qs.get('member_limit') or 1000} 次/日"
     return f"今日下载配额已用尽（{qs.get('limit')}/日）"
 
 # 清晰度会员门槛（2026-10-02 用户定档「免费用户要弹出会员才能下载」）：
@@ -273,7 +273,7 @@ def _quality_gate_error(request, quality: str) -> str | None:
         return None
     label = app.downloader.quality_label(str(height))
     return (f'免费用户最高支持 {FREE_MAX_QUALITY}P 清晰度（本次选择 {label}）— '
-            f'开通下载会员可解锁 2K/4K 原画')
+            f'开通VIP会员可解锁 2K/4K 原画')
 
 
 def _stream_referer(host: str) -> str:
@@ -526,7 +526,7 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
         task_ids.append(task.id)
     if not task_ids:
         if quota_exhausted:
-            raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + (_download_gate_error(request) or '今日免费下载次数已用尽 — 开通下载会员可解锁'))
+            raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + (_download_gate_error(request) or '今日免费下载次数已用尽 — 开通VIP会员可解锁'))
         raise app.HTTPException(status_code=400, detail='链接均无法识别，请确认是视频播放页链接')
     return {'task_ids': task_ids, 'count': len(task_ids), 'skipped': skipped, 'quota_exhausted': quota_exhausted}
 

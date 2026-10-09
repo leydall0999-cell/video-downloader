@@ -67,7 +67,7 @@ def test_frontend_wiring():
     check("app.js 暴露 __vdlOpenMemberCenter 挂载点",
           "window.__vdlOpenMemberCenter = openMemberCenter;" in app)
     check("app.js 的 402 文案按「清晰度」分岔",
-          "/清晰度/.test(tip)" in app and "开通下载会员即可解锁 2K/4K 原画" in app)
+          "/清晰度/.test(tip)" in app and "开通VIP会员即可解锁 2K/4K 原画" in app)
     check("app.js 仍保留每日次数口径的文案",
           "免费额度每日 24:00 刷新" in app)
 

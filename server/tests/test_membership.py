@@ -33,7 +33,7 @@ def test_plans_structure():
     st = _mkstore(tempfile.mkdtemp(), [T0])
     p = st.plans()
     assert p["currency"] == "CNY"
-    # 下载会员 6 档（1/3/7 天体验档 + 月/半年/年），年档带 best 标记
+    # VIP会员 6 档（1/3/7 天体验档 + 月/半年/年），年档带 best 标记
     assert set(DOWNLOAD_PLANS) == {
         "download_1day", "download_3day", "download_7day",
         "download_month", "download_half_year", "download_year"}
@@ -45,7 +45,7 @@ def test_plans_structure():
     assert DOWNLOAD_PLANS["download_half_year"]["saving"] > 0.4
     # AI 会员 2 档，捆绑提示
     assert set(AI_PLANS) == {"ai_5500", "ai_15000"}
-    assert "包含下载会员全部权益" in p["ai_member"]["bundle_note"]
+    assert "包含VIP会员全部权益" in p["ai_member"]["bundle_note"]
     # 积分包 2 档
     assert set(CREDIT_PACKS) == {"credits_5000", "credits_15000"}
     # 权益文案含日配额
@@ -63,7 +63,7 @@ def test_activate_download_month():
     assert abs(s["download_member"]["expire_at"] - (T0 + 30 * 86400)) < 1
     assert s["download_member"]["source"] == "download"
     assert s["ai_member"]["active"] is False
-    print("✅ 下载会员月卡激活，到期 = now+30d")
+    print("✅ VIP会员月卡激活，到期 = now+30d")
 
 def test_activate_renewal_extends():
     """续费顺延：到期日 = max(now, 当前到期) + 时长，不吞已有天数。"""
@@ -88,7 +88,7 @@ def test_ai_member_bundles_download():
     assert s["download_member"]["active"] is True
     assert abs(s["download_member"]["expire_at"] - (T0 + 30 * 86400)) < 1
     assert s["download_member"]["source"] == "ai_bundle"
-    print("✅ AI 会员自动捆绑下载会员权益（到期对齐）")
+    print("✅ AI 会员自动捆绑VIP会员权益（到期对齐）")
 
 def test_ai_expiry_clears_subscription_credits():
     cur = [T0]
@@ -147,7 +147,7 @@ def test_free_quota_10_then_blocked():
     r = st.use_daily("download")
     assert r["ok"] is False
     assert r.get("code") == "MEMBER_QUOTA"
-    assert "免费" in r["error"] and "开通下载会员" in r["error"]
+    assert "免费" in r["error"] and "开通VIP会员" in r["error"]
     q = st.quota_state("download")
     assert q["tier"] == "free" and q["limit"] == 10 and q["used"] == 10
     # 2026-10-04：原画/批量两条占位配额已下线（原画是清晰度档位门而非次数配额），
@@ -215,7 +215,7 @@ def test_new_quota_keys_roll_over_daily():
     print("✅ 拆键后的 4 个新键跨日均重置")
 
 def test_member_quota_upgrade_after_activation():
-    """开通下载会员后 download 额度升到 1000/日，当日已用计数延续。"""
+    """开通VIP会员后 download 额度升到 1000/日，当日已用计数延续。"""
     cur = [T0]
     st = _mkstore(tempfile.mkdtemp(), cur)
     for _ in range(10):

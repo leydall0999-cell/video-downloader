@@ -9533,7 +9533,7 @@ el.dwVidPlayer.hidden = true;
       if (msg.indexOf('MEMBER_QUOTA|') === 0) {
         const tip = msg.split('|').slice(1).join('|') || '今日免费解析额度已用尽';
         try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
-        showError(tip, '开通下载会员即可继续解析（免费额度每日 24:00 刷新）');
+        showError(tip, '开通VIP会员即可继续解析（免费额度每日 24:00 刷新）');
         return;
       }
       showError(error.message || '解析失败', error.hint, '', error.category);
@@ -9593,8 +9593,8 @@ el.dwVidPlayer.hidden = true;
         const tip = _msg2.split('|').slice(1).join('|') || '今日免费下载次数已用尽';
         try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
         const hint = /清晰度/.test(tip)
-          ? '开通下载会员即可解锁 2K/4K 原画（1080P 及以下免费不限档）'
-          : '开通下载会员即可继续下载（免费额度每日 24:00 刷新）';
+          ? '开通VIP会员即可解锁 2K/4K 原画（1080P 及以下免费不限档）'
+          : '开通VIP会员即可继续下载（免费额度每日 24:00 刷新）';
         showError(tip, hint);
       } else if (error.subscribe) {
         promptSubscribe();
@@ -16821,7 +16821,7 @@ el.dwVidPlayer.hidden = true;
       const ai = s.ai_member || {};
       if (dl.active) {
         const src = dl.source === 'ai_bundle' ? '（随 AI 会员）' : '';
-        chips.push(`<span class="member-chip member-chip-dl">👑 下载会员${src} 至 ${_memberFmtDate(dl.expire_at)}</span>`);
+        chips.push(`<span class="member-chip member-chip-dl">👑 VIP会员${src} 至 ${_memberFmtDate(dl.expire_at)}</span>`);
       }
       if (ai.active) {
         // 标注「到期清零」：AI 订阅积分随 AI 会员到期日一起失效，与永久积分区别开来
@@ -16855,7 +16855,7 @@ el.dwVidPlayer.hidden = true;
       const aiPlans = (p.ai_member && p.ai_member.plans) || {};
       const packs = (p.credit_packs) || {};
       const dlBenefits = (p.download_member && p.download_member.benefits) || [];
-      // 下载会员（6 档：1/3/7 天体验 + 月/半年/年）+ 共享权益清单
+      // VIP会员（6 档：1/3/7 天体验 + 月/半年/年）+ 共享权益清单
       const dlCards = Object.entries(dlPlans).map(([code, plan]) =>
         _memberCard(plan, code, { unit: plan.days ? ` / ${plan.days} 天` : '' })).join('');
       const dlList = dlBenefits.map(b => `<li>${escHtml(b.text)}</li>`).join('');
@@ -16864,22 +16864,22 @@ el.dwVidPlayer.hidden = true;
         <div class="member-plans">${dlCards}</div>`;
       // AI 会员（2 档，捆绑下载权益）
       // 2026-10-04：补上权益清单渲染 —— ai_member.features 一直在接口里，但前端
-      // 从没渲染过，AI 会员面板只有一行「包含下载会员全部权益」+ 两张卡（用户反馈
-      // 「AI 会员补充权益」）。复用下载会员那套 .member-benefits 样式，视觉一致。
+      // 从没渲染过，AI 会员面板只有一行「包含VIP会员全部权益」+ 两张卡（用户反馈
+      // 「AI 会员补充权益」）。复用VIP会员那套 .member-benefits 样式，视觉一致。
       const aiFeatures = (p.ai_member && p.ai_member.features) || [];
       const aiList = aiFeatures.length
         ? `<div class="member-benefits member-benefits-top"><ul class="member-benefits-list">${
             aiFeatures.map(f => `<li>${escHtml(f)}</li>`).join('')}</ul></div>`
         : '';
-      // bundle_note（🔗 包含下载会员全部权益）已在 features 里有一项，重复会显得啰嗦，
+      // bundle_note（🔗 包含VIP会员全部权益）已在 features 里有一项，重复会显得啰嗦，
       // 只有当 features 没提到时才保留这条兜底。
       const aiNote = (p.ai_member && p.ai_member.bundle_note
-                      && !aiFeatures.some(f => String(f).includes('下载会员')))
+                      && !aiFeatures.some(f => String(f).includes('VIP会员')))
         ? `<div class="member-bundle-note">🔗 ${escHtml(p.ai_member.bundle_note)}</div>` : '';
       const aiCards = Object.entries(aiPlans).map(([code, plan]) =>
         _memberCard(plan, code, {
           unit: ' / 月',
-          foot: `月赠 ${plan.credits} 积分（30 天有效）· 含下载会员权益`,
+          foot: `月赠 ${plan.credits} 积分（30 天有效）· 含VIP会员权益`,
         })).join('');
       el.memberPaneAi.innerHTML = `${aiNote}${aiList}<div class="member-plans">${aiCards}</div>`;
       // 永久积分包
@@ -18587,7 +18587,7 @@ el.dwVidPlayer.hidden = true;
       const dl = ms.download_member || {};
       const ai = ms.ai_member || {};
       const memberBits = [];
-      if (dl.active) memberBits.push(`下载会员 至 ${_memberFmtDate(dl.expire_at)}`);
+      if (dl.active) memberBits.push(`VIP会员 至 ${_memberFmtDate(dl.expire_at)}`);
       if (ai.active) memberBits.push(`AI会员 至 ${_memberFmtDate(ai.expire_at)}`);
       setTxt(el.userMenuMember, memberBits.length ? memberBits.join(' · ') : '免费用户');
       const creditsTotal = Number(ms.credits_total || 0);
@@ -18699,12 +18699,12 @@ el.dwVidPlayer.hidden = true;
       const t = h.at ? _memberFmtDate(h.at, true) : '—';
       const name = esc(_planName(h.code));
       const kind = esc(_purchaseType(h.code));
-      const via = h.via === 'ui_test' ? '激活码' : esc(h.via || '—');
+      const via = ({ ui_test: '激活码', cloud: '在线购买', admin_direct: '管理员补单' })[h.via] || esc(h.via || '—');
       let expire = '—';
       if (h.code && h.code.startsWith('download_')) {
-        expire = dl.active ? `至 ${_memberFmtDate(dl.expire_at)}` : '已过期';
+        expire = dl.active ? `至 ${_memberFmtDate(dl.expire_at, true)}` : '已过期';
       } else if (h.code && h.code.startsWith('ai_')) {
-        expire = ai.active ? `至 ${_memberFmtDate(ai.expire_at)}` : '已过期';
+        expire = ai.active ? `至 ${_memberFmtDate(ai.expire_at, true)}` : '已过期';
       } else if (h.code && h.code.startsWith('credits_')) {
         expire = '永久';
       }
@@ -18785,7 +18785,8 @@ el.dwVidPlayer.hidden = true;
   // 套餐 code → 可读名称（与 membership.py 套餐表对应）
   function _planName(code) {
     const MAP = {
-      download_month: '下载会员·月卡', download_half_year: '下载会员·180天', download_quarter: '下载会员·季卡', download_year: '下载会员·年卡',
+      download_1day: 'VIP会员·1天', download_3day: 'VIP会员·3天', download_7day: 'VIP会员·7天',
+      download_month: 'VIP会员·月卡', download_half_year: 'VIP会员·180天', download_quarter: 'VIP会员·季卡', download_year: 'VIP会员·年卡',
       ai_5500: 'AI会员·积分包', ai_15000: 'AI会员·月卡', ai_40000: 'AI会员·季卡', ai_150000: 'AI会员·年卡',
       credits_5000: '积分包 5000', credits_15000: '积分包 15000', credits_50000: '积分包 50000',
     };
@@ -18793,7 +18794,7 @@ el.dwVidPlayer.hidden = true;
   }
   function _purchaseType(code) {
     if (!code) return '其他';
-    if (code.startsWith('download_')) return '下载会员';
+    if (code.startsWith('download_')) return 'VIP会员';
     if (code.startsWith('ai_')) return 'AI 会员';
     if (code.startsWith('credits_')) return '积分包';
     return '其他';
@@ -18864,7 +18865,7 @@ el.dwVidPlayer.hidden = true;
       const ai = ms.ai_member || {};
       const memberRows = [];
       // 2026-10-03 改版：渐变会员卡行（盾牌图标 + 名称 + 有效期至 …），样式见 .pf-mrow
-      if (dl.active) memberRows.push(`<div class="pf-mrow"><span class="pf-mrow-ic is-dl">🛡</span><span class="pf-mrow-name">下载会员</span><span class="pf-mrow-exp">有效期至 ${esc(_memberFmtDate(dl.expire_at))}</span></div>`);
+      if (dl.active) memberRows.push(`<div class="pf-mrow"><span class="pf-mrow-ic is-dl">🛡</span><span class="pf-mrow-name">VIP会员</span><span class="pf-mrow-exp">有效期至 ${esc(_memberFmtDate(dl.expire_at))}</span></div>`);
       if (ai.active) memberRows.push(`<div class="pf-mrow"><span class="pf-mrow-ic is-ai">🛡</span><span class="pf-mrow-name">AI 会员</span><span class="pf-mrow-exp">有效期至 ${esc(_memberFmtDate(ai.expire_at))}</span></div>`);
       if (memberRows.length) {
         if (el.profMemberList) { el.profMemberList.innerHTML = memberRows.join(''); el.profMemberList.hidden = false; }
@@ -21022,7 +21023,24 @@ el.dwVidPlayer.hidden = true;
           `<td style="color:${x.grant_failed ? '#e5484d' : 'inherit'}">${x.grant_failed || 0}</td>` +
           `<td>${x.auto_grants || 0}</td><td>${x.redeems || 0}</td>` +
           `<td style="color:${x.mismatch ? '#e5484d' : '#30a46c'}">${x.mismatch || 0}</td></tr>`).join('');
-        box.innerHTML = `<div class="admin-count" style="margin-bottom:6px">近 7 天线上入账 <b>¥${(d && d.income_yuan_total || 0).toFixed(2)}</b> · 对账差异 <b style="color:${mismatches.length ? '#e5484d' : '#30a46c'}">${mismatches.length}</b> · 卡密核销（线下入账）${totalRedeems} 笔</div>` +
+        // 收入单独拎出来（2026-10-09 用户要求）：此前「入账/差异/核销」挤一行，
+        // 收入只是行内加粗，扫一眼抓不到。现在收入独立成卡、加大加粗放最前。
+        const incomeYuan = (d && d.income_yuan_total || 0);
+        box.innerHTML =
+          `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">` +
+          `<div style="flex:1 1 150px;background:linear-gradient(135deg,#0e7a3d,#30a46c);color:#fff;border-radius:10px;padding:10px 14px">` +
+          `<div style="font-size:.72rem;opacity:.85">线上入账（近 7 天）</div>` +
+          `<div style="font-size:1.5rem;font-weight:700;line-height:1.25">¥${incomeYuan.toFixed(2)}</div>` +
+          `<div style="font-size:.7rem;opacity:.85">共 ${dayRows.reduce((s, x) => s + (x.paid_orders || 0), 0)} 笔已付订单</div></div>` +
+          `<div style="flex:1 1 130px;background:var(--card,#fff);border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:10px 14px">` +
+          `<div style="font-size:.72rem;color:var(--text-mute,#6b7280)">对账差异</div>` +
+          `<div style="font-size:1.25rem;font-weight:700;color:${mismatches.length ? '#e5484d' : '#30a46c'}">${mismatches.length}</div>` +
+          `<div style="font-size:.7rem;color:var(--text-mute,#6b7280)">${mismatches.length ? '需逐条核对' : '账实相符'}</div></div>` +
+          `<div style="flex:1 1 130px;background:var(--card,#fff);border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:10px 14px">` +
+          `<div style="font-size:.72rem;color:var(--text-mute,#6b7280)">卡密核销（线下入账）</div>` +
+          `<div style="font-size:1.25rem;font-weight:700">${totalRedeems}</div>` +
+          `<div style="font-size:.7rem;color:var(--text-mute,#6b7280)">笔</div></div>` +
+          `</div>` +
           (dayRows.length ? '<table class="admin-table"><thead><tr><th>日期</th><th>线上入账</th><th>订单数</th><th>发货失败</th><th>自动发货</th><th>卡密核销</th><th>差异</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="admin-empty">近 7 天暂无账目</div>');
         if (mis) mis.innerHTML = mismatches.map((m) => {
           const kk = _MON_MISMATCH_KINDS[m.kind] || [m.kind, 'is-warn'];
@@ -21363,7 +21381,7 @@ el.dwVidPlayer.hidden = true;
 
     // ---- AI 计费区左右分栏切换（2026-10-06 用户定档「左右排版，不要上下排版」）----
     // 「AI 积分成本」与「免费额度」是同一批 op，做成同 section 内的两栏切换，
-    // 形态对齐「下载会员/AI会员/积分包」那套 admin-seg。
+    // 形态对齐「VIP会员/AI会员/积分包」那套 admin-seg。
     const applyAiCostSeg = (cat) => {
       const seg = $('adminAiCostSeg');
       if (!seg) return;
@@ -21669,7 +21687,7 @@ el.dwVidPlayer.hidden = true;
         if (fv === 'member' && !_isMember(u)) return false;
         if (!q) return true;
         const m = u.membership || {};
-        const mem = m.download_active ? '下载会员' : (m.ai_active ? 'AI会员' : '免费');
+        const mem = m.download_active ? 'VIP会员' : (m.ai_active ? 'AI会员' : '免费');
         const identifier = esc(u.identifier).toLowerCase();
         const uidStr = (u.user_id || '').toLowerCase();
         const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString().toLowerCase() : '';
@@ -21688,7 +21706,7 @@ el.dwVidPlayer.hidden = true;
         const h = String(u.user_id || 'x').split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 100, 7);
         const isFe = h % 2 === 1;
         const ava = `<span class="admin-ava" style="background:${isFe ? '#fce7f3' : '#dbeafe'}">${isFe ? '👩' : '👨'}</span>`;
-        const memChip = m.download_active ? '<span class="admin-chip is-blue">下载会员</span>'
+        const memChip = m.download_active ? '<span class="admin-chip is-blue">VIP会员</span>'
           : (m.ai_active ? '<span class="admin-chip is-violet">AI会员</span>'
           : '<span class="admin-chip is-gray">免费</span>');
         // 状态列：设计稿为纯文字（正常深灰 / 已禁用红字）
@@ -21731,7 +21749,7 @@ el.dwVidPlayer.hidden = true;
     };
     const renderMemberTable = () => {
       if (!memberTable) return;
-      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>下载会员</th><th>AI会员</th><th>AI积分</th><th>永久积分</th><th>合计</th><th>操作</th></tr></thead>';
+      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>VIP会员</th><th>AI会员</th><th>AI积分</th><th>永久积分</th><th>合计</th><th>操作</th></tr></thead>';
       const rows = lastMembers.map((m) => {
         const dl = m.download_active ? `✅ ${esc(m.download_plan || '')}` : '—';
         const ai = m.ai_active ? `✅ ${esc(m.ai_plan || '')}` : '—';
@@ -21822,7 +21840,7 @@ el.dwVidPlayer.hidden = true;
             + '再回来看这里的配额消耗与云端授权。</div></section>'
             + '<section class="aud-sec"><h4>账号状态</h4><table class="admin-table"><tbody>'
             + _usageRows([
-              ['下载会员', (m.download_member || {}).active ? '有效' : '无（免费账号）'],
+              ['VIP会员', (m.download_member || {}).active ? '有效' : '无（免费账号）'],
               ['AI 会员', (m.ai_member || {}).active ? '有效' : '无'],
               ['积分', String(m.credits_total != null ? m.credits_total : 0)],
               ['设备指纹', u.device_fp || '—（从未在本机登录）'],
@@ -21841,7 +21859,7 @@ el.dwVidPlayer.hidden = true;
         const dl = m.download_member || {}, ai = m.ai_member || {};
         let h = '<section class="aud-sec"><h4>会员与权益</h4><table class="admin-table"><tbody>'
           + _usageRows([
-            ['下载会员', dl.active ? _usageChip(true, '有效至 ' + _usageFmtDate(dl.expire_at), '无') : _usageChip(false, '', '无')],
+            ['VIP会员', dl.active ? _usageChip(true, '有效至 ' + _usageFmtDate(dl.expire_at), '无') : _usageChip(false, '', '无')],
             ['会员来源', dl.source || '—'],
             ['AI 会员', ai.active ? _usageChip(true, '有效至 ' + _usageFmtDate(ai.expire_at), '无') : _usageChip(false, '', '无')],
             ['AI 订阅积分', `${Number(ai.credits_left || 0)}（随会员到期清零）`],
@@ -22077,11 +22095,14 @@ el.dwVidPlayer.hidden = true;
       return s;
     };
     const _MKT_BY_MODE = { flash_sale: ['flash'], limited: ['stock'], event: ['event', 'stock'], normal: [] };
+    // 「每人限购」任何模式都可配（常态价也能限购 N 次；活动价不填时服务端默认按 1 次），
+    // 所以独立成 universal 组，不放进 _MKT_BY_MODE（防止某天改映射把它漏掉）。
+    const _MKT_GROUPS_UNIVERSAL = ['limit'];
     const applyMktGroups = (item) => {
       if (!item) return;
       const sel = item.querySelector('.plan-mode');
       const mode = (sel && sel.value) || 'normal';
-      const want = _MKT_BY_MODE[mode] || [];
+      const want = (_MKT_BY_MODE[mode] || []).concat(..._MKT_GROUPS_UNIVERSAL);
       item.querySelectorAll('.plan-mkt-group').forEach((g) => {
         g.hidden = !want.includes(g.dataset.mkt);
       });
@@ -22241,6 +22262,9 @@ el.dwVidPlayer.hidden = true;
           <div class="plan-mkt-group" data-mkt="stock"><div class="plan-mkt-group-h">数量（总共能卖多少份，售完自动置灰；两种模式通用）</div><div class="admin-plan-mkt-grid">
             <label>总份数<input class="admin-input admin-input-sm plan-stock" data-plan="${esc(code)}" type="number" placeholder="0=不限"></label>
             <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(code)}" value="0" type="number"></label>
+          </div></div>
+          <div class="plan-mkt-group" data-mkt="limit"><div class="plan-mkt-group-h">每人限购（同一账号最多能买几次；留空或 0 = 不限。**活动价/秒杀档位不填也默认限购 1 次**）</div><div class="admin-plan-mkt-grid">
+            <label>每人限购<input class="admin-input admin-input-sm plan-limit" data-plan="${esc(code)}" type="number" placeholder="留空=不限（活动价默认 1）"></label>
           </div></div>
           <div class="admin-plan-mkt-grid">
             <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(code)}" placeholder="显示在套餐卡片上"></label>
@@ -22428,6 +22452,12 @@ el.dwVidPlayer.hidden = true;
                   <label>已售份数<input class="admin-input admin-input-sm plan-sold" data-plan="${esc(k)}" value="${esc(p.sold || 0)}" type="number"></label>
                 </div>
               </div>
+              <div class="plan-mkt-group" data-mkt="limit">
+                <div class="plan-mkt-group-h">每人限购（同一账号最多能买几次；留空或 0 = 不限。**活动价/秒杀档位不填也默认限购 1 次**）</div>
+                <div class="admin-plan-mkt-grid">
+                  <label>每人限购<input class="admin-input admin-input-sm plan-limit" data-plan="${esc(k)}" value="${esc(p.limit_per_user || '')}" type="number" placeholder="留空=不限（活动价默认 1）"></label>
+                </div>
+              </div>
               <div class="admin-plan-mkt-grid">
                 <label class="plan-desc">补充说明<input class="admin-input admin-input-sm plan-desc-input" data-plan="${esc(k)}" value="${esc(p.desc || '')}" placeholder="显示在套餐卡片上"></label>
               </div>
@@ -22438,14 +22468,14 @@ el.dwVidPlayer.hidden = true;
         // 新增自定义档位（完全自定义：code 唯一即可）
         h += `<div class="admin-plan-add">
           <input class="admin-input admin-input-sm plan-new-code" placeholder="新档位 code（如 download_2day）" spellcheck="false">
-          <input class="admin-input admin-input-sm plan-new-label" placeholder="标题（如 下载会员·2天）">
+          <input class="admin-input admin-input-sm plan-new-label" placeholder="标题（如 VIP会员·2天）">
           <input class="admin-input admin-input-sm plan-new-price" type="number" step="0.01" placeholder="价格">
           <input class="admin-input admin-input-sm plan-new-days" type="number" placeholder="${kind === 'days' ? '天数' : '积分'}">
           <button type="button" class="admin-btn admin-btn-sm admin-btn-primary plan-add-btn">+ 新增档位</button>
         </div>`;
         return h + '</div>';
       };
-      let html = planBlock('下载会员套餐', dl, 'days', 'dl');
+      let html = planBlock('VIP会员套餐', dl, 'days', 'dl');
       html += planBlock('AI 会员套餐', ai, 'credits', 'ai');
       html += planBlock('积分包', cp, 'credits', 'cp');
       html += '<div class="admin-plan-group" data-cat="cost"><h4>AI 积分成本（每次操作消耗积分）</h4>';
@@ -22514,6 +22544,7 @@ el.dwVidPlayer.hidden = true;
           const feEl = val('.plan-flashend');
           const stockEl = val('.plan-stock');
           const soldEl = val('.plan-sold');
+          const limitEl = val('.plan-limit');
           const saEl = val('.plan-startat');
           const eaEl = val('.plan-endat');
           const descEl = val('.plan-desc-input');
@@ -22530,6 +22561,8 @@ el.dwVidPlayer.hidden = true;
           if (feEl) out[k].flash_end = _localToTs(feEl.value);
           if (stockEl) out[k].stock = parseInt(stockEl.value, 10) || 0;
           if (soldEl) out[k].sold = parseInt(soldEl.value, 10) || 0;
+          // 每人限购：0/留空 = 不限；活动价档位由服务端默认按 1 次处理
+          if (limitEl) out[k].limit_per_user = Math.max(0, parseInt(limitEl.value, 10) || 0);
           if (saEl) out[k].start_at = _localToTs(saEl.value);
           if (eaEl) out[k].end_at = _localToTs(eaEl.value);
         });
