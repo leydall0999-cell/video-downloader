@@ -331,6 +331,75 @@ def test_h_hint_self_describes() -> None:
     check("不误判为「订单号不存在」", "不存在" not in d, d)
 
 
+# ── [I] 查账区间：窗口真生效 / 上限钳制 / notify 门 ────────────────────────── #
+def test_i_range_windows() -> None:
+    """2026-10-09 用户要求「入账可查 1 天/3 天/7 天/1 个月/半年/1 年」。
+
+    钉住三件事：
+      [I1] `days` 真的扩大窗口（90 天前的订单：days=7 看不到、days=91 看得到）；
+      [I2] 上限钳制（超上限按 RECON_DAYS_MAX 给、上限够 365、0/负数回落 1、数字字符串能吃）；
+      [I3] `notify=False`（用户手工查大区间）**只出报告、不动告警状态** ——
+           否则一次拉近一年会把窗口外从未扫过的历史差异炸成一堆新 critical 告警，
+           并被 recon_seen 钉住（7 天窗口内一直响）；
+      [I4] `notify=True`（后台 10 分钟自扫 / 小窗口查询）维持原行为：告警 + 去重。
+    """
+    print("[I] 查账区间：窗口生效 / 上限钳制 / notify 门")
+
+    print("      [I1] 90 天前的订单：days=7 窗口外、days=91 收得进来")
+    o = _order("VDLP-OLD-90", "o@x.com", "download_1day", "PAID", MIN - D90)
+    r7 = _run_ex([], {o[0]: o[1]}, days=7)
+    r91 = _run_ex([], {o[0]: o[1]}, days=91)
+    check("days=7 看不到（无账目行）", not r7["day_rows"], str(r7["day_rows"]))
+    check("days=91 收进来且入账合计 = 1.90",
+          bool(r91["day_rows"]) and r91["income_yuan_total"] == 1.9,
+          json.dumps(r91["day_rows"], ensure_ascii=False))
+    check("回传的 days 就是实际生效区间（前端靠它反查是否有截断）",
+          r7["days"] == 7 and r91["days"] == 91, f"{r7['days']}/{r91['days']}")
+
+    print("      [I2] 上限钳制：超上限 → RECON_DAYS_MAX；0 / 负数 → 1")
+    r_big = _run_ex([], {}, days=9999)
+    r_zero = _run_ex([], {}, days=0)
+    r_neg = _run_ex([], {}, days=-5)
+    check("超上限按 RECON_DAYS_MAX 给", r_big["days"] == LIC.RECON_DAYS_MAX, str(r_big["days"]))
+    check("上限 ≥365（够「近 1 年」）", LIC.RECON_DAYS_MAX >= 365, str(LIC.RECON_DAYS_MAX))
+    check("0 / 负数回落 1（不得变成全量扫）",
+          r_zero["days"] == 1 and r_neg["days"] == 1, f"{r_zero['days']}/{r_neg['days']}")
+    check("数字字符串吃得下（前端传 '30' 也认）", _run_ex([], {}, days="30")["days"] == 30)
+
+    print("      [I3] notify=False：只出报告，不写 recon_seen、不响铃")
+    evs = [_grant(MIN + 5, "q@vdl.local", "download_1day", "xunhupay-auto:NO-SUCH-1")]
+    r = _run_ex(evs, {}, days=365, notify=False)
+    check("差异照样报出来（自证≠免报）", len(_gno(r)) == 1, str(_gno(r)))
+    check("不产生告警", not (_state.get("alerts") or []), str(_state.get("alerts")))
+    check("不写 recon_seen（历史差异不会被钉住）",
+          not (_state.get("recon_seen") or []), str(_state.get("recon_seen")))
+    check("new_alerts 计数 0", r["new_alerts"] == 0, str(r["new_alerts"]))
+
+    print("      [I4] notify=True（自扫 / 小窗口查询）：维持原行为 + 幂等")
+    r2 = _run_ex(evs, {}, days=7, notify=True)
+    check("照常告警（critical）",
+          len(_state.get("alerts") or []) == 1
+          and (_state["alerts"][0].get("level") or "") == "critical",
+          str(_state.get("alerts")))
+    check("写 recon_seen 去重", bool(_state.get("recon_seen")), str(_state.get("recon_seen")))
+    check("new_alerts 计数 1", r2["new_alerts"] == 1, str(r2["new_alerts"]))
+    _write(evs, {})                                  # 不重置 _state，再扫一遍
+    r3 = LIC.recon_impl(_state, days=365, now=NOW, notify=True)
+    check("第二次扫不重复告警（recon_seen 去重仍有效）",
+          r3["new_alerts"] == 0, str(r3["new_alerts"]))
+
+
+def _run_ex(events: list, orders: dict, days: int = 7, notify: bool = True) -> dict:
+    """同 _run，但可指定查账区间 / 是否写告警状态（2026-10-09 区间开关用）。"""
+    global _state
+    _state = {"alerts": [], "recon_seen": []}
+    _write(events, orders)
+    return LIC.recon_impl(_state, days=days, now=NOW, notify=notify)
+
+
+D90 = 86400.0 * 90
+
+
 def main() -> int:
     print("=" * 58)
     print("对账 grant_no_pay 归并守卫（deploy/license_server.py）")
@@ -345,6 +414,7 @@ def main() -> int:
         test_f_counts_agree()
         test_g_paid_no_grant_intact()
         test_h_hint_self_describes()
+        test_i_range_windows()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print("=" * 58)

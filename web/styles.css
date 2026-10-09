@@ -5504,18 +5504,21 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 html.theme-dark .pf-changelog { background: rgba(255, 255, 255, .04); border-color: rgba(255, 255, 255, .1); }
 /* 运维监控「范围」切换（2026-10-03）：JS 一直在切 is-active，但这里原先没有
    对应样式 → 四个按钮长得一模一样，看着像没生效。 */
-.admin-btn.admin-mon-range {
+.admin-btn.admin-mon-range, .admin-btn.admin-recon-range {
   height: 30px; padding: 0 .85rem; border-radius: 8px; font-size: .82rem;
   border: 1px solid var(--line, #e5e7ef); background: #fff; color: var(--text-mute, #6b7280);
   margin-right: .2rem;
 }
-.admin-btn.admin-mon-range:hover { background: #f3f4f8; color: var(--text, #1f2937); }
-.admin-btn.admin-mon-range.is-active {
+.admin-btn.admin-mon-range:hover, .admin-btn.admin-recon-range:hover { background: #f3f4f8; color: var(--text, #1f2937); }
+.admin-btn.admin-mon-range.is-active, .admin-btn.admin-recon-range.is-active {
   background: var(--brand, #4f6cf0); border-color: var(--brand, #4f6cf0);
   color: #fff; font-weight: 600;
 }
-html.theme-dark .admin-btn.admin-mon-range { background: rgba(255, 255, 255, .06); color: var(--text-mute, #9ca3af); }
-html.theme-dark .admin-btn.admin-mon-range.is-active { background: var(--brand, #4f6cf0); color: #fff; }
+html.theme-dark .admin-btn.admin-mon-range, html.theme-dark .admin-btn.admin-recon-range { background: rgba(255, 255, 255, .06); color: var(--text-mute, #9ca3af); }
+html.theme-dark .admin-btn.admin-mon-range.is-active, html.theme-dark .admin-btn.admin-recon-range.is-active { background: var(--brand, #4f6cf0); color: #fff; }
+/* 每日对账 · 查账区间条（2026-10-09）：独立一行、左对齐，避免 6 个区间按钮把
+   「说明 / 最后核对 / 刷新」那行的 space-between 撑歪 */
+.admin-recon-rangebar { justify-content: flex-start; margin-top: -.35rem; }
 /* 真人访客口径卡片（2026-10-03）：与「全部请求」技术明细区分开 */
 .admin-human-note {
   grid-column: 1 / -1; font-size: .72rem; color: var(--text-mute, #94a3b8);

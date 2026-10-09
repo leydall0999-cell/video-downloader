@@ -21035,6 +21035,14 @@ el.dwVidPlayer.hidden = true;
         loadMonitorAlerts();
       } catch (_) { /* 静默 */ }
     };
+    // 每日对账 · 查账区间（2026-10-09 用户要求「入账可查 1 天/3 天/7 天/1 个月/半年/1 年」）：
+    // 区间天数即后端 `days` 参数，默认 7 天（与授权中心 10 分钟自扫窗口一致，所见即告警口径）。
+    // 🔴 上限受三层链路钳制（本机 core.py → ECS worker → 授权中心 license_server），三处同值 400：
+    //    任一处没放开，大区间会被上游**静默截断**（不报错、只给少），所以下面用服务端回传的
+    //    `days` 反查实际生效区间，不一致时在界面显式告警。
+    const _RECON_RANGE_LABEL = { 1: '近 1 天', 3: '近 3 天', 7: '近 7 天', 30: '近 1 个月', 180: '近半年', 365: '近 1 年' };
+    let _reconDays = 7;
+    const _reconRangeLabel = (d) => _RECON_RANGE_LABEL[d] || ('近 ' + d + ' 天');
     const loadMonitorRecon = async () => {
       const box = $('adminMonitorRecon');
       const mis = $('adminMonitorMismatches');
@@ -21042,7 +21050,7 @@ el.dwVidPlayer.hidden = true;
       box.innerHTML = '<div class="admin-empty">加载中…</div>';
       try {
         const d = await adminRequest('/api/app/license-recon', {
-          method: 'POST', body: JSON.stringify({ days: 7 }),
+          method: 'POST', body: JSON.stringify({ days: _reconDays }),
           headers: { 'Content-Type': 'application/json' } });
         const mismatches = (d && d.mismatches) || [];
         const dayRows = (d && d.day_rows) || [];
@@ -21050,6 +21058,20 @@ el.dwVidPlayer.hidden = true;
         // 是哪一分钟拉的 —— 逐条核对时无法判断「是不是刚拉的」。
         const ckBox = $('adminReconChecked');
         if (ckBox) ckBox.textContent = (d && d.checked_at) ? ('最后核对：' + _monMinute(d.checked_at)) : '';
+        // 回显**实际生效**的区间（服务端回传的 days，不是本地所选值）：大区间被某层链路
+        // 截断时这里会明说，避免「选了近一年、其实只有 60 天」还被蒙在鼓里。
+        const tipBox = $('adminReconRangeTip');
+        if (tipBox) {
+          const used = Number((d && d.days) || 0) || _reconDays;
+          const ymd = (ts) => String(_monMinute(ts) || '').slice(0, 10);
+          if (used !== _reconDays) {
+            tipBox.textContent = '⚠️ 实际只生效 ' + _reconRangeLabel(used)
+              + '（区间上限被链路截断，请同步放开本机/ECS/授权中心三处上限）';
+          } else {
+            tipBox.textContent = _reconRangeLabel(used)
+              + ((d && d.checked_at) ? ('：' + ymd(d.checked_at - used * 86400) + ' ~ ' + ymd(d.checked_at)) : '');
+          }
+        }
         const totalRedeems = dayRows.reduce((s, x) => s + (x.redeems || 0), 0);
         const rows = dayRows.map((x) =>
           `<tr><td>${esc(x.date)}</td><td>¥${(x.income_yuan || 0).toFixed(2)}</td>` +
@@ -21063,7 +21085,7 @@ el.dwVidPlayer.hidden = true;
         box.innerHTML =
           `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">` +
           `<div style="flex:1 1 150px;background:linear-gradient(135deg,#0e7a3d,#30a46c);color:#fff;border-radius:10px;padding:10px 14px">` +
-          `<div style="font-size:.72rem;opacity:.85">线上入账（近 7 天）</div>` +
+          `<div style="font-size:.72rem;opacity:.85">线上入账（${_reconRangeLabel(_reconDays)}）</div>` +
           `<div style="font-size:1.5rem;font-weight:700;line-height:1.25">¥${incomeYuan.toFixed(2)}</div>` +
           `<div style="font-size:.7rem;opacity:.85">共 ${dayRows.reduce((s, x) => s + (x.paid_orders || 0), 0)} 笔已付订单</div></div>` +
           `<div style="flex:1 1 130px;background:var(--card,#fff);border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:10px 14px">` +
@@ -21075,7 +21097,7 @@ el.dwVidPlayer.hidden = true;
           `<div style="font-size:1.25rem;font-weight:700">${totalRedeems}</div>` +
           `<div style="font-size:.7rem;color:var(--text-mute,#6b7280)">笔</div></div>` +
           `</div>` +
-          (dayRows.length ? '<table class="admin-table"><thead><tr><th>日期</th><th>线上入账</th><th>订单数</th><th>发货失败</th><th>自动发货</th><th>卡密核销</th><th>差异</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="admin-empty">近 7 天暂无账目</div>');
+          (dayRows.length ? '<table class="admin-table"><thead><tr><th>日期</th><th>线上入账</th><th>订单数</th><th>发货失败</th><th>自动发货</th><th>卡密核销</th><th>差异</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="admin-empty">' + _reconRangeLabel(_reconDays) + '暂无账目</div>');
         if (mis) mis.innerHTML = mismatches.map((m) => {
           const kk = _MON_MISMATCH_KINDS[m.kind] || [m.kind, 'is-warn'];
           return `<div class="admin-msg is-err" style="display:block;margin-top:6px"><b>${kk[0]}</b>` +
@@ -21086,6 +21108,9 @@ el.dwVidPlayer.hidden = true;
         if (mis) mis.innerHTML = '';
         const ckBox = $('adminReconChecked');
         if (ckBox) ckBox.textContent = '';
+        // 取不到报告时不留上一次的区间回显（那会显示成"这次就是这么查的"）
+        const tipBox = $('adminReconRangeTip');
+        if (tipBox) tipBox.textContent = _reconRangeLabel(_reconDays) + '（本次未取到报告）';
       }
     };
     // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
@@ -21264,6 +21289,15 @@ el.dwVidPlayer.hidden = true;
     if ($('adminMonitorRefresh')) $('adminMonitorRefresh').addEventListener('click', loadMonitor);
     if ($('adminMonitorAckAll')) $('adminMonitorAckAll').addEventListener('click', () => ackMonitorAlerts([]));
     if ($('adminReconRefresh')) $('adminReconRefresh').addEventListener('click', loadMonitorRecon);
+    // 查账区间按钮（2026-10-09）：切换即重拉报告；高亮 + 回显由 loadMonitorRecon 统一刷新。
+    document.querySelectorAll('.admin-recon-range[data-recon-days]').forEach((b) => {
+      b.addEventListener('click', () => {
+        _reconDays = Number(b.dataset.reconDays) || 7;
+        document.querySelectorAll('.admin-recon-range[data-recon-days]')
+          .forEach((x) => x.classList.toggle('is-active', x === b));
+        loadMonitorRecon();
+      });
+    });
 
     // ---- AI 大模型账户 ----
     const aiStatusLabel = (s) => ({

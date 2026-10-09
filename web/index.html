@@ -4005,6 +4005,20 @@
             <span class="admin-count" id="adminReconChecked" style="margin-left:10px" data-page-node-id="adminReconChecked"></span>
             <button type="button" id="adminReconRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminReconRefresh">刷新</button>
           </div>
+          <!-- 查账区间（2026-10-09 用户要求「入账可查 1 天/3 天/7 天/1 个月/半年/1 年」）：
+               默认近 7 天（与授权中心 10 分钟自扫窗口一致，所见即告警口径）。切换立即重拉报告，
+               选择保留到本次会话结束。⚠️ 区间上限受**三层链路**钳制（本机 core.py → ECS worker
+               → 授权中心 license_server），三处同值；任一处没放开，大区间会被静默截断。 -->
+          <div class="admin-toolbar admin-recon-rangebar" data-page-node-id="adminReconRangeBar">
+            <span class="admin-count">查账区间：</span>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-recon-range" data-recon-days="1">近 1 天</button>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-recon-range" data-recon-days="3">近 3 天</button>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-recon-range is-active" data-recon-days="7">近 7 天</button>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-recon-range" data-recon-days="30">近 1 个月</button>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-recon-range" data-recon-days="180">近半年</button>
+            <button type="button" class="admin-btn admin-btn-ghost admin-btn-sm admin-recon-range" data-recon-days="365">近 1 年</button>
+            <span class="admin-count" id="adminReconRangeTip" style="margin-left:6px" data-page-node-id="adminReconRangeTip"></span>
+          </div>
           <div class="admin-cfg-section" data-page-node-id="adminMonReconSec">
             <div class="admin-cfg-head" data-page-node-id="adminMonReconHead">
               <h3 data-page-node-id="adminMonReconTitle">每日对账 · 入账 vs 充值发货</h3>

@@ -98,6 +98,16 @@
       <span class="sub" style="color:var(--muted);font-size:12px;font-weight:400">支付宝实付订单 vs 自动发货逐笔核对；差异自动告警（授权中心每 10 分钟自扫，此处按需拉报告）</span>
       <span class="spacer"></span>
       <button id="reconBtn">立即核对</button></h2>
+    <div class="tabs" id="reconRangeTabs" style="padding:0 0 6px">
+      <span class="lbl">查账区间</span>
+      <button data-recon-days="1">近 1 天</button>
+      <button data-recon-days="3">近 3 天</button>
+      <button data-recon-days="7" class="active">近 7 天</button>
+      <button data-recon-days="30">近 1 个月</button>
+      <button data-recon-days="180">近半年</button>
+      <button data-recon-days="365">近 1 年</button>
+      <span class="lbl" id="reconRangeTip"></span>
+    </div>
     <div id="reconStats" class="stat-row"></div>
     <div id="reconTable"></div>
     <div id="reconMismatches" style="margin-top:10px"></div>
@@ -230,16 +240,31 @@ const MISMATCH_KINDS={
   grant_no_pay:['🚨 发货未收款','var(--red)'],
   plan_amount_mismatch:['⚠️ 金额与发货不符','var(--amber)'],
 };
+// 查账区间（2026-10-09 用户要求「入账可查 1 天/3 天/7 天/1 个月/半年/1 年」）。
+// 与主界面「每日对账」tab 同语义、同数据源：区间天数即后端 days；上限受三层链路钳制
+// （本机 core.py → ECS worker → 授权中心 license_server），三处同值 400 ⇒
+// 用服务端回传的 days 反查实际生效区间，被截断时明说，避免「选了近一年其实只有 60 天」。
+const RECON_LABEL={1:'近 1 天',3:'近 3 天',7:'近 7 天',30:'近 1 个月',180:'近半年',365:'近 1 年'};
+let reconDays=7;
+const reconLabel=(d)=>RECON_LABEL[d]||('近 '+d+' 天');
+// 北京时间 YYYY-MM-DD（区间回显用；与主界面 _monMinute 同一口径：北京时区、不靠本机时区）
+const ymd=(ts)=>{const n=Number(ts);if(!n)return '';
+  const p=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(n*1000));
+  const g=(t)=>(p.find(x=>x.type===t)||{}).value||'';return g('year')+'-'+g('month')+'-'+g('day');};
 async function loadRecon(){
   const el=$('#reconStats'); el.innerHTML='<div class="empty">加载中…</div>';
   try{
     const r=await fetch('/api/app/license-recon',{method:'POST',
-      headers:Object.assign({'Content-Type':'application/json'},authHeaders()),body:JSON.stringify({days:7})});
+      headers:Object.assign({'Content-Type':'application/json'},authHeaders()),body:JSON.stringify({days:reconDays})});
     const d=await r.json();
     if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
     const ms=d.mismatches||[];
+    const used=Number(d.days||0)||reconDays;
+    $('#reconRangeTip').textContent=(used!==reconDays)
+      ? ('⚠️ 实际只生效 '+reconLabel(used)+'（区间上限被链路截断）')
+      : (reconLabel(used)+(d.checked_at?('：'+ymd(d.checked_at-used*86400)+' ~ '+ymd(d.checked_at)):''));
     el.innerHTML=
-      `<div class="stat"><div class="n" style="color:var(--green)">¥${(d.income_yuan_total||0).toFixed(2)}</div><div class="l">近 7 天线上入账</div></div>`+
+      `<div class="stat"><div class="n" style="color:var(--green)">¥${(d.income_yuan_total||0).toFixed(2)}</div><div class="l">${reconLabel(reconDays)}线上入账</div></div>`+
       `<div class="stat"><div class="n" style="color:${ms.length?'var(--red)':'var(--green)'}">${ms.length}</div><div class="l">对账差异</div></div>`+
       `<div class="stat"><div class="n">${(d.day_rows||[]).reduce((s,x)=>s+(x.redeems||0),0)}</div><div class="l">卡密核销（线下入账）</div></div>`;
     $('#reconTable').innerHTML=(d.day_rows&&d.day_rows.length)?
@@ -248,7 +273,7 @@ async function loadRecon(){
         `<td>${x.paid_orders||0}</td><td style="color:${x.grant_failed?'var(--red)':'inherit'}">${x.grant_failed||0}</td>`+
         `<td>${x.auto_grants||0}</td><td>${x.redeems||0}</td>`+
         `<td style="color:${x.mismatch?'var(--red)':'var(--green)'}">${x.mismatch||0}</td></tr>`).join('')+'</table>')
-      :'<div class="empty">近 7 天暂无账目</div>';
+      :'<div class="empty">'+reconLabel(reconDays)+'暂无账目</div>';
     $('#reconMismatches').innerHTML=ms.length?
       ms.map(m=>{const kk=MISMATCH_KINDS[m.kind]||[m.kind,'var(--amber)'];
         return `<div class="row" style="border:1px solid var(--line);border-radius:8px;margin-bottom:6px">`+
@@ -258,6 +283,7 @@ async function loadRecon(){
       :'';
   }catch(e){
     el.innerHTML='';
+    $('#reconRangeTip').textContent=reconLabel(reconDays)+'（本次未取到报告）';
     $('#reconTable').innerHTML=`<div class="err">${isAdminErr(e)?esc(adminNeededMsg()):(isKeyErr(e)?esc(keyNeededMsg()):('对账加载失败：'+esc(e.message)))}</div>`;
   }
 }
@@ -281,6 +307,15 @@ async function loadAll(){
 }
 setInterval(loadAlerts,30*1000);   // 告警 30s 自动刷新（不受时间范围切换影响）
 $('#reconBtn').addEventListener('click',loadRecon);
+// 查账区间切换：改状态 + 高亮 + 立即重拉（与主界面「每日对账」tab 同行为）
+document.querySelectorAll('#reconRangeTabs button[data-recon-days]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    reconDays=Number(b.dataset.reconDays)||7;
+    document.querySelectorAll('#reconRangeTabs button[data-recon-days]').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    loadRecon();
+  });
+});
 document.querySelectorAll('#rangeTabs button[data-range]').forEach(b=>{
   b.addEventListener('click',()=>{
     curRange=b.dataset.range;

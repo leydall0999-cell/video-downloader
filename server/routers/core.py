@@ -1358,6 +1358,14 @@ def app_license_alerts_notify(payload: dict, request: app.Request):
         return {"ok": False, "err": str(e)[:200]}
 
 
+# 查账区间（2026-10-09 用户要求「入账可查 1 天/3 天/7 天/1 个月/半年/1 年」）：
+# 默认 7 天（与授权中心自扫窗口一致），上限 400 天（前端最大 365 = 近 1 年）。
+# 🔴 与 ECS worker `server/routers/core.py`、授权中心 `deploy/license_server.py`
+#    的 RECON_DAYS_MAX **必须同值**，否则大区间被上游先截断且不报错。
+_RECON_DAYS_DEFAULT = 7
+_RECON_DAYS_MAX = 400
+
+
 @router.post("/api/app/license-recon")
 def app_license_recon(payload: dict, request: app.Request):
     """每日入账/充值对账报告（2026-09-26 资金核对，超管专用）。
@@ -1365,18 +1373,22 @@ def app_license_recon(payload: dict, request: app.Request):
     链路：App 前端(看板) → 本机 /api/app/license-recon（is_admin 门禁）
           → ECS worker /api/license-recon（X-Admin-Key）→ 本机 8902 license recon。
     差异（收款未发货/发货未收款/金额不符）在授权中心自动告警，本接口按需拉报告。
+
+    `days` = 查账区间天数（前端给 1/3/7/30/180/365）。🔴 上限 `_RECON_DAYS_MAX` 与
+    ECS worker 的 `core.py`、授权中心 `deploy/license_server.py` 的 `RECON_DAYS_MAX`
+    是**三处同值**：任一处没放开，大区间都会被静默截断成 60 天且不报错。
     """
     _require_local(request)
     if not _ops_requester_is_admin(request):
         raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
     try:
-        days = int(payload.get("days") or 7)
+        days = int(payload.get("days") or _RECON_DAYS_DEFAULT)
     except (TypeError, ValueError):
-        days = 7
+        days = _RECON_DAYS_DEFAULT
     try:
         resp = app.requests.post(
             f"{_OPS_ECS_BASE}/api/license-recon",
-            json={"days": max(1, min(days, 60))},
+            json={"days": max(1, min(days, _RECON_DAYS_MAX))},
             headers={"X-Admin-Key": _ops_admin_key()},
             timeout=15,
         )

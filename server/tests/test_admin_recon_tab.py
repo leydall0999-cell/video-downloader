@@ -164,6 +164,68 @@ def main():
     check("告警去重键仍按「天」切（改了会一天多条告警）",
           bool(re.search(r"key = f\".*?_bj_day\(m\['at'\]\)", body)))
 
+    # ── E. 查账区间（2026-10-09 用户要求：1 天/3 天/7 天/1 个月/半年/1 年）────
+    print("\nE. 查账区间：按钮 / 接线 / 三层上限同值")
+    core = (REPO / "server" / "routers" / "core.py").read_text(encoding="utf-8")
+    css = (REPO / "web" / "styles.css").read_text(encoding="utf-8")
+    board = (REPO / "web" / "ops" / "board.html").read_text(encoding="utf-8")
+
+    days_btns = re.findall(r'data-recon-days="(\d+)"', rec_body)
+    check("对账页有 6 个区间按钮（1/3/7/30/180/365）",
+          days_btns == ["1", "3", "7", "30", "180", "365"], f"实际 {days_btns}")
+    check("默认高亮近 7 天（与授权中心 10 分钟自扫窗口同口径）",
+          re.search(r'admin-recon-range is-active" data-recon-days="7"', rec_body) is not None)
+    check("区间条 + 生效区间回显位都在页面上",
+          "adminReconRangeBar" in rec_body and "adminReconRangeTip" in rec_body)
+    check("区间条不在运维监控页里（两 tab 的范围语义不同，别串）",
+          "adminReconRangeBar" not in mon_body)
+    # 逐行找**规则行**（选择器行以 `{` 结尾）而不是全文 contains：深色主题那两行是
+    # 一行式规则（以 `}` 结尾），若只判 contains，删掉浅色规则也会假绿。
+    css_lines = css.splitlines()
+    check("区间按钮样式到位：基础规则 + 选中高亮规则（缺 ⇒ 按钮难看/看不出选中）",
+          any(".admin-btn.admin-recon-range" in ln and ln.rstrip().endswith("{")
+              for ln in css_lines)
+          and any(".admin-btn.admin-recon-range.is-active" in ln and ln.rstrip().endswith("{")
+                  for ln in css_lines)
+          and ".admin-recon-rangebar" in css,
+          "样式缺失")
+
+    check("所选区间真当 days 传给后端（不再写死 7）",
+          re.search(r"JSON\.stringify\(\{ days: _reconDays \}\)", js) is not None
+          and "days: 7" not in js[js.index("'/api/app/license-recon'"):][:240])
+    check("六个区间的中文标签齐全",
+          all(k in js for k in ("1: '近 1 天'", "3: '近 3 天'", "7: '近 7 天'",
+                                "30: '近 1 个月'", "180: '近半年'", "365: '近 1 年'")))
+    check("入账卡片标题随区间变化（不再写死「近 7 天」）",
+          "${_reconRangeLabel(_reconDays)}" in js)
+    check("空账目文案随区间变化", "_reconRangeLabel(_reconDays) + '暂无账目</div>'" in js)
+    check("用服务端回传的 days 反查实际生效区间，被截断时显式告警",
+          "used !== _reconDays" in js and "区间上限被链路截断" in js)
+    click_i = js.index("_reconDays = Number(b.dataset.reconDays)")
+    check("区间按钮接线：改状态 + 切高亮 + 立即重拉",
+          re.search(r"\.admin-recon-range\[data-recon-days\]'\)\.forEach", js) is not None
+          and "loadMonitorRecon();" in js[click_i: click_i + 240])
+
+    # 🔴 上限在**三层**里各有一份（本机 core.py → ECS worker core.py → 授权中心）：任一处
+    #    没放开，大区间都会被上游先截断，且**静默**（不报错、只给少）。
+    m_ls = re.search(r"^RECON_DAYS_MAX = (\d+)", ls, re.M)
+    m_core = re.search(r"^_RECON_DAYS_MAX = (\d+)", core, re.M)
+    check("授权中心 / 本机 core.py 都有区间上限常量", bool(m_ls and m_core))
+    check("两层上限同值且 ≥365（够「近 1 年」）",
+          bool(m_ls and m_core) and m_ls.group(1) == m_core.group(1)
+          and int(m_ls.group(1)) >= 365,
+          f"授权中心={m_ls and m_ls.group(1)} 本机={m_core and m_core.group(1)}")
+    check("授权中心按上限常量钳制（残留 min(int(days), 60) 即漏改）",
+          "min(int(days), RECON_DAYS_MAX)" in ls and "min(int(days), 60)" not in ls)
+    check("本机转发按上限常量钳制（残留 min(days, 60) 即漏改）",
+          "min(days, _RECON_DAYS_MAX)" in core and "min(days, 60)" not in core)
+    check("大区间只出报告、不改告警状态（notify 门在位）",
+          "notify: bool = True" in ls and "notify=d <= RECON_DAYS" in ls
+          and re.search(r"if notify:", ls) is not None)
+    check("看板页同源支持区间（两侧口径不能不一致）",
+          re.findall(r'data-recon-days="(\d+)"', board) == ["1", "3", "7", "30", "180", "365"]
+          and "days:reconDays" in board)
+
     print("")
     print("=========================================")
     print(f"  通过: {PASS}   失败: {FAIL}")

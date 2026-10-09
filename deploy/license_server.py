@@ -43,6 +43,7 @@ secret 只存在环境变量 VDL_LICENSE_SECRET，**永不下发** ⇒ 卡密不
                                                                    管理员设定权威基线（迁移/纠错）
   POST /api/license/usage     {email, token}                       管理员查权益与流水
   POST /api/license/recon     {days?, token}                       管理员每日入账/充值对账报告
+                                                                   days 1~400（前端给 1/3/7/30/180/365）
                                                                    （后台另有 10 分钟自扫线程，差异自动告警）
 
   权益权威化（v1）：登录/心跳/充值响应的 account.authority 快照是会员到期与积分
@@ -1307,6 +1308,11 @@ def alerts_ack_impl(state: dict[str, Any], ids: Any) -> dict[str, Any]:
 PAY_ORDERS_PATH = Path(os.environ.get("VDL_PAY_ORDERS")
                        or str(DATA_PATH.parent / "pay_orders.json"))
 RECON_DAYS = 7                  # 每轮回看近 N 天（新差异只告警一次，老差异不重复吵）
+# 查账区间的上限（2026-10-09 用户要求「入账可查 1 天/3 天/7 天/1 个月/半年/1 年」）：
+# 前端最大是 365（近 1 年），这里留余量到 400。🔴 同一上限在**三层**里都有：
+#   桌面 App 本机 server/routers/core.py → ECS worker server/routers/core.py → 本文件。
+#   三处必须同步改，否则大区间会被上游先截断成 60 天，还**不报错**（静默给少）。
+RECON_DAYS_MAX = 400
 RECON_INTERVAL = 600.0          # 后台 10 分钟自扫一轮（对账很轻：两个小文件）
 RECON_SEEN_CAP = 1000
 GRANTING_STUCK = 1800.0         # 订单卡在 GRANTING 超 30 分钟 = 发货挂了
@@ -1481,13 +1487,17 @@ def _grant_no_pay_status_note(status: str) -> str:
 
 
 def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
-               now: Optional[float] = None) -> dict[str, Any]:
-    """每日入账与充值对账：支付宝实付订单 vs 自动发货，差异即刻告警。
+               now: Optional[float] = None, notify: bool = True) -> dict[str, Any]:
+    """每日入账与充值对账：实付订单 vs 自动发货，差异即刻告警。
 
     幂等：同一差异只在第一次发现时告警（recon_seen 去重表），修复后自动消失。
+
+    `days` = 查账区间（1 ~ RECON_DAYS_MAX），后台自扫固定 `RECON_DAYS`；
+    `notify=False` = **只看报告、不动告警状态**（用户手工拉大区间时用：否则把近一年
+    的账一拉，窗口外从未扫过的历史差异会一次性炸成 N 条新 critical 告警并被钉住）。
     """
     now = time.time() if now is None else float(now)
-    days = max(1, min(int(days), 60))
+    days = max(1, min(int(days), RECON_DAYS_MAX))
     horizon = 86400.0 * days
 
     # 入账侧：已收款订单（PAID / GRANT_FAILED / 卡死的 GRANTING）
@@ -1657,18 +1667,20 @@ def recon_impl(state: dict[str, Any], days: int = RECON_DAYS,
         _row(_bj_day(m["at"]))["mismatch"] += 1
 
     # 告警：只对「第一次发现」的差异响铃（recon_seen 持久去重，修复后销号）
-    seen = {str(x) for x in (state.get("recon_seen") or [])}
+    # notify=False（用户手工查账）时整块跳过：不写 recon_seen、不响铃，纯报告。
     new_alerts = 0
-    for m in mismatches:
-        key = f"{m['kind']}:{m.get('order_id') or ''}:{m.get('email') or ''}:{_bj_day(m['at'])}"
-        if key in seen:
-            continue
-        seen.add(key)
-        _raise_alert(state, "recon_mismatch",
-                     "warn" if m["kind"] == "plan_amount_mismatch" else "critical",
-                     m.get("email") or "", "", m["detail"], now)
-        new_alerts += 1
-    state["recon_seen"] = sorted(seen)[-RECON_SEEN_CAP:]
+    if notify:
+        seen = {str(x) for x in (state.get("recon_seen") or [])}
+        for m in mismatches:
+            key = f"{m['kind']}:{m.get('order_id') or ''}:{m.get('email') or ''}:{_bj_day(m['at'])}"
+            if key in seen:
+                continue
+            seen.add(key)
+            _raise_alert(state, "recon_mismatch",
+                         "warn" if m["kind"] == "plan_amount_mismatch" else "critical",
+                         m.get("email") or "", "", m["detail"], now)
+            new_alerts += 1
+        state["recon_seen"] = sorted(seen)[-RECON_SEEN_CAP:]
 
     return {"ok": True, "days": days, "checked_at": now,
             "income_yuan_total": round(sum(r["income_yuan"] for r in day_rows.values()), 2),
@@ -1824,7 +1836,10 @@ class Handler(BaseHTTPRequestHandler):
                             d = int(data.get("days") or RECON_DAYS)
                         except (TypeError, ValueError):
                             d = RECON_DAYS
-                        out = recon_impl(st, days=d, now=now)
+                        # 查账区间 ≤ 自扫窗口时维持原行为（会告警、写 recon_seen）；更大区间
+                        # 是「查历史账」只出报告 —— 否则一次拉近一年，窗口外从未扫过的历史
+                        # 差异会炸成一堆新 critical 告警并被 recon_seen 钉住。
+                        out = recon_impl(st, days=d, now=now, notify=d <= RECON_DAYS)
                         _save_state(st)
                     elif action == "plans_set":
                         # 桌面后台「套餐与积分成本」保存时下发：整表覆盖式写入
