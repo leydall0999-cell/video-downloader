@@ -241,15 +241,29 @@ if [ "$ASSUME_YES" != "1" ]; then
 fi
 
 # 6) 上传
+# 顺序：先落地安装包与增量补丁，最后才原子替换 latest.json —— 否则用户端可能读到
+# 指向尚未上传完成的包的清单（patch_url 404 / zip 半截）。
+# ssh/scp 一律 BatchMode=yes：key 不可用时**立即报错**，而不是退化成密码提示静默空等。
 echo "▶ 上传到 $VPS_HOST:$VPS_DIR"
-ssh -n -o StrictHostKeyChecking=no "$VPS_HOST" "mkdir -p '$VPS_DIR'"
-scp -o StrictHostKeyChecking=no "$ZIP" "$VPS_HOST:$VPS_DIR/VideoDownloader.app.zip"
-scp -o StrictHostKeyChecking=no "$LATEST_JSON" "$VPS_HOST:$VPS_DIR/latest.json"
+SSH_OPTS="-o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15"
+ssh -n $SSH_OPTS "$VPS_HOST" "mkdir -p '$VPS_DIR'"
+
+# 大包优先用 rsync 续传：断管后重跑只补差额，不必从头再传 400+MB。
+if command -v rsync >/dev/null 2>&1 && ssh -n $SSH_OPTS "$VPS_HOST" "command -v rsync >/dev/null 2>&1"; then
+  echo "   · rsync 续传安装包（已传部分自动跳过）"
+  rsync -a --partial --append --inplace --progress \
+    -e "ssh $SSH_OPTS" "$ZIP" "$VPS_HOST:$VPS_DIR/VideoDownloader.app.zip"
+else
+  scp $SSH_OPTS "$ZIP" "$VPS_HOST:$VPS_DIR/VideoDownloader.app.zip"
+fi
 if [ -n "$PATCH_BIN" ]; then
-  scp -o StrictHostKeyChecking=no "$PATCH_BIN" "$VPS_HOST:$VPS_DIR/$(basename "$PATCH_BIN")"
+  scp $SSH_OPTS "$PATCH_BIN" "$VPS_HOST:$VPS_DIR/$(basename "$PATCH_BIN")"
   echo "   ✔ 已上传增量补丁 $(basename "$PATCH_BIN")"
 fi
-echo "   ✔ 已上传安装包与 latest.json"
+# latest.json 原子替换：先传 .tmp 再 mv，避免用户端读到半截 JSON。
+scp $SSH_OPTS "$LATEST_JSON" "$VPS_HOST:$VPS_DIR/latest.json.tmp"
+ssh -n $SSH_OPTS "$VPS_HOST" "cd '$VPS_DIR' && cp -a latest.json latest.json.bak-\$(date +%s) 2>/dev/null || true; mv -f latest.json.tmp latest.json"
+echo "   ✔ 已上传安装包、增量补丁与 latest.json"
 
 # 7) 校验对外可访问性（外部可达需阿里云安全组放行对应端口）
 echo "▶ 校验对外可访问性"
