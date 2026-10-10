@@ -987,6 +987,21 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 .idp-picked { display: flex; align-items: center; gap: 10px; margin: 6px 0 0; font-size: 13px; color: var(--text-2, #555); }
 .idp-picked-name { overflow-wrap: anywhere; }
 #idphotoView.is-dragover { outline: 2px dashed var(--brand, #4f46e5); outline-offset: 6px; border-radius: 10px; }
+/* 2026-10-10 用户要求：证件照改「左＝参数 / 右＝出图」左右排版。
+   出图前右栏是空的（#idpPreviewWrap 带 hidden），此时仍按单列整宽铺开，
+   避免参数区被压成半宽 —— 因此只在预览出现时（:has 命中）切成两栏。
+   左栏定宽 440px：低于 .idp-form 两列门槛（220×2+22=462）⇒ 四个字段单列堆叠，
+   「尺寸规格」里的「一寸（25×35mm·295×413）」这类长选项不会被原生 select 截断。
+   窄窗（<900）保持单列，参数与预览上下排。 */
+.idp-split { display: block; }
+.idp-col { min-width: 0; }
+@media (min-width: 900px) {
+  #idphotoView:has(#idpPreviewWrap:not([hidden])) .idp-split { display: flex; align-items: flex-start; gap: 26px; }
+  #idphotoView:has(#idpPreviewWrap:not([hidden])) .idp-col-left { flex: 0 1 440px; min-width: 320px; }
+  #idphotoView:has(#idpPreviewWrap:not([hidden])) .idp-col-right { flex: 1 1 0; min-width: 0; }
+  /* 右栏顶端与左栏首个控件对齐（.idp-preview 原为纵向堆叠留的 14px 上边距） */
+  #idphotoView:has(#idpPreviewWrap:not([hidden])) .idp-preview { margin-top: 0; }
+}
 /* 图片转文字（OCR）卡片：跟在去水印结果区下方，输出文本可滚动复制 */
 .dw-ocr-card { margin-top: .8rem; }
 .dw-ocr-card textarea { width: 100%; resize: vertical; font-size: .92rem; line-height: 1.55; white-space: pre-wrap; }

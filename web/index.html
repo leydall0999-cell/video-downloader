@@ -2020,49 +2020,55 @@
       </div>
     </details>
 
-    <label class="uc-field">
-      <span class="uc-label">照片文件</span>
-      <input type="file" id="idpFile" accept="image/*" />
-      <span class="idp-hint" id="idpFileHint">macOS 的文件面板本身要 4 秒左右才弹出（系统层面，与 App 无关）；更快的办法：把图片<b>直接拖进本页</b>，或复制图片后在本页按 <b>⌘V</b> 粘贴。</span>
-    </label>
-    <div class="idp-picked" id="idpPicked" hidden>
-      <span class="idp-picked-name" id="idpPickedName"></span>
-      <button type="button" class="btn btn-ghost btn-sm" id="idpPickedClear">✕ 清除</button>
-    </div>
-    <div class="idp-form">
+    <div class="idp-split">
+      <div class="idp-col idp-col-left">
       <label class="uc-field">
-        <span class="uc-label">尺寸规格</span>
-        <select id="idpSpec"></select>
+        <span class="uc-label">照片文件</span>
+        <input type="file" id="idpFile" accept="image/*" />
+        <span class="idp-hint" id="idpFileHint">macOS 的文件面板本身要 4 秒左右才弹出（系统层面，与 App 无关）；更快的办法：把图片<b>直接拖进本页</b>，或复制图片后在本页按 <b>⌘V</b> 粘贴。</span>
       </label>
-      <label class="uc-field">
-        <span class="uc-label">排版张数</span>
-        <select id="idpLayout">
-          <option value="1">单张</option>
-          <option value="4">4 张（2×2 冲印版）</option>
-          <option value="8">8 张（2×4 冲印版）</option>
-        </select>
-      </label>
-      <div class="uc-field">
-        <span class="uc-label">底色</span>
-        <div class="idp-colors" id="idpColors"></div>
+      <div class="idp-picked" id="idpPicked" hidden>
+        <span class="idp-picked-name" id="idpPickedName"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="idpPickedClear">✕ 清除</button>
       </div>
-      <div class="uc-field">
-        <span class="uc-label">人物大小 <b class="idp-zoom-val" id="idpZoomVal">100%</b></span>
-        <input type="range" id="idpZoom" min="60" max="160" step="5" value="100"
-               aria-label="人物大小" />
-        <span class="idp-hint">出图后可拖动微调，不重复抠图、秒出</span>
+      <div class="idp-form">
+        <label class="uc-field">
+          <span class="uc-label">尺寸规格</span>
+          <select id="idpSpec"></select>
+        </label>
+        <label class="uc-field">
+          <span class="uc-label">排版张数</span>
+          <select id="idpLayout">
+            <option value="1">单张</option>
+            <option value="4">4 张（2×2 冲印版）</option>
+            <option value="8">8 张（2×4 冲印版）</option>
+          </select>
+        </label>
+        <div class="uc-field">
+          <span class="uc-label">底色</span>
+          <div class="idp-colors" id="idpColors"></div>
+        </div>
+        <div class="uc-field">
+          <span class="uc-label">人物大小 <b class="idp-zoom-val" id="idpZoomVal">100%</b></span>
+          <input type="range" id="idpZoom" min="60" max="160" step="5" value="100"
+                 aria-label="人物大小" />
+          <span class="idp-hint">出图后可拖动微调，不重复抠图、秒出</span>
+        </div>
       </div>
-    </div>
-    <div class="idp-actions">
-      <button type="button" class="uc-btn primary" id="idpBtn">生成证件照</button>
-      <a class="uc-btn" id="idpDl" hidden>下载结果</a>
-    </div>
-    <p class="idp-status" id="idpStatus"></p>
-    <div class="idp-preview" id="idpPreviewWrap" hidden>
-      <img id="idpPreview" alt="证件照预览" draggable="false" />
-      <div class="idp-preview-bar">
-        <span class="idp-hint">预览图上<b>按住拖动</b>挪位置 / <b>滚轮</b>调大小（也可用上面的滑块）</span>
-        <button type="button" class="btn btn-ghost btn-sm" id="idpReset">↺ 复位</button>
+      <div class="idp-actions">
+        <button type="button" class="uc-btn primary" id="idpBtn">生成证件照</button>
+        <a class="uc-btn" id="idpDl" hidden>下载结果</a>
+      </div>
+      <p class="idp-status" id="idpStatus"></p>
+      </div>
+      <div class="idp-col idp-col-right">
+      <div class="idp-preview" id="idpPreviewWrap" hidden>
+        <img id="idpPreview" alt="证件照预览" draggable="false" />
+        <div class="idp-preview-bar">
+          <span class="idp-hint">预览图上<b>按住拖动</b>挪位置 / <b>滚轮</b>调大小（也可用上面的滑块）</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="idpReset">↺ 复位</button>
+        </div>
+      </div>
       </div>
     </div>
   </section>
