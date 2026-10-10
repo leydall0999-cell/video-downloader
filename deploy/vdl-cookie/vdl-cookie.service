@@ -1,0 +1,18 @@
+[Unit]
+Description=VDL Bilibili Cookie Pusher + Refill API (VPS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vdl-worker
+EnvironmentFile=/opt/vdl-worker/.cookie_sync.env
+ExecStart=/opt/vdl-worker/.venv/bin/python /opt/vdl-worker/vdl_cookie_daemon.py
+Restart=always
+RestartSec=5
+User=root
+StandardOutput=append:/opt/vdl-worker/daemon.log
+StandardError=append:/opt/vdl-worker/daemon.log
+
+[Install]
+WantedBy=multi-user.target

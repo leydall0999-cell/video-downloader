@@ -1,0 +1,13 @@
+# vdl-cookie 守护进程日志（unit 用 StandardOutput/Error=append 写固定文件）
+# ⚠️ 必须 copytruncate：systemd 持有该 fd，普通 rename 轮转后进程仍写旧 inode。
+/opt/vdl-worker/daemon.log {
+    daily
+    rotate 14
+    maxsize 20M
+    copytruncate
+    compress
+    delaycompress
+    missingok
+    notifempty
+    su root root
+}
