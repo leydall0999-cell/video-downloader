@@ -498,6 +498,22 @@ def test_shadow_count_survives_file_deletion():
 def test_shadow_uses_max_not_trust():
     """影子与文件取**较大值**：手改小文件不能把已用额度改回来。"""
     d = _fresh()
+    # 🔴 环境自检（同 test_shadow_count_survives_file_deletion）：Keychain 写不了
+    #    （非 macOS／被沙盒拒写／security 超时）时影子记不住，本用例会红成
+    #    「配额回归」——那是**假红**，还会把整条发布链路挡住。此处明确跳过，
+    #    不静默、也不算通过。
+    _probe = quota._keychain_account("__env_probe__" + d)
+    _SHADOW_ACCOUNTS.add(_probe)
+    quota._keychain_write(
+        {"cloud_lifetime": {quota.DEFAULT_CLOUD_RESOURCE: 12345},
+         "daily_auto": {}, "daily_date": ""}, "2026-01-01", _probe)
+    _back = quota._keychain_read(_probe)
+    if not _back or int(_back.get("cloud_lifetime", {}).get(
+            quota.DEFAULT_CLOUD_RESOURCE, -1)) != 12345:
+        print("  ⏭  跳过：本机 Keychain 影子不可用（非 macOS／被拒／超时）"
+              " —— 属环境能力缺失，不是配额回归，也不得计为通过")
+        _cleanup_keychain()
+        return
     q = _mgr(d)
     for _ in range(2):
         assert q.consume_cloud_event() is True
