@@ -89,12 +89,15 @@ _RETURN_URL = ""
 
 # 金额真源（与 App membership.DOWNLOAD_PLANS / AI_PLANS / CREDIT_PACKS 对齐，单位元）
 PRICE_MAP: dict[str, dict[str, Any]] = {
-    "download_1day":      {"price": "1.90",   "subject": "视频工坊·下载会员1天卡"},
-    "download_3day":      {"price": "4.90",   "subject": "视频工坊·下载会员3天卡"},
-    "download_7day":      {"price": "9.90",   "subject": "视频工坊·下载会员7天卡"},
-    "download_month":     {"price": "29.80",  "subject": "视频工坊·下载会员月卡"},
-    "download_half_year": {"price": "99.90",  "subject": "视频工坊·下载会员半年卡"},
-    "download_year":      {"price": "179.00", "subject": "视频工坊·下载会员年卡"},
+    # 🔴 2026-10-10：商品名「下载会员」→「VIP会员」，与 App 内 membership.DOWNLOAD_PLANS
+    #    的 label 对齐（7fe74c4 改名时漏了本文件，导致付款账单与 App 内展示不一致）。
+    #    顾客在微信账单里看到的商品名必须 = 他点下单时看到的那一项，否则会以为买错。
+    "download_1day":      {"price": "1.90",   "subject": "视频工坊·VIP会员1天卡"},
+    "download_3day":      {"price": "4.90",   "subject": "视频工坊·VIP会员3天卡"},
+    "download_7day":      {"price": "9.90",   "subject": "视频工坊·VIP会员7天卡"},
+    "download_month":     {"price": "29.80",  "subject": "视频工坊·VIP会员月卡"},
+    "download_half_year": {"price": "99.90",  "subject": "视频工坊·VIP会员半年卡"},
+    "download_year":      {"price": "179.00", "subject": "视频工坊·VIP会员年卡"},
     "ai_5500":            {"price": "49.90",  "subject": "视频工坊·AI积分月会员"},
     "ai_15000":           {"price": "99.90",  "subject": "视频工坊·AI月会员"},
     "credits_5000":       {"price": "50.00",  "subject": "视频工坊·5000积分包"},
@@ -340,7 +343,7 @@ def _xunhu_sign(params: dict[str, Any], appsecret: str) -> str:
 
     🔴 两处必须照抄官方，2026-10-09 实测踩中：
       1. **值不做 urlencode**：官方是 `$arg .= "$key=$val"` 取原值。早期实现用
-         quote_plus 编码值 —— 本服务标题含中文（"视频工坊·下载会员1天卡"）、
+         quote_plus 编码值 —— 本服务标题含中文（"视频工坊·VIP会员1天卡"）、
          notify_url 含 `:` `/`，编码后 hash 与服务端算出的不一致。
       2. **空值不参与签名**（官方 `is_null($val) || $val === ''` 跳过），`hash` 自身不参与。
     """
