@@ -249,7 +249,291 @@ def test_find_head_rows_rejects_non_portrait():
     print("✅ 结构判据：矩形拒绝 / 人像结构识别")
 
 
+def test_head_detected_without_neck_by_proportion():
+    """长发 / 近景特写（行宽一路变宽、没有脖子收窄）也必须按头构图。
+
+    这是「人物偏小」投诉的主战场：真人长发照的行宽从发顶单调增到肩，脖子判据
+    漏判 ⇒ 落到回退构图 ⇒ 脸只有画布高的一成出头。兜底按人体比例（头宽≈肩宽
+    0.42）反推头，命中后肩以下被自然裁切 = 证件照该有的头肩特写。
+    判据：头主导时人像会**裁到画布底边**；回退构图底部必留白（3%）。
+    """
+    import numpy as _np
+    h, w = 900, 600
+    m = _np.zeros((h, w), dtype=bool)
+    for y in range(h):                       # 半宽单调增：漏斗形（发顶→肩），无收窄
+        half = int(30 + 250 * ((y / float(h)) ** 0.8))
+        m[y, max(0, w // 2 - half):w // 2 + half] = True
+    got = idp._find_head_rows(m)
+    assert got is not None, "长发 / 近景人像被判成非人像（会落回退构图，脸被缩小）"
+    assert len(got) == 3 and got[2] > 0, "兜底必须回传估算头宽（否则头宽取区间最大行宽会偏大）"
+
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    px = im.load()
+    for y in range(h):
+        for x in range(w):
+            if m[y, x]:
+                px[x, y] = (230, 190, 160, 255)
+    src = _tmp_png(im, "longhair.png")
+    out = str(Path(tempfile.gettempdir()) / "_vdl_test_idp_longhair.png")
+    idp.compose_id_photo(src, out, 295, 413, "white", 1)
+    rgb = Image.open(out).convert("RGB")
+    p = rgb.load()
+    W, H = rgb.size
+
+    def _fg(yy):
+        return sum(1 for xx in range(W) if p[xx, yy] != (255, 255, 255))
+
+    assert _fg(H - 1) > 0, "底部被留白了 ⇒ 走的是回退构图（脸还是小的）"
+    assert _fg(H - 1) > W * 0.8, f"底边没撑满（{_fg(H - 1)}/{W}），不像头肩特写"
+    assert _fg(int(H * 0.085) + 4) > 0, "头顶不在 8.5% 留白处（构图锚点不对）"
+    print("✅ 长发/近景无脖子：按人体比例估头，头肩特写到底边（不再缩成小脸）")
+
+
+def test_compose_zoom_changes_size():
+    """「人物大小」可调：zoom 越大脸越大，且头顶留白（缩放锚点）不动。
+
+    锚点必须稳——拖滑块时头顶位置若跟着漂，用户每调一下都要重新对位置，
+    这个滑块就成了「能调但没法调准」。
+    """
+    src = _tmp_png(_person_rgba(), "person_zoom.png")
+    got = {}
+    for z in (0.7, 1.0, 1.4):
+        out = str(Path(tempfile.gettempdir()) / f"_vdl_test_idp_zoom_{int(z * 100)}.png")
+        info = idp.compose_id_photo(src, out, 295, 413, "white", 1, zoom=z)
+        got[z] = (_head_metrics(out), info)
+    (w7, _, t7), (w1, _, t1), (w14, _, t14) = got[0.7][0], got[1.0][0], got[1.4][0]
+    assert w14 > w1 * 1.25, f"zoom=1.4 头宽 {w14:.2f} 没比 1.0（{w1:.2f}）明显变大"
+    assert w7 < w1 * 0.85, f"zoom=0.7 头宽 {w7:.2f} 没比 1.0（{w1:.2f}）变小"
+    assert abs(t14 - t1) < 0.02 and abs(t7 - t1) < 0.02, \
+        f"缩放把头顶留白也带跑了：{t7:.2f} / {t1:.2f} / {t14:.2f}"
+    assert got[1.4][1]["zoom"] == 1.4, "detail 没回传 zoom（前端拿不到当前倍率）"
+    # 越界必须夹住：手改请求不能拉出马赛克大图或缩成一个点
+    assert idp.clamp_zoom(9) == idp._ZOOM_MAX, "zoom 上限没夹住"
+    assert idp.clamp_zoom(0.01) == idp._ZOOM_MIN, "zoom 下限没夹住"
+    assert idp.clamp_zoom("abc") == 1.0 and idp.clamp_zoom(None) == 1.0, "非法 zoom 没回退默认"
+    print(f"✅ 人物大小可调：0.7→{w7:.2f} / 1.0→{w1:.2f} / 1.4→{w14:.2f}，头顶留白 {t1:.2f} 不动")
+
+
+def test_render_endpoint_reuses_matting():
+    """拖滑块只重合成、**不重抠图**：抠图必须只被调用一次（否则滑块等于不能用）。
+
+    抠图一次几十秒，若每拖一下都重抠，用户只会看到一直转圈。
+    """
+    from fastapi.testclient import TestClient
+    import time
+    calls = {"n": 0}
+
+    def _fake_matting(src, out, **kw):
+        calls["n"] += 1
+        _person_rgba().save(out, format="PNG")
+
+    def _head_w(resp):
+        im = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        W, H = im.size
+        px = im.load()
+        hx = [x for y in range(H) for x in range(W) if px[x, y] == (230, 190, 160)]
+        return (max(hx) - min(hx) + 1) / W
+
+    orig = idp.mat.matting_image
+    idp.mat.matting_image = _fake_matting
+    try:
+        c = TestClient(server_app.app)
+        buf = io.BytesIO()
+        Image.new("RGB", (600, 900), (170, 170, 170)).save(buf, format="PNG")
+        r = c.post("/api/idphoto/make",
+                   files={"file": ("me.png", buf.getvalue(), "image/png")},
+                   data={"w": "295", "h": "413", "bg": "blue", "layout": "1",
+                         "label": "一寸", "zoom": "1.0"})
+        assert r.status_code == 200, r.text[:200]
+        job = r.json()["job_id"]
+        st = None
+        for _ in range(60):
+            st = c.get(f"/api/idphoto/{job}").json()
+            if st["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.2)
+        assert st["status"] == "completed", f"任务失败：{st.get('error')}"
+        assert st["detail"].get("zoom") == 1.0, "首次生成没带 zoom"
+        w_before = _head_w(c.get(f"/api/idphoto/{job}/file"))
+        rr = c.post(f"/api/idphoto/{job}/render", data={"zoom": "1.4"})
+        assert rr.status_code == 200, rr.text[:200]
+        assert rr.json()["detail"]["zoom"] == 1.4, "重新合成没吃到新 zoom"
+        w_after = _head_w(c.get(f"/api/idphoto/{job}/file"))
+        assert w_after > w_before * 1.25, f"重新出图没变大：{w_before:.2f} → {w_after:.2f}"
+        assert calls["n"] == 1, f"重新出图又跑了一次抠图（共 {calls['n']} 次）"
+        print(f"✅ 重新合成：头宽 {w_before:.2f} → {w_after:.2f}，抠图只跑 1 次（不重抠）")
+    finally:
+        idp.mat.matting_image = orig
+
+
+def test_compose_offset_moves_and_clamps():
+    """预览拖动（ox/oy）：真的移动人像，且越界会被夹住——不许把人拖出画面。
+
+    用户拖到极限时若不做夹取，会导出一张纯底色空图，看起来像「生成坏了」。
+    """
+    src = _tmp_png(_person_rgba(), "person_off.png")
+    tmp = Path(tempfile.gettempdir())
+    paths = {k: str(tmp / f"_vdl_test_idp_off_{k}.png") for k in ("base", "right", "far")}
+    idp.compose_id_photo(src, paths["base"], 295, 413, "white", 1)
+    idp.compose_id_photo(src, paths["right"], 295, 413, "white", 1, ox=0.15)
+    idp.compose_id_photo(src, paths["far"], 295, 413, "white", 1, ox=1.0)
+
+    def fg_stats(path):
+        im = Image.open(path).convert("RGB")
+        W, H = im.size
+        px = im.load()
+        xs = [x for y in range(H) for x in range(W) if px[x, y] != (255, 255, 255)]
+        return len(xs), (sum(xs) / float(len(xs)) / W if xs else 0.0)
+
+    n_base, cx_base = fg_stats(paths["base"])
+    n_right, cx_right = fg_stats(paths["right"])
+    n_far, _ = fg_stats(paths["far"])
+    assert cx_right > cx_base + 0.05, f"ox 没把人像右移：{cx_base:.2f} → {cx_right:.2f}"
+    assert n_far < n_base, "越界后应被夹住只露一部分，不该完整保留"
+
+    # 夹取要用「比画布小」的主体才测得出：上面那张头主导人像比画布还宽，
+    # 移动一整幅画布的距离也还留在画面里，去掉夹取的变异会存活（踩过）。
+    small = _tmp_png(_subject_rgba(), "small_off.png")
+    s_base = str(tmp / "_vdl_test_idp_off_small_base.png")
+    far2 = str(tmp / "_vdl_test_idp_off_far2.png")
+    idp.compose_id_photo(small, s_base, 295, 413, "white", 1)
+    idp.compose_id_photo(small, far2, 295, 413, "white", 1, ox=1.0)
+
+    def _fg_of(path):
+        im2 = Image.open(path).convert("RGB")
+        W2, H2 = im2.size
+        px2 = im2.load()
+        return sum(1 for y in range(H2) for x in range(W2) if px2[x, y] != (255, 255, 255))
+
+    n_far2, n_small = _fg_of(far2), _fg_of(s_base)
+    assert n_far2 >= n_small * 0.3, \
+        f"拖到极限后人像几乎被拖出画布（{n_far2} vs 复位 {n_small}）"
+    assert idp._clamp_off(9.9) == 1.0 and idp._clamp_off("x") == 0.0, "偏移参数没夹住"
+    print(f"✅ 位置拖动：重心 {cx_base:.2f} → {cx_right:.2f}，越界被夹住（仍留 {n_far} 像素）")
+
+
+def test_offset_extreme_never_empties_canvas():
+    """两个方向同时拖到极限也不能出空图。
+
+    实测踩到：只夹「包围盒至少两成可见」时，右下角可见区正好落在主体轮廓的空隙里
+    （人像右下方没内容）⇒ 导出一张纯底色图，用户以为「生成坏了」。所以要按**主体质心**
+    仍落在画布内来兜底。
+    """
+    im = Image.new("RGBA", (200, 400), (0, 0, 0, 0))
+    px = im.load()
+    for y in range(20, 200):                 # 上部竖条
+        for x in range(40, 160):
+            px[x, y] = (30, 60, 90, 255)
+    for y in range(200, 380):                # 下部偏左（右下角留空）
+        for x in range(20, 120):
+            px[x, y] = (30, 60, 90, 255)
+    src = _tmp_png(im, "corner.png")
+    base = str(Path(tempfile.gettempdir()) / "_vdl_test_idp_corner_base.png")
+    out = str(Path(tempfile.gettempdir()) / "_vdl_test_idp_corner.png")
+    idp.compose_id_photo(src, base, 295, 413, "white", 1)
+    idp.compose_id_photo(src, out, 295, 413, "white", 1, ox=1.0, oy=1.0)
+
+    def _fg(path):
+        rgb = Image.open(path).convert("RGB")
+        W, H = rgb.size
+        p = rgb.load()
+        return sum(1 for y in range(H) for x in range(W) if p[x, y] != (255, 255, 255))
+
+    n0, n = _fg(base), _fg(out)
+    assert n >= n0 * 0.3, f"极限拖动后只剩 {n}/{n0} 像素，人像基本被拖没了（应当还有一半左右）"
+    print(f"✅ 极限拖动仍保住主体（{n}/{n0} 像素，约 {n / n0:.0%}）")
+
+
+def test_precut_skips_matting_and_rejects_opaque():
+    """「用作证件照」（precut）：必须跳过抠图；没有透明区域的图必须拒收。
+
+    拒收很重要：用户可能把普通照片当「已抠好」传进来，那样会合成一张带原背景的
+    矩形贴图，而用户会以为是我们抠错了。
+    """
+    from fastapi.testclient import TestClient
+    import time
+    calls = {"n": 0}
+
+    def _fake_matting(src, out, **kw):
+        calls["n"] += 1
+        _person_rgba().save(out, format="PNG")
+
+    orig = idp.mat.matting_image
+    idp.mat.matting_image = _fake_matting
+    try:
+        c = TestClient(server_app.app)
+        buf = io.BytesIO()
+        _person_rgba().save(buf, format="PNG")
+        r = c.post("/api/idphoto/make",
+                   files={"file": ("cut.png", buf.getvalue(), "image/png")},
+                   data={"w": "295", "h": "413", "bg": "blue", "layout": "1",
+                         "precut": "true", "zoom": "1.0"})
+        assert r.status_code == 200, r.text[:200]
+        job = r.json()["job_id"]
+        st = None
+        for _ in range(60):
+            st = c.get(f"/api/idphoto/{job}").json()
+            if st["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.2)
+        assert st["status"] == "completed", f"precut 任务失败：{st.get('error')}"
+        assert calls["n"] == 0, f"precut 竟然又抠了一次图（{calls['n']} 次）"
+
+        # 位置拖动走的就是 render 接口 ⇒ ox/oy 必须透传
+        rr = c.post(f"/api/idphoto/{job}/render",
+                    data={"zoom": "1.0", "ox": "0.12", "oy": "-0.08"})
+        assert rr.status_code == 200, rr.text[:200]
+        d = rr.json()["detail"]
+        assert abs(d["ox"] - 0.12) < 1e-6 and abs(d["oy"] + 0.08) < 1e-6, \
+            f"render 没吃到 ox/oy：{d}"
+
+        buf2 = io.BytesIO()
+        Image.new("RGB", (300, 400), (120, 130, 140)).save(buf2, format="JPEG")
+        r2 = c.post("/api/idphoto/make",
+                    files={"file": ("photo.jpg", buf2.getvalue(), "image/jpeg")},
+                    data={"w": "295", "h": "413", "precut": "true"})
+        job2 = r2.json()["job_id"]
+        st2 = None
+        for _ in range(60):
+            st2 = c.get(f"/api/idphoto/{job2}").json()
+            if st2["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.2)
+        assert st2["status"] == "failed", "不透明图被当成抠图结果放行了"
+        print("✅ 用作证件照：precut 跳过抠图（0 次）/ render 吃 ox,oy / 非透明图被拒")
+    finally:
+        idp.mat.matting_image = orig
+
+
 # ---------------------------------------------------------------- 前端接线
+def test_frontend_zoom_wiring_present():
+    """「人物大小」三处接线：滑块控件 / JS 取值 / 重新合成接口调用。"""
+    html = _web("index.html")
+    js = _web("app.js")
+    assert 'id="idpZoom"' in html, "缺少「人物大小」滑块控件"
+    assert "el.idpZoom" in js, "滑块没接进 JS（拖了没反应）"
+    assert "/render" in js, "JS 没调重新合成接口（拖滑块不会重新出图）"
+    assert "form.append('zoom'" in js, "生成时没把 zoom 传给后端（首次出图不吃滑块值）"
+    print("✅ 人物大小前端接线齐全（控件 / 取值 / 重合成）")
+
+
+def test_frontend_drag_paste_and_matting_bridge_wiring():
+    """拖动 / 滚轮 / 拖拽入页 / ⌘V 粘贴 / 一键抠图带入：五条通道缺一条用户就得多等面板。"""
+    html = _web("index.html")
+    js = _web("app.js")
+    assert 'id="idpReset"' in html, "缺少「复位」按钮（拖歪了没法还原）"
+    assert 'id="idpPicked"' in html, "缺少「已选图片」状态行（拖入后看不出载入了没有）"
+    assert 'id="matToIdPhoto"' in html, "一键抠图缺少「用作证件照」按钮"
+    assert "el.idpPreview.addEventListener('pointerdown'" in js, "预览没接按住拖动"
+    assert "el.idpPreview.addEventListener('pointerup'" in js, "拖动松手没接（位置不会落盘）"
+    assert "{ passive: false }" in js, "预览滚轮没拦默认滚动（会变成页面滚动）"
+    assert "el.idphotoView.addEventListener('drop'" in js, "证件照页没接拖拽入页"
+    assert "addEventListener('paste'" in js, "没接 ⌘V 粘贴"
+    assert "switchView('idphoto')" in js, "「用作证件照」没切到证件照视图"
+    assert "form.append('precut'" in js, "生成时没带 precut（从抠图带入会白抠一次）"
+    print("✅ 拖动 / 滚轮 / 拖拽 / 粘贴 / 一键抠图带入 五条通道接线齐全")
+
+
 def _web(name):
     return Path(_WEB_DIR, name).read_text(encoding="utf-8")
 
@@ -343,7 +627,15 @@ if __name__ == "__main__":
     test_mask_cleanup_drops_residue()
     test_compose_head_dominant_for_portrait()
     test_find_head_rows_rejects_non_portrait()
+    test_head_detected_without_neck_by_proportion()
+    test_compose_zoom_changes_size()
+    test_render_endpoint_reuses_matting()
+    test_compose_offset_moves_and_clamps()
+    test_offset_extreme_never_empties_canvas()
+    test_precut_skips_matting_and_rejects_opaque()
     test_frontend_wiring_present()
+    test_frontend_zoom_wiring_present()
+    test_frontend_drag_paste_and_matting_bridge_wiring()
     test_routes_mounted()
     test_job_pipeline_e2e()
     print("\n全部通过 ✅")

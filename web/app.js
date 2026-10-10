@@ -918,6 +918,12 @@
     idpSpec: $('idpSpec'),
     idpLayout: $('idpLayout'),
     idpColors: $('idpColors'),
+    idpZoom: $('idpZoom'),
+    idpZoomVal: $('idpZoomVal'),
+    idpPicked: $('idpPicked'),
+    idpPickedName: $('idpPickedName'),
+    idpPickedClear: $('idpPickedClear'),
+    idpReset: $('idpReset'),
     idpBtn: $('idpBtn'),
     idpDl: $('idpDl'),
     idpStatus: $('idpStatus'),
@@ -1069,6 +1075,7 @@
     matResult: $('matResult'),
     matOut: $('matOut'),
     matDownload: $('matDownload'),
+    matToIdPhoto: $('matToIdPhoto'),
     matUpgradeCloud: $('matUpgradeCloud'),
     matLightbox: $('matLightbox'),
     matLightboxStage: $('matLightboxStage'),
@@ -7786,14 +7793,227 @@
     el.idpStatus.classList.toggle('is-error', !!isErr);
   };
 
-  const startIdPhoto = async () => {
-    const f = el.idpFile.files[0];
-    if (!f) { idpSetStatus('请先选择一张人像照片', true); return; }
+  // 最近一次成功的证件照任务：拖「人物大小」滑块时按新倍率重新合成，
+  // 复用已抠好的人像（不重跑抠图，几百毫秒出图）。
+  let idpJob = '';
+  let idpRenderSeq = 0;
+  // 待处理的图片：来自原生选择 / 拖拽 / 粘贴 /「一键抠图」带入
+  let idpPickedFile = null;
+  let idpPrecut = false;          // true = 已是抠好的透明图（生成时跳过抠图）
+  let idpSheetW = 0;              // 当前产物整版宽（排版时 > 单张宽，用于拖动换算）
+  const idpOff = { x: 0, y: 0 };  // 位置微调，单位=画布宽/高的比例
+  const idpZoomFactor = () => (Number(el.idpZoom && el.idpZoom.value) || 100) / 100;
+
+  const idpSetPicked = (file, precut) => {
+    idpPickedFile = file || null;
+    idpPrecut = !!precut;
+    if (!el.idpPicked) return;
+    el.idpPicked.hidden = !idpPickedFile;
+    if (idpPickedFile) {
+      el.idpPickedName.textContent = (idpPrecut ? '已带入抠好的透明图：' : '已选择：')
+        + (idpPickedFile.name || '图片')
+        + (idpPrecut ? '（生成时不再重新抠图）' : '');
+    }
+  };
+
+  // 单张画布在预览里的显示尺寸：拖动位移(px) ÷ 它 = 画布比例。
+  // 排版模式下 <img> 是整版（多张 + 白边），必须按「单张宽 / 整版宽」折算，
+  // 否则拖同样的距离，位置偏得比用户手动的多好几倍。
+  const idpSingleDisplay = () => {
     const spec = idpCurrentSpec();
+    const sheetW = idpSheetW || spec.w;
+    const imgW = (el.idpPreview && el.idpPreview.clientWidth) || 0;
+    const k = imgW > 0 ? imgW / sheetW : 1;
+    return { w: Math.max(1, spec.w * k), h: Math.max(1, spec.h * k) };
+  };
+
+  // 拖动时本地先动（即时反馈）；松手才请求后端出真图并清掉本地位移
+  const idpApplyOff = () => {
+    if (!el.idpPreview) return;
+    if (!idpOff.x && !idpOff.y) {
+      el.idpPreview.style.transform = '';
+      return;
+    }
+    const d = idpSingleDisplay();
+    el.idpPreview.style.transform =
+      `translate(${(idpOff.x * d.w).toFixed(1)}px, ${(idpOff.y * d.h).toFixed(1)}px)`;
+  };
+
+  const idpRenderZoom = async () => {
+    if (!idpJob) return;
+    const seq = idpRenderSeq + 1;
+    idpRenderSeq = seq;
+    const z = idpZoomFactor();
+    idpSetStatus(`正在按 ${Math.round(z * 100)}% 重新出图…`, false);
+    try {
+      const fd = new FormData();
+      fd.append('zoom', String(z));
+      fd.append('ox', String(idpOff.x));
+      fd.append('oy', String(idpOff.y));
+      const res = await request(`/api/idphoto/${idpJob}/render`, { method: 'POST', body: fd });
+      if (seq !== idpRenderSeq) return;         // 已被更新的拖动取代，丢弃过期结果
+      // 后端会夹住越界的位移，回报实际生效值 ⇒ 以它为准，后续拖动才有正确基准
+      const d = (res && res.detail) || {};
+      idpOff.x = Number(d.ox) || 0;
+      idpOff.y = Number(d.oy) || 0;
+      if (Number(d.width)) idpSheetW = Number(d.width);
+      el.idpPreview.style.transform = '';       // 真图本身已含位移，清掉本地预览位移
+      const url = `/api/idphoto/${idpJob}/file?t=${Date.now()}`;
+      el.idpPreview.src = url;
+      el.idpDl.href = url;
+      idpSetStatus(`已按 ${Math.round(z * 100)}% 重新出图 ✅`, false);
+    } catch (error) {
+      if (seq !== idpRenderSeq) return;
+      idpSetStatus('调整失败：' + ((error && error.message) || '未知错误'), true);
+    }
+  };
+
+  // 边拖边出图：input 时先更新数字，停手 350ms 再请求（避免拖动过程打一串请求）
+  let idpZoomTimer = 0;
+  if (el.idpZoom) {
+    el.idpZoom.addEventListener('input', () => {
+      el.idpZoomVal.textContent = `${el.idpZoom.value}%`;
+      clearTimeout(idpZoomTimer);
+      // 还没出过图：光拖滑块没意义，明确告诉用户先生成（否则像「拖了没反应」）
+      if (!idpJob) {
+        idpSetStatus('先点「生成证件照」，出图后再拖这里调整人物大小', false);
+        return;
+      }
+      idpZoomTimer = setTimeout(idpRenderZoom, 350);
+    });
+  }
+
+  // ── 预览图上按住拖动挪位置（本地即时反馈，松手才出真图） ──
+  let idpDrag = null;
+  if (el.idpPreview) {
+    el.idpPreview.addEventListener('pointerdown', (e) => {
+      if (!idpJob) {
+        idpSetStatus('先生成证件照，出图后就能在预览上拖动 / 滚轮调整', false);
+        return;
+      }
+      const d = idpSingleDisplay();
+      idpDrag = { sx: e.clientX, sy: e.clientY, ox: idpOff.x, oy: idpOff.y, w: d.w, h: d.h };
+      try { el.idpPreview.setPointerCapture(e.pointerId); } catch (_) { /* 老内核无此 API */ }
+      el.idpPreview.classList.add('is-dragging');
+      e.preventDefault();
+    });
+    el.idpPreview.addEventListener('pointermove', (e) => {
+      if (!idpDrag) return;
+      idpOff.x = idpDrag.ox + (e.clientX - idpDrag.sx) / idpDrag.w;
+      idpOff.y = idpDrag.oy + (e.clientY - idpDrag.sy) / idpDrag.h;
+      idpApplyOff();
+    });
+    const idpDragEnd = (e) => {
+      if (!idpDrag) return;
+      idpDrag = null;
+      el.idpPreview.classList.remove('is-dragging');
+      try { el.idpPreview.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      idpRenderZoom();
+    };
+    el.idpPreview.addEventListener('pointerup', idpDragEnd);
+    el.idpPreview.addEventListener('pointercancel', idpDragEnd);
+    // 滚轮缩放（需 preventDefault 拦掉页面滚动，故 passive:false）
+    el.idpPreview.addEventListener('wheel', (e) => {
+      if (!idpJob) return;
+      e.preventDefault();
+      const cur = Number(el.idpZoom.value) || 100;
+      const v = Math.max(60, Math.min(160, cur + (e.deltaY > 0 ? -5 : 5)));
+      el.idpZoom.value = String(v);
+      el.idpZoomVal.textContent = `${v}%`;
+      clearTimeout(idpZoomTimer);
+      idpZoomTimer = setTimeout(idpRenderZoom, 220);
+    }, { passive: false });
+  }
+
+  if (el.idpReset) {
+    el.idpReset.addEventListener('click', () => {
+      idpOff.x = 0;
+      idpOff.y = 0;
+      el.idpPreview.style.transform = '';
+      el.idpZoom.value = '100';
+      el.idpZoomVal.textContent = '100%';
+      if (idpJob) idpRenderZoom();
+      else idpSetStatus('已复位：大小 100%', false);
+    });
+  }
+
+  // ── 拖拽图片进本页（绕开 macOS 那个要 4 秒才弹出的文件面板） ──
+  if (el.idphotoView) {
+    ['dragenter', 'dragover'].forEach((t) => el.idphotoView.addEventListener(t, (e) => {
+      if (!e.dataTransfer) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      el.idphotoView.classList.add('is-dragover');
+    }));
+    ['dragleave', 'dragend'].forEach((t) => el.idphotoView.addEventListener(t,
+      () => el.idphotoView.classList.remove('is-dragover')));
+    el.idphotoView.addEventListener('drop', (e) => {
+      e.preventDefault();
+      el.idphotoView.classList.remove('is-dragover');
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) { idpSetStatus('没识别到图片文件，请从访达把图片拖进来', true); return; }
+      if (f.type && !/^image\//.test(f.type)) {
+        idpSetStatus('这个文件不是图片，请拖 png / jpg / webp 图片', true);
+        return;
+      }
+      idpSetPicked(f, false);
+      idpSetStatus(`已载入「${f.name}」，选好规格和底色后点「生成证件照」`, false);
+    });
+  }
+
+  // ── 复制图片后 ⌘V 直接粘贴（截图后最省事） ──
+  document.addEventListener('paste', (e) => {
+    if (!el.idphotoView || el.idphotoView.hidden) return;
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (let i = 0; i < items.length; i += 1) {
+      if (items[i].type && items[i].type.indexOf('image/') === 0) {
+        const f = items[i].getAsFile();
+        if (f) {
+          idpSetPicked(f, false);
+          idpSetStatus('已从剪贴板载入图片，点「生成证件照」即可', false);
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+  });
+
+  if (el.idpFile) {
+    el.idpFile.addEventListener('change', () => {
+      const f = el.idpFile.files && el.idpFile.files[0];
+      if (f) {
+        idpSetPicked(f, false);
+        idpSetStatus(`已选择「${f.name}」`, false);
+      }
+    });
+    // 点下去先给反馈：系统面板要 3~5 秒才弹出来，不提示会让人以为卡死、反复点
+    el.idpFile.addEventListener('click', () => {
+      idpSetStatus('正在打开系统文件选择器…（macOS 面板通常 3~5 秒才弹出，可改用拖拽或 ⌘V）', false);
+    });
+  }
+  if (el.idpPickedClear) {
+    el.idpPickedClear.addEventListener('click', () => {
+      idpSetPicked(null, false);
+      idpSetStatus('已清除所选图片', false);
+    });
+  }
+
+  const startIdPhoto = async () => {
+    const f = idpPickedFile;
+    if (!f) {
+      idpSetStatus('请先选择 / 拖入一张人像照片（也可以从「一键抠图」点「用作证件照」带入）', true);
+      return;
+    }
+    const spec = idpCurrentSpec();
+    idpJob = '';                   // 新任务未出图前，滑块不能指向旧任务
+    idpOff.x = 0;                  // 位置回到标准构图（上一张的拖动不带过来）
+    idpOff.y = 0;
+    el.idpPreview.style.transform = '';
     el.idpBtn.disabled = true;
     el.idpDl.hidden = true;
     el.idpPreviewWrap.hidden = true;
-    idpSetStatus('抠图换底中…（首次使用需下载抠图模型，请耐心等待）', false);
+    idpSetStatus(idpPrecut ? '换底出图中（这张已经抠好了，不重新抠图，很快）…'
+                           : '抠图换底中…（首次使用需下载抠图模型，请耐心等待）', false);
     const form = new FormData();
     form.append('file', f);
     form.append('w', String(spec.w));
@@ -7801,9 +8021,12 @@
     form.append('bg', idpBg);
     form.append('layout', el.idpLayout.value || '1');
     form.append('label', spec.name);
+    form.append('zoom', String(idpZoomFactor()));
+    form.append('precut', idpPrecut ? 'true' : 'false');
     try {
       const data = await request('/api/idphoto/make', { method: 'POST', body: form });
       const job = data.job_id;
+      idpJob = job;                 // 供「人物大小」滑块重新合成使用
       // 轮询：抠图是重算力任务，给足 5 分钟（首次还要下载模型）
       let st = null;
       for (let i = 0; i < 300; i += 1) {
@@ -7816,14 +8039,16 @@
         idpSetStatus('失败：' + ((st && st.error) || '处理超时，请重试'), true);
         return;
       }
-      const url = `/api/idphoto/${job}/file`;
+      const url = `/api/idphoto/${job}/file?t=${Date.now()}`;
       el.idpPreview.src = url;
       el.idpPreviewWrap.hidden = false;
       el.idpDl.href = url;
       el.idpDl.setAttribute('download', st.filename || '证件照.png');
       el.idpDl.hidden = false;
       const d = st.detail || {};
-      idpSetStatus(`完成 ✅ ${spec.name} ${spec.w}×${spec.h}${d.layout > 1 ? ` · ${d.layout} 张排版` : ''}`, false);
+      idpSheetW = Number(d.width) || 0;    // 拖动换算基准（排版时 != 单张宽）
+      idpSetStatus(`完成 ✅ ${spec.name} ${spec.w}×${spec.h}${d.layout > 1 ? ` · ${d.layout} 张排版` : ''}`
+        + '　·　可在预览上拖动 / 滚轮微调', false);
     } catch (error) {
       idpSetStatus('失败：' + ((error && error.message) || '未知错误'), true);
     } finally {
@@ -7833,6 +8058,23 @@
   idpRenderSpecs();
   idpRenderColors();
   if (el.idpBtn) el.idpBtn.addEventListener('click', startIdPhoto);
+
+  // 「一键抠图」→「证件照」：把抠好的透明图直接带过去换底出片，不再重抠一次
+  if (el.matToIdPhoto) {
+    el.matToIdPhoto.addEventListener('click', async () => {
+      const src = (el.matOut && (el.matOut.currentSrc || el.matOut.src)) || '';
+      if (!src) { idpSetStatus('还没有抠图结果，先在上面完成一次抠图', true); return; }
+      try {
+        const blob = await (await fetch(src)).blob();
+        const f = new File([blob], '抠好的透明图.png', { type: blob.type || 'image/png' });
+        switchView('idphoto');
+        idpSetPicked(f, true);
+        idpSetStatus('已带入抠好的透明图：选规格和底色，点「生成证件照」即可（不会重新抠图）', false);
+      } catch (error) {
+        idpSetStatus('带入失败：' + ((error && error.message) || '未知错误'), true);
+      }
+    });
+  }
 
 
   // 当前拖拽目标：'preview' | 'modal'，用于全局 mousemove/mouseup 知道该用哪张图

@@ -971,11 +971,22 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
                     linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%);
   background-size: 10px 10px; background-position: 0 0, 5px 5px; background-color: #fff;
 }
+.idp-zoom-val { color: var(--brand, #4f46e5); font-weight: 600; }
+.idp-hint { display: block; margin-top: 4px; color: var(--muted, #8a8f98); font-size: 12px; }
+.idp-form input[type="range"] {
+  width: 100%; margin: 6px 0 0; accent-color: var(--brand, #4f46e5); cursor: pointer;
+}
 .idp-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 16px 0 6px; }
 .idp-status { margin: 4px 0 0; min-height: 20px; color: var(--muted, #8a8f98); font-size: 13px; }
 .idp-status.is-error { color: #d92d20; }
 .idp-preview { margin-top: 14px; padding: 16px; border: 1px solid var(--line, rgba(127, 127, 127, .28)); border-radius: 12px; background: #fff; }
 .idp-preview img { display: block; margin: 0 auto; max-width: 100%; height: auto; border: 1px solid rgba(0, 0, 0, .12); }
+.idp-preview img { cursor: grab; touch-action: none; user-select: none; }
+.idp-preview img.is-dragging { cursor: grabbing; }
+.idp-preview-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.idp-picked { display: flex; align-items: center; gap: 10px; margin: 6px 0 0; font-size: 13px; color: var(--text-2, #555); }
+.idp-picked-name { overflow-wrap: anywhere; }
+#idphotoView.is-dragover { outline: 2px dashed var(--brand, #4f46e5); outline-offset: 6px; border-radius: 10px; }
 /* 图片转文字（OCR）卡片：跟在去水印结果区下方，输出文本可滚动复制 */
 .dw-ocr-card { margin-top: .8rem; }
 .dw-ocr-card textarea { width: 100%; resize: vertical; font-size: .92rem; line-height: 1.55; white-space: pre-wrap; }

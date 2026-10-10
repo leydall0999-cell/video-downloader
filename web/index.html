@@ -1803,6 +1803,7 @@
       <li>点选择按钮载入图片。</li>
       <li>选抠图模型；需要更精细可勾选「启用 AI 画质增强」并选增强档位。</li>
       <li>点「<b>开始抠图</b>」，输出透明底 PNG。</li>
+      <li>抠出来的人像可以直接点结果区的「<b>🪪 用作证件照</b>」——带着这张透明图跳到「证件照」换底出片，<b>不用再抠一次</b>；证件照里还能拖动 / 滚轮微调人物大小和位置。</li>
     </ol>
     <p class="howto-note">可输入文字描述要抠的主体（如「人像」「商品」）提升准确度。</p>
     <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
@@ -1975,6 +1976,7 @@
             </div>
             <div class="mat-result-actions" data-page-node-id="YHYawO6r4ulWakxqWkbMAu">
               <a class="btn btn-accent btn-sm" id="matDownload" download data-page-node-id="eLbQXCH9ORPiAvfWJZe14R">下载透明 PNG</a>
+              <button type="button" class="btn btn-ghost btn-sm" id="matToIdPhoto" title="把这张抠好的透明图直接带到「证件照」换底出图，省掉重新抠图">🪪 用作证件照</button>
               <button type="button" class="btn btn-ghost btn-sm" id="matUpgradeCloud" hidden data-page-node-id="ufdA0aOiEjKQSsEeeCCvgU">☁️ 升级云端精修</button>
               <span class="convert-status" id="matResultSizeTip" data-page-node-id="Cgdi54P5pnvzAkUFUs9JU1"></span>
             </div>
@@ -2006,13 +2008,14 @@
       <summary class="howto-head"><span class="howto-ic" aria-hidden="true">💡</span><span class="howto-title">怎么用 · 证件照</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
       <div class="howto-body">
         <ol class="howto-steps">
-          <li>在「照片文件」处选择一张人像清晰的正面照（背景杂乱也没关系，会自动抠出人像）。</li>
+          <li>载入一张人像清晰的正面照：点「照片文件」选择，或<b>直接把图片拖进本页</b>、复制图片后在本页按 <b>⌘V</b> 粘贴；已经抠好的人像还能从「一键抠图」点「<b>🪪 用作证件照</b>」带过来（省一次抠图）。背景杂乱也没关系，会自动抠出人像。</li>
           <li>选<b>尺寸规格</b>：一寸 / 二寸等常用尺寸，或社保卡、教师资格证等考试证件尺寸。</li>
           <li>选<b>底色</b>：白底 / 蓝底 / 红底等标准色，也可以保留<b>透明底</b>。</li>
           <li>选<b>排版</b>（单张 / 4 张 / 8 张冲印版），点「<b>生成证件照</b>」。</li>
-          <li>看预览，满意后点「<b>下载结果</b>」取回 300dpi PNG。</li>
+          <li>看预览不满意的，直接<b>在预览图上按住拖动</b>挪位置、用<b>滚轮</b>放大缩小；也可以用上面的「<b>人物大小</b>」滑块（60%~160%）和「<b>↺ 复位</b>」还原。每次约一秒出新图，不会重新抠图。</li>
+          <li>满意后点「<b>下载结果</b>」取回 300dpi PNG。</li>
         </ol>
-        <p class="howto-note">出图自动按证件照构图（人像居中、顶部留白、底部对齐）；若原图背景太复杂导致抠图不理想，可先去「一键抠图」处理好再来。</p>
+        <p class="howto-note">出图自动按证件照构图（头顶留白、肩部裁切），拖动 / 缩放只重做合成、不重跑抠图，所以调多久都不耗时间。</p>
         <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
       </div>
     </details>
@@ -2020,7 +2023,12 @@
     <label class="uc-field">
       <span class="uc-label">照片文件</span>
       <input type="file" id="idpFile" accept="image/*" />
+      <span class="idp-hint" id="idpFileHint">macOS 的文件面板本身要 4 秒左右才弹出（系统层面，与 App 无关）；更快的办法：把图片<b>直接拖进本页</b>，或复制图片后在本页按 <b>⌘V</b> 粘贴。</span>
     </label>
+    <div class="idp-picked" id="idpPicked" hidden>
+      <span class="idp-picked-name" id="idpPickedName"></span>
+      <button type="button" class="btn btn-ghost btn-sm" id="idpPickedClear">✕ 清除</button>
+    </div>
     <div class="idp-form">
       <label class="uc-field">
         <span class="uc-label">尺寸规格</span>
@@ -2038,6 +2046,12 @@
         <span class="uc-label">底色</span>
         <div class="idp-colors" id="idpColors"></div>
       </div>
+      <div class="uc-field">
+        <span class="uc-label">人物大小 <b class="idp-zoom-val" id="idpZoomVal">100%</b></span>
+        <input type="range" id="idpZoom" min="60" max="160" step="5" value="100"
+               aria-label="人物大小" />
+        <span class="idp-hint">出图后可拖动微调，不重复抠图、秒出</span>
+      </div>
     </div>
     <div class="idp-actions">
       <button type="button" class="uc-btn primary" id="idpBtn">生成证件照</button>
@@ -2045,7 +2059,11 @@
     </div>
     <p class="idp-status" id="idpStatus"></p>
     <div class="idp-preview" id="idpPreviewWrap" hidden>
-      <img id="idpPreview" alt="证件照预览" />
+      <img id="idpPreview" alt="证件照预览" draggable="false" />
+      <div class="idp-preview-bar">
+        <span class="idp-hint">预览图上<b>按住拖动</b>挪位置 / <b>滚轮</b>调大小（也可用上面的滑块）</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="idpReset">↺ 复位</button>
+      </div>
     </div>
   </section>
 
