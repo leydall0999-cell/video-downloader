@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="1024">
+      <stop offset="0" stop-color="#122B5C"/>
+      <stop offset="1" stop-color="#2B4FD8"/>
+    </linearGradient>
+    <radialGradient id="hl" gradientUnits="userSpaceOnUse" cx="512" cy="81" r="942">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="sq"><rect x="0" y="0" width="1024" height="1024" rx="230" ry="230"/></clipPath>
+  </defs>
+  <g clip-path="url(#sq)">
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+    <rect width="1024" height="1024" fill="url(#hl)"/>
+    <rect x="209.9" y="271.4" width="604.2" height="481.3" rx="66.6" ry="66.6" fill="#fff"/><rect x="259.1" y="320.5" width="505.9" height="383.0" rx="32.8" ry="32.8" fill="url(#bg)"/><rect x="217.1" y="335.9" width="34.8" height="34.8" rx="8.2" ry="8.2" fill="url(#bg)"/><rect x="772.1" y="335.9" width="34.8" height="34.8" rx="8.2" ry="8.2" fill="url(#bg)"/><rect x="217.1" y="422.9" width="34.8" height="34.8" rx="8.2" ry="8.2" fill="url(#bg)"/><rect x="772.1" y="422.9" width="34.8" height="34.8" rx="8.2" ry="8.2" fill="url(#bg)"/><rect x="217.1" y="510.0" width="34.8" height="34.8" rx="8.2" ry="8.2" fill="url(#bg)"/><rect x="772.1" y="510.0" width="34.8" height="34.8" rx="8.2" ry="8.2" fill="url(#bg)"/><rect x="217.1" y="597.0" width="34.8" height="34.8" rx="8.2" ry="8.2" fill="url(#bg)"/><rect x="772.1" y="597.0" width="34.8" height="34.8" rx="8.2" ry="8.2" fill="url(#bg)"/><rect x="483.8" y="343.0" width="56.3" height="163.8" rx="20.5" ry="20.5" fill="#fff"/><path d="M 400.4 506.9 L 623.6 506.9 A 16.4 16.4 0 0 1 629.7 519.6 L 522.3 652.8 A 16.4 16.4 0 0 1 501.7 652.8 L 394.3 519.6 A 16.4 16.4 0 0 1 400.4 506.9 Z" fill="#fff"/>
+  </g>
+</svg>
