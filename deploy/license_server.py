@@ -584,7 +584,8 @@ def _cloud_quota_view(user: dict[str, Any], now: float,
 
 def cloud_quota_impl(state: dict[str, Any], token: str, now: float, secret: str,
                      lifetime: int = 0, daily: int = 0, refund: bool = False,
-                     resource: str = "", ip: str = "") -> dict[str, Any]:
+                     resource: str = "", ip: str = "",
+                     allow_refund: bool = False, event_id: str = "") -> dict[str, Any]:
     """免费云端额度跨端原子扣减 / 退还（2026-10-06）。
 
     🔴 为什么必须有这个端点：桌面端原先把「终身 3 次云端额度」记在**本机**
@@ -595,11 +596,23 @@ def cloud_quota_impl(state: dict[str, Any], token: str, now: float, secret: str,
 
     语义：
       · lifetime/daily > 0 → 扣减（原子：先判余额再改，超额不落账并返回 allowed=False）
-      · refund=True       → 退还（任务失败补偿，绝不超退到 0 以下）
+      · refund=True       → 退还（**仅受信管理端**，见下），绝不超退到 0 以下
       · 两者都不传         → 只查询当前余额（客户端冷启动/心跳回灌用）
 
-    日切按北京时间（与 daily_impl / _authority_view 的 usage_date 一致）。
-    断网时由调用方按 fail-open 处理（沿用本机计数），故本端点只在能连通时调用。
+    🔴 安全审计 2026-10-11（P0-4「云额度可被用户自行回退」）：
+      修复前有两个致命口子 ——
+        ① 负值守卫写的是 `life_n < 0 **and** day_n < 0`：只传**一个**负数
+           （如 lifetime=-3）就绕过守卫，而 `max(0, used + (-3))` 会把已用数
+           回退 ⇒ 用户自行把「终身免费次数」刷回满额，无限白嫖；
+        ② `refund` 由**客户端**直接传入即生效 ⇒ 消费→退还→再消费，循环套利。
+      现在：
+        · 任一负值即 400（`or` 而非 `and`）；
+        · `refund` 仅当 `allow_refund=True`（管理端 `cloud_quota_refund`）才受理，
+          客户端传 refund 一律 403；
+        · 退还必须携带 `event_id`（原消费事件号）且**一次性** —— 同一事件
+          重复退还直接 409，杜绝「反复退同一笔」把额度退成负数或重复回补。
+      日切按北京时间（与 daily_impl / _authority_view 的 usage_date 一致）。
+      断网时由调用方按 fail-open 处理（沿用本机计数），故本端点只在能连通时调用。
     """
     uid = parse_token(token, secret, now)
     user = _users(state).get(uid)
@@ -613,12 +626,26 @@ def cloud_quota_impl(state: dict[str, Any], token: str, now: float, secret: str,
         day_n = int(daily or 0)
     except (TypeError, ValueError):
         raise ApiError(400, "BAD_BODY", "lifetime/daily 必须是整数")
+
     if refund:
+        # 退还只允许受信管理端发起；客户端自退 = 消费→退还→再消费的无限套利。
+        if not allow_refund:
+            raise ApiError(403, "REFUND_FORBIDDEN",
+                           "该接口不支持退还云端额度，如需补退请联系客服")
+        if not str(event_id or "").strip():
+            raise ApiError(400, "BAD_BODY", "退还必须携带 event_id（原消费事件号）")
         life_n, day_n = -abs(life_n), -abs(day_n)
-    if life_n < 0 and day_n < 0 and not refund:
-        raise ApiError(400, "BAD_BODY", "扣减数不能为负，退还请传 refund=true")
+    elif life_n < 0 or day_n < 0:
+        # ⚠️ 必须是 or：写 and 时「只传一个负数」可绕过，正是 P0-4 的根因。
+        raise ApiError(400, "BAD_BODY", "扣减数不能为负")
+
 
     cq = user.setdefault("cloud_quota", {})
+    # 退还幂等（P0-4）：同一消费事件只允许退还一次。
+    if refund:
+        _done = cq.get("refunded_events") or []
+        if str(event_id or "").strip() in _done:
+            raise ApiError(409, "REFUND_DUPLICATE", "该消费事件已退还过，不能重复退还")
     today = _bj_day(now)
     daily_state = cq.get("daily") or {}
     if str(daily_state.get("date") or "") != today:
@@ -666,13 +693,31 @@ def cloud_quota_impl(state: dict[str, Any], token: str, now: float, secret: str,
     cq["lifetime"] = life_dict
     daily_state["auto"] = day_dict
     cq["daily"] = daily_state
+
+    # 消费事件号：扣减时服务端生成（随响应回给调用方），退还时沿用原事件号。
+    # 有了它，「退还」才是可核验的（凭既有消费记录）、且天然一次性。
+    ev_id = str(event_id or "").strip()
+    if not ev_id and (life_n > 0 or day_n > 0):
+        ev_id = secrets.token_hex(8)
+    if refund and ev_id:
+        _done = cq.setdefault("refunded_events", [])
+        if ev_id not in _done:
+            _done.append(ev_id)
+        cq["refunded_events"] = _done[-500:]      # 只留最近 500 条，防无限膨胀
+
     user["cloud_quota"] = cq
 
     if life_n or day_n:
+        # 审计流水（P0-4）：每次额度变更都留痕 —— 来源（客户端/受信管理端）、
+        # 事件号、资源、变更量、变更后余量、来源 IP，便于对账与追责。
         _log_event(state, "cloud_quota", now, email=uid, resource=res,
                    lifetime=life_n, daily=day_n, refund=bool(refund),
+                   event_id=ev_id,
+                   source=("trusted" if allow_refund else "client"),
+                   ip=ip or "",
                    life_used=life_dict[res], day_used=day_dict[res])
     return {"ok": True, "allowed": True, "refunded": bool(refund),
+            "event_id": ev_id,
             "applied": {"lifetime": life_n, "daily": day_n},
             "cloud_quota": _cloud_quota_view(user, now, limits),
             "authority": _authority_view(user, now)}
@@ -1022,6 +1067,21 @@ def grant_impl(state: dict[str, Any], email: str, plan: str, now: float,
             "user_id": uid, "email": uid, "salt": "", "pw_hash": "",
             "created_at": now, "devices": [], "purchases": [], "no_password": True,
         }
+    # 🔴 安全审计 2026-10-11（P1-1）订单级幂等：同一笔支付（同一 note 里的
+    #    渠道+订单号）重复回调只发一次权益，直接返回既有结果。
+    #    放在限购闸之前 —— 重复回调不是「超限购买」，不该被记成 LIMIT_REACHED 告警。
+    _okey = _order_key_of_note(note)
+    if _okey:
+        for _p in (user.get("purchases") or []):
+            if _order_key_of_note(_p.get("note")) == _okey:
+                _log_event(state, "grant_duplicate", now, email=uid,
+                           order_key=_okey,
+                           plan_code=str(_p.get("plan_code") or plan_code))
+                return {"ok": True, "user_id": uid,
+                        "plan_code": str(_p.get("plan_code") or plan_code),
+                        "purchase_id": str(_p.get("id") or ""),
+                        "duplicate": True,
+                        "account": _public_user(user)}
     # 🔴 每人限购硬闸（2026-10-09）：活动价档可设 limit_per_user。
     #    收款前的拦截在 pay_server（正常路径根本走不到这里）；本闸只用于兜住
     #    「并发多单 / 直接调 grant」的绕过。仅对**支付驱动**的发货生效
@@ -1328,6 +1388,25 @@ _AUTO_NOTE_RE = re.compile(r"^[A-Za-z0-9_]+-auto:")
 def _is_auto_grant_note(note: Any) -> bool:
     """该 grant 是否由支付渠道自动发货写下（note = "<渠道>-auto:<order_id>"）。"""
     return bool(_AUTO_NOTE_RE.match(str(note or "")))
+
+
+# 安全审计 2026-10-11（P1-1「回调重复发权益」）：从自动发货 note 里取
+# `(渠道, 订单号)` 唯一键，用于**发货侧**幂等去重。
+_ORDER_KEY_RE = re.compile(r"^([A-Za-z0-9_]+)-auto:(\S+)$")
+
+
+def _order_key_of_note(note: Any) -> str:
+    """自动发货 note → "<渠道>:<订单号>" 唯一键；非支付驱动发货返回空串。
+
+    支付渠道会重试回调；并发两笔通知、或「发货成功但订单落盘前进程重启」后重放，
+    都会走到 grant 一次以上。旧实现只有调用方（pay_server）的本地订单状态做去重，
+    且 `_grant` 调用在锁外 —— 并发时双双通过检查即**重复发货**（会员天数/积分翻倍，
+    真实账目损失）。去重必须落在**权威侧**（授权中心），这里就是那道闸。
+    """
+    m = _ORDER_KEY_RE.match(str(note or "").strip())
+    if not m:
+        return ""
+    return f"{m.group(1).lower()}:{m.group(2)}"
 
 
 def _grant_prefix_for(order: dict[str, Any]) -> str:
@@ -1776,7 +1855,11 @@ class Handler(BaseHTTPRequestHandler):
                           "ban", "adjust", "setstate", "usage",
                           "alerts", "alerts_ack", "recon", "plans_set",
                             # 🔴 2026-10-06 免费额度覆盖下发（终身免费次数）
-                            "free_quota_set"):
+                            "free_quota_set",
+                            # 🔴 安全审计 2026-10-11（P0-4）：受信额度退还。
+                            #    客户端不得自行退还（否则消费→退还→再消费可无限白嫖），
+                            #    退还只允许管理端凭消费事件号一次性冲正。
+                            "cloud_quota_refund"):
                 self._require_admin(data)
                 with _LOCK:
                     st = _load_state()
@@ -1877,6 +1960,21 @@ class Handler(BaseHTTPRequestHandler):
                             st, now,
                             cloud_lifetime=(data["cloud_lifetime"]
                                             if "cloud_lifetime" in data else _UNSET))
+                    elif action == "cloud_quota_refund":
+                        # 🔴 安全审计 2026-10-11（P0-4）受信额度退还：
+                        #   客户端自退 = 消费→退还→再消费的无限套利（真实云端大模型
+                        #   调用成本 ¥0.04~0.19/次），故退还只允许管理端发起，
+                        #   且必须凭**既有消费事件号**一次性冲正（重复退还 → 409）。
+                        out = cloud_quota_impl(st, str(data.get("token") or ""),
+                                               now, SECRET,
+                                               lifetime=data.get("lifetime") or 0,
+                                               daily=data.get("daily") or 0,
+                                               refund=True,
+                                               resource=str(data.get("resource") or ""),
+                                               ip=ip,
+                                               allow_refund=True,
+                                               event_id=str(data.get("event_id") or ""))
+                        _save_state(st)
                     else:
                         out = users_impl(st)
                 return self._json(200, out)

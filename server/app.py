@@ -611,18 +611,39 @@ _rate_log: dict[str, list[float]] = {}
 _rate_lock = threading.Lock()
 
 def _client_ip(request: Request) -> str:
-    """取真实客户端 IP，避免伪造 X-Forwarded-For 头绕过限流。
+    """取真实客户端 IP（限流桶键 / 日志用），避免伪造 X-Forwarded-For 绕过限流。
 
-    优先级：X-Real-IP（Cloudflare 等反代会覆盖用户自填、最可信）
-            > X-Forwarded-For 最右段（平台/反代追加的最近一跳，用户无法伪造最右）
-            > 直连地址。
+    优先级（安全审计 2026-10-11 P2-17 重排）：
+      ① `CF-Connecting-IP` —— Cloudflare 自己写入的权威客户端地址（用户无法伪造）；
+      ② `X-Real-IP` —— nginx 的 `$remote_addr`；
+      ③ `X-Forwarded-For` 的最近一跳（最右）与原始客户端（最左）；
+      ④ 直连 socket 地址。
+    规则：**优先返回第一个非环回候选**；只有全部候选都是环回才按本机处理。
+
+    🔴 为什么必须这么改：线上走 Cloudflare 命名隧道时，nginx 看到的 `$remote_addr`
+    是 **127.0.0.1**（cloudflared 从本机发起连接），于是 `X-Real-IP` 恒为 127.0.0.1
+    → `_is_loopback_ip` 判为环回 → **全站限流（30 次/小时）在隧道入口整体失效**。
+    旧实现只取 `X-Real-IP` 单值，正好踩中这一条。
     """
-    real = request.headers.get("x-real-ip")
+    cands: list[str] = []
+    cf = (request.headers.get("cf-connecting-ip") or "").strip()
+    if cf:
+        cands.append(cf.split(",")[0].strip())
+    real = (request.headers.get("x-real-ip") or "").strip()
     if real:
-        return real.split(",")[0].strip()
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[-1].strip()
+        cands.append(real.split(",")[0].strip())
+    fwd = (request.headers.get("x-forwarded-for") or "").strip()
+    if fwd:
+        parts = [p.strip() for p in fwd.split(",") if p.strip()]
+        if parts:
+            cands.append(parts[-1])      # 反代追加的最近一跳（用户无法伪造最右）
+            cands.append(parts[0])       # 隧道场景下的原始客户端
+    for c in cands:
+        if c and not _is_loopback_ip(c):
+            return c
+    for c in cands:
+        if c:
+            return c
     return request.client.host if request.client else "unknown"
 
 
@@ -634,8 +655,11 @@ def _is_loopback_ip(ip: str) -> bool:
     一台机器的全部正常操作会挤进同一个桶，30 次/小时的上限极易打满，导致用户
     在做解析/下载/转码时频繁收到「下载太频繁了」的 429（2026-09-22 用户实测反馈）。
     环回地址不存在被外部薅带宽的滥用场景，故一律豁免；只有真实远端 IP 才受限。
-    注意：经 Cloudflare / nginx 反代时 _client_ip 会取 X-Real-IP / X-Forwarded-For
-    里的真实远端地址，不会误判为环回，公开部署的护栏依然有效。
+
+    ⚠️ 2026-10-11 修正：原先这里写「经 Cloudflare / nginx 反代时 _client_ip 会取到
+    真实远端地址，不会误判为环回」——**该前提在 CF 隧道下不成立**（nginx 的
+    `$remote_addr` 是 127.0.0.1）。真正的保障已移入 `_client_ip`（优先非环回候选），
+    本函数只负责「一个字符串是不是环回地址」这一件事。
     """
     if ip in ("127.0.0.1", "::1", "localhost"):
         return True
@@ -691,6 +715,153 @@ def _assert_safe_url(url: str) -> None:
             "该链接指向非公开网络，已拒绝",
             "只允许下载公开可访问的视频；内网 / 本地 / 云元数据地址不可用",
         )
+
+# --------------------------------------------------------------------------- #
+# 本机路径「可外传/可渲染」护栏（安全审计 2026-10-11，P2-14 / P2-15）
+# --------------------------------------------------------------------------- #
+# `/api/share/upload_path`（把任意本机文件传上**公网短链**）与
+# `/api/pagetool/build`（把任意本机文件读成自包含 HTML，并在其同目录写产物）
+# 此前都接受**任意绝对路径** —— 等于对外提供了一个「读任意文件并外传」的原语：
+# 拿到本机端口即可把 ~/.ssh/id_rsa、users.json、.auth_secret 之类传成公开链接。
+# 两者都是桌面端本机入口（网页版因 nginx 路由不可达），但端口暴露场景下就是实打实的
+# 任意文件读取。这里给出一条共用护栏。
+#
+# 双层判定：**用户目录白名单**（与 routers/convert.py 的 `_resolve_safe_local_path`
+# 同口径，保证正常素材/文档不受影响）+ **敏感位置黑名单**（密钥与配置几乎都住在
+# 点开头目录 / 应用数据目录 / 钥匙串目录里）。
+_SENSITIVE_FILE_RE = re.compile(
+    r"^(\.auth_secret"
+    r"|users\.json|cards\.json|admin\.json|smtp\.json|share\.json|vault\.json"
+    r"|tasks_state\.json|quota\.json|membership.*\.json|membership_plans\.json"
+    r"|id_rsa.*|id_ed25519.*|id_ecdsa.*"
+    r"|.*\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|env))$",
+    re.IGNORECASE)
+_SENSITIVE_DIR_PREFIXES = (
+    "/Library/Keychains", "/etc/", "/private/etc/", "/var/", "/System/",
+    "/usr/", "/bin/", "/sbin/", "C:\\Windows", "C:\\Program Files",
+)
+# 用户主目录下的敏感**路径段**（按段比对，不看前缀）。
+# 🔴 验证轮补充（P3-2）：只按前缀拦 `/Library/Keychains` 是不够的 —— macOS 的
+#   登录钥匙串与浏览器凭证库都在**用户级** `~/Library/...` 下
+#   （`~/Library/Keychains/login.keychain-db`、
+#    `~/Library/Application Support/Google/Chrome/Default/Cookies`、
+#    `~/Library/Cookies/...`），它们落在 `/Users/` 白名单内、也不是点目录，
+#   于是能通过「上传成公网短链 / 渲染成网页」把本机凭证带走。
+#   任何正常用途都不会去分享 `~/Library` 下的文件，故整段封禁。
+_SENSITIVE_DIR_COMPONENTS = frozenset({
+    "Library", "AppData", "Keychains", "Keychain",
+    "Application Support", "Cookies", "Safari", "Containers",
+})
+# 允许被外传/渲染的根前缀（用户目录口径，与 routers/convert.py 的本机路径白名单一致）。
+# 独立成常量便于测试注入临时目录。
+_SHAREABLE_PATH_PREFIXES = ("/Users/", "/home/", "/Volumes/", "C:\\", "D:\\")
+
+
+def _assert_shareable_local_path(raw: str) -> Path:
+    """校验「允许被外传 / 被渲染成网页」的本机路径，返回 resolve 后的 Path。
+
+    违规一律抛 HTTPException（400 语义错误 / 403 安全拒绝）。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="缺少文件路径")
+    try:
+        rp = Path(os.path.expanduser(text)).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="无法解析路径：%s" % text)
+    if not rp.is_file():
+        raise HTTPException(status_code=400, detail="文件不存在或不是普通文件：%s" % text)
+
+    # ① 用户目录白名单（与 convert 的本机路径口径一致）
+    if not str(rp).startswith(_SHAREABLE_PATH_PREFIXES):
+        raise HTTPException(status_code=403, detail="只允许处理用户目录下的文件")
+
+    # ② 任何点开头的路径段：密钥 / 配置 / 凭证几乎都住在点目录里
+    #    （.ssh / .gnupg / .aws / .config / .video-downloader / .videodownloader / .vdl-license…）
+    if any(seg.startswith(".") for seg in rp.parts[1:]):
+        raise HTTPException(status_code=403,
+                            detail="出于安全考虑，不允许处理隐藏目录下的文件")
+
+    # ②b 用户主目录下的敏感路径段（钥匙串 / 浏览器凭证 / 应用容器）
+    if any(seg in _SENSITIVE_DIR_COMPONENTS for seg in rp.parts[1:]):
+        raise HTTPException(status_code=403,
+                            detail="出于安全考虑，不允许处理系统 / 凭证类目录下的文件")
+
+    # ③ 应用自身数据目录（账号表 / 令牌 / 保险箱 / 订单 / 授权中心数据）
+    try:
+        from auth_store import _base_dir as _auth_base
+        rp.relative_to(_auth_base().resolve())
+        raise HTTPException(status_code=403, detail="不允许处理应用数据目录下的文件")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    # ④ 系统与钥匙串目录
+    if str(rp).startswith(_SENSITIVE_DIR_PREFIXES):
+        raise HTTPException(status_code=403, detail="不允许处理系统目录下的文件")
+
+    # ⑤ 密钥 / 账号类文件名
+    if _SENSITIVE_FILE_RE.match(rp.name):
+        raise HTTPException(status_code=403,
+                            detail="出于安全考虑，不允许处理密钥 / 账号类文件")
+
+    return rp
+
+
+# --------------------------------------------------------------------------- #
+# 「本机直连」判定（安全审计 2026-10-11，P3-1）
+# --------------------------------------------------------------------------- #
+# 🔴 为什么不能用 `request.client.host` 单值判定：
+#   uvicorn 默认开启 `--proxy-headers`（Procfile 里没有关掉它），此时 `scope["client"]`
+#   已被 `ProxyHeadersMiddleware` 用 `X-Forwarded-For` **重写**过 —— 不再是 socket 对端。
+#   而 uvicorn 0.52 的取法是「从右往左取第一个**不受信**的 host；若全部受信则回退最左」
+#   （`_TrustedHosts.get_trusted_client_address`，受信集默认 `{"127.0.0.1"}`）。
+#   于是链路里只要有一跳是环回（CF 命名隧道下 cloudflared 与 nginx 同机，
+#   nginx 的 `$remote_addr` 恰为 127.0.0.1），客户端自填 `X-Forwarded-For: 127.0.0.1`
+#   就能让推导结果落在受信集内 → `client.host` 变成 127.0.0.1 → 被当成「本机」。
+#
+#   受影响的是所有「按本机免鉴权」的分支：
+#     · `routers/core.py::_is_local_request` → `_require_admin`（运维端点免密钥）、`_require_local`
+#     · `routers/auth.py::_is_loopback` → dev 模式**回传密码重置验证码**（账号接管）、
+#       `ensure_superusers(allow_bootstrap=...)`（公网首用户自动提权）
+#     · `app.cookie_sync_from_local`（读本机浏览器登录态并上报公共池）
+#
+#   判据改为：**桌面 App 的 WebView 直连 127.0.0.1、不带任何代理头**；
+#   凡带代理头者一律不按本机对待。这条判据不依赖任何反代语义，因此可离线验证。
+#   （`routers/system.py` 的代理设置端点早就这么写了，本函数把它抽成共用真源。）
+_PROXY_HEADER_NAMES = (
+    "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "x-forwarded-port",
+    "x-real-ip", "forwarded", "true-client-ip", "x-client-ip",
+    "x-cluster-client-ip", "x-original-forwarded-for",
+    "cf-connecting-ip", "cf-ray", "cf-ipcountry",
+)
+
+
+def _has_proxy_headers(request) -> bool:
+    """请求是否携带任何反代 / 隧道头（带 → 说明不是本机直连）。"""
+    try:
+        for name in _PROXY_HEADER_NAMES:
+            if (request.headers.get(name) or "").strip():
+                return True
+    except Exception:
+        return True          # 取不到头就按「经过代理」从严处理
+    return False
+
+
+def _is_local_direct(request) -> bool:
+    """是否为本机直连（socket 对端环回 **且** 未携带任何代理头）。
+
+    这是全仓「本机免鉴权」判定的唯一真源，路由层不要再自己写 client.host 比较。
+    """
+    if request is None or _has_proxy_headers(request):
+        return False
+    try:
+        host = (request.client.host if request.client else "") or ""
+    except Exception:
+        return False
+    return host in ("127.0.0.1", "::1", "localhost")
+
 
 def _check_rate_limit(request: Request) -> None:
     """滑动窗口限流。超限抛 429，并告知还要等多久。
@@ -988,6 +1159,12 @@ def _vault_save(vault: dict) -> None:
         )
 
 def _vault_tmp_for(lib_id: str) -> Path:
+    """⚠️ 遗留（安全审计 2026-10-11 P1-7 后已无调用方）。
+
+    解密播放已改为 `crypto_vault.decrypt_range` + 内存流式回传，**不再落盘明文**，
+    故不再需要「按 lib_id 派生临时解密文件」。保留函数是为了兼容历史引用，
+    新代码请勿使用；`.vault_tmp` 目录仅用于承接升级前遗留的 `.dec` 清理。
+    """
     VAULT_TMP.mkdir(parents=True, exist_ok=True)
     return VAULT_TMP / (lib_id + ".dec")
 
@@ -2088,9 +2265,12 @@ async def lifespan(_: FastAPI):
     except Exception:
         logger.exception("启动公共 Cookie 池探测失败")
     # 启动即确保超级用户标记（后台管理面板授权：admin.json / VDL_ADMIN_IDENTIFIER / 首个注册账号）
+    # 🔴 安全审计 2026-10-11（P1-2）：启动时**不允许**「无超管则提升最早注册账号」这条兜底
+    #    —— 公网部署（网页版）每次重启都会跑这里，等于把超管送给历史最早的那个注册账号。
+    #    启动阶段只认显式名单；桌面单机的兜底由登录/注册路径（本机回环）负责。
     try:
         from auth_store import ensure_superusers
-        ensure_superusers()
+        ensure_superusers(allow_bootstrap=False)
     except Exception:
         logger.exception("确保超级用户失败")
     # AI 引擎空闲自动卸载（2026-09-30）：后台巡检，空闲超阈值（默认 3 分钟）释放
@@ -2214,6 +2394,14 @@ _LOGIN_GATED_PREFIXES = (
     "/api/matting",            # 一键抠图（含模型预热/切换）
     "/api/dw",                 # 图片 / PDF / 视频去水印（含编辑期抽帧）
     "/api/subscriptions",      # 订阅追更
+    # 🔴 安全审计 2026-10-11（P2-21）：证件照（2026-10-10 新增）漏登记 ——
+    #    `/api/idphoto/make`、`/api/idphoto/{job}/render` 都是「产出结果」的 POST，
+    #    却只在限流之下（`VDL_API_TOKEN` 未设时未登录即可制图）。
+    #    GET 子路径（查询/取图）不受本门禁影响（门禁只拦 POST）。
+    "/api/idphoto",            # 证件照制作 / 重新出图
+    # 🔴 安全审计 2026-10-11（P2-15）：文件变网页（`build` 读任意本机路径并写产物）
+    #    此前完全不在门禁内，未登录即可触发（盲读 + 任意可写目录投放）。
+    "/api/pagetool",           # 文件变网页（生成 / 上传生成）
     "/api/commentary/render",      # 渲染成片
     "/api/commentary/remux-bgm",   # 重新混音
     "/api/commentary/preview",
@@ -2293,9 +2481,50 @@ class ConvertRequest(BaseModel):
     resolution: str = "original"
 
 def _require_task(task_id: str, device_id: str = ""):
-    """取任务。桌面单机无设备隔离，device_id 参数仅为兼容 web 版调用签名保留。"""
+    """取任务。桌面单机无设备隔离，device_id 参数仅为兼容 web 版调用签名保留。
+
+    ⚠️ 安全审计 P0-2：本函数**不做归属校验**，仅按 id 取。对外端点请改用
+    `_require_owned_task`，否则会跨用户泄漏/操作他人任务。
+    """
     task = store.get(task_id)
     if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    return task
+
+
+def _task_owner(request) -> str:
+    """任务归属标识（安全审计 P0-2）。
+
+    · 已登录 → "u:" + uid：uid 由服务端从 HMAC 签名 token 解出，客户端**无法伪造**；
+    · 未登录 → "d:" + 设备标识：与转换/压缩等既有隔离同源（X-Device-Id / ?device=）；
+    · 两者都拿不到 → ""（匿名桶，仅历史遗留任务会出现）。
+    前缀区分命名空间，避免 uid 与设备标识串号。
+    """
+    uid = None
+    try:
+        from user_membership import get_current_user_id
+        uid = get_current_user_id(request)
+    except Exception:
+        uid = None
+    if uid:
+        return "u:" + str(uid)
+    try:
+        dev = (request.headers.get("X-Device-Id")
+               or request.query_params.get("device") or "").strip()
+    except Exception:
+        dev = ""
+    return ("d:" + dev[:64]) if dev else ""
+
+
+def _require_owned_task(task_id: str, request):
+    """取任务并校验归属：非本人任务一律 404（不返回 403，避免任务 id 可枚举）。
+
+    历史遗留任务（owner_id 为空，升级前创建）保持可访问，避免老用户历史任务
+    凭空消失；新任务一律带 owner_id。
+    """
+    task = _require_task(task_id)
+    owner = getattr(task, "owner_id", "") or ""
+    if owner and owner != _task_owner(request):
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     return task
 
@@ -2585,8 +2814,12 @@ class CommentaryRenameReq(BaseModel):
 
 # ---- 脚本审核专用路由 ----
 
-def _resolve_source(payload: CommentaryRequest) -> str:
-    """解析视频来源（task_id 或 file_id / stash:id），返回绝对路径。"""
+def _resolve_source(payload: CommentaryRequest, request=None) -> str:
+    """解析视频来源（task_id 或 file_id / stash:id），返回绝对路径。
+
+    request 传入时，task_id 分支会校验任务归属（安全审计 P0-2）：否则登录用户可
+    借用他人 task_id 生成解说，间接读取别人的视频。
+    """
     if payload.file_id:
         # stash: 前缀 → 本机接收站缓存（去重命中时 0 字节传输）
         if payload.file_id.startswith("stash:"):
@@ -2608,7 +2841,8 @@ def _resolve_source(payload: CommentaryRequest) -> str:
             raise HTTPException(status_code=409, detail="该文件不是视频，无法生成解说成片")
         return str(p)
     elif payload.task_id:
-        task = _require_task(payload.task_id)
+        task = _require_owned_task(payload.task_id, request) if request is not None \
+            else _require_task(payload.task_id)
         if task.status != "completed" or not task.filepath or not task.filepath.exists():
             raise HTTPException(status_code=409, detail="下载任务尚未完成，无法生成解说")
         return str(task.filepath)
@@ -2763,7 +2997,7 @@ def _suggest_intro_outro(src_path: str) -> dict:
     except Exception:
         return {"ok": False, "lo": None, "hi": None, "dur": 0.0}
 
-def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
+def _commentary_title(payload: "CommentaryRequest", src_path: str, request=None) -> str:
     """为解说任务推导「片名锚点」（最终会进成片文件名 `<片名>-解说完成<时间>.mp4`）。
 
     优先级（2026-09-15 重排，修复成片名变 16 位乱码哈希）：
@@ -2801,7 +3035,9 @@ def _commentary_title(payload: "CommentaryRequest", src_path: str) -> str:
     # ③ 下载任务标题（含步骤详情反解 + URL 轻量重解析兜底）
     if getattr(payload, "task_id", ""):
         try:
-            t = _require_task(payload.task_id)
+            # 安全审计 P0-2：带上 request 时校验归属，防止借他人 task_id 反查片名。
+            t = _require_owned_task(payload.task_id, request) if request is not None \
+                else _require_task(payload.task_id)
             tt = (getattr(t, "title", "") or "").strip()
             if tt:
                 return tt
@@ -3649,6 +3885,7 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
         task = store.create(
             url=url, title=it["title"], platform=platform.name,
             quality=downloader.quality_label(sub.quality_key), quality_key=sub.quality_key,
+            owner_id=getattr(sub, "owner_id", "") or "",
         )
         scheduler.submit(downloader.run_download, task, store, sub.quality_key, sub.cookie, sub.proxy, SINGLE_DOWNLOAD_RETRIES)
         task_ids.append(task.id)
@@ -3891,9 +4128,13 @@ def cookie_sync(payload: dict, request: Request) -> dict:
 
 @app.post("/api/cookie/sync/from-local")
 def cookie_sync_from_local(payload: dict, request: Request) -> dict:
-    """仅本机(App 端)调用：读取本机浏览器指定站点登录态并上报到公共池。"""
-    ip = (request.client.host if request.client else "") or ""
-    if ip not in ("127.0.0.1", "::1", "localhost"):
+    """仅本机(App 端)调用：读取本机浏览器指定站点登录态并上报到公共池。
+
+    安全审计 2026-10-11（P3-1）：此前只比 `request.client.host`，而该值可被
+    `X-Forwarded-For` 伪造（见 `_is_local_direct` 说明）—— 被骗过就等于让公网调用方
+    触发「读本机浏览器登录态并上报」。改用共享真源（要求未携带任何代理头）。
+    """
+    if not _is_local_direct(request):
         raise HTTPException(status_code=403, detail="仅允许本机调用")
     from cookie_pool import add_cookie, verify_cookie, is_allowed, _norm_domain
     domain = _norm_domain((payload or {}).get("domain") or "chrqj.com")

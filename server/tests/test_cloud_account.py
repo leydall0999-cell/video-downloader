@@ -82,6 +82,26 @@ def _fake_device_id(sb: sandbox, fp: str = FP_A) -> None:
     sb.setmodule("device_id", mod)
 
 
+def _owner_request(email: str = "u@x.com", password: str = "pw123456"):
+    """造一个「本机云账号归属者」的伪请求。
+
+    安全审计 2026-10-11（P1-8）：`/api/cloud/sync|status|logout|unbind` 现在要求
+    调用者携带**有效登录 token**，且该账号注册邮箱与全局账本 account.email 一致
+    （与 user_membership.current_member_store 的 same_owner 同口径）。
+    故测试也必须以归属者身份调用，否则拿到的是 403。
+    """
+    from auth_store import create_user, authenticate, issue_token
+    uid = authenticate(email, password) or create_user(email, password)
+    if not uid:
+        uid = authenticate(email, password)
+    assert uid, f"无法建立本地账号 {email}"
+    return types.SimpleNamespace(
+        headers={"Authorization": "Bearer " + issue_token(uid)},
+        client=types.SimpleNamespace(host="127.0.0.1"),
+        query_params={},
+    )
+
+
 # ── 幂等：同一笔购买不得重复落户 ─────────────────────────────────────────── #
 def test_apply_cloud_purchases_is_idempotent() -> None:
     store = _store()
@@ -184,7 +204,7 @@ def test_cloud_sync_marks_evicted() -> None:
         fake_client.LicenseCloudError = RuntimeError
         sb.setmodule("license_client", fake_client)
 
-        out = cloud_account.cloud_sync()
+        out = cloud_account.cloud_sync(_owner_request())
 
     assert out["evicted"] is True, out
     assert store.status()["device_locked"] == "DEVICE_EVICTED"
@@ -214,7 +234,7 @@ def test_offline_sync_keeps_benefits() -> None:
         fake_client.LicenseCloudError = Boom
         sb.setmodule("license_client", fake_client)
 
-        out = cloud_account.cloud_sync()
+        out = cloud_account.cloud_sync(_owner_request())
 
     assert out["ok"] is True and out.get("offline") is True, out
     assert store.status()["download_member"]["active"] is True

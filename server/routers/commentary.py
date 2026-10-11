@@ -369,7 +369,7 @@ def commentary_config_save(req: app.CommentaryConfigRequest) -> dict:
 
 
 @router.post("/api/commentary")
-def create_commentary(payload: app.CommentaryRequest) -> dict:
+def create_commentary(payload: app.CommentaryRequest, request: app.Request) -> dict:
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
     if app.COMMENTARY_MODE == "http":
@@ -379,7 +379,7 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
         if not app.COMMENTARY_DIR or not (app.COMMENTARY_DIR / "process.py").exists():
             raise app.HTTPException(status_code=503, detail="解说管线未配置（VDL_COMMENTARY_DIR 缺失或不含 process.py）")
 
-    src_path = app._resolve_source(payload)
+    src_path = app._resolve_source(payload, request)
 
     # 前置闸门：免费用户超时长 / 必须走云端但额度已耗尽 → 立刻拒绝，绝不进入执行阶段。
     # 历史缺口：此入口与本地拖拽入口都没有校验，用户要等转写+脚本全跑完才被告知
@@ -390,7 +390,7 @@ def create_commentary(payload: app.CommentaryRequest) -> dict:
                       vision=bool(payload.vision))
 
     job_id = app.uuid.uuid4().hex[:12]
-    _title = app._commentary_title(payload, src_path)
+    _title = app._commentary_title(payload, src_path, request)
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                    "steps": [], "logs": [], "src_path": src_path, "title": _title}
@@ -457,7 +457,7 @@ def feather_detect(frames: list[app.UploadFile] = app._FastAPIFile(default=[]),
     return res
 
 @router.post("/api/commentary/suggest-range")
-def suggest_range(payload: app.CommentaryRequest) -> dict:
+def suggest_range(payload: app.CommentaryRequest, request: app.Request) -> dict:
     """轻量探测片头/片尾边界，供前端「起点/终点」预填建议值（2026-09-20）。
 
     只跑 ffmpeg 静音/黑场/静止探测（秒级、零 LLM 成本）。探测不到（有声有色的
@@ -467,7 +467,7 @@ def suggest_range(payload: app.CommentaryRequest) -> dict:
     """
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
-    src = app._resolve_source(payload)
+    src = app._resolve_source(payload, request)
     return app._suggest_intro_outro(src)
 
 @router.post("/api/commentary/upload")
@@ -940,7 +940,7 @@ def commentary_file(job_id: str) -> app.FileResponse:
     return app.FileResponse(str(p), filename=p.name, media_type="application/octet-stream")
 
 @router.post("/api/commentary/script-only")
-def create_script_only(payload: app.CommentaryRequest) -> dict:
+def create_script_only(payload: app.CommentaryRequest, request: app.Request) -> dict:
     """只做转写+解说词生成，不渲染成片。返回 job_id 供前端轮询，
     拿到 script.json 后展示可编辑解说词面板。"""
     if not app.COMMENTARY_ENABLED:
@@ -950,7 +950,7 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
             raise app.HTTPException(status_code=503, detail="解说 worker 未配置")
         raise app.HTTPException(status_code=400, detail="脚本审核模式暂不支持 HTTP worker，请使用 local 模式")
 
-    src_path = app._resolve_source(payload)
+    src_path = app._resolve_source(payload, request)
 
     # 前置闸门（本地拖拽 / 下载库主路径）：这是「不能等做完才说额度不够」的关键点——
     # 免费用户跑一条超能力的片子，若在此放行，会白等十几分钟后才失败并产出废片。
@@ -960,7 +960,7 @@ def create_script_only(payload: app.CommentaryRequest) -> dict:
                       vision=bool(payload.vision))
 
     job_id = app.uuid.uuid4().hex[:12]
-    _title = app._commentary_title(payload, src_path)
+    _title = app._commentary_title(payload, src_path, request)
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
                                    "progress": [], "src_path": src_path, "title": _title}

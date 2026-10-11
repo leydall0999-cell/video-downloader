@@ -27,6 +27,11 @@ MEDIA_EXTS = VIDEO_EXTS | AUDIO_EXTS | IMAGE_EXTS
 ENCRYPTED_EXT = ".vdlenc"
 
 THUMB_DIR_NAME = ".thumbs"
+# 保险箱「解密播放」临时目录（在 DOWNLOAD_DIR 下）：里面是 .vdlenc 的**明文**产物。
+# 🔴 安全审计 2026-10-11（P1-7）：扫描时必须排除，否则加密文件解出来的明文会被
+#    当成普通媒体项列进媒体库、并可通过 /api/library/file/{id} 直接下载 ——
+#    「加锁」形同虚设。这里连同所有点开头目录一并跳过（防御性）。
+VAULT_TMP_DIR_NAME = ".vault_tmp"
 # 批量抽帧产物目录（`<标题>.抽帧[.n]`）：里面动辄上百张图，不进媒体库列表，避免刷屏。
 FRAMES_DIR_MARK = ".抽帧"
 _THUMB_LOCK = threading.Lock()
@@ -48,7 +53,12 @@ def decode_id(lib_id: str) -> str:
 # 安全解析
 # --------------------------------------------------------------------------- #
 def _resolve_safe(download_dir: Path, lib_id: str) -> Path | None:
-    """把 id 解码为真实文件，并严格限制在其 download_dir 内。"""
+    """把 id 解码为真实文件，并严格限制在其 download_dir 内。
+
+    🔴 安全审计 2026-10-11（P1-7）：额外拒绝落在**点开头目录**（`.vault_tmp` /
+    `.thumbs` 等）里的路径 —— 保险箱解密播放的明文临时文件就在这里，
+    只要构造出对应 id 就能把它当普通文件下载走，绕过「已加锁」。
+    """
     try:
         rel = decode_id(lib_id)
         candidate = (download_dir / rel).resolve()
@@ -56,6 +66,12 @@ def _resolve_safe(download_dir: Path, lib_id: str) -> Path | None:
         return None
     root = download_dir.resolve()
     if candidate == root or root in candidate.parents:
+        try:
+            parts = candidate.relative_to(root).parts
+        except ValueError:
+            return None
+        if any(p.startswith(".") for p in parts):
+            return None
         if candidate.is_file():
             return candidate
     return None
@@ -91,6 +107,12 @@ def scan_library(download_dir: Path) -> list[dict[str, Any]]:
         rel = path.relative_to(download_dir)
         # 跳过缩略图缓存目录与转换目录里的临时/派生文件（可选包含 conversions，但跳过 .part）
         if rel.parts and rel.parts[0] == THUMB_DIR_NAME:
+            continue
+        # 🔴 安全审计 2026-10-11（P1-7）：任何点开头目录（含保险箱解密临时目录
+        #    `.vault_tmp`）都不进媒体库 —— 里面的 .dec 是加密文件的**明文**产物。
+        if rel.parts and rel.parts[0] == VAULT_TMP_DIR_NAME:
+            continue
+        if any(part.startswith(".") for part in rel.parts[:-1]):
             continue
         # 跳过批量抽帧子目录（`<标题>.抽帧` / `<标题>.抽帧.2`）里的成百上千张帧图
         if any(FRAMES_DIR_MARK in part for part in rel.parts[:-1]):

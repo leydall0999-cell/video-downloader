@@ -43,7 +43,14 @@ def _membership_dir() -> Path:
 
 def get_user_store(user_id: str) -> MembershipStore:
     if user_id not in _STORE_CACHE:
-        _STORE_CACHE[user_id] = MembershipStore(path=_membership_dir() / f"{user_id}.json")
+        st = MembershipStore(path=_membership_dir() / f"{user_id}.json")
+        # 安全审计 2026-10-11（P1-8）：注入归属邮箱 —— MembershipStore._cloud_token
+        # 在回落全局账本取云 token 前会用它做归属校验，防越权借用他人账号身份。
+        try:
+            st._owner_email = _email_of(user_id)
+        except Exception:
+            st._owner_email = ""
+        _STORE_CACHE[user_id] = st
     return _STORE_CACHE[user_id]
 
 

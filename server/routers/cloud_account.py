@@ -26,7 +26,7 @@ import platform
 import socket
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Request
 
 router = APIRouter()
 
@@ -36,6 +36,67 @@ _SYNC_MIN_INTERVAL = 1800.0   # 自动同步最小间隔（秒），避免每次
 def _store():
     import app
     return app.member_store
+
+
+# --------------------------------------------------------------------------- #
+# 云账号归属绑定（安全审计 2026-10-11，P1-8「云账号全局身份」）
+# --------------------------------------------------------------------------- #
+# 🔴 缺陷：`/api/cloud/status|sync|logout|unbind` 一律操作**全局** member_store，
+#   且完全不校验调用者。于是任何能访问该端口的人都能：
+#     · GET /api/cloud/status  → 读出本机云账号的邮箱与设备列表（隐私泄漏）
+#     · POST /api/cloud/logout → 把别人登出（DoS）
+#     · POST /api/cloud/unbind → 踢掉他人设备（占位/骚扰）
+#   桌面端本意是「本机回环调用」，但网页版同源部署时这些路由同样可达。
+# 现在统一绑定到**当前经验证账号**：必须携带有效登录 token，且该账号注册邮箱
+# 与全局账本 account.email 一致（与 user_membership.current_member_store 的
+# same_owner 口径完全相同）。非归属者：读接口回空快照，写接口 403。
+def _verified_owner_email(request: Optional[Request]) -> str:
+    """当前请求的**经验证**账号邮箱；未登录 / token 无效 → 空串。"""
+    if request is None:
+        return ""
+    try:
+        import app
+        uid = app.get_current_user_id(request)
+    except Exception:
+        uid = None
+    if not uid:
+        return ""
+    try:
+        from auth_store import user_identifier
+        return str(user_identifier(uid) or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _global_account_email() -> str:
+    import app
+    g = app.member_store
+    g._ensure_loaded()
+    return str((g._state.get("meta") or {}).get("account", {}).get("email") or "").strip().lower()
+
+
+def _is_cloud_owner(request: Optional[Request]) -> bool:
+    email = _verified_owner_email(request)
+    if not email:
+        return False
+    gemail = _global_account_email()
+    return bool(gemail) and gemail == email
+
+
+def _require_cloud_owner(request: Optional[Request]):
+    """写接口门禁：非归属者一律 403。返回全局 store（已确认调用者就是归属者）。"""
+    import app
+    if not _verified_owner_email(request):
+        raise app.HTTPException(status_code=403, detail="请先登录账号")
+    if not _is_cloud_owner(request):
+        raise app.HTTPException(status_code=403, detail="当前账号不是本机云账号的归属者")
+    return app.member_store
+
+
+_EMPTY_ACCOUNT_VIEW = {
+    "logged_in": False, "email": "", "device_fp": "", "device_name": "",
+    "devices": [], "max_devices": 2, "evicted": False, "last_sync": 0.0,
+}
 
 
 def _local_token_for(email: str, password: str) -> str:
@@ -523,24 +584,38 @@ def cloud_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 @router.post("/api/cloud/logout")
-def cloud_logout() -> dict[str, Any]:
-    """本地登出。权益不做清除（换账号/换机都不丢已买的会员）。"""
-    store = _store()
+def cloud_logout(request: Request) -> dict[str, Any]:
+    """本地登出。权益不做清除（换账号/换机都不丢已买的会员）。
+
+    安全审计 2026-10-11（P1-8）：必须是本机云账号的**归属者**才能登出，
+    否则任何人都能一句话把别人踢下线。
+    """
+    store = _require_cloud_owner(request)
     store.clear_account()
     return _pub(store)
 
 
 @router.get("/api/cloud/status")
-def cloud_status() -> dict[str, Any]:
-    """离线可读：账号快照 + 设备列表 + 是否被挤出。"""
+def cloud_status(request: Request) -> dict[str, Any]:
+    """离线可读：账号快照 + 设备列表 + 是否被挤出。
+
+    安全审计 2026-10-11（P1-8）：绑定当前经验证账号；非归属者（含未登录）
+    只回空快照，不泄漏本机云账号的邮箱与设备列表。
+    """
+    if not _is_cloud_owner(request):
+        return {"ok": True, "account": dict(_EMPTY_ACCOUNT_VIEW)}
     return _pub(_store())
 
 
 @router.post("/api/cloud/sync")
-def cloud_sync() -> dict[str, Any]:
-    """主动同步：续期 + 拉新权益 + 检查设备名额。断网时不动本地（fail-open）。"""
+def cloud_sync(request: Request) -> dict[str, Any]:
+    """主动同步：续期 + 拉新权益 + 检查设备名额。断网时不动本地（fail-open）。
+
+    安全审计 2026-10-11（P1-8）：心跳会用**本机云账号的 token** 去授权中心
+    续期并刷新设备列表，必须限归属者（否则等于替他人操作账号）。
+    """
     import license_client
-    store = _store()
+    store = _require_cloud_owner(request)
     acc = (store._state.get("meta") or {}).get("account") or {}
     token = str(acc.get("token") or "")
     if not token:
@@ -581,13 +656,17 @@ def cloud_redeem(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 @router.post("/api/cloud/unbind")
-def cloud_unbind(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """把某台设备踢下线（腾出名额给新机器）。"""
+def cloud_unbind(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
+    """把某台设备踢下线（腾出名额给新机器）。
+
+    安全审计 2026-10-11（P1-8）：必须限本机云账号的归属者，否则任何人
+    都能踢掉他人设备（骚扰 / 抢占设备位）。
+    """
     import license_client
     fp = str(payload.get("fp") or "").strip()
     if not fp:
         return {"ok": False, "error": "缺少设备标识"}
-    store = _store()
+    store = _require_cloud_owner(request)
     acc = (store._state.get("meta") or {}).get("account") or {}
     token = str(acc.get("token") or "")
     if not token:

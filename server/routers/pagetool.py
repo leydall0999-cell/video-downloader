@@ -331,16 +331,20 @@ class BuildReq(BaseModel):
 
 @router.post("/api/pagetool/build")
 def build_from_paths(req: BuildReq) -> dict:
-    """桌面端：把本机文件（路径）生成自包含 HTML 页面。"""
+    """桌面端：把本机文件（路径）生成自包含 HTML 页面。
+
+    🔴 安全审计 2026-10-11（P2-15）：此前对**任意绝对路径**既读（base64 内嵌进页面）
+    又在同目录写 `<stem>.网页.html`，且端点未鉴权 ⇒ 端口暴露下可盲读任意文件 +
+    在任意可写目录投放文件。现改走共用的本机路径护栏
+    `app._assert_shareable_local_path`（用户目录白名单 + 敏感位置黑名单）；
+    端点本身也已加入登录门禁清单（`_LOGIN_GATED_PREFIXES`）。
+    """
     raw = [p for p in (req.paths or []) if str(p).strip()]
     if not raw:
         raise HTTPException(status_code=400, detail="请先选择文件。")
-    paths: list[Path] = []
-    for p in raw:
-        q = Path(p).expanduser()
-        if not q.is_file():
-            raise HTTPException(status_code=400, detail="文件不存在或不可读：%s" % p)
-        paths.append(q)
+    # 局部导入：本模块会被 app.py 反向 include，顶层 `import app` 会构成循环导入。
+    from app import _assert_shareable_local_path as _guard
+    paths: list[Path] = [_guard(p) for p in raw]
     title = (req.title or "").strip() or paths[0].stem
     return _write_page(paths, title)
 

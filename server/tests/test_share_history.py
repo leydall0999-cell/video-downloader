@@ -340,11 +340,23 @@ def test_upload_failure_writes_no_history():
 
 
 def test_upload_path_endpoint_returns_expire():
-    """桌面端入口必须把 expire 收下并回显（前端据此提示有效期）。"""
+    """桌面端入口必须把 expire 收下并回显（前端据此提示有效期）。
+
+    ⚠️ 安全审计 2026-10-11（P2-14）后 `upload_path` 只接受**用户目录**下的文件
+    （此前接受任意绝对路径 = 「读任意本机文件并发布成公网短链」的原语）。
+    本用例的文件落在系统临时区，故临时把该前缀并入白名单 —— 让用例继续聚焦
+    「expire 收下并回显」这一件事，路径护栏由 test_p2_hardening.py 单独覆盖。
+    """
+    import app as _app
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         f.write(b"\x89PNG\r\n\x1a\n" + b"0" * 100)
         p = f.name
     captured = {}
+    _old_prefixes = _app._SHAREABLE_PATH_PREFIXES
+    # 同时给「原样」与「resolve 后」两种前缀：macOS 的 /var/folders/... 解析后
+    # 会变成 /private/var/folders/...，护栏比对的是 resolve 后的路径。
+    _pdir = str(Path(p).parent)
+    _app._SHAREABLE_PATH_PREFIXES = (_pdir + os.sep, "/private" + _pdir + os.sep) + _old_prefixes
     try:
         with temp_hist(), _patch(_start_upload=lambda tid, mk, total, name, expire=0:
                                  captured.update(expire=expire,
@@ -357,6 +369,7 @@ def test_upload_path_endpoint_returns_expire():
             d2 = sh.share_upload_path({"path": p, "expire": "not-a-number"})
             assert d2["expire"] == 0 and captured["expire"] == 0
     finally:
+        _app._SHAREABLE_PATH_PREFIXES = _old_prefixes
         os.unlink(p)
 
 

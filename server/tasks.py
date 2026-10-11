@@ -18,8 +18,14 @@ from typing import Literal, Optional
 
 from atomic_io import atomic_write_json
 
-TaskStatus = Literal["pending", "downloading", "merging", "paused", "completed", "failed", "canceled"]
+TaskStatus = Literal["pending", "downloading", "merging", "paused", "pausing",
+                     "completed", "failed", "canceled"]
 StepStatus = Literal["pending", "running", "done", "error"]
+
+# 终态：TTL 清理（purge_expired）只处理这些状态，进行中的一律跳过。
+# 🔴 安全审计 2026-10-11（P2-18）：此前用「非 completed 即删」的判据，
+#    会把下载超过 1 小时的任务就地删除。
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "canceled"})
 
 TASK_TTL_SECONDS = 60 * 60  # 成品文件保留 1 小时
 TASK_ID_LENGTH = 16
@@ -41,7 +47,7 @@ _PERSIST_FIELDS = (
     "error", "hint", "created_at", "extract_mode",
     "concurrent_fragments", "downloader_type", "cookie", "proxy", "referer",
     "source_url", "play_url", "watch_options", "is_hls", "resumable",
-    "file_expired",
+    "file_expired", "owner_id",
 )
 
 
@@ -110,6 +116,11 @@ class DownloadTask:
     is_hls: bool = False
     # CDP 嗅探直链的防盗链 Referer（嗅探来源页），重试/续传时原样复用
     referer: str = ""
+    # 任务归属（安全审计 P0-2，2026-10-11）：创建者的账号/设备标识。
+    # 此前下载任务链**没有任何归属校验**，/api/tasks 会返回全站任务、任何人可
+    # 下载他人成品或取消他人任务（IDOR）。空串 = 升级前的历史遗留任务，
+    # 为兼容仍可访问；新任务一律由 app._task_owner(request) 写入。
+    owner_id: str = ""
     # 过程展示：结构化步骤 + 文本日志
     steps: list[dict] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
@@ -286,6 +297,7 @@ class TaskStore:
                 downloader_type=str(row.get("downloader_type") or ""),
                 cookie=str(row.get("cookie") or ""), proxy=str(row.get("proxy") or ""),
                 referer=str(row.get("referer") or ""),
+                owner_id=str(row.get("owner_id") or ""),
                 source_url=str(row.get("source_url") or ""),
                 play_url=str(row.get("play_url") or ""),
                 watch_options=list(row.get("watch_options") or []),
@@ -300,8 +312,11 @@ class TaskStore:
                     task.add_step("成品文件", "done", "已超过保留期，文件已清理（可重新下载）")
                 else:
                     task.add_step("成片已就绪", "done")
-            elif status in ("pending", "downloading", "merging", "paused"):
+            elif status in ("pending", "downloading", "merging", "paused", "pausing"):
                 # 中断的任务统一恢复为「失败 + 可续传」，前端出「继续下载」按钮
+                # 安全审计 2026-10-11（P2-19）：`pausing`（暂停信号已发出但尚未被
+                # 进度回调消费，例如卡在合并阶段）原先落到下面的 else 分支被原样
+                # 恢复 ⇒ 任务永久停在 pausing，既不可续也不可控。这里一并按中断处理。
                 task.status = "failed"
                 task.error = "应用退出，任务已中断"
                 task.hint = "分片仍在磁盘上，点「继续下载」可从断点续传"
@@ -324,7 +339,8 @@ class TaskStore:
                 concurrent_fragments: int = 0, downloader_type: str = "",
                 cookie: str = "", proxy: str = "",
                 play_url: str = "", watch_options: list[dict] | None = None,
-                is_hls: bool = False, referer: str = "") -> DownloadTask:
+                is_hls: bool = False, referer: str = "",
+                owner_id: str = "") -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -334,7 +350,7 @@ class TaskStore:
             concurrent_fragments=concurrent_fragments, downloader_type=downloader_type,
             cookie=cookie, proxy=proxy,
             play_url=play_url, watch_options=watch_options or [], is_hls=is_hls,
-            referer=referer,
+            referer=referer, owner_id=owner_id,
         )
         with self._lock:
             self._tasks[task_id] = task
@@ -387,18 +403,49 @@ class TaskStore:
             shutil.rmtree(task.workdir, ignore_errors=True)
 
     def list_all(self) -> list["DownloadTask"]:
-        """返回当前所有任务的安全快照（不暴露内部 dict），供队列概览使用。"""
+        """返回当前所有任务的安全快照（不暴露内部 dict），供队列概览使用。
+
+        ⚠️ 安全审计 P0-2：这是**不过滤归属**的全量视图，仅限内部使用（如 TTL 清理、
+        取消全部）。对外端点必须改用 `list_for_owner`，否则会跨用户泄漏任务。
+        """
         with self._lock:
             return list(self._tasks.values())
 
+    def list_for_owner(self, owner_id: str) -> list["DownloadTask"]:
+        """按归属列出任务：新任务严格匹配 owner；历史遗留（owner_id 为空）保持可见。
+
+        与 routers/convert.py 的设备隔离同口径（历史无归属 job 兼容可见），
+        避免升级后老用户的历史任务凭空消失。
+        """
+        with self._lock:
+            return [t for t in self._tasks.values()
+                    if not getattr(t, "owner_id", "") or t.owner_id == owner_id]
+
     def purge_expired(self, ttl: int = TASK_TTL_SECONDS) -> int:
+        """TTL 清理：**只处理已终结的任务**，进行中的任务永不被清理。
+
+        🔴 安全审计 2026-10-11（P2-18「数据误删/竞态」）：原先的判据是
+        「created_at 超过 TTL 且非 completed → remove」，于是**下载超过 1 小时的任务
+        会被就地删除**（大文件、慢链路、暂停中的任务全中招）——用户在下载中途发现
+        任务凭空消失、分片被清掉。TTL 的语义是「**成品**保留 1 小时」，
+        与「进行中任务的存活时长」无关。
+
+        现在：
+          · 进行中（pending/downloading/merging/paused/pausing）→ **一律跳过**；
+          · completed → 降级为历史条目（清文件、留元数据）；
+          · failed / canceled → 连记录一起清掉（它们是真正的终态残留）。
+        """
         deadline = time.time() - ttl
         demoted = 0
         with self._lock:
             stale = []
             for tid, t in self._tasks.items():
-                if t.created_at >= deadline or t.file_expired:
-                    continue  # 未到期 / 已是历史条目
+                if t.file_expired:
+                    continue                     # 已是历史条目
+                if t.status not in _TERMINAL_STATUSES:
+                    continue                     # 进行中：绝不清理（P2-18 核心）
+                if t.created_at >= deadline:
+                    continue                     # 终态但未到期
                 if t.status == "completed":
                     stale.append((tid, "demote"))
                 else:
@@ -407,20 +454,28 @@ class TaskStore:
                 self._persist_dirty = True
         for task_id, action in stale:
             if action == "demote":
-                self._demote_completed(task_id)
-                demoted += 1
+                demoted += self._demote_completed(task_id)
             else:
                 self.remove(task_id)
         return demoted
 
-    def _demote_completed(self, task_id: str) -> None:
+    def _demote_completed(self, task_id: str) -> int:
         """B5：到期完成任务降级为历史条目——清空工作目录释放空间，保留元数据
         （标题/平台/大小/来源 URL），卡片变「成品已清理」，可整条重新下载。
-        历史上限 _MAX_PERSISTED_COMPLETED 条，超限把最老的连记录一起清掉。"""
+        历史上限 _MAX_PERSISTED_COMPLETED 条，超限把最老的连记录一起清掉。
+
+        🔴 安全审计 2026-10-11（P2-18 竞态）：进入临界区后**必须复核状态** ——
+        `purge_expired` 的快照与实际降级之间存在窗口，若期间用户点了「重试」
+        （状态回到 pending、workdir 里正在写入新分片），此时 rmtree 会把在途分片
+        一并清掉。现在：状态不再是 completed 就**放弃降级**，返回 0。
+        """
         with self._lock:
             task = self._tasks.get(task_id)
             if task is None:
-                return
+                return 0
+            if task.status != "completed":
+                # 期间被重试/取消 → 不再是「到期成品」，绝不动它的工作目录
+                return 0
             task.filepath = None
             task.file_expired = True
             task.resumable = False
@@ -432,15 +487,17 @@ class TaskStore:
             if len(completed) > _MAX_PERSISTED_COMPLETED:
                 completed.sort(key=lambda t: t.created_at)
                 overflow = [t.id for t in completed[:len(completed) - _MAX_PERSISTED_COMPLETED]]
+            workdir = task.workdir
             self._persist_locked(force=True)
         for tid in overflow:
             self.remove(tid)
-        if task.workdir and task.workdir.exists():
-            shutil.rmtree(task.workdir, ignore_errors=True)
+        if workdir and workdir.exists():
+            shutil.rmtree(workdir, ignore_errors=True)
             try:
-                task.workdir.mkdir(parents=True, exist_ok=True)
+                workdir.mkdir(parents=True, exist_ok=True)
             except OSError:
                 pass
+        return 1
 
     def purge_orphans(self) -> int:
         """清理上次进程遗留的任务目录（任务状态只存在内存中，重启后即为孤儿）。"""

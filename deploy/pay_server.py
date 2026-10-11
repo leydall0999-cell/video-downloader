@@ -536,6 +536,37 @@ def _grant(email: str, plan_code: str, note: str = "alipay-auto") -> dict[str, A
     return out
 
 
+# 发货在途窗口（秒）：GRANTING 且未超此窗口视为「另一次通知正在发货」。
+_GRANTING_INFLIGHT = 300.0
+
+
+def _claim_grant(ordr: dict, now: float) -> bool:
+    """把订单从「未发货」CAS 到 GRANTING；已发货 / 正在发货返回 False。
+
+    安全审计 2026-10-11（P1-1「回调重复发权益」）：原先两处 notify 只判
+    `status == "PAID"`，而真正的 `_grant` 调用在锁**外** —— 两笔并发通知（渠道重试、
+    或支付宝与虎皮椒同时到达）会双双通过检查，各发一次权益。现在改成带时间戳的
+    在途标记：
+      · PAID                → False（已发货，幂等返回 success）
+      · GRANTING 且未超 5 分钟 → False（另一次通知正在发货）
+      · GRANTING 且已超 5 分钟 → True（疑似卡死，允许重试；
+        授权中心侧还有按「渠道:订单号」的订单级幂等兜底，重试不会重复发放）
+      · 其它                 → True（首次发货）
+
+    调用方必须已在 `_LOCK` 内，并在本函数返回 True 后调用 `_save_orders(o)`。
+    """
+    st = str(ordr.get("status") or "")
+    if st == "PAID":
+        return False
+    if st == "GRANTING":
+        started = float(ordr.get("granting_at") or 0)
+        if started and (now - started) < _GRANTING_INFLIGHT:
+            return False
+    ordr["status"] = "GRANTING"
+    ordr["granting_at"] = float(now)
+    return True
+
+
 def _grant_failure_status(err: object) -> str:
     """发货失败时的订单状态：**限购拒绝**与其他发货故障要分开。
 
@@ -809,11 +840,12 @@ class Handler(BaseHTTPRequestHandler):
             ordr = o.get(order_id)
             if not ordr:
                 return self._text(200, "success")
-            if ordr.get("status") == "PAID":
+            # 安全审计 2026-10-11（P1-1）：CAS 到 GRANTING —— 已发货或正在发货
+            # 一律幂等返回 success，杜绝并发/重试通知的重复发货。
+            if not _claim_grant(ordr, time.time()):
                 return self._text(200, "success")  # 幂等
             email = ordr["email"]
             plan_code = ordr["plan_code"]
-            ordr["status"] = "GRANTING"
             _save_orders(o)
         try:
             _grant(email, plan_code, note=f"alipay-auto:{order_id}")
@@ -867,11 +899,12 @@ class Handler(BaseHTTPRequestHandler):
             ordr = o.get(order_id)
             if not ordr:
                 return self._text(200, "success")
-            if ordr.get("status") == "PAID":
+            # 安全审计 2026-10-11（P1-1）：CAS 到 GRANTING —— 已发货或正在发货
+            # 一律幂等返回 success，杜绝并发/重试通知的重复发货。
+            if not _claim_grant(ordr, time.time()):
                 return self._text(200, "success")  # 幂等
             email = ordr["email"]
             plan_code = ordr["plan_code"]
-            ordr["status"] = "GRANTING"
             _save_orders(o)
         try:
             _grant(email, plan_code, note=f"xunhupay-auto:{order_id}")

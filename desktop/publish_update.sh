@@ -228,6 +228,33 @@ print(json.dumps(data, ensure_ascii=False, indent=2))
 PY
 cat "$LATEST_JSON"
 
+# 4.1) 生成 latest.json 的 Ed25519 签名（安全审计 P0-1）
+#      客户端强制验签：清单里的 url / sha256 一旦被中间人篡改，验签必然失败。
+#      私钥只存在于发布机，经 VDL_UPDATE_SIGNING_KEY 指定（生成见 tools/gen_update_signing_key.py）。
+LATEST_SIG="${LATEST_JSON}.sig"
+rm -f "$LATEST_SIG"
+SIGN_KEY="${VDL_UPDATE_SIGNING_KEY:-}"
+if [ -z "$SIGN_KEY" ]; then
+  echo "   ⚠️ 未设置 VDL_UPDATE_SIGNING_KEY，本次发布**不含签名**。"
+  echo "      已启用验签的客户端会拒绝该更新；生成密钥：python3 tools/gen_update_signing_key.py"
+elif [ ! -f "$SIGN_KEY" ]; then
+  echo "   ✗ VDL_UPDATE_SIGNING_KEY 指向的文件不存在：$SIGN_KEY"
+  exit 1
+elif python3 - "$LATEST_JSON" "$SIGN_KEY" <<'PY'
+import base64, sys
+from cryptography.hazmat.primitives import serialization
+path, keyfile = sys.argv[1], sys.argv[2]
+key = serialization.load_pem_private_key(open(keyfile, "rb").read(), password=None)
+raw = open(path, "rb").read()
+open(path + ".sig", "wb").write(base64.b64encode(key.sign(raw)))
+PY
+then
+  echo "   ✔ 已生成签名 latest.json.sig"
+else
+  echo "   ✗ 签名生成失败（发布机是否已安装 cryptography？）"
+  exit 1
+fi
+
 # 5) 发布前人工确认（默认开启，避免误发未测试版本）
 if [ "$ASSUME_YES" != "1" ]; then
   echo
@@ -260,10 +287,15 @@ if [ -n "$PATCH_BIN" ]; then
   scp $SSH_OPTS "$PATCH_BIN" "$VPS_HOST:$VPS_DIR/$(basename "$PATCH_BIN")"
   echo "   ✔ 已上传增量补丁 $(basename "$PATCH_BIN")"
 fi
-# latest.json 原子替换：先传 .tmp 再 mv，避免用户端读到半截 JSON。
+# latest.json 与签名原子替换：先传签名、再替换清单 —— 避免用户端读到
+# 「有新清单但还没有对应签名」的中间态（那会被客户端判为不可信而拒绝）。
+if [ -f "$LATEST_SIG" ]; then
+  scp $SSH_OPTS "$LATEST_SIG" "$VPS_HOST:$VPS_DIR/latest.json.sig.tmp"
+  ssh -n $SSH_OPTS "$VPS_HOST" "cd '$VPS_DIR' && mv -f latest.json.sig.tmp latest.json.sig"
+fi
 scp $SSH_OPTS "$LATEST_JSON" "$VPS_HOST:$VPS_DIR/latest.json.tmp"
 ssh -n $SSH_OPTS "$VPS_HOST" "cd '$VPS_DIR' && cp -a latest.json latest.json.bak-\$(date +%s) 2>/dev/null || true; mv -f latest.json.tmp latest.json"
-echo "   ✔ 已上传安装包、增量补丁与 latest.json"
+echo "   ✔ 已上传安装包、增量补丁、latest.json$( [ -f "$LATEST_SIG" ] && echo ' 与签名' )"
 
 # 7) 校验对外可访问性（外部可达需阿里云安全组放行对应端口）
 echo "▶ 校验对外可访问性"

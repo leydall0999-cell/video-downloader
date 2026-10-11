@@ -1230,6 +1230,9 @@ class MembershipStore:
     now_fn: Callable[[], float] = field(default=time.time)
     _state: dict[str, Any] = field(default_factory=_empty_state, init=False)
     _loaded: bool = field(default=False, init=False)
+    # 归属邮箱（安全审计 2026-10-11 P1-8）：由 user_membership.get_user_store 注入，
+    # 用于「回落全局账本取云 token」前的归属校验。空串 = 归属未知 → 一律不借他人身份。
+    _owner_email: str = field(default="", init=False)
 
     def __post_init__(self) -> None:
         if self.path is None:
@@ -1380,17 +1383,29 @@ class MembershipStore:
     # ---- 激活 ----
     def activate(self, code: str, via: str = "test",
                  device_fp: Optional[str] = None,
-                 license_code: str = "") -> dict[str, Any]:
+                 license_code: str = "",
+                 order_id: str = "") -> dict[str, Any]:
         """按套餐/积分包 code 激活。续费顺延，AI 会员自动捆绑下载权益。
 
         P2 一机一码：激活时把设备指纹写进 meta.device_fp（仅收**强指纹**；
         弱指纹不绑，宁漏勿误伤）。之后 status() 发现指纹不符 → 会员锁定
         （防拷贝 membership.json 到别的机器白嫖）。license_code 一并留痕，
         供启动时向授权中心 check 卡密是否被作废。
+
+        安全审计 P0-3（幂等）：`order_id` 非空时按订单号去重 —— 同一笔支付的
+        重复回调 / 轮询 / 重试**只发放一次**。此前支付链路靠 PaymentService 的
+        `order["granted"]` 标记防重，但该标记与「权益是否真的发过」是两份状态，
+        回调重放或跨实例并发时仍可能重复发放（会员天数/积分翻倍）。
         """
         self._ensure_loaded()
         now = self._now()
         st = self._state
+        # 订单级幂等：已发过就直接返回既有结果，绝不再叠加权益。
+        if order_id:
+            done = (st.get("meta") or {}).get("granted_orders") or []
+            if order_id in done:
+                return {"ok": True, "code": code, "via": via, "idempotent": True,
+                        "order_id": order_id}
         result: dict[str, Any] = {"ok": True, "code": code, "via": via}
 
         # 🔴 一律走生效套餐表（覆盖层 → 代码常量）：此前直接用模块常量，
@@ -1460,6 +1475,12 @@ class MembershipStore:
             "code": code, "via": via, "at": now, "type": "activate",
         })
         st["meta"]["history"] = st["meta"]["history"][-200:]  # 只留最近 200 条
+        # 安全审计 P0-3：记下已发放的订单号（幂等键），同样只留最近 200 条。
+        if order_id:
+            _go = st["meta"].setdefault("granted_orders", [])
+            if order_id not in _go:
+                _go.append(order_id)
+            st["meta"]["granted_orders"] = _go[-200:]
         self._persist()
         # 限量档售出 +1（写回覆盖层，让后台「已售」实时反映）
         if code in _all_plans and int(_all_plans[code].get("stock") or 0) > 0:
@@ -1773,13 +1794,19 @@ class MembershipStore:
         return _trial_key(op, str(pol.get("mode"))) in self._trials_raw()
 
     def _cloud_token(self) -> str:
-        """取本 store 的云账号 token；本 store 没有时回落全局 store。
+        """取本 store 的云账号 token；本 store 没有时回落全局 store（**需归属一致**）。
 
         🔴 2026-10-06 修复（跨端「仅一次」静默失效根因）：
         云端账号由 cloud_account 写入**全局** `app.member_store`，而 `current_member_store(request)`
         对「已登录本地账号」返回的是 **per-user** store —— 二者不一致，导致免费体验名额跨端
         领取读不到 token → `_trial_claim_remote` 直接 `offline` 静默 fail-open（本机放行、
         不上报授权中心），跨端「仅一次」形同虚设。这里回落全局 store 取到真实 token。
+
+        🔴 安全审计 2026-10-11（P1-8「云账号全局身份」）：回落**必须校验归属** ——
+        原先只要本 store 没有 token 就无条件借用全局账本的 token，等于任意 per-user
+        store 都能拿「本机云账号的身份」去调授权中心（越权使用他人账号）。
+        现在：本 store 的归属邮箱（`_owner_email`）必须与全局账本 account.email 一致；
+        归属未知（空）一律不回落（fail-closed）。
         """
         try:
             t = str(((self._state.get("meta") or {}).get("account") or {}).get("token") or "").strip()
@@ -1787,13 +1814,18 @@ class MembershipStore:
                 return t
         except Exception:
             pass
+        own_email = str(getattr(self, "_owner_email", "") or "").strip().lower()
+        if not own_email:
+            return ""                    # 归属未知 → 不借他人身份
         try:
             import app  # 懒导入，避免与 app 的循环依赖
             gstore = getattr(app, "member_store", None)
             if gstore is not None:
                 gstore._ensure_loaded()
-                gt = str(((gstore._state.get("meta") or {}).get("account") or {}).get("token") or "").strip()
-                if gt:
+                gacc = ((gstore._state.get("meta") or {}).get("account") or {})
+                gt = str(gacc.get("token") or "").strip()
+                gemail = str(gacc.get("email") or "").strip().lower()
+                if gt and gemail and gemail == own_email:
                     return gt
         except Exception:
             pass

@@ -22,7 +22,8 @@ def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
     _ckey, _clabel = app.convert_quota_key(payload.target)
     _gate = app.app_compute_gate(request, _ckey, _clabel)   # 免费 5 次/日
     subscribed, free_used, free_daily = app._check_convert_quota(request)
-    task = app._require_task(payload.task_id, _device_of(request))
+    # 安全审计 P0-2：源任务必须属于当前用户（此前只传 device_id 且被忽略，等于无校验）
+    task = app._require_owned_task(payload.task_id, request)
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise app.HTTPException(status_code=409, detail="原任务文件尚未准备好，无法转换")
     target = payload.target

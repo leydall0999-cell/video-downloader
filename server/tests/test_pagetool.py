@@ -239,6 +239,21 @@ def test_endpoints() -> None:
     app.include_router(pg.router)
     client = TestClient(app)
 
+    # 安全审计 2026-10-11（P2-15）：`build` 现在只接受**用户目录**下的路径
+    # （此前接受任意绝对路径：盲读任意文件 + 在任意可写目录投放产物）。
+    # 本用例的素材落在系统临时区，故临时把该前缀并入白名单；路径护栏本身
+    # 由 test_p2_hardening.py 单独覆盖。
+    import app as _app
+    _old_prefixes = _app._SHAREABLE_PATH_PREFIXES
+    _app._SHAREABLE_PATH_PREFIXES = (tempfile.gettempdir() + os.sep,
+                                     "/private" + tempfile.gettempdir() + os.sep) + _old_prefixes
+    try:
+        _test_endpoints_body(client)
+    finally:
+        _app._SHAREABLE_PATH_PREFIXES = _old_prefixes
+
+
+def _test_endpoints_body(client) -> None:
     with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as home:
         t = Path(td)
         img = t / "封面.png"

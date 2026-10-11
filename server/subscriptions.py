@@ -31,6 +31,9 @@ class Subscription:
     last_video_ids: list[str] = field(default_factory=list)
     last_checked: float = 0.0
     created_at: float = 0.0
+    # 安全审计 P0-2：订阅源归属。与下载任务同源（"u:<uid>" / "d:<device>"），
+    # 空串=升级前创建的历史订阅，保持对所有人可见以免老用户订阅凭空消失。
+    owner_id: str = ""
 
     def to_public_dict(self) -> dict:
         return asdict(self)
@@ -75,8 +78,21 @@ class SubscriptionStore:
             return self._subs.get(sub_id)
 
     def list_all(self) -> list[Subscription]:
+        """返回**全站**订阅源。仅供后台 watchdog 与运维使用。
+
+        ⚠️ 安全审计 P0-2：对外接口请改用 `list_for_owner`，否则会跨用户泄漏他人订阅。
+        """
         with self._lock:
             return sorted(self._subs.values(), key=lambda s: s.created_at, reverse=True)
+
+    def list_for_owner(self, owner_id: str) -> list[Subscription]:
+        """按归属过滤：只返回本人订阅 + 历史遗留（owner_id 为空）订阅。"""
+        with self._lock:
+            return sorted(
+                (s for s in self._subs.values()
+                 if not getattr(s, "owner_id", "") or s.owner_id == owner_id),
+                key=lambda s: s.created_at, reverse=True,
+            )
 
     def remove(self, sub_id: str) -> bool:
         with self._lock:

@@ -105,6 +105,7 @@
     downloading: '下载中',
     merging: '合并中',
     paused: '已暂停',
+    pausing: '暂停中',   // 安全审计 P2-19：此前缺这一项，界面会直接显示英文 'pausing'
     completed: '已完成',
     failed: '失败',
     canceled: '已取消',
@@ -125,8 +126,12 @@
   /** HTML 转义 —— 提前到 IIFE 顶部，避免 Safari TDZ 误报 */
   const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  /** 轻量转义（纯字符串化，用于表格单元格），置顶以便个人中心等顶层渲染函数可用 */
-  const esc = (s) => (s == null ? '' : String(s));
+  /** 表格单元格 / innerHTML 模板统一用的转义函数。
+   *  🔴 安全审计 2026-10-11（P2-22）：此前它是 `String(s)` 的 **no-op**，
+   *  却被用在 160+ 处 innerHTML 模板里 —— 客服会话正文/图片地址、后台告警的
+   *  detail/email/path、用户账号标识等都会原样当 HTML 解析，构成
+   *  「用户 ↔ 客服 ↔ 后台」互相注入的存储型 XSS。现改为与 escHtml 同一实现。 */
+  const esc = escHtml;
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -10273,10 +10278,23 @@ el.dwVidPlayer.hidden = true;
     }
   };
 
+  // 会员配额墙统一处理（后端 402 + detail 前缀 "MEMBER_QUOTA|"）。
+  // 安全审计 2026-10-11（P1-5）：retry / resume 现在同样要过下载配额门，
+  // 若不剥前缀，用户会看到「MEMBER_QUOTA|今日免费下载次数已用尽」这种原始文案。
+  const _quotaWall = (msg) => {
+    const tip = String(msg || '').split('|').slice(1).join('|') || '今日免费下载次数已用尽';
+    try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+    showError(tip, /清晰度/.test(tip)
+      ? '开通VIP会员即可解锁 2K/4K 原画（1080P 及以下免费不限档）'
+      : '开通VIP会员即可继续下载（免费额度每日 24:00 刷新）');
+  };
+
   const resumeTask = async (taskId, base = '') => {
     try {
       const r = await request(`/api/tasks/${taskId}/resume`, { method: 'POST' }, base);
     } catch (error) {
+      const _m = (error && error.message) || '';
+      if (_m.indexOf('MEMBER_QUOTA|') === 0) { _quotaWall(_m); return; }
       showError(error.message || '继续失败', error.hint);
     }
   };
@@ -10289,6 +10307,8 @@ el.dwVidPlayer.hidden = true;
       refs.error.hidden = true;
       trackTask(taskId, refs, refs.base || '');  // 重新跟踪（原 tracker 已因终态移除）
     } catch (error) {
+      const _m = (error && error.message) || '';
+      if (_m.indexOf('MEMBER_QUOTA|') === 0) { _quotaWall(_m); return; }
       showError(error.message || '重试失败', error.hint);
     }
   };
@@ -17976,6 +17996,10 @@ el.dwVidPlayer.hidden = true;
     libCommentary: '媒体库生成解说成片',
     libCleanup: '媒体库自动清理',
     cleanRun: '存储清理',
+    // 安全审计 2026-10-11（P2-21）：证件照「生成」漏登记 —— 未登录点它会直接 401
+    // （后端已补门禁），补进本表才能弹登录框并「登录后自动继续」。
+    // 只挂「生成」按钮；滑块/复位触发的重新出图属生成后的微调，不重复弹框。
+    idpBtn: '证件照制作',
   };
   var _LOGIN_GATE_SELECTOR = Object.keys(_LOGIN_GATED_ACTIONS).map(function (id) { return '#' + id; }).join(',');
   document.addEventListener('click', function (e) {
@@ -21612,7 +21636,10 @@ el.dwVidPlayer.hidden = true;
       const headers = Object.assign({}, opts.headers || {}, tok ? { Authorization: 'Bearer ' + tok } : {});
       return request(path, Object.assign({}, opts, { headers }));
     };
-    const esc = (s) => (s == null ? '' : String(s));
+    // 安全审计 2026-10-11（P2-22）：此前是与外层同名的 no-op，admin 面板里
+    // 数十处 innerHTML（用户账号标识、告警 detail/email/ip、对账明细、事件日志、
+    // 访客 path/message 等）全部未转义 —— 统一改为真转义（与外层 esc/escHtml 同实现）。
+    const esc = escHtml;
 
     const openAdmin = async () => {
       overlay.hidden = false;
@@ -22470,7 +22497,9 @@ el.dwVidPlayer.hidden = true;
         if (!q) return true;
         const m = u.membership || {};
         const mem = m.download_active ? 'VIP会员' : (m.ai_active ? 'AI会员' : '免费');
-        const identifier = esc(u.identifier).toLowerCase();
+        // ⚠️ 这里是**搜索过滤**、不是 HTML 输出，绝不能转义 —— 否则账号里含
+        //    撇号（如 o'brien@x.com）会被转成 &#39; 而搜不到。
+        const identifier = String(u.identifier == null ? '' : u.identifier).toLowerCase();
         const uidStr = (u.user_id || '').toLowerCase();
         const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString().toLowerCase() : '';
         const memStr = mem.toLowerCase();

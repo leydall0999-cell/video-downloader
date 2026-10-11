@@ -20,6 +20,7 @@ import base64
 import ipaddress
 import json
 import os
+import secrets
 import sys
 import re
 import shutil
@@ -503,7 +504,6 @@ def _info_hash(h: Any) -> str:
 _ARIA2_PORT = 16800
 _ARIA2_RPC = f"http://127.0.0.1:{_ARIA2_PORT}/jsonrpc"
 
-
 def _find_aria2c() -> Optional[str]:
     """定位 aria2c 二进制：打包态优先用随包自包含（<Resources>/bin/aria2c）；否则本机 brew 绝对路径 / PATH。
 
@@ -607,11 +607,20 @@ class Aria2TorrentManager:
         self._meta: dict[str, dict] = {}
         self._sidecarred: set[str] = set()
         self._started = False
+        # aria2 JSON-RPC 一次性密钥（安全审计 P2-16）；启动时生成，见 _start_daemon
+        self._rpc_secret: str = ""
 
     # ---------- RPC ----------
     def _rpc(self, method: str, params: list) -> Any:
+        # 🔴 安全审计 2026-10-11（P2-16）：aria2 的 JSON-RPC 原先**无 rpc-secret**，
+        #    且开了 `--rpc-allow-origin-all` —— 本机任意进程（乃至恶意网页，
+        #    经 DNS rebinding 指向 127.0.0.1）都能调 `aria2.addUri` 指定 dir/out，
+        #    在本机任意可写位置落文件（任意写）。现在每次启动生成一次性随机密钥，
+        #    所有调用都必须带 `token:<secret>` 作为 params 首元素。
+        tok = f"token:{self._rpc_secret}" if self._rpc_secret else None
+        full_params = ([tok] + list(params)) if tok else list(params)
         payload = json.dumps(
-            {"jsonrpc": "2.0", "id": "vdl", "method": method, "params": params}
+            {"jsonrpc": "2.0", "id": "vdl", "method": method, "params": full_params}
         ).encode()
         req = urllib.request.Request(
             _ARIA2_RPC, data=payload,
@@ -633,9 +642,14 @@ class Aria2TorrentManager:
     def _start_daemon(self) -> None:
         if self._bin is None:
             raise RuntimeError("未找到 aria2c")
+        # 每次启动一把新密钥：只存在于本进程内存与 aria2c 命令行，外部拿不到。
+        self._rpc_secret = secrets.token_urlsafe(24)
         args = [
             self._bin, "--enable-rpc", f"--rpc-listen-port={_ARIA2_PORT}",
-            "--rpc-listen-all=false", "--rpc-allow-origin-all",
+            "--rpc-listen-all=false",
+            # ⚠️ 不再加 `--rpc-allow-origin-all`：那会让浏览器跨源预检通过，
+            #    把本机 RPC 暴露给任意网页（安全审计 P2-16）。后端走 urllib，不需要它。
+            f"--rpc-secret={self._rpc_secret}",
             f"--dir={self.download_dir}", "--continue=true", "--seed-time=0",
             "--bt-enable-lpd=true", "--enable-dht=true", "--bt-seed-unverified=true",
             "--max-concurrent-downloads=5", "--bt-max-peers=50",

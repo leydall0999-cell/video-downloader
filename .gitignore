@@ -17,6 +17,12 @@ commentary_out/
 .env
 *.local
 
+# 自更新清单签名私钥（Ed25519）——绝不允许入库
+*.vdl_update_signing_key.pem
+.vdl_update_signing_key.pem
+tools/*.pem
+!tools/*.pub.pem
+
 # 系统/编辑器
 .DS_Store
 .idea/

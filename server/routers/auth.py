@@ -49,19 +49,25 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 def _is_loopback(request: Request) -> bool:
-    """判断调用方是否来自本机。
+    """判断调用方是否来自本机直连。
 
-    ⚠️ 本判定依赖「反代后的 `request.client.host` 是真实客户端 IP」这一**部署侧前提**：
-    实测生产 VPS 的 `vdl-web` 访问日志为真实公网 IP（uvicorn 采纳了 nginx 的
-    `X-Forwarded-For`），故公网请求不会被误判为本机。该前提**无法在离线测试里钉住**
-    （属 nginx 配置），改反代/换端口后必须复核一次 —— 见 skill `vdl-build-release`。
+    ⚠️ 安全审计 2026-10-11（P3-1）**必须**走 `app._is_local_direct`，不能只看
+    `request.client.host`：uvicorn 默认开启 `--proxy-headers`，会把 `client` 用
+    `X-Forwarded-For` 重写；而它的取法是「从右往左取第一个不受信 host，全受信则
+    回退最左」（受信集默认 {127.0.0.1}）。于是客户端自填 `X-Forwarded-For: 127.0.0.1`
+    在「链路里存在环回跳」的部署下即可让 client.host 变成 127.0.0.1，从而骗过本判定。
+
+    本判定的下游含**高危分支**，故必须 fail-closed：
+      · dev 模式**回传密码重置验证码**（被骗过 = 任意账号接管）；
+      · `ensure_superusers(allow_bootstrap=...)`（被骗过 = 公网首用户自动提权）；
+      · 本机才区分「密码不正确 / 账号不存在」（被骗过 = 账号枚举）。
+    真实本机直连（桌面 App 的 WebView）不带任何代理头，故新判据不影响桌面体验。
     """
     try:
-        client = request.client
-        host = (client.host if client else "") or ""
+        from app import _is_local_direct
+        return bool(_is_local_direct(request))
     except Exception:  # noqa: BLE001 — 取不到就当公网，宁可少回传
         return False
-    return host in _LOOPBACK_HOSTS
 
 
 def _auth_user_id(request: Request) -> Optional[str]:
@@ -137,7 +143,7 @@ def _sync_cloud_password(ident: str, new_pw: str, old_pw: str = "") -> dict[str,
 
 
 @router.post("/api/auth/register")
-def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def auth_register(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     ident = str(payload.get("identifier") or "").strip().lower()
     pw = str(payload.get("password") or "")
     if not ident:
@@ -150,7 +156,10 @@ def auth_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     uid = create_user(ident, pw)
     if not uid:
         return {"ok": False, "error": "该账号已注册，请直接登录"}
-    ensure_superusers()
+    # 安全审计 2026-10-11（P1-2）：仅本机回环才允许「无超管时提升最早注册账号」这条
+    # 兜底 —— 公网部署下它等于「第一个注册的人自动成为超管」，全新实例被抢注即失守。
+    # 公网必须靠 VDL_ADMIN_IDENTIFIER / admin.json 显式名单或后台提权。
+    ensure_superusers(allow_bootstrap=_is_loopback(request))
     record_event("register", {"identifier": ident})
     return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident,
             "is_admin": bool(user_is_admin(uid))}
@@ -177,7 +186,9 @@ def auth_login(request: Request, payload: dict[str, Any] = Body(...)) -> dict[st
         if _is_loopback(request):
             return {"ok": False, "error": "账号不存在，请先注册", "code": "NO_ACCOUNT"}
         return {"ok": False, "error": "账号或密码错误", "code": "BAD_CREDENTIALS"}
-    ensure_superusers()
+    # 安全审计 2026-10-11（P1-2）：见 auth_register 同名说明 —— 公网不得靠「先注册者」
+    # 自动成为超管，仅本机回环保留兜底。
+    ensure_superusers(allow_bootstrap=_is_loopback(request))
     record_event("login", {"identifier": ident})
     return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident,
             "is_admin": bool(user_is_admin(uid))}

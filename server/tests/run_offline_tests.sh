@@ -694,6 +694,109 @@ run_node test_placeholder_contrast.mjs
 #      「只在注释里保留 closest([hidden])」三个自证/定位类用例。
 run_node test_howto_guide.mjs
 
+# 49. test_task_ownership_p0_2.py —— P0-2 下载任务/订阅源 越权隔离（安全审计 2026-10-11）：
+#      此前 `_require_task` 只按 id 取、`/api/tasks` 直接 `store.list_all()` 返回**全站**任务，
+#      攻击者拿到/枚举到 task_id 即可读标题、拉成片、取消/暂停他人任务；订阅源同理。
+#      本守卫钉死：① 服务端 uid 优先于客户端可伪造的 X-Device-Id；② 跨设备/跨账号一律 404
+#      （不返回 403 防枚举）；③ 历史遗留（owner_id 为空）保持可见，避免老用户历史凭空消失；
+#      ④ list_for_owner 只返回本人 + 遗留；⑤ 借他人 task_id 反查片名不得泄漏标题。
+run_one test_task_ownership_p0_2.py
+
+# 50. test_token_revocation_p0_5.py —— 注销/禁用/改密 必须撤销已签发 token（安全审计 2026-10-11）：
+#      `verify_token` 原先只验 HMAC+exp ⇒ 配合 10 年 TTL，任何一次 token 泄漏都是**永久后门**：
+#      用户改密/注销/被后台禁用后，攻击者手里的 bearer 照旧畅通。本守卫钉死：
+#      ① payload 增加 token_version，改密/注销/禁用/删除时 +1，旧 token 立即失效；
+#      ② 账号不存在/disabled/deleted_at → 一律拒（fail-closed）；
+#      ③ 禁用账号不得再登录换新 token；④ 「解禁本正常账号」不得无故踢人（幂等）；
+#      ⑤ 旧格式 token（无版本号）在状态未变时仍可用 —— 升级不把在线用户集体下线；
+#      ⑥ TTL 可经 VDL_TOKEN_TTL_SECONDS 收紧，非法值回落默认。
+run_one test_token_revocation_p0_5.py
+
+# 51. test_mock_pay_gate_p0_3.py —— 旧 mock 支付路径不得免费发权益（安全审计 2026-10-11）：
+#      `_provider()` 默认 mock，`simulate_paid` 唯一守卫是 isinstance(MockProvider) ⇒
+#      任何能访问端口的人 POST 自己的 order_id 即可白拿会员/积分。本守卫钉死：
+#      ① 默认（未设 VDL_PAY_MOCK）一律 404；② 开关打开但非本机回环仍拒（缺一不可）；
+#      ③ 权益必须发给**订单归属账号**而非回调请求者；④ 订单缺 user_id 时拒绝发放；
+#      ⑤ activate(order_id=...) 订单级幂等，重复回调不叠加会员时长。
+run_one test_mock_pay_gate_p0_3.py
+
+# 52. test_cloud_quota_refund_p0_4.py —— 云额度不得被用户自行回退（安全审计 2026-10-11）：
+#      `cloud_quota_impl` 是两端共用的账号级免费云端额度记账（终身 3 次/日 1 次，
+#      单次真实大模型调用 ¥0.04~0.19）。旧实现两个口子：① 负值守卫写 `and`
+#      ⇒ 只传一个负数即绕过，`max(0, used+n)` 把已用数回退 = 自行刷满额度；
+#      ② `refund=True` 由客户端直接传入即生效 ⇒ 消费→退还→再消费无限套利。
+#      本守卫钉死：① 任一负值 400（or 而非 and）；② 客户端 refund 一律 403；
+#      ③ 退还必须带 event_id 且一次性（重复 409）、不得退成负数；
+#      ④ 扣减返回事件号；⑤ 每次变更写审计流水（来源/事件号/金额/IP）。
+run_one test_cloud_quota_refund_p0_4.py
+
+# 53. test_p1_core_hardening.py —— core.py 四项加固（安全审计 2026-10-11 P1）：
+#      P1-6 admin 空密钥放行（`key == _ops_admin_key()` 在未配置时 ""=="" 即放行，
+#           运维端点等于无鉴权；且 `_is_local_request` 把 host=="" 也算本机）
+#      P1-3 stream/proxy SSRF + Cookie 外泄（回包 ACAO:* 让任意网页读走带登录态内容；
+#           只验首跳导致 302→内网可绕过；任意 URL 都自动注入浏览器 Cookie）
+#      P1-4 download/batch 缺 SSRF 护栏（parse_source 只做平台匹配，内网地址可入队）
+#      P1-5 retry/resume 绕过配额（既不过配额门也不计费 ⇒ 取消→重试无限刷）
+run_one test_p1_core_hardening.py
+
+# 54. test_p1_identity_and_vault.py —— 回调幂等 / 超管 bootstrap / 保险箱明文 / 云账号身份：
+#      P1-1 支付回调重复发权益（pay_server 只判 PAID 且 _grant 在锁外；授权中心 grant
+#           无订单级幂等 ⇒ 并发/重试通知重复发货，会员天数积分翻倍）
+#      P1-2 超管 bootstrap 抢占（公网全新实例「第一个注册者」自动成为超管）
+#      P1-7 保险箱明文持久化（.vdlenc 解密到 DOWNLOAD_DIR/.vault_tmp 后从不删除，
+#           且 scan_library/_resolve_safe 都不排除 ⇒ 明文可被列出并下载）
+#      P1-8 云账号全局身份（/api/cloud/* 不校验调用者；_cloud_token 回落全局 token
+#           不校验归属 ⇒ 越权借用他人账号身份）
+run_one test_p1_identity_and_vault.py
+
+# 56. test_p2_hardening.py —— 🟡/🟢 级发现（安全审计 2026-10-11 P2 批次）：
+#      P2-14 分享 upload_path 任意绝对路径外传（~/.ssh/id_rsa 可传成公网短链）
+#      P2-15 文件变网页 build 未鉴权、未限路径（盲读 + 同目录写产物）
+#      P2-16 aria2 JSON-RPC 无 rpc-secret 且开 rpc-allow-origin-all（任意写文件）
+#      P2-17 CF 隧道下 nginx $remote_addr=127.0.0.1 ⇒ 全站限流被整体豁免
+#      P2-18 purge_expired 把「下载超过 TTL 的进行中任务」就地删除；降级不复核状态
+#      P2-19 pause 置非法态 pausing（不在 TaskStatus），卡死后不可续不可控
+#      P2-21 证件照 make/render 与文件变网页未进登录门禁
+run_one test_p2_hardening.py
+
+# 57. test_esc_escaping.mjs —— 前端 `esc()` 真转义守卫（P2-22）：
+#      app.js 里两处 `const esc` 原是纯字符串化的 **no-op**，却用在 200+ 处 innerHTML
+#      模板里（客服会话正文/图片地址、后台告警 detail/email、对账明细、事件日志、
+#      访客 path/message…）⇒ 用户↔客服↔后台互相注入的存储型 XSS。
+#      守卫行为求值每一处 esc 定义（& < > " ' 全转义）、反回归 no-op 形态、
+#      并锁住「搜索过滤处不得用 esc」与「调用点数量不得塌陷」。
+run_node test_esc_escaping.mjs
+
+# 58. test_local_trust_p3_1.py —— 「本机直连」判定不可伪造（验证轮新发现，P3-1）：
+#      uvicorn 默认开 `--proxy-headers`（Procfile 未关），`scope["client"]` 已被
+#      X-Forwarded-For 重写；uvicorn 0.52 取「从右往左第一个不受信 host，全受信则回退最左」
+#      ⇒ 链路里存在环回跳时（CF 命名隧道下 nginx 的 $remote_addr 恰为 127.0.0.1），
+#      客户端自填 `X-Forwarded-For: 127.0.0.1` 即可让 client.host 变成 127.0.0.1。
+#      受影响分支全是高危：运维端点免密钥（_require_admin）、dev 模式回传重置验证码
+#      （账号接管）、公网首用户自动提权、读本机浏览器登录态上报公共池、改全局代理配置。
+#      修复：统一走 `app._is_local_direct`（环回 **且** 未携带任何代理头）。
+run_one test_local_trust_p3_1.py
+
+# 59. test_subscription_ssrf_p3_2.py —— 订阅源 SSRF 护栏（验证轮新发现，P3-2）：
+#      `/api/subscriptions` 的 add_subscription 在 parse_source 之后、probe_channel
+#      （yt-dlp extract_flat，真实发起 HTTP）之前，补 `_assert_safe_url`，与 /api/download、
+#      /api/resolve 口径一致；否则任意登录用户可让本机请求 169.254.169.254 云元数据等内网地址
+#      （parse_source 仅做「功能白名单」，对非已知平台回退 _generic_platform 并不拦截内部地址）。
+run_one test_subscription_ssrf_p3_2.py
+
+# 55. tests/test_crypto_routes.py（仓库根，非 server/tests）—— 保险箱路由集成（TestClient）：
+#      加密→原件移回收站→库识别加密项→**encfile 播放内容与原文一致**→解密还原→锁定 423→禁用 404。
+#      ⚠️ 安全审计 2026-10-11（P1-7）把解密播放从「落盘临时文件」改成「内存流式解密 + Range」后，
+#      这条「播放内容一致」的断言就是该改动的回归网，故补登记进运行器（此前从未被跑过）。
+echo ""
+echo "=== tests/test_crypto_routes.py（保险箱路由集成） ==="
+if VDL_CRYPTO_ENABLED=1 VDL_VAULT_CONFIG="$VDL_DATA_DIR/vault_route_test.json" \
+   "$PY" "$REPO/tests/test_crypto_routes.py" 2>&1; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

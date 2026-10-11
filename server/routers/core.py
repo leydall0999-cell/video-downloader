@@ -6,6 +6,7 @@
 handler 原样搬入、零改引用。路由用 @router.get/post 挂载，已在 app.py 末尾 include。
 """
 import app
+import hmac
 import re
 from fastapi import APIRouter
 router = APIRouter()
@@ -322,6 +323,87 @@ def _rewrite_m3u8(text: str, base_url: str, proxy_prefix: str) -> str:
         out.append(proxy_prefix + app.quote(abs_url, safe=''))
     return '\n'.join(out)
 
+def _own_hosts(request) -> set[str]:
+    """本服务自身的 host 集合（用于判定调用方是否来自我们自己的页面）。"""
+    hosts: set[str] = set()
+    try:
+        h = (request.url.hostname or "").lower()
+        if h:
+            hosts.add(h)
+    except Exception:
+        pass
+    try:
+        h2 = (request.headers.get("host") or "").split(":")[0].strip().lower()
+        if h2:
+            hosts.add(h2)
+    except Exception:
+        pass
+    return hosts
+
+
+def _caller_is_own_page(request) -> bool:
+    """调用方是否来自本服务自己的页面。
+
+    安全审计 2026-10-11（P1-3）：`/api/stream/proxy` 会**自动注入用户真实浏览器
+    的登录态**去源站取流。若任意网页都能调用它，就等于把本端点变成一个
+    「带用户登录态的取数器」（配合原回包的 `Access-Control-Allow-Origin: *`，
+    恶意页面可以直接读走响应体 = 会话数据外泄）。
+
+    这里要求：请求带 `Referer` / `Origin` 时，其 host 必须指向本服务自身；
+    两者都缺（原生 `<video>` 播放器直连常不带 Referer）才按可信处理 ——
+    此时回包已移除 ACAO，跨源页面读不到内容（纵深防御，见 stream_proxy）。
+    """
+    if request is None:
+        return False
+    own = _own_hosts(request)
+    for hdr in ("referer", "origin"):
+        try:
+            v = (request.headers.get(hdr) or "").strip()
+        except Exception:
+            v = ""
+        if not v:
+            continue
+        try:
+            h = (app.urlparse(v).hostname or "").lower()
+        except Exception:
+            return False
+        return bool(h and h in own)
+    return True
+
+
+def _stream_get(u: str, headers: dict, proxies, timeout):
+    """带 SSRF 复检的重定向跟随（最多 3 跳）。
+
+    安全审计 2026-10-11（P1-3）：`requests` 默认自动跟随重定向，而 `_assert_safe_url`
+    只校验**首跳** —— 一个公网地址 302 到 `169.254.169.254`（云元数据）或内网地址
+    即可把护栏整个绕过去。现改为手动逐跳校验；跨 host 跳转时丢弃 Cookie
+    （与浏览器同源策略一致，避免把 A 站的登录态带给 B 站）。
+    """
+    cur = u
+    cur_headers = dict(headers)
+    cur_host = (app.urlparse(u).hostname or "").lower()
+    last = None
+    for _hop in range(4):
+        app._assert_safe_url(cur)
+        resp = app.requests.get(cur, headers=cur_headers, stream=True,
+                                timeout=timeout, proxies=proxies,
+                                allow_redirects=False)
+        if resp.status_code not in (301, 302, 303, 307, 308):
+            return resp
+        loc = (resp.headers.get("Location") or "").strip()
+        if not loc:
+            return resp                      # 异常响应：交给上层按原状态处理
+        nxt = app.urljoin(cur, loc)
+        nxt_host = (app.urlparse(nxt).hostname or "").lower()
+        resp.close()
+        if nxt_host != cur_host:
+            cur_headers.pop("Cookie", None)
+        cur = nxt
+        cur_host = nxt_host
+        last = resp
+    raise app.HTTPException(status_code=508, detail="上游重定向次数过多，已中止")
+
+
 @router.get('/api/stream/proxy')
 def stream_proxy(u: str='', cookie: str='', request: app.Request=None):
     """在线观看流代理：浏览器（WKWebView）直连腾讯会被防盗链 403，且原生 HLS 无法自定义
@@ -331,6 +413,18 @@ def stream_proxy(u: str='', cookie: str='', request: app.Request=None):
     - 对 m3u8 清单：把内部相对/绝对 URL 改写为指向本端点的代理 URL，这样原生 <video>
       播放器解析 master→子 playlist→ts 分片时，每一跳都走本端点（后端统一带 Referer），
       无需 hls.js，macOS 原生 HLS 即可播放。
+
+    🔴 安全审计 2026-10-11（P1-3「stream/proxy SSRF + Cookie 外泄」）三处加固：
+      ① **不再回 `Access-Control-Allow-Origin: *`** —— 原实现让任意网页都能
+         `fetch()` 读走响应体（含用用户浏览器登录态取回的私密内容），是最直接的
+         外泄通道。同源播放（本项目 UI 与本端点同源）不需要 CORS 头，去掉零影响。
+      ② 重定向逐跳复检（`_stream_get`）：只验首跳时，公网地址 302 到内网即可绕过。
+      ③ 自动注入浏览器登录态前先判「调用方是否我们自己的页面」（`_caller_is_own_page`），
+         防止被外部页面当作「带登录态的取数器」使用。
+
+    说明：本端点不能直接加 Bearer 鉴权 —— 原生 `<video>` / HLS 分片请求无法携带
+    自定义头。故以「同源 Referer + 无 ACAO」替代；若后续要更强保证，可改为由前端
+    签发一次性 HMAC 短票据放进 query（需前后端同步改动）。
     """
     if not u:
         raise app.HTTPException(status_code=400, detail='缺少 u 参数')
@@ -346,7 +440,8 @@ def stream_proxy(u: str='', cookie: str='', request: app.Request=None):
         user_cookie = user_cookie[7:].strip()
     cookie_text = user_cookie
     used_auto_cookie = False
-    if not cookie_text:
+    # 仅当调用方是我们自己的页面时，才去读用户真实浏览器的登录态（P1-3 ③）。
+    if not cookie_text and _caller_is_own_page(request):
         try:
             auto = app.downloader.get_browser_cookie_header(host, u)
         except Exception:
@@ -367,7 +462,9 @@ def stream_proxy(u: str='', cookie: str='', request: app.Request=None):
             _client_range = _cr
             headers['Range'] = _cr
     try:
-        resp = app.requests.get(u, headers=headers, stream=True, timeout=(10, 120), proxies=_proxies)
+        resp = _stream_get(u, headers, _proxies, (10, 120))
+    except app.HTTPException:
+        raise
     except Exception as exc:
         raise app.HTTPException(status_code=502, detail=f'上游拉取失败：{app.downloader._clean_message(str(exc))}') from None
     if resp.status_code >= 400:
@@ -390,8 +487,8 @@ def stream_proxy(u: str='', cookie: str='', request: app.Request=None):
         resp.close()
         if raw.lstrip().startswith('#EXTM3U'):
             rewritten = _rewrite_m3u8(raw, u, proxy_prefix)
-            return app.Response(rewritten, media_type='application/vnd.apple.mpegurl', headers={'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*'})
-        return app.Response(raw, media_type=content_type or 'application/octet-stream', headers={'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*'})
+            return app.Response(rewritten, media_type='application/vnd.apple.mpegurl', headers={'Cache-Control': 'no-store'})
+        return app.Response(raw, media_type=content_type or 'application/octet-stream', headers={'Cache-Control': 'no-store'})
 
     def _gen():
         try:
@@ -400,7 +497,9 @@ def stream_proxy(u: str='', cookie: str='', request: app.Request=None):
                     yield chunk
         finally:
             resp.close()
-    _resp_headers = {'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'X-Accel-Buffering': 'no'}
+    # ⚠️ 不再返回 Access-Control-Allow-Origin（P1-3 ①）：同源播放不需要它，
+    #    而它正是「任意网页读走带登录态内容」的开关。
+    _resp_headers = {'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'}
     if resp.headers.get('Accept-Ranges'):
         _resp_headers['Accept-Ranges'] = resp.headers['Accept-Ranges']
     if resp.status_code == 206 and resp.headers.get('Content-Range'):
@@ -447,6 +546,11 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     # youtu.be 短链时，对端会因 Cookie 域不跟随 302 而报错 → 表现为「解析成功但
     # 下载卡住/失败」的分裂现象。实现唯一真源 downloader.canonicalize_video_url。
     url = app.downloader.canonicalize_video_url(url)
+    # 🔴 安全审计 2026-10-11（P1-4「download/batch 缺 SSRF 护栏」）：`parse_source` 只做
+    #    平台目录匹配，**不校验目标地址** —— 于是 `http://169.254.169.254/latest/meta-data/`
+    #    这类内网/云元数据地址可以直接进下载队列（yt-dlp 会真的去拉）。
+    #    `/api/resolve` 早有 `_assert_safe_url`，唯独真正落盘的下载入口漏了。
+    app._assert_safe_url(url)
     if not app.downloader.is_valid_quality(payload.quality):
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
     # 清晰度门（2026-10-02）：免费档选 2K/4K 在**建任务之前**拦下，前端弹会员中心。
@@ -471,7 +575,7 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
         _runner = app.downloader.run_remote_download
     else:
         _runner = app.downloader.run_download
-    task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=_task_cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, referer=(payload.referer or '').strip())
+    task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=_task_cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, referer=(payload.referer or '').strip(), owner_id=app._task_owner(request))
     app.scheduler.submit(_runner, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     # 任务创建成功才计费（失败/被拒不烧免费额度）
     _charged = app.current_member_store(request).use_daily('download', 1)
@@ -517,10 +621,13 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
             break
         try:
             url, platform = app.parse_source(u)
+            # 安全审计 2026-10-11（P1-4）：批量入口同样要过 SSRF 护栏；
+            # 不安全地址按「无法识别」计入 skipped，不中断整批。
+            app._assert_safe_url(url)
         except (app.UnsupportedPlatformError, app.LinkError):
             skipped += 1
             continue
-        task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode)
+        task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, owner_id=app._task_owner(request))
         app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, retries)
         app.current_member_store(request).use_daily('download', 1)  # 每个成功创建的任务计 1 次下载配额
         task_ids.append(task.id)
@@ -531,33 +638,50 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
     return {'task_ids': task_ids, 'count': len(task_ids), 'skipped': skipped, 'quota_exhausted': quota_exhausted}
 
 @router.get('/api/tasks')
-def list_tasks() -> dict:
-    """列出当前所有任务（含排队 / 进行中 / 已完成），供前端队列概览。"""
-    tasks = [t.to_public_dict() for t in app.store.list_all()]
-    stats = {'pending': 0, 'downloading': 0, 'merging': 0, 'completed': 0, 'failed': 0, 'canceled': 0}
+def list_tasks(request: app.Request) -> dict:
+    """列出当前用户的任务（含排队 / 进行中 / 已完成），供前端队列概览。
+
+    安全审计 P0-2：此前用 list_all() 返回**全站**任务，任何人可看到他人视频标题、
+    直链与提取文案。现按归属过滤（历史无归属任务仍可见，避免升级后凭空消失）。
+    """
+    tasks = [t.to_public_dict() for t in app.store.list_for_owner(app._task_owner(request))]
+    stats = {'pending': 0, 'downloading': 0, 'merging': 0, 'paused': 0, 'pausing': 0,
+             'completed': 0, 'failed': 0, 'canceled': 0}
     for t in tasks:
         stats[t['status']] = stats.get(t['status'], 0) + 1
     stats['active'] = app.scheduler.active_count()
     return {'tasks': tasks, 'stats': stats, 'concurrency': app.scheduler.concurrency}
 
 @router.post('/api/tasks/{task_id}/retry')
-def retry_task(task_id: str) -> dict:
-    task = app._require_task(task_id)
+def retry_task(task_id: str, request: app.Request) -> dict:
+    task = app._require_owned_task(task_id, request)
     # B5：成品已清理的历史条目（completed+file_expired）也允许「重新下载」
     _hist_redownload = task.status == 'completed' and getattr(task, 'file_expired', False)
     if task.status not in ('failed', 'canceled') and not _hist_redownload:
         raise app.HTTPException(status_code=400, detail='仅失败 / 已取消 / 成品已清理的任务可以重试')
+    # 🔴 安全审计 2026-10-11（P1-5「retry/resume 绕过配额」）：重试此前**既不过配额门
+    #    也不计费** —— 于是「取消 → 重试」与「历史条目（completed+file_expired）重新下载」
+    #    可以无限刷，下载配额形同虚设。
+    #    现在：① 一律先过配额门（用尽即 402）；
+    #          ② 仅当本次**会真正重新传输**时计 1 次 —— 有 .part 的续传是同一份传输的
+    #             继续（创建任务时已计费），不重复收；历史条目重新下载与无 .part 的
+    #             失败任务重试都是新传输，按次计费。
+    _err = _download_gate_error(request)
+    if _err:
+        raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _err)
     task.cancel_requested = False
     task.cancel_reason = ''
     resume = app.downloader._has_partial(task.workdir) and not _hist_redownload
     app.store.update(task_id, status='pending', error='', hint='', progress=task.progress if resume else 0.0, downloaded_bytes=task.downloaded_bytes if resume else 0, total_bytes=task.total_bytes if resume else 0, speed=0.0, eta=0, filesize=0, filename='', resumable=False, file_expired=False, filepath=None)
     app.scheduler.submit(app.downloader.run_download, task, app.store, task.quality_key, task.cookie, task.proxy, app.BATCH_RETRIES_DEFAULT, '', task.concurrent_fragments, task.downloader_type, resume)
+    if not resume:
+        app.current_member_store(request).use_daily('download', 1)
     return {'task_id': task_id, 'status': 'pending', 'resume': resume}
 
 @router.post('/api/tasks/{task_id}/extract-text')
-def reextract_text(task_id: str) -> dict:
+def reextract_text(task_id: str, request: app.Request) -> dict:
     """对已完成任务重新提取文案（如首次语音转写超时，可点重试）。"""
-    task = app._require_task(task_id)
+    task = app._require_owned_task(task_id, request)
     if not task.extract_mode:
         raise app.HTTPException(status_code=400, detail='该任务未开启文案提取')
     if not task.filepath or not app.Path(task.filepath).exists():
@@ -566,10 +690,13 @@ def reextract_text(task_id: str) -> dict:
     return {'task_id': task_id, 'status': 'running'}
 
 @router.post('/api/tasks/cancel-all')
-def cancel_all_tasks() -> dict:
-    """取消所有进行中 / 排队中的任务；已完成与失败的任务保留（不删文件）。"""
+def cancel_all_tasks(request: app.Request) -> dict:
+    """取消**自己**所有进行中 / 排队中的任务；已完成与失败的任务保留（不删文件）。
+
+    安全审计 P0-2：此前遍历全站任务，任何人可一键取消所有人的下载（DoS）。
+    """
     canceled = 0
-    for t in app.store.list_all():
+    for t in app.store.list_for_owner(app._task_owner(request)):
         if not t.is_finished and app.store.request_cancel(t.id):
             canceled += 1
     return {'canceled': canceled}
@@ -579,12 +706,12 @@ def batch_config() -> dict:
     return {'concurrency': app.scheduler.concurrency, 'hard_max': app.VDL_BATCH_HARD_MAX, 'retries': app.BATCH_RETRIES_DEFAULT}
 
 @router.get('/api/tasks/{task_id}')
-def task_status(task_id: str) -> dict:
-    return app._require_task(task_id).to_public_dict()
+def task_status(task_id: str, request: app.Request) -> dict:
+    return app._require_owned_task(task_id, request).to_public_dict()
 
 @router.get('/api/tasks/{task_id}/events')
 async def task_events(task_id: str, request: app.Request) -> app.StreamingResponse:
-    app._require_task(task_id)
+    app._require_owned_task(task_id, request)
 
     async def event_stream():
         elapsed = 0.0
@@ -606,8 +733,8 @@ def _sse(data: dict) -> str:
     return f'data: {app.json.dumps(data, ensure_ascii=False)}\n\n'
 
 @router.get('/api/tasks/{task_id}/file')
-def download_file(task_id: str, download: int=0) -> app.Response:
-    task = app._require_task(task_id)
+def download_file(task_id: str, request: app.Request, download: int=0) -> app.Response:
+    task = app._require_owned_task(task_id, request)
     if task.status != 'completed' or not task.filepath or (not task.filepath.exists()):
         raise app.HTTPException(status_code=409, detail='文件尚未准备好')
     _ext = task.filepath.suffix.lower()
@@ -627,21 +754,26 @@ def download_file(task_id: str, download: int=0) -> app.Response:
     return app.FileResponse(path=task.filepath, filename=task.filepath.name, media_type=_mt)
 
 @router.delete('/api/tasks/{task_id}')
-def cancel_task(task_id: str) -> dict:
+def cancel_task(task_id: str, request: app.Request) -> dict:
     """进行中的任务 → 请求取消并保留记录；已结束的任务 → 连同文件一起清理。"""
-    task = app._require_task(task_id)
+    task = app._require_owned_task(task_id, request)
     if task.is_finished:
         app.store.remove(task_id)
         return {'task_id': task_id, 'canceled': False, 'removed': True}
     return {'task_id': task_id, 'canceled': app.store.request_cancel(task_id), 'removed': False}
 
 @router.post('/api/tasks/{task_id}/pause')
-def pause_task(task_id: str) -> dict:
-    """暂停正在下载的任务——保留 .part 文件，后续可断点续传。"""
-    task = app._require_task(task_id)
+def pause_task(task_id: str, request: app.Request) -> dict:
+    """暂停正在下载的任务——保留 .part 文件，后续可断点续传。
+
+    安全审计 2026-10-11（P2-19）：`pausing` 是「暂停信号已发出、尚未被进度回调
+    消费」的中间态（例如正卡在合并阶段）。它必须可被重复点击、也必须可被 resume
+    接管，否则任务会永久停在 `pausing`。
+    """
+    task = app._require_owned_task(task_id, request)
     if task.is_finished:
         return {'task_id': task_id, 'paused': False, 'message': '任务已结束，无法暂停'}
-    if task.status == 'paused':
+    if task.status in ('paused', 'pausing'):
         return {'task_id': task_id, 'paused': True, 'message': '已暂停'}
     task.pause_requested = True
     task.add_step('下载音视频', 'pending', '正在暂停…')
@@ -649,11 +781,22 @@ def pause_task(task_id: str) -> dict:
     return {'task_id': task_id, 'paused': True}
 
 @router.post('/api/tasks/{task_id}/resume')
-def resume_task(task_id: str) -> dict:
-    """继续被暂停的下载——yt-dlp 自动从已下载的 .part 文件断点续传。"""
-    task = app._require_task(task_id)
-    if task.status not in ('paused',):
+def resume_task(task_id: str, request: app.Request) -> dict:
+    """继续被暂停的下载——yt-dlp 自动从已下载的 .part 文件断点续传。
+
+    安全审计 2026-10-11（P2-19）：同时接受 `pausing` —— 合并阶段的暂停信号不会被
+    进度回调消费，任务可能长期停在 `pausing`；此时必须允许「继续」把它拉回来
+    （否则用户既等不到暂停、也点不动继续）。
+    """
+    task = app._require_owned_task(task_id, request)
+    if task.status not in ('paused', 'pausing'):
         return {'task_id': task_id, 'resumed': False, 'message': '任务未处于暂停状态'}
+    # 🔴 安全审计 2026-10-11（P1-5）：恢复同样要过配额门 —— 否则「暂停 → 恢复」
+    #    是一条完全免闸的循环通道（配额用尽也能继续下载）。这里**不重复计费**：
+    #    任务创建时已计过 1 次，恢复只是同一份传输的继续（yt-dlp 走 .part 续传）。
+    _err = _download_gate_error(request)
+    if _err:
+        raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _err)
     task.pause_requested = False
     task.add_step('下载音视频', 'running', '继续下载…')
     task.log('用户继续下载（断点续传）')
@@ -738,12 +881,16 @@ def _ops_admin_key() -> str:
 
 
 def _is_local_request(request) -> bool:
-    """桌面端本机 WebView 经 127.0.0.1 访问，视为可信。"""
-    try:
-        host = request.client.host if request.client else ""
-    except Exception:
-        host = ""
-    return host in ("127.0.0.1", "::1", "localhost", "")
+    """桌面端本机 WebView 经 127.0.0.1 访问，视为可信。
+
+    安全审计 2026-10-11：
+      · P1-6：此前把 `host == ""`（拿不到来源地址）也算本机 —— 「无法确定来源」被
+        当成「可信」，是最不该有的默认。现要求**显式**回环地址。
+      · P3-1：改用共享真源 `app._is_local_direct` —— 单看 `client.host` 会被
+        `X-Forwarded-For` 伪造（uvicorn 的 proxy-headers 会用它重写 client），
+        故还要求**未携带任何代理头**。本机直连的 WebView 不带代理头。
+    """
+    return app._is_local_direct(request)
 
 
 def _require_local(request):
@@ -767,11 +914,24 @@ def _ops_requester_is_admin(request) -> bool:
 
 
 def _require_admin(request):
-    """运维端点鉴权：本机放行；远端必须带正确 X-Admin-Key。"""
+    """运维端点鉴权：本机放行；远端必须带正确 X-Admin-Key。
+
+    安全审计 2026-10-11（P1-6）：此前判定写的是 `key == _ops_admin_key()`，
+    而服务端**未配置任何密钥**时 `_ops_admin_key()` 返回 `""` ——
+    于是远端请求只要不带 `X-Admin-Key`（或带空值）就满足 `"" == ""`，
+    运维端点（事件日志 / 诊断包导出 / 授权中心代理）**完全无鉴权**。
+    现在：期望密钥为空时直接拒绝（fail-closed），并改用恒定时间比较。
+    """
     if _is_local_request(request):
         return
+    expected = _ops_admin_key()
+    if not expected:
+        raise app.HTTPException(
+            status_code=503,
+            detail="运维密钥未配置，已拒绝访问（请设置 VDL_ADMIN_KEY 或写入本机钥匙串 vdl-ops-admin）",
+        )
     key = (request.headers.get("X-Admin-Key") or "").strip()
-    if key == _ops_admin_key():
+    if key and hmac.compare_digest(key, expected):
         return
     raise app.HTTPException(status_code=403, detail="需要管理员密钥（X-Admin-Key）")
 

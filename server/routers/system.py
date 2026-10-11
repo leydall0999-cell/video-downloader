@@ -14,6 +14,7 @@ macOS 自更新难点：运行中的 .app 不能覆盖自身。解法是用 star
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -40,6 +41,28 @@ router = APIRouter()
 UPDATE_BASE_URL = os.environ.get("VDL_UPDATE_BASE_URL", "http://8.138.223.3:8765").rstrip("/")
 UPDATE_GUARD_SECONDS = int(os.environ.get("VDL_UPDATE_GUARD_SECONDS", "120"))
 _DOWNLOAD_TIMEOUT = int(os.environ.get("VDL_UPDATE_DL_TIMEOUT", "1800"))
+
+# ---- 更新清单签名（Ed25519，防「明文更新源被中间人替换」） --------------------
+# 安全审计 P0-1（2026-10-11）：此前 latest.json 与安装包 sha256 都取自同一条未认证
+# 通道，攻击者可在网络路径上同时替换清单与包，校验随之自洽 → 供应链 RCE。
+# 现改为：发布侧用私钥对 latest.json 的**原始字节**签名，客户端用内置公钥验签；
+# 只有验签通过的清单才允许使用其中的 url / sha256 / patch_sha256。
+#   · 公钥：随包内置（下方常量），或经 VDL_UPDATE_PUBKEY 覆盖（换源/测试）。
+#   · 私钥：仅存在于发布机，经 VDL_UPDATE_SIGNING_KEY 指向（见 tools/gen_update_signing_key.py）。
+#   · 未配置公钥时默认**拒绝更新**（fail-closed），可用 VDL_UPDATE_ALLOW_UNSIGNED=1 临时放行。
+UPDATE_MANIFEST_PUBKEY_B64 = (os.environ.get("VDL_UPDATE_PUBKEY") or "").strip()
+UPDATE_ALLOW_UNSIGNED = (os.environ.get("VDL_UPDATE_ALLOW_UNSIGNED", "").strip() == "1")
+UPDATE_SIG_SUFFIX = ".sig"
+# 可选：要求更新包由指定 Developer ID 团队签名 / 通过公证（配合已验签清单形成纵深防御）。
+UPDATE_EXPECT_TEAM_ID = (os.environ.get("VDL_UPDATE_EXPECT_TEAM_ID") or "").strip()
+UPDATE_REQUIRE_NOTARIZATION = (os.environ.get("VDL_UPDATE_REQUIRE_NOTARIZATION", "").strip() == "1")
+
+_logger = logging.getLogger("vdl.update")
+if UPDATE_BASE_URL.startswith("http://"):
+    _logger.warning(
+        "更新源使用明文 HTTP（%s）。清单签名已强制启用可防篡改；仍建议尽快改为 HTTPS。",
+        UPDATE_BASE_URL,
+    )
 
 _LAUNCH_LOG = Path.home() / ".vdl_launch.log"
 
@@ -158,6 +181,61 @@ def _http_get_json(url: str, timeout: int = 15) -> Any:
     req = urllib.request.Request(url, headers={"User-Agent": "VDL-Update/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _http_get_bytes(url: str, timeout: int = 15) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "VDL-Update/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+class ManifestError(RuntimeError):
+    """更新清单不可信（缺签名 / 验签失败 / 格式异常）。"""
+
+
+def _verify_manifest_signature(raw: bytes, sig_b64: str, pubkey_b64: str) -> bool:
+    """用 Ed25519 公钥校验 latest.json 的**原始字节**签名。任何异常都视为不通过。"""
+    try:
+        import base64
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(pubkey_b64))
+        pub.verify(base64.b64decode(sig_b64), raw)
+        return True
+    except Exception:  # noqa: BLE001 —— InvalidSignature / 解码失败 / 依赖缺失一律不通过
+        return False
+
+
+def _fetch_manifest(timeout: int = 15) -> dict:
+    """拉取并**验签**更新清单；验签不通过一律抛 ManifestError（fail-closed）。
+
+    签名覆盖 latest.json 的原始字节，因此清单里的 url / sha256 / patch_sha256
+    一旦被篡改，验签必然失败——sha256 与签名由此绑定，MITM 无法同时替换两者。
+    """
+    base = UPDATE_BASE_URL.rstrip("/")
+    raw = _http_get_bytes(base + "/latest.json", timeout=timeout)
+    pubkey = (os.environ.get("VDL_UPDATE_PUBKEY") or UPDATE_MANIFEST_PUBKEY_B64 or "").strip()
+    if pubkey:
+        try:
+            sig_raw = _http_get_bytes(base + "/latest.json" + UPDATE_SIG_SUFFIX, timeout=timeout)
+        except Exception as e:  # noqa: BLE001
+            raise ManifestError("更新清单缺少签名文件（%s），已拒绝更新" % e) from None
+        sig_b64 = sig_raw.decode("utf-8", "ignore").strip()
+        if not _verify_manifest_signature(raw, sig_b64, pubkey):
+            raise ManifestError("更新清单签名校验失败，已拒绝本次更新（疑似被篡改）")
+    elif not UPDATE_ALLOW_UNSIGNED:
+        raise ManifestError(
+            "更新源未配置签名公钥，出于安全已拒绝更新；"
+            "请配置 VDL_UPDATE_PUBKEY，或设置 VDL_UPDATE_ALLOW_UNSIGNED=1 临时放行"
+        )
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        raise ManifestError("更新清单格式异常：%s" % e) from None
+    if not isinstance(data, dict):
+        raise ManifestError("更新清单格式异常")
+    return data
 
 
 def _http_download(url: str, dest: Path, timeout: int = _DOWNLOAD_TIMEOUT,
@@ -288,7 +366,14 @@ def _apply_delta(staging_app: Path, pkg_zip: Path) -> bool:
 
 
 def _verify_app(app: Path, target_ver: str) -> bool:
-    """校验还原出的 app：ad-hoc 签名完整性 + 版本号匹配。"""
+    """校验还原出的 app：签名完整性 + （可选）签名主体/公证 + 版本号匹配。
+
+    安全审计 P0-1 加固：仅 `codesign --verify` 只证明「包内签名自洽」，ad-hoc 自签
+    同样返回 0，不校验签名者身份。因此额外支持：
+      · VDL_UPDATE_EXPECT_TEAM_ID —— 要求签名团队 ID 匹配（防自签包冒充）；
+      · VDL_UPDATE_REQUIRE_NOTARIZATION=1 —— 要求通过 spctl 公证校验。
+    两者默认关闭，但一旦配置即强制；配合已验签的清单构成纵深防御。
+    """
     r = subprocess.run(
         ["codesign", "--verify", "--verbose=2", str(app)],
         capture_output=True,
@@ -296,6 +381,29 @@ def _verify_app(app: Path, target_ver: str) -> bool:
     )
     if r.returncode != 0:
         return False
+    if UPDATE_EXPECT_TEAM_ID:
+        try:
+            d = subprocess.run(
+                ["codesign", "-dv", "--verbose=4", str(app)],
+                capture_output=True,
+                text=True,
+            )
+            blob = (d.stdout or "") + (d.stderr or "")
+            if UPDATE_EXPECT_TEAM_ID not in blob:
+                return False
+        except Exception:
+            return False
+    if UPDATE_REQUIRE_NOTARIZATION:
+        try:
+            s = subprocess.run(
+                ["spctl", "-a", "-vv", "--type", "execute", str(app)],
+                capture_output=True,
+                text=True,
+            )
+            if s.returncode != 0:
+                return False
+        except Exception:
+            return False
     vt = app / "Contents" / "Resources" / "version.txt"
     try:
         return vt.read_text(encoding="utf-8").strip() == target_ver
@@ -334,7 +442,9 @@ def _prepare_update(data: dict, work: Path, bundle: Path, target_ver: str,
             subprocess.run(["ditto", str(bundle), str(staging)], check=True)
             if not _apply_delta(staging, patch_path):
                 raise RuntimeError("delta 套用失败")
-            # 套用后文件已变更，原 ad-hoc 签名失效，重新 ad-hoc 签名（macOS 自带 codesign）
+            # 套用后文件已变更，原 ad-hoc 签名失效，需重新 ad-hoc 签名（macOS 自带 codesign）。
+            # 安全说明（P0-1）：ad-hoc 重签本身不再构成信任缺口——因为补丁的完整性由
+            # **已验签清单**里的 patch_sha256 保证，攻击者无法在不破坏签名的前提下替换 delta。
             subprocess.run(
                 ["codesign", "--force", "--deep", "--sign", "-", str(staging)],
                 check=True,
@@ -469,11 +579,13 @@ def _is_local_direct(request: Request) -> bool:
 
     云端多用户部署经 nginx 反代，请求必带 X-Forwarded-For 且所有用户共享同一份
     proxy.json——绝不允许单个登录用户改全局网络配置，因此 GET/POST 双向拦截。
+
+    安全审计 2026-10-11（P3-1）：改用共享真源 `app._is_local_direct`。本函数原先
+    只查 `X-Forwarded-For`（思路正确、但覆盖面窄：`X-Real-IP` / `CF-Connecting-IP` /
+    `Forwarded` 等同样说明请求经过反代）。真源已把全部代理头纳入判据。
     """
-    if (request.headers.get("x-forwarded-for") or "").strip():
-        return False
-    host = (request.client.host if request.client else "") or ""
-    return host in ("127.0.0.1", "::1", "localhost")
+    from app import _is_local_direct as _impl   # 局部导入：本模块被 app.py 反向 include
+    return bool(_impl(request))
 
 
 def _read_proxy_file() -> dict[str, Any]:
@@ -543,7 +655,10 @@ def engine_idle_save(payload: dict[str, Any] = Body(default={})) -> dict[str, An
 @router.get("/api/system/latest")
 def system_latest() -> dict[str, Any]:
     try:
-        data = _http_get_json(UPDATE_BASE_URL.rstrip("/") + "/latest.json", timeout=15)
+        data = _fetch_manifest(timeout=15)
+    except ManifestError as e:
+        # 清单不可信（缺签名 / 验签失败）→ 不展示任何可下载信息，直接报错
+        return {"ok": False, "error": str(e), "current": VERSION, "untrusted": True}
     except Exception as e:
         return {"ok": False, "error": "无法连接更新服务器（%s）" % e, "current": VERSION}
     latest_ver = str(data.get("version") or "")
@@ -611,9 +726,11 @@ def system_update(request: Request, payload: dict[str, Any] = Body(...)) -> dict
     if not target_ver:
         return {"ok": False, "error": "缺少目标版本"}
 
-    # 取最新信息（含下载地址与校验和）
+    # 取最新信息（含下载地址与校验和）—— 必须验签通过，否则拒绝更新
     try:
-        data = _http_get_json(UPDATE_BASE_URL.rstrip("/") + "/latest.json", timeout=15)
+        data = _fetch_manifest(timeout=15)
+    except ManifestError as e:
+        return {"ok": False, "error": str(e), "code": "MANIFEST_UNTRUSTED"}
     except Exception as e:
         return {"ok": False, "error": "无法连接更新服务器：%s" % e}
     if str(data.get("version")) != target_ver:

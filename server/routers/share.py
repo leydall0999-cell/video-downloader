@@ -458,12 +458,24 @@ def _start_upload(tid: str, make_reader, total: int, filename: str,
 
 @router.post("/api/share/upload_path")
 def share_upload_path(payload: dict = Body(...)):
-    """桌面端入口：传本机绝对路径，由后端流式读取并转发到分享节点。"""
-    path = (payload or {}).get("path") or ""
-    path = os.path.expanduser(str(path).strip())
-    if not path or not os.path.isfile(path):
-        return JSONResponse({"ok": False, "error": "file_not_found", "path": path},
-                            status_code=400)
+    """桌面端入口：传本机绝对路径，由后端流式读取并转发到分享节点。
+
+    🔴 安全审计 2026-10-11（P2-14）：此前接受**任意绝对路径**，等于对外提供
+    「读任意本机文件并发布成公网短链」的原语（~/.ssh/id_rsa、users.json、
+    .auth_secret 都能传成公开链接）。现改走共用的本机路径护栏
+    `app._assert_shareable_local_path`（用户目录白名单 + 敏感位置黑名单）。
+    """
+    raw_path = (payload or {}).get("path") or ""
+    # 局部导入：本模块会被 app.py 反向 include，顶层 `import app` 会构成循环导入。
+    import app
+    try:
+        path = str(app._assert_shareable_local_path(raw_path))
+    except app.HTTPException as exc:
+        # 400（路径不存在/不是普通文件）沿用旧契约 file_not_found；
+        # 403 是新增的「敏感位置」拒绝，单列一个错误码便于前端区分提示。
+        code = "path_not_allowed" if exc.status_code == 403 else "file_not_found"
+        return JSONResponse({"ok": False, "error": code, "detail": exc.detail,
+                             "path": str(raw_path)}, status_code=exc.status_code)
     try:
         total = os.path.getsize(path)
     except OSError as exc:

@@ -102,10 +102,17 @@ def set_user_disabled(user_id: str, disabled: bool) -> dict[str, Any]:
         user = next((u for u in data["users"] if u["user_id"] == user_id), None)
         if not user:
             return {"ok": False, "error": "用户不存在"}
-        user["disabled"] = bool(disabled)
+        new_val = bool(disabled)
+        # 安全审计 P0-5：禁用必须让已签发的 token 立即失效，否则「后台禁用」
+        # 只是登录侧拦截，手里已有 bearer 的账号仍能照常调用受保护接口。
+        # 仅在状态**真的变化**时递增版本 —— 否则「解禁一个本就正常的账号」会把
+        # 人家正常在用的登录态无谓踢掉。
+        if bool(user.get("disabled", False)) != new_val:
+            user["disabled"] = new_val
+            auth_store.bump_token_version(user)
         user["updated_at"] = int(time.time())
         _save_users(data)
-        return {"ok": True, "disabled": bool(disabled)}
+        return {"ok": True, "disabled": new_val}
 
 
 def delete_user(user_id: str) -> dict[str, Any]:
@@ -129,6 +136,8 @@ def delete_user(user_id: str) -> dict[str, Any]:
         user["deleted_at"] = int(time.time())
         user["disabled"] = True
         user["updated_at"] = int(time.time())
+        # 安全审计 P0-5：删除同样要撤销已签发 token（否则删了账号仍能被旧 bearer 使用）
+        auth_store.bump_token_version(user)
         if ident and ident in data["by_identifier"]:
             del data["by_identifier"][ident]
         _save_users(data)
