@@ -233,14 +233,19 @@ cat "$LATEST_JSON"
 #      私钥只存在于发布机，经 VDL_UPDATE_SIGNING_KEY 指定（生成见 tools/gen_update_signing_key.py）。
 LATEST_SIG="${LATEST_JSON}.sig"
 rm -f "$LATEST_SIG"
+# 签名依赖 cryptography —— 它装在构建 venv 里，系统 python3 通常没有
+# （2026-10-11 实测：用裸 python3 会 ModuleNotFoundError → 签名失败 → 发布中止）。
+# 优先用构建 venv 的解释器，缺失时回退 python3。
+SIGN_PY="$REPO/.build_venv/bin/python"
+[ -x "$SIGN_PY" ] || SIGN_PY="python3"
 SIGN_KEY="${VDL_UPDATE_SIGNING_KEY:-}"
 if [ -z "$SIGN_KEY" ]; then
   echo "   ⚠️ 未设置 VDL_UPDATE_SIGNING_KEY，本次发布**不含签名**。"
-  echo "      已启用验签的客户端会拒绝该更新；生成密钥：python3 tools/gen_update_signing_key.py"
+  echo "      已启用验签的客户端会拒绝该更新；生成密钥：$SIGN_PY tools/gen_update_signing_key.py"
 elif [ ! -f "$SIGN_KEY" ]; then
   echo "   ✗ VDL_UPDATE_SIGNING_KEY 指向的文件不存在：$SIGN_KEY"
   exit 1
-elif python3 - "$LATEST_JSON" "$SIGN_KEY" <<'PY'
+elif "$SIGN_PY" - "$LATEST_JSON" "$SIGN_KEY" <<'PY'
 import base64, sys
 from cryptography.hazmat.primitives import serialization
 path, keyfile = sys.argv[1], sys.argv[2]

@@ -221,6 +221,10 @@ def adjust_credits(user_id: str, delta: int, pool: str = "auto") -> dict[str, An
         res = get_user_store(user_id).add_credits(delta, pool=pool)
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"调分失败：{e}"}
+    # 实测 F1（2026-10-11）：本地被拒（如非 AI 会员充 AI 池）时不得再推云端 ——
+    # 否则云端会记下一笔本地并不存在的授予，造成两端账目分叉。
+    if not res.get("ok"):
+        return res
     # B 修复（2026-09-30）：云端是积分权威源，超管改分必须同步到授权中心，
     # 否则账号一联网（登录/心跳）就被云端快照覆盖回旧值 —— 过去改分「不生效」的根因。
     # 本地写照常保留作缓存；云端不可达时静默忽略（本地改动不丢）。

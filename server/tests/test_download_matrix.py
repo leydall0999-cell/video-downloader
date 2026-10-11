@@ -165,7 +165,11 @@ def test_run_download_wiring_source_level():
     """源码级钉死：B3 硬上限延长 + A2 矩阵接线，防止回归。"""
     src = Path(downloader.__file__).read_text(encoding="utf-8")
     # B3：硬上限 join 在 while True 里，推进判定存在
-    assert src.index("while True:") < src.index("th.join(timeout=DOWNLOAD_HARD_TIMEOUT)")
+    # 实测 F2（2026-10-11）把「一次性 join 硬上限」改为「短切片 join + 取消即中断」，
+    # 但硬上限仍必须在该等待循环内、推进判定仍必须在——此处按新实现等价钉死。
+    assert src.index("while True:") < src.index("th.join(timeout=_slice)")
+    assert "_wait_left = float(DOWNLOAD_HARD_TIMEOUT)" in src
+    assert "task.cancel_requested and not task.is_finished" in src, "等待循环必须能被打断"
     assert 'task.status == "downloading" and (time.time() - last["ts"]) <= DOWNLOAD_STALL_TIMEOUT' in src
     # A2：矩阵接入 run_download，且 alt_protocol 传入 _run_once
     assert "_matrix = _retry_matrix(downloader_type)" in src

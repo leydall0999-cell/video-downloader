@@ -192,6 +192,12 @@ run_one test_download_matrix.py
 #  停滞与硬超时不再伪装成「用户取消」；VDL_PROXY_YT/proxy.json 只分流 YouTube 域；
 #  到期完成任务降级为历史条目（保留 50 条元数据、可重新下载）。
 run_one test_batch3_history.py
+#  积分口径一致性 + 停滞看门狗终态（2026-10-11 全功能实测发现）：
+#  F1 给非活跃账号充 AI 池 → 「账面显示 N、扣费报当前 0」（拒绝 + 不同步云端）；
+#  F2 看门狗停滞只写步骤不落终态 → 任务僵在 downloading 最长 2h、DELETE 清不掉
+#     （抽 _finalize_terminated，主等待循环短切片 join + 取消即中断）；
+#  F3 设备锁定时 credits_total 未随 AI 池置零重算。
+run_one test_credit_and_stall_consistency.py
 run_one test_proxy_settings.py
 #  1/3/7 天下载会员档 + 套餐价格单一真源（2026-09-30）：超管在后台改价/改天数后，
 #  展示（/api/member/plans 真身 store.plans()）/ 下单金额 / 发放天数三处必须同步。
@@ -792,6 +798,19 @@ echo ""
 echo "=== tests/test_crypto_routes.py（保险箱路由集成） ==="
 if VDL_CRYPTO_ENABLED=1 VDL_VAULT_CONFIG="$VDL_DATA_DIR/vault_route_test.json" \
    "$PY" "$REPO/tests/test_crypto_routes.py" 2>&1; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
+# tests/test_download_watchdog.py（仓库根，pytest）—— 下载停滞看门狗 + 整体硬超时端到端：
+#  用「下到一半永久卡死、进度回调再也不来」的假 _run_once，验证 run_download 不会永久挂起、
+#  并发槽会被释放。⚠️ 此前**从未登记进运行器**：A2（2026-10-02）给 run_download 加第 10 个
+#  位置参 alt_protocol 时漏改本文件的假 _run_once，两用例从此恒红却无人发现（离线运行器不跑它）。
+#  2026-10-11 全功能实测发现并修好，登记进来防再次腐化。
+echo ""
+echo "=== tests/test_download_watchdog.py（看门狗/硬超时，pytest） ==="
+if env -u HTTP_PROXY -u HTTPS_PROXY "$PY" -m pytest "$REPO/tests/test_download_watchdog.py" -q 2>&1; then
   PASS=$((PASS+1))
 else
   FAIL=$((FAIL+1))

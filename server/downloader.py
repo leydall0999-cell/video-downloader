@@ -4950,8 +4950,26 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
             # 有字节增量，last["ts"] 由看门狗维护），不杀任务、继续等——只杀真正停滞/假死的。
             # 超长视频（几小时直播回放、4K 大片）此前会被 7200s 硬上限「进度正常也被处决」。
             while True:
-                th.join(timeout=DOWNLOAD_HARD_TIMEOUT)
+                # 实测 F2（2026-10-11）：原先一次性 join(整体硬上限) 会干等最多 7200s。
+                # 期间若看门狗已置 cancel_requested（下载线程卡在无进度回调的阶段，
+                # 标志长期不被消费），任务既不落终态、DELETE 也清不掉、还白占并发槽。
+                # 改为短切片 join：一旦发现取消/停滞标志立即落终态并跳出。
+                _wait_left = float(DOWNLOAD_HARD_TIMEOUT)
+                _early = False
+                while _wait_left > 0 and th.is_alive():
+                    _slice = min(WATCHDOG_POLL, _wait_left)
+                    th.join(timeout=_slice)
+                    _wait_left -= _slice
+                    if not th.is_alive():
+                        break
+                    if task.cancel_requested and not task.is_finished:
+                        _early = True
+                        break
                 if not th.is_alive():
+                    break
+                if _early:
+                    # 看门狗/用户已判定终止：用与子线程同一份逻辑落终态，不再干等硬超时。
+                    _finalize_terminated(task, store)
                     break
                 if task.status == "downloading" and (time.time() - last["ts"]) <= DOWNLOAD_STALL_TIMEOUT:
                     task.log(
@@ -4989,6 +5007,46 @@ def _mark_step_error(task: DownloadTask, detail: str) -> None:
         task.add_step("下载音视频", "error", detail)
     else:
         task.add_step("解析视频信息", "error", detail)
+
+def _finalize_terminated(task: DownloadTask, store: TaskStore) -> None:
+    """把「看门狗停滞 / 整体硬超时 / 用户取消」按 cancel_reason 统一落成终态。
+
+    实测 F2（2026-10-11）：终态原先只在下载子线程的 `except DownloadCanceled` 里写。
+    但 `cancel_requested` 只在**进度回调**与若干重试循环边界被消费——若子线程正阻塞在
+    **无回调**阶段（解析元数据 / 取流 URL / 连接假死），该标志长时间不被读取，任务便以
+    「步骤已写『已自动终止』、整体状态仍 downloading」的形态僵持到整体硬超时
+    （DOWNLOAD_HARD_TIMEOUT=7200s），期间 DELETE 清不掉、白占并发槽。
+
+    抽出本函数后，主等待循环一旦看到 `cancel_requested` 也能立即落终态，不必干等。
+    **幂等**：重复调用产出同一终态（子线程随后真正退出时再调一次也不会写歪）。
+    """
+    _reason = getattr(task, "cancel_reason", "") or ""
+    if _reason == "stall":
+        _mark_step_error(task, f"下载停滞超过 {DOWNLOAD_STALL_TIMEOUT}s，已自动终止")
+        store.update(
+            task.id, status="failed", error="下载停滞，已自动终止",
+            hint=f"连接超过 {DOWNLOAD_STALL_TIMEOUT}s 没有任何进展（站点/网络假死）。"
+                 "点「继续下载」可从断点续传，或更换清晰度/代理后重试",
+            category="stalled", resumable=_has_partial(task.workdir),
+        )
+    elif _reason == "timeout":
+        _mark_step_error(task, "下载超时，已强制结束")
+        store.update(
+            task.id, status="failed", error="下载超时",
+            hint="站点响应过慢或连接不稳定，请稍后重试或更换清晰度/代理",
+            category="timeout", resumable=_has_partial(task.workdir),
+        )
+    else:
+        _mark_step_error(task, "用户已取消")
+        # 断点续传：取消时【不清除】工作目录里的 .part 分片，仅当确实残留部分文件时标记可续传。
+        resumable = _has_partial(task.workdir)
+        store.update(
+            task.id, status="canceled", error="已取消下载",
+            progress=task.progress, downloaded_bytes=task.downloaded_bytes,
+            resumable=resumable,
+        )
+        if not resumable:
+            store.clear_files(task.id)
 
 def _format_bytes(n: int) -> str:
     if n < 1024:
@@ -5297,35 +5355,10 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         # 保留 .part 文件，不清除——后续继续时 yt-dlp 断点续传
     except DownloadCanceled:
         # A3（2026-10-02）：看门狗停滞 / 硬超时的系统终止此前伪装成「用户已取消」，
-        # 用户看到 canceled「已取消下载」一头雾水。按 cancel_reason 分流终态：
-        _reason = getattr(task, "cancel_reason", "") or ""
-        if _reason == "stall":
-            _mark_step_error(task, f"下载停滞超过 {DOWNLOAD_STALL_TIMEOUT}s，已自动终止")
-            store.update(
-                task.id, status="failed", error="下载停滞，已自动终止",
-                hint=f"连接超过 {DOWNLOAD_STALL_TIMEOUT}s 没有任何进展（站点/网络假死）。"
-                     "点「继续下载」可从断点续传，或更换清晰度/代理后重试",
-                category="stalled", resumable=_has_partial(task.workdir),
-            )
-        elif _reason == "timeout":
-            _mark_step_error(task, "下载超时，已强制结束")
-            store.update(
-                task.id, status="failed", error="下载超时",
-                hint="站点响应过慢或连接不稳定，请稍后重试或更换清晰度/代理",
-                category="timeout", resumable=_has_partial(task.workdir),
-            )
-        else:
-            _mark_step_error(task, "用户已取消")
-            # 断点续传：取消时【不清除】工作目录里的 .part 分片，仅当确实残留部分文件时标记可续传，
-            # 后续「继续下载」让 yt-dlp 从中断处接上（aria2c 走 --continue，原生下载器走 continue=True）。
-            resumable = _has_partial(task.workdir)
-            store.update(
-                task.id, status="canceled", error="已取消下载",
-                progress=task.progress, downloaded_bytes=task.downloaded_bytes,
-                resumable=resumable,
-            )
-            if not resumable:
-                store.clear_files(task.id)
+        # 用户看到 canceled「已取消下载」一头雾水。按 cancel_reason 分流终态。
+        # 实测 F2（2026-10-11）：逻辑抽到 `_finalize_terminated`，与主等待循环共用同一份，
+        # 避免「子线程阻塞时代码路径根本走不到这里」导致任务僵在 downloading。
+        _finalize_terminated(task, store)
     except (UnsupportedError, GeoRestrictedError, ExtractorError, DownloadError) as exc:
         err = _friendly_error(exc, _build_diag_context(task.url, cookie=cookie, proxy=proxy, options=_dl_opts))
         _mark_step_error(task, err.message)

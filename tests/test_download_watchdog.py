@@ -6,6 +6,7 @@
 
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -28,14 +29,13 @@ def test_run_download_stall_does_not_hang(monkeypatch):
 
     # 用一个「卡死」的 _run_once 替代真实下载：进入 downloading 后永远 sleep，
     # 且不检查 cancel_requested（模拟进度回调彻底不来）
-    def fake_run_once(task, store, quality_key, cookie="", proxy="", format_id="", concurrent_fragments=0, downloader_type="", resume=False):
+    def fake_run_once(task, store, quality_key, cookie="", proxy="", format_id="", concurrent_fragments=0, downloader_type="", resume=False, alt_protocol=False):
         store.update(task.id, status="downloading")
         time.sleep(30)  # 假死
 
     monkeypatch.setattr(dl, "_run_once", fake_run_once)
 
-    root = Path(__file__).resolve().parent / "_wd_tmp"
-    root.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="vdl_wd_"))
     store = TaskStore(root)
     task = store.create(url="http://example.com/x", title="卡死测试", platform="test", quality="best")
 
@@ -44,7 +44,11 @@ def test_run_download_stall_does_not_hang(monkeypatch):
     t = store.get(task.id)
     assert t.status == "failed", f"期望 failed，实际 {t.status}"
     assert t.cancel_requested is True, "看门狗/硬超时应当置取消标记"
-    assert "超时" in (t.error or ""), f"错误应提及超时，实际：{t.error}"
+    assert ("超时" in (t.error or "")) or ("停滞" in (t.error or "")), \
+        f"错误应提及超时/停滞，实际：{t.error}"
+    # 实测 F2（2026-10-11）：下载线程阻塞在无进度回调阶段时，主等待循环一旦看到
+    # cancel_requested 就立即落终态（不再干等整体硬超时），此时 cancel_reason=="stall"，
+    # 终态文案是「下载停滞，已自动终止」——与子线程正常路径同源，比笼统的「下载超时」更准。
 
 
 def test_run_download_stall_canceled_via_hook(monkeypatch):
@@ -71,7 +75,7 @@ def test_run_download_stall_canceled_via_hook(monkeypatch):
         def on_postprocess(self, payload):
             pass
 
-    def fake_run_once(task, store, quality_key, cookie="", proxy="", format_id="", concurrent_fragments=0, downloader_type="", resume=False):
+    def fake_run_once(task, store, quality_key, cookie="", proxy="", format_id="", concurrent_fragments=0, downloader_type="", resume=False, alt_protocol=False):
         reporter = _FakeReporter()
         reporter._task = task
         store.update(task.id, status="downloading")
@@ -87,8 +91,7 @@ def test_run_download_stall_canceled_via_hook(monkeypatch):
 
     monkeypatch.setattr(dl, "_run_once", fake_run_once)
 
-    root = Path(__file__).resolve().parent / "_wd_tmp"
-    root.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="vdl_wd_"))
     store = TaskStore(root)
     task = store.create(url="http://example.com/y", title="停滞回调测试", platform="test", quality="best")
 

@@ -1335,6 +1335,9 @@ class MembershipStore:
             out["download_member"]["source"] = None
             out["ai_member"]["active"] = False
             out["ai_member"]["credits_left"] = 0
+            # 实测 F3（2026-10-11）：credits_total 在上面按「置零前」的 credits_left 算好，
+            # 锁定态把 AI 池清零后必须同口径重算，否则账面残留已不可用的旧值。
+            out["credits_total"] = int(st["permanent_credits"].get("total", 0))
             out["device_locked"] = lock
         out["account"] = self.account_view()
         # 免费用户的「首次体验」余量（2026-10-05）：逐个 op 算好，前端直接用，
@@ -1927,6 +1930,15 @@ class MembershipStore:
         delta = int(delta)
         ai = st["ai_member"]
         if pool == "ai":
+            # 实测 F1（2026-10-11）：AI 订阅积分只在「AI 会员活跃期」内可扣 ——
+            # spend_credits / can_afford 均以 `ai_member.active` 计算可用余额。
+            # 若给非活跃账号充 AI 池，会造出「余额接口显示 N、每次扣费报当前 0」的假余额
+            # （触发面：管理员在「调分」里给非 AI 会员填了 AI 订阅积分）。此处直接拒绝，
+            # 提示改用永久积分池；不隐式改池，避免管理员的选择被悄悄改写。
+            if delta > 0 and not ai.get("active"):
+                return {"ok": False,
+                        "error": "该账号当前不是 AI 会员，AI 订阅积分不可用；"
+                                 "请改用「永久积分」，或先为其开通 AI 会员"}
             ai["credits_left"] = int(ai.get("credits_left", 0)) + delta
         elif pool == "permanent":
             st["permanent_credits"]["total"] = int(st["permanent_credits"].get("total", 0)) + delta
