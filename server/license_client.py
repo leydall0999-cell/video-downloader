@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Optional
@@ -56,7 +57,13 @@ def license_base() -> str:
             base = ""
     if not base:
         base = DEFAULT_BASE
-    _BASE_CACHE["base"] = base.rstrip("/")
+    base = base.rstrip("/")
+    # 安全审计 2026-10-11（R-11）：基址来自 env / 本地 cloud_sync.json，可能被劫持。
+    # 至少把协议限制在 http(s)，避免 file:// 等非网络协议被当作「授权中心基址」。
+    # （更严的域名白名单会破坏用户自建部署，故不做；本项危害需本机写权限，属低危。）
+    if not re.match(r"^https?://", base):
+        base = DEFAULT_BASE
+    _BASE_CACHE["base"] = base
     return _BASE_CACHE["base"]
 
 

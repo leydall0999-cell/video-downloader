@@ -484,8 +484,10 @@ def _save_orders(o: dict[str, Any]) -> None:
 
 
 def _gen_order_id() -> str:
+    # 安全审计 2026-10-11（R-09）：随机部分由 4 位扩到 10 位十六进制（16→40 bit）。
+    # 原 4 位熵太低，配合无鉴权的 /api/pay/query 可被枚举订单号、读取他人订单状态与金额。
     return "VDLP" + time.strftime("%Y%m%d%H%M%S") + "".join(
-        secrets.choice(string.hexdigits[:16]) for _ in range(4))
+        secrets.choice(string.hexdigits[:16]) for _ in range(10))
 
 
 def _qr_png(text: str) -> str:

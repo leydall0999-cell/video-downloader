@@ -63,7 +63,11 @@ router = APIRouter()
 #         因其 Restart=always 会换随机域名、令已发短链静默失效，2026-09-26 弃用。
 DEFAULT_BASE = "https://hanyuxz.top"
 DEFAULT_DIRECT = "http://8.138.223.3:8888/su"
-DEFAULT_TOKEN = "_hI50c3L0HYZ2kK_jMXa5tzKY7BnS_3b"
+# 安全审计 2026-10-11（R-08）：**不再内置上传凭证**。原先把分享节点 token 硬编码在
+# 客户端源码里，任何拿到 App / 源码的人都能提取该 token，白嫖 / 滥用分享节点。
+# 现要求运行时经 VDL_SHARE_TOKEN 或 ~/.videodownloader/share.json 提供；
+# 未配置时分享功能自动关闭（enabled=False），不再用「人尽皆知的 token」上传。
+DEFAULT_TOKEN = ""
 
 CF_BODY_LIMIT = 100 * 1024 * 1024      # Cloudflare 免费版请求体上限
 CHUNK = 256 * 1024                     # 流式块大小
@@ -118,11 +122,14 @@ def _load_conf() -> dict:
 def share_config():
     """下发分享节点配置（前端据此提示体积限制、生成二维码）。"""
     conf = _load_conf()
+    # 安全审计 2026-10-11（R-08）：**不再向前端下发 upload token**。上传 / 删除都由
+    # 本机后端用它转发（见 _run_upload / _node_delete），前端根本不需要它；原先下发
+    # 等于把节点凭证暴露给任意能读到本接口的页面。仅返回「是否已配置」。
     return {
         "ok": True,
         "base": conf["base"],
-        "token": conf["token"],
         "direct": conf["direct"],
+        "has_token": bool(conf["token"]),
         "cf_body_limit": CF_BODY_LIMIT,
         "max_upload": MAX_UPLOAD,
         "enabled": bool(conf["base"] and conf["token"]),

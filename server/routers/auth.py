@@ -172,7 +172,13 @@ def auth_login(request: Request, payload: dict[str, Any] = Body(...)) -> dict[st
     if not ident or not pw:
         return {"ok": False, "error": "请输入账号和密码"}
     from auth_store import (authenticate, issue_token, ensure_superusers,
-                            user_is_admin, user_exists)
+                            user_is_admin, user_exists,
+                            login_locked, note_login_failure, clear_login_failures)
+    # 安全审计 2026-10-11（R-05）：登录失败限流，防在线暴力破解 / 撞库。
+    _wait = login_locked(ident)
+    if _wait > 0:
+        return {"ok": False, "code": "RATE_LIMITED",
+                "error": f"登录尝试过于频繁，请约 {int(_wait // 60) + 1} 分钟后再试"}
     uid = authenticate(ident, pw)
     if not uid:
         # 🔴 2026-09-22 实测缺陷：此前统一回「账号或密码错误」，桌面端拿这个文案
@@ -181,11 +187,14 @@ def auth_login(request: Request, payload: dict[str, Any] = Body(...)) -> dict[st
         #    只是密码打错，却被提示「账号不存在，请先注册」。
         #    本机账号表才是权威，故在本机回环时区分两种失败，让提示与事实一致。
         #    公网（网页版）保持模糊文案，避免账号枚举。
+        note_login_failure(ident)   # R-05：登记失败计数
         if _is_loopback(request) and user_exists(ident):
             return {"ok": False, "error": "密码不正确", "code": "BAD_PASSWORD"}
         if _is_loopback(request):
             return {"ok": False, "error": "账号不存在，请先注册", "code": "NO_ACCOUNT"}
         return {"ok": False, "error": "账号或密码错误", "code": "BAD_CREDENTIALS"}
+    # 安全审计 2026-10-11（R-05）：登录成功清零失败计数。
+    clear_login_failures(ident)
     # 安全审计 2026-10-11（P1-2）：见 auth_register 同名说明 —— 公网不得靠「先注册者」
     # 自动成为超管，仅本机回环保留兜底。
     ensure_superusers(allow_bootstrap=_is_loopback(request))

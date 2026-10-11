@@ -143,7 +143,11 @@ def voice_studio_config_get() -> dict:
 
 
 @router.post("/api/voice-studio/config")
-def voice_studio_config_save(req: VoiceStudioConfigRequest) -> dict:
+def voice_studio_config_save(req: VoiceStudioConfigRequest, request: app.Request = None) -> dict:
+    # 安全审计 2026-10-11（R-02）：本端点无鉴权且可改写 base_url（后端会向该地址
+    # 发 TTS/ASR 请求，可致 SSRF 与用户文本外传）—— 补齐来源校验，拒绝外部站点跨源。
+    if app._cross_site_rejected(request):
+        raise app.HTTPException(status_code=403, detail="拒绝来自外部站点的跨源请求")
     data = {
         "enabled": bool(req.enabled),
         "base_url": (req.base_url or "").strip() or _vsc.DEFAULT_BASE_URL,

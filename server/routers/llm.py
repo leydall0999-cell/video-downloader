@@ -88,7 +88,7 @@ def llm_config_get() -> dict:
     return cfg
 
 @router.post("/api/llm/config")
-def llm_config_save(req: app.LLMConfigRequest) -> dict:
+def llm_config_save(req: app.LLMConfigRequest, request: app.Request = None) -> dict:
     """保存 LLM 配置。如果前端传了脱敏的 api_key(含 ****)则沿用已有 Key 不覆盖。
 
     以「现有配置」为基底做增量更新。历史缺陷：本端点原先把字段逐个写进一个
@@ -97,6 +97,10 @@ def llm_config_save(req: app.LLMConfigRequest) -> dict:
     失效、回落到云端并消耗免费配额，且界面没有任何提示。改为增量合并后，
     未暴露的字段（以及未来新增的字段）都会被保留。
     """
+    # 安全审计 2026-10-11（R-02）：本端点无鉴权且可改写 base_url，配合全局 CORS
+    # "*" 会被恶意网页跨源调用以劫持后续 LLM 凭据 —— 补齐来源校验。
+    if app._cross_site_rejected(request):
+        raise app.HTTPException(status_code=403, detail="拒绝来自外部站点的跨源请求")
     # 基底用「用户配置文件本身」，**不是** get_llm_config()（后者已叠加管理员受管
     # 配置与环境变量）：否则每次保存都会把管理员下发的凭据写进用户文件，破坏
     # 「凭据只由管理员持有」的设计。

@@ -472,6 +472,18 @@ class ConcatRequest(BaseModel):
     audio_only: bool = False   # 前端提示：所有素材均为音频
 
 
+def _safe_out_name(name):
+    """安全审计 2026-10-11（R-01）：净化用户可控的输出文件名。
+
+    用户传入的 out_name 会被拼进 DOWNLOAD_DIR 下的落盘路径
+    （见 _store_library），若含目录分隔符或 ".." 即可越界写。这里只保留
+    最后一个路径分量，并剥离前导点/空白，防止路径穿越。
+    """
+    base = os.path.basename(str(name or "merged").replace("\\", "/")).strip()
+    base = base.strip(". ") or "merged"
+    return base or "merged"
+
+
 def _ffprobe_bin():
     """解析 ffprobe 路径（app 未定义全局 FFPROBE_BIN，这里兜底探测）。"""
     ffmpeg = getattr(app, "FFMPEG_BIN", "") or ""
@@ -552,9 +564,15 @@ def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library, 
     def _store_library():
         if not to_library:
             return
-        dest = app.DOWNLOAD_DIR / f"[{out_format.upper()}]{out_name}.{ext}"
+        # 安全审计 2026-10-11（R-01）：落盘名 basename 兜底 + 落点 containment 校验，
+        # 防止 un-sanitized 的 out_name 越界写（纵深防御，入口已净化一次）。
+        _sn = os.path.basename(str(out_name or "merged")) or "merged"
+        dest = app.DOWNLOAD_DIR / f"[{out_format.upper()}]{_sn}.{ext}"
+        if app.DOWNLOAD_DIR.resolve() not in dest.resolve().parents:
+            _sn = f"{_sn}_{app.uuid.uuid4().hex[:6]}"
+            dest = app.DOWNLOAD_DIR / f"[{out_format.upper()}]{_sn}.{ext}"
         if dest.exists() and dest.resolve() != out_path.resolve():
-            dest = app.DOWNLOAD_DIR / f"[{out_format.upper()}]{out_name}_{app.uuid.uuid4().hex[:6]}.{ext}"
+            dest = app.DOWNLOAD_DIR / f"[{out_format.upper()}]{_sn}_{app.uuid.uuid4().hex[:6]}.{ext}"
         app.shutil.copy2(out_path, dest)
 
     # ---- 阶段1：无损合并 ----
@@ -637,6 +655,9 @@ def _run_concat(job_id, seg_names, out_format, out_name, device_id, to_library, 
 
 def _create_concat_job(segs, out_format, out_name, to_library, audio_only, request):
     """为 /api/concat 与 /api/concat/local 共用的 job 创建逻辑（含本地算力配额）。"""
+    # 安全审计 2026-10-11（R-01）：out_name 用户可控且会用于落盘（写侧 path traversal）
+    # 与前端展示，入口统一净化。
+    out_name = _safe_out_name(out_name)
     # 🔴 2026-10-06 第二轮拆池：拼接是**独立功能**，不再按输出格式记到
     # convert_video / convert_audio（那会让「视频拼接」和「视频格式转换」共用一份，
     # 用户想拼 3 段视频就把格式转换的额度用光了）。音频拼接同理独立。
@@ -681,11 +702,19 @@ def concat_api(payload: ConcatRequest, request: app.Request) -> dict:
         raise app.HTTPException(status_code=400, detail="不支持的输出格式")
     segs = payload.segments or []
     seg_paths = []
+    # 安全审计 2026-10-11（R-01）：segments 为用户可控文件名，resolve 后必须严格落在
+    # UPLOAD_TMP 内，拒绝 "../" 穿越与绝对路径（原实现仅判 exists，可读任意文件）。
+    _up_root = app.UPLOAD_TMP.resolve()
     for name in segs:
-        p = app.UPLOAD_TMP / name
-        if not p.exists():
+        try:
+            rp = (app.UPLOAD_TMP / str(name)).resolve()
+        except Exception:
+            raise app.HTTPException(status_code=400, detail=f"素材路径非法：{name}")
+        if rp != _up_root and _up_root not in rp.parents:
+            raise app.HTTPException(status_code=400, detail=f"素材路径越界：{name}")
+        if not rp.is_file():
             raise app.HTTPException(status_code=400, detail=f"素材不存在或已过期：{name}")
-        seg_paths.append(p)
+        seg_paths.append(rp)
     return _create_concat_job(seg_paths, payload.out_format, payload.out_name,
                                 payload.to_library, payload.audio_only, request)
 

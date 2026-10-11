@@ -690,8 +690,13 @@ def _assert_safe_url(url: str) -> None:
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:
-        # 解析不到的域名交给 yt-dlp 统一报错，这里不拦（避免误杀偶发 DNS 抖动）
-        return
+        # 安全审计 2026-10-11（R-03）：原实现解析失败直接放行（fail-open），攻击者可借
+        # 「检查时 DNS 失败、下载时再解析到内网」的重绑定手法绕过护栏。改为 fail-closed；
+        # 为降低偶发 DNS 抖动误杀，先重试一次，仍失败才拒绝。
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            raise LinkError("域名解析失败", "无法解析该域名，请稍后重试或更换链接")
     # DNS 污染 / 代理 / CDN 场景下，getaddrinfo 常同时返回「真实公网 IP」和
     # 「保留 / 链路本地假地址」(如本机 youtube.com 解析出 2001::1 这类 Teredo 保留地址)。
     # 只要存在任一公网可达地址即视为合法公开域名，避免被假地址一票否决（与 /api/download
@@ -706,6 +711,10 @@ def _assert_safe_url(url: str) -> None:
             continue
         if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
             addr = addr.ipv4_mapped
+        # 安全审计 2026-10-11（R-03）：显式叠加 _PRIVATE_NETS 判定，补齐 is_private 在
+        # 部分网段（如 100.64.0.0/10 CGNAT —— 实测 Python 3.13 is_private=False）上的遗漏。
+        if any(addr in _net for _net in _PRIVATE_NETS):
+            continue
         if not (addr.is_private or addr.is_loopback or addr.is_link_local
                 or addr.is_reserved or addr.is_multicast):
             has_public = True
@@ -861,6 +870,33 @@ def _is_local_direct(request) -> bool:
     except Exception:
         return False
     return host in ("127.0.0.1", "::1", "localhost")
+
+
+# 安全审计 2026-10-11（R-02）：跨源 CSRF 兜底校验的来源白名单。
+# 仅放行「本机来源」与「浏览器扩展来源」；无 Origin（同源前端 / 本机直连）放行。
+_EXT_ORIGIN_RE = re.compile(r"^(chrome|moz|safari-web|ms-browser)-extension://[^\s]*$")
+_LOCAL_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
+
+
+def _cross_site_rejected(request) -> bool:
+    """安全审计 2026-10-11（R-02）：判断是否应拒绝该跨源请求（CSRF 兜底）。
+
+    全局 CORS 默认对任意 Origin 放行（浏览器扩展 content script 从任意 https
+    页面回传嗅探项所必需，见 routers/sniffer.py），因此对**仅前端同源使用**的
+    敏感端点（改配置类），必须额外做来源校验，防止恶意网页改写 base_url
+    劫持凭据 / 外传用户内容：
+
+      - 无 Origin 头 → 放行（同源前端、本机直连 curl）；
+      - Origin 命中本机 / 扩展白名单 → 放行；
+      - 其余（含 "null" 的沙箱 iframe、任意外部站点）→ 拒绝。
+    """
+    try:
+        origin = (request.headers.get("origin") or "").strip()
+    except Exception:
+        return False
+    if not origin:
+        return False
+    return not (_EXT_ORIGIN_RE.match(origin) or _LOCAL_ORIGIN_RE.match(origin))
 
 
 def _check_rate_limit(request: Request) -> None:

@@ -210,8 +210,13 @@ def pay_gateway_create(payload: dict[str, Any] = Body(...), request: Request = N
 
 
 @router.post("/api/pay/query")
-def pay_gateway_query(payload: dict[str, Any] = Body(...)) -> dict:
+def pay_gateway_query(payload: dict[str, Any] = Body(...), request: Request = None) -> dict:
     """订单状态轮询转发（付款成功由 VPS 异步回调发货，前端只查状态）。"""
+    # 安全审计 2026-10-11（R-09）：原端点无任何来源校验，配合低熵订单号可被恶意网页
+    # 跨源枚举他人订单状态 / 金额。这里补来源校验（同源前端 / 本机直连放行）。
+    import app
+    if app._cross_site_rejected(request):
+        return {"ok": False, "error": "拒绝来自外部站点的跨源请求", "code": "CSRF_BLOCKED"}
     order_id = str(payload.get("order_id") or "").strip()
     if not order_id:
         return {"ok": False, "error": "缺少订单号", "code": "NO_ORDER"}

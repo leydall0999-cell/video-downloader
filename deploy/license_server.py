@@ -73,6 +73,14 @@ from typing import Any, Optional
 # ── 配置 ──────────────────────────────────────────────────────────────────── #
 SECRET = (os.environ.get("VDL_LICENSE_SECRET") or "").strip()
 ADMIN_TOKEN = (os.environ.get("VDL_LICENSE_ADMIN_TOKEN") or "").strip()
+# 安全审计 2026-10-11（R-07）：管理员鉴权失败锁定。原实现只做 compare_digest、无失败
+# 计数 —— 一旦 ADMIN_TOKEN 被在线爆破即完整接管授权中心。此处用**模块级**状态
+# （BaseHTTPRequestHandler 每请求一个新实例，实例属性不跨请求）。
+_ADMIN_MAX_FAILS = 10          # 连续失败上限
+_ADMIN_LOCK_SECONDS = 300      # 触发后锁定时长（秒）
+_ADMIN_GUARD_LOCK = threading.Lock()
+_ADMIN_FAILS = 0
+_ADMIN_LOCK_UNTIL = 0.0
 PORT = int(os.environ.get("VDL_LICENSE_PORT") or "8902")
 DATA_PATH = Path(os.environ.get("VDL_LICENSE_DATA")
                  or os.path.expanduser("~/.vdl-license/cards.json"))
@@ -2075,11 +2083,25 @@ class Handler(BaseHTTPRequestHandler):
         return {"fp": fp, "name": name or "未命名设备"}
 
     def _require_admin(self, data: dict[str, Any]) -> None:
+        global _ADMIN_FAILS, _ADMIN_LOCK_UNTIL
         if not ADMIN_TOKEN:
             raise ApiError(500, "NO_ADMIN_TOKEN", "服务端未配置 VDL_LICENSE_ADMIN_TOKEN")
+        now = time.time()
+        with _ADMIN_GUARD_LOCK:
+            if now < _ADMIN_LOCK_UNTIL:
+                raise ApiError(429, "RATE_LIMITED",
+                               f"管理员鉴权失败次数过多，请 {int(_ADMIN_LOCK_UNTIL - now) + 1} 秒后再试")
         tok = str(data.get("token") or "")
         if not hmac.compare_digest(tok, ADMIN_TOKEN):
+            # 安全审计 2026-10-11（R-07）：登记失败；连续超限则锁定一段时间。
+            with _ADMIN_GUARD_LOCK:
+                _ADMIN_FAILS += 1
+                if _ADMIN_FAILS >= _ADMIN_MAX_FAILS:
+                    _ADMIN_LOCK_UNTIL = time.time() + _ADMIN_LOCK_SECONDS
+                    _ADMIN_FAILS = 0
             raise ApiError(403, "FORBIDDEN", "管理员 token 不正确")
+        with _ADMIN_GUARD_LOCK:
+            _ADMIN_FAILS = 0
 
     def _require_secret(self) -> None:
         if not SECRET:

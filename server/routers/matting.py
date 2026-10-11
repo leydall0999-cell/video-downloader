@@ -704,12 +704,19 @@ def matting_warmup() -> dict:
 def matting_upload_model(
     file: app.UploadFile = app._FastAPIFile(...),
     payload: str = app.Form(None),
+    request: app.Request = None,
 ) -> dict:
     """用户在浏览器手动下载到本地后，从 App 内上传到正确目录（不再走命令行）。
 
     query/form: model=<name>（不指定则用当前选中的模型）
     form:     file=<下载的 .onnx>
     """
+    # 安全审计 2026-10-11（R-14）：本端点会**覆盖 onnx 模型文件**，原先无任何门禁
+    # —— 任意能访问端口者即可写入模型目录（投毒 / DoS）。补来源校验 + 登录要求。
+    if app._cross_site_rejected(request):
+        raise app.HTTPException(status_code=403, detail="拒绝来自外部站点的跨源请求")
+    if not app.get_current_user_id(request):
+        raise app.HTTPException(status_code=401, detail="请先登录后再上传模型")
     target_name = ""
     if payload:
         try:

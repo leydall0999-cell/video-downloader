@@ -721,7 +721,10 @@ def ensure_superusers(allow_bootstrap: bool = True) -> None:
 # --------------------------------------------------------------------------- #
 RESET_CODE_TTL = 5 * 60  # 5 分钟有效
 _RESEND_COOLDOWN = 60    # 重发冷却（秒）
-_RESET_CODES: dict[str, dict] = {}   # ident -> {"code": str, "exp": float, "last": float}
+# 安全审计 2026-10-11（R-04）：单个验证码允许的最大校验次数。原实现无限制，
+# 6 位码 5 分钟内可被暴力枚举 → 账号接管。超出即作废该码（须重新申请）。
+_RESET_MAX_TRIES = 5
+_RESET_CODES: dict[str, dict] = {}   # ident -> {"code": str, "exp": float, "last": float, "tries": int}
 _RESET_LOCK = threading.Lock()
 
 
@@ -749,7 +752,7 @@ def generate_reset_code(identifier: str) -> Optional[str]:
     code = f"{_s.randbelow(1_000_000):06d}"
     now = time.time()
     with _RESET_LOCK:
-        _RESET_CODES[ident] = {"code": code, "exp": now + RESET_CODE_TTL, "last": now}
+        _RESET_CODES[ident] = {"code": code, "exp": now + RESET_CODE_TTL, "last": now, "tries": 0}
     return code
 
 
@@ -764,7 +767,7 @@ def reset_code_cooldown_ok(identifier: str) -> bool:
 
 
 def verify_reset_code(identifier: str, code: str) -> bool:
-    """校验验证码；正确则一次性作废（防重放）。"""
+    """校验验证码；正确则一次性作废（防重放）；累计失败达上限亦作废（防爆破）。"""
     ident = _normalize(identifier)
     with _RESET_LOCK:
         rec = _RESET_CODES.get(ident)
@@ -773,10 +776,60 @@ def verify_reset_code(identifier: str, code: str) -> bool:
         if time.time() > rec["exp"]:
             _RESET_CODES.pop(ident, None)
             return False
+        # 安全审计 2026-10-11（R-04）：原实现无尝试次数限制，6 位码 5 分钟内可被
+        # 暴力枚举 → 账号接管。次数用尽即作废该码，须重新申请。
+        if int(rec.get("tries", 0)) >= _RESET_MAX_TRIES:
+            _RESET_CODES.pop(ident, None)
+            return False
         ok = hmac.compare_digest(rec["code"], (code or "").strip())
         if ok:
             _RESET_CODES.pop(ident, None)  # 一次性
+        else:
+            rec["tries"] = int(rec.get("tries", 0)) + 1
+            if rec["tries"] >= _RESET_MAX_TRIES:
+                _RESET_CODES.pop(ident, None)  # 用尽即作废
         return ok
+
+
+# --------------------------------------------------------------------------- #
+# 登录失败限流（安全审计 2026-10-11，R-05）
+# --------------------------------------------------------------------------- #
+# 旧实现 /api/auth/login 无任何失败计数，可被在线暴力破解 / 撞库。这里按 identifier
+# 维度做滑动窗口失败计数（反代后源 IP 常同为一台，故按账号维度更可靠）：
+# 窗口内失败超过阈值即短暂锁定，成功登录后清零。
+LOGIN_MAX_FAILS = 8            # 窗口内允许的最大失败次数
+LOGIN_FAIL_WINDOW = 10 * 60    # 失败统计窗口（秒）
+_LOGIN_FAILS: dict[str, list] = {}   # ident -> [失败时间戳, ...]
+_LOGIN_LOCK = threading.Lock()
+
+
+def login_locked(identifier: str) -> float:
+    """返回该账号还需等待的秒数（0 = 未锁定）。"""
+    ident = _normalize(identifier)
+    now = time.time()
+    with _LOGIN_LOCK:
+        fails = [t for t in _LOGIN_FAILS.get(ident, []) if now - t < LOGIN_FAIL_WINDOW]
+        _LOGIN_FAILS[ident] = fails
+        if len(fails) >= LOGIN_MAX_FAILS:
+            return max(0.0, LOGIN_FAIL_WINDOW - (now - fails[0]))
+        return 0.0
+
+
+def note_login_failure(identifier: str) -> None:
+    """登记一次登录失败。"""
+    ident = _normalize(identifier)
+    now = time.time()
+    with _LOGIN_LOCK:
+        fails = [t for t in _LOGIN_FAILS.get(ident, []) if now - t < LOGIN_FAIL_WINDOW]
+        fails.append(now)
+        _LOGIN_FAILS[ident] = fails
+
+
+def clear_login_failures(identifier: str) -> None:
+    """登录成功后清零失败计数。"""
+    ident = _normalize(identifier)
+    with _LOGIN_LOCK:
+        _LOGIN_FAILS.pop(ident, None)
 
 
 def _smtp_accounts() -> Optional[list]:
