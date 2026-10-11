@@ -50,7 +50,7 @@ _DOWNLOAD_TIMEOUT = int(os.environ.get("VDL_UPDATE_DL_TIMEOUT", "1800"))
 #   · 公钥：随包内置（下方常量），或经 VDL_UPDATE_PUBKEY 覆盖（换源/测试）。
 #   · 私钥：仅存在于发布机，经 VDL_UPDATE_SIGNING_KEY 指向（见 tools/gen_update_signing_key.py）。
 #   · 未配置公钥时默认**拒绝更新**（fail-closed），可用 VDL_UPDATE_ALLOW_UNSIGNED=1 临时放行。
-UPDATE_MANIFEST_PUBKEY_B64 = (os.environ.get("VDL_UPDATE_PUBKEY") or "").strip()
+UPDATE_MANIFEST_PUBKEY_B64 = (os.environ.get("VDL_UPDATE_PUBKEY") or "2EWZ3ZQFAdePJ28uGNcT9BxU/z8fefrrUW7kGVyE99A=").strip()
 UPDATE_ALLOW_UNSIGNED = (os.environ.get("VDL_UPDATE_ALLOW_UNSIGNED", "").strip() == "1")
 UPDATE_SIG_SUFFIX = ".sig"
 # 可选：要求更新包由指定 Developer ID 团队签名 / 通过公证（配合已验签清单形成纵深防御）。

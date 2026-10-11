@@ -33,7 +33,7 @@ NOTES="${VDL_RELEASE_NOTES:-性能优化与问题修复}"
 #   或把多行说明写进文件：VDL_RELEASE_NOTES_FILE=/tmp/notes.txt bash publish_update.sh
 if [ -n "${VDL_RELEASE_NOTES_FILE:-}" ] && [ -f "${VDL_RELEASE_NOTES_FILE:-}" ]; then
   NOTES="$(cat "$VDL_RELEASE_NOTES_FILE")"
-  echo "   更新说明来源 : $VDL_RELEASE_NOTES_FILE（$(printf '%s\n' "$NOTES" | grep -c .) 条）"
+  echo "   更新说明来源 : ${VDL_RELEASE_NOTES_FILE}（$(printf '%s\n' "$NOTES" | grep -c .) 条）"
 fi
 
 ASSUME_YES=0

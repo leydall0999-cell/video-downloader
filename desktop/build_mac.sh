@@ -689,7 +689,7 @@ if [ -f "$SV_SRC/model.int8.onnx" ] && [ -f "$SV_SRC/tokens.txt" ]; then
   cp "$SV_SRC/tokens.txt" "$SV_DST/"
   echo "   已注入：Contents/Resources/sensevoice（$(du -sh "$SV_DST" | cut -f1)）"
 else
-  echo "   ⚠️ 未找到模型（$SV_SRC），跳过——字幕将仅用 Whisper（粤语支持不可用）"
+  echo "   ⚠️ 未找到模型（${SV_SRC}），跳过——字幕将仅用 Whisper（粤语支持不可用）"
 fi
 
 echo "▶ 签名（ad-hoc）"
