@@ -288,6 +288,24 @@ if command -v rsync >/dev/null 2>&1 && ssh -n $SSH_OPTS "$VPS_HOST" "command -v 
 else
   scp $SSH_OPTS "$ZIP" "$VPS_HOST:$VPS_DIR/VideoDownloader.app.zip"
 fi
+# 🔴 6.1) 远端 sha256 强校验 —— 必须在替换 latest.json **之前**
+#   为什么必需：rsync 用的是 --append。若上一次上传被中断（超时被杀 / Ctrl-C），
+#   远端会留下「长度不匹配」或「半截」的旧文件；下次 --append 会**接着坏数据往后写**，
+#   产出「长度对、内容错」的包，而 rsync 自己**不报错**。此时若照常替换 latest.json，
+#   所有用户下载到的包 sha256 与清单不符 → 更新一律失败，脚本却打印「✅ 发布完成」。
+#   （2026-10-11 实测踩到：本地/清单 0b383694…，远端却是 811fa459…，同尺寸、不同内容。）
+REMOTE_ZIP_SHA="$(ssh -n $SSH_OPTS "$VPS_HOST" \
+  "cd '$VPS_DIR' && (sha256sum VideoDownloader.app.zip 2>/dev/null || shasum -a 256 VideoDownloader.app.zip) | awk '{print \$1}'" \
+  | tr -d '[:space:]')"
+if [ "$REMOTE_ZIP_SHA" != "$ZIP_SHA" ]; then
+  echo "   ✗ 远端安装包 sha256 与本地不一致，**中止发布**（latest.json 未替换，用户端不受影响）"
+  echo "       本地: $ZIP_SHA"
+  echo "       远端: ${REMOTE_ZIP_SHA:-<空>}"
+  echo "     根因多为上次上传中断残留半截文件、本次 rsync --append 续在坏数据之后。"
+  echo "     处置：ssh $VPS_HOST \"rm -f '$VPS_DIR/VideoDownloader.app.zip'\" 后重跑本脚本。"
+  exit 1
+fi
+echo "   ✔ 远端安装包 sha256 与本地一致（${REMOTE_ZIP_SHA:0:16}…）"
 if [ -n "$PATCH_BIN" ]; then
   scp $SSH_OPTS "$PATCH_BIN" "$VPS_HOST:$VPS_DIR/$(basename "$PATCH_BIN")"
   echo "   ✔ 已上传增量补丁 $(basename "$PATCH_BIN")"
