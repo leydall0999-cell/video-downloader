@@ -4025,6 +4025,8 @@ from routers import subtitle as _subtitle_rtr
 app.include_router(_subtitle_rtr.router)
 from routers import core as _core_rtr
 app.include_router(_core_rtr.router)
+from routers import image as _image_rtr
+app.include_router(_image_rtr.router)
 from routers import commentary as _commentary_rtr
 app.include_router(_commentary_rtr.router)
 from routers import library as _library_rtr

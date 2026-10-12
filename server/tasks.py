@@ -42,7 +42,7 @@ _PERSIST_INTERVAL = 2.0        # 进度类变更的落盘节流（秒）
 _MAX_PERSISTED_COMPLETED = 50  # 状态文件里最多保留多少条已完成任务
 
 _PERSIST_FIELDS = (
-    "url", "title", "platform", "quality", "quality_key", "status",
+    "url", "title", "platform", "quality", "kind", "quality_key", "status",
     "progress", "downloaded_bytes", "total_bytes", "filename", "filesize",
     "error", "hint", "created_at", "extract_mode",
     "concurrent_fragments", "downloader_type", "cookie", "proxy", "referer",
@@ -74,6 +74,10 @@ class DownloadTask:
     title: str
     platform: str
     quality: str
+    # 任务类型（2026-10-12 图片下载 P0）："video"=yt-dlp 视频流水线；
+    # "image"=image_download.run_image_download 直链落盘。决定重试/暂停走哪条
+    # 执行器（routers/core.py 按此分流），前端据此显示图片徽标。
+    kind: str = "video"
     quality_key: str = "best"          # 原始清晰度 key（如 best/1080/audio），重试时用它重下
     status: TaskStatus = "pending"
     progress: float = 0.0
@@ -164,6 +168,7 @@ class DownloadTask:
         return {
             "task_id": self.id,
             "status": self.status,
+            "kind": self.kind,
             "progress": round(self.progress, 2),
             "downloaded_bytes": self.downloaded_bytes,
             "total_bytes": self.total_bytes,
@@ -283,6 +288,7 @@ class TaskStore:
             task = DownloadTask(
                 id=tid, url=str(row.get("url") or ""), title=str(row.get("title") or ""),
                 platform=str(row.get("platform") or ""), quality=str(row.get("quality") or ""),
+                kind=str(row.get("kind") or "video"),
                 quality_key=str(row.get("quality_key") or "best"),
                 status=status if isinstance(status, str) else "pending",
                 progress=float(row.get("progress") or 0.0),
@@ -340,7 +346,7 @@ class TaskStore:
                 cookie: str = "", proxy: str = "",
                 play_url: str = "", watch_options: list[dict] | None = None,
                 is_hls: bool = False, referer: str = "",
-                owner_id: str = "") -> DownloadTask:
+                owner_id: str = "", kind: str = "video") -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -350,7 +356,7 @@ class TaskStore:
             concurrent_fragments=concurrent_fragments, downloader_type=downloader_type,
             cookie=cookie, proxy=proxy,
             play_url=play_url, watch_options=watch_options or [], is_hls=is_hls,
-            referer=referer, owner_id=owner_id,
+            referer=referer, owner_id=owner_id, kind=kind or "video",
         )
         with self._lock:
             self._tasks[task_id] = task

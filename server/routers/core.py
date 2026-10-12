@@ -671,9 +671,16 @@ def retry_task(task_id: str, request: app.Request) -> dict:
         raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _err)
     task.cancel_requested = False
     task.cancel_reason = ''
-    resume = app.downloader._has_partial(task.workdir) and not _hist_redownload
+    # 图片任务（kind=image，2026-10-12 P0）没有 .part 断点续传概念 —— 单文件直传，
+    # 取消即删半成品，重试就是一次新传输；执行器也要换成 run_image_download。
+    _is_image = getattr(task, 'kind', 'video') == 'image'
+    resume = (not _is_image) and app.downloader._has_partial(task.workdir) and not _hist_redownload
     app.store.update(task_id, status='pending', error='', hint='', progress=task.progress if resume else 0.0, downloaded_bytes=task.downloaded_bytes if resume else 0, total_bytes=task.total_bytes if resume else 0, speed=0.0, eta=0, filesize=0, filename='', resumable=False, file_expired=False, filepath=None)
-    app.scheduler.submit(app.downloader.run_download, task, app.store, task.quality_key, task.cookie, task.proxy, app.BATCH_RETRIES_DEFAULT, '', task.concurrent_fragments, task.downloader_type, resume)
+    if _is_image:
+        import image_download
+        app.scheduler.submit(image_download.run_image_download, task, app.store)
+    else:
+        app.scheduler.submit(app.downloader.run_download, task, app.store, task.quality_key, task.cookie, task.proxy, app.BATCH_RETRIES_DEFAULT, '', task.concurrent_fragments, task.downloader_type, resume)
     if not resume:
         app.current_member_store(request).use_daily('download', 1)
     return {'task_id': task_id, 'status': 'pending', 'resume': resume}
@@ -739,6 +746,17 @@ def download_file(task_id: str, request: app.Request, download: int=0) -> app.Re
         raise app.HTTPException(status_code=409, detail='文件尚未准备好')
     _ext = task.filepath.suffix.lower()
     _mt = {'.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg'}.get(_ext, 'application/octet-stream')
+    # 图片下载（kind=image，2026-10-12 P0）：按扩展名补图片 media type，
+    # 让 <img>/预览 场景内联渲染、保存场景走 download=1 附件。
+    # 🔴 SVG 刻意映射为 application/octet-stream：SVG 可含 <script>，
+    #    以 image/svg+xml 内联渲染等于把用户会话暴露给图片作者 —— 只许附件下载。
+    _mt = {**{'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+              '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+              '.avif': 'image/avif', '.heic': 'image/heic', '.heif': 'image/heif',
+              '.tiff': 'image/tiff', '.ico': 'image/x-icon',
+              '.svg': 'application/octet-stream'},
+           **{'.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
+              '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg'}}.get(_ext, 'application/octet-stream')
     if download:
         # 强制下载：流式传输，避免 read_bytes() 把大文件读进内存；
         # Content-Disposition 的 filename= 只能是 ASCII，中文走 filename*=UTF-8''。
@@ -773,6 +791,11 @@ def pause_task(task_id: str, request: app.Request) -> dict:
     task = app._require_owned_task(task_id, request)
     if task.is_finished:
         return {'task_id': task_id, 'paused': False, 'message': '任务已结束，无法暂停'}
+    # 图片任务（kind=image）：单文件直传、无 .part 续传，暂停没有恢复语义 ——
+    # 若照样置 pausing，没有任何执行器消费该标志，任务会永久卡在中间态（P2-19 同款坑）。
+    if getattr(task, 'kind', 'video') == 'image':
+        return {'task_id': task_id, 'paused': False,
+                'message': '图片下载不支持暂停，可取消后重新下载'}
     if task.status in ('paused', 'pausing'):
         return {'task_id': task_id, 'paused': True, 'message': '已暂停'}
     task.pause_requested = True
@@ -791,6 +814,10 @@ def resume_task(task_id: str, request: app.Request) -> dict:
     task = app._require_owned_task(task_id, request)
     if task.status not in ('paused', 'pausing'):
         return {'task_id': task_id, 'resumed': False, 'message': '任务未处于暂停状态'}
+    # 图片任务永远不会进入 paused/pausing（pause 入口已挡），这里兜底拒绝，
+    # 避免把图片任务错交给 yt-dlp 续传逻辑。
+    if getattr(task, 'kind', 'video') == 'image':
+        return {'task_id': task_id, 'resumed': False, 'message': '图片下载不支持暂停/继续'}
     # 🔴 安全审计 2026-10-11（P1-5）：恢复同样要过配额门 —— 否则「暂停 → 恢复」
     #    是一条完全免闸的循环通道（配额用尽也能继续下载）。这里**不重复计费**：
     #    任务创建时已计过 1 次，恢复只是同一份传输的继续（yt-dlp 走 .part 续传）。

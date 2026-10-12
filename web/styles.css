@@ -181,6 +181,24 @@ img { max-width: 100%; display: block; }
 .card .lib-controls { margin-bottom: .7rem; }
 .card .sub-add { margin-bottom: 0; }
 
+/* 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）*/
+.mode-switch {
+  display: inline-flex; gap: .25rem; margin-bottom: .85rem;
+  background: #eef0f8; border: 1px solid var(--line); border-radius: 999px; padding: .25rem;
+}
+.mode-btn {
+  border: 0; background: transparent; color: var(--text-mute); cursor: pointer;
+  font-size: .88rem; font-weight: 600; padding: .45rem 1.15rem; border-radius: 999px;
+  transition: background .18s, color .18s; font-family: inherit;
+}
+.mode-btn:hover:not(.is-active) { color: var(--text); }
+.mode-btn.is-active { background: var(--brand); color: #fff; box-shadow: 0 2px 8px rgba(79, 70, 229, .28); }
+.image-mode-note {
+  margin: 0 0 .85rem; font-size: .82rem; line-height: 1.65; color: var(--text-mute);
+  background: #f6f7fc; border: 1px dashed var(--line); border-radius: 12px; padding: .6rem .85rem;
+}
+.image-mode-note b { color: var(--text); }
+
 .input-row {
   display: flex;
   align-items: center;
