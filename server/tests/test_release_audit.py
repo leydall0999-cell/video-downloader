@@ -179,6 +179,67 @@ def test_zip_form() -> None:
     print("✅ 发布用的 .zip 形态同样被核查")
 
 
+def test_ditto_style_zip() -> None:
+    """**发布包里真正的形态**：`ditto -c -k --keepParent` 打的包。
+
+    它有三个与普通 zip 不同的特征，全都实测踩过（2026-10-13）：
+      ① 每个条目都带 `VideoDownloader.app/` 前缀 ⇒ 不归一化会让「是否第三方/我方区」判定失效；
+      ② 中文条目不置 UTF-8 标志 ⇒ 读出来是 CP437 乱码（「视频工坊」变 `ΦºåΘóæσ╖Ñσ¥è`）；
+      ③ 为带扩展属性的文件生成 `._xxx` 伴生条目。
+    本用例锁住：三者在核查里都被正确对待，且**不产生假命中**。
+    """
+    mod = _load_tool()
+    with tempfile.TemporaryDirectory(prefix="vdl_audit_ditto_") as td:
+        root = pathlib.Path(td)
+        _clean_pkg(root)
+        # 我方区里放一个中文名的泄露文件（必须被抓到，且证明 CP437 名不影响判定）
+        _write(root, "Contents/Resources/commentary/泄露的密钥.py",
+               ('k = "AKLT' + "E" * 40 + '"\n').encode())
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("VideoDownloader.app/", b"")                    # 目录条目
+            for p in root.rglob("*"):
+                if p.is_file():
+                    z.writestr("VideoDownloader.app/" + str(p.relative_to(root)), p.read_bytes())
+            z.writestr("VideoDownloader.app/Contents/Resources/commentary/._process.py",
+                       b"\x00\x05\x16\x07")                              # AppleDouble 伴生
+            _nm = "视频工坊".encode("utf-8").decode("cp437")            # ditto 风格中文名
+            z.writestr("VideoDownloader.app/Contents/MacOS/" + _nm, b"\x7fELF" + b"\x00" * 16)
+        zp = root.parent / "ditto_style.zip"
+        zp.write_bytes(buf.getvalue())
+        try:
+            # ① CP437 名必须能被还原（否则中文名条目一律判错）。
+            #    ⚠️ 无法用 zipfile.writestr 造出这种条目（它会强制置 UTF-8 标志），
+            #    所以直接构造 ZipInfo 验证解码逻辑；真实形态已在发布包上实测过
+            #    （ditto 打的包不置标志，`Contents/MacOS/视频工坊` 读出来是乱码）。
+            zi = zipfile.ZipInfo()
+            zi.filename = "视频工坊".encode("utf-8").decode("cp437")
+            zi.flag_bits = 0
+            check("CP437 中文条目名可还原为「视频工坊」",
+                  mod._decode_zip_name(zi) == "视频工坊", mod._decode_zip_name(zi))
+            zi2 = zipfile.ZipInfo(filename="ascii-name.py")
+            check("已是 UTF-8/ASCII 的名字原样返回",
+                  mod._decode_zip_name(zi2) == "ascii-name.py")
+
+            r = mod.audit(zp)
+            check("ditto 风格 zip：中文名条目走对了判定路径（凭据被抓到）",
+                  any("泄露的密钥" in x for x in r["hits"]["A-凭据"]), str(r["hits"]["A-凭据"])[:120])
+            check("ditto 风格 zip：前缀不影响我方区判定（G 有内容）",
+                  len(r["hits"]["G-我方明文源码"]) >= 2, str(len(r["hits"]["G-我方明文源码"])))
+            check("ditto 风格 zip：AppleDouble 伴生文件归噪音（不进源码/垃圾清单）",
+                  any("._process" in x for x in r["hits"]["F2-第三方区冗余"])
+                  and not any("._" in x for x in r["hits"]["G-我方明文源码"])
+                  and not any("._" in x for x in r["hits"]["F1-我方区垃圾"]),
+                  f"F2={r['hits']['F2-第三方区冗余'][:3]} G={r['hits']['G-我方明文源码'][:3]}")
+            check("ditto 风格 zip：第三方库仍被白名单（不虚报 A 类）",
+                  not any("Frameworks" in x for x in r["hits"]["A-凭据"]), str(r["hits"]["A-凭据"])[:120])
+            check("ditto 风格 zip：判定为不可发布", r["ok"] is False)
+        finally:
+            zp.unlink(missing_ok=True)
+    print("✅ ditto 风格 zip（前缀 / CP437 中文名 / AppleDouble）判定正确")
+
+
 def test_our_zones_cover_the_real_areas() -> None:
     """棘轮：我方区清单必须覆盖构建真正 add-data 的目录（否则垃圾会悄悄变成"第三方区"）。"""
     mod = _load_tool()
@@ -208,6 +269,7 @@ def main() -> int:
     test_false_positives_stay_fixed()
     test_large_binary_is_scanned()
     test_zip_form()
+    test_ditto_style_zip()
     test_our_zones_cover_the_real_areas()
     print("")
     if FAILS:

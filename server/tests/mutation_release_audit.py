@@ -41,16 +41,21 @@ MUTATIONS: list[tuple[str, str, str]] = [
      'hits["F2-第三方区冗余"].append(rel)'),
 
     ("M5 恢复大文件跳过（主可执行不再被扫）",
-     "        try:\n            blob = _read(rel, zf, root, SCAN_LIMIT_BYTES)",
+     "        try:\n            blob = _read(rel, zf, root, SCAN_LIMIT_BYTES, open_name)",
      "        if size and size > 8 * 1024 * 1024 and not is_text:\n            continue\n"
-     "        try:\n            blob = _read(rel, zf, root, SCAN_LIMIT_BYTES)"),
+     "        try:\n            blob = _read(rel, zf, root, SCAN_LIMIT_BYTES, open_name)"),
 
     ("M6 私有网段 IP 对二进制也判（版本号误报复辟）",
      '    ("私有网段 IP（仅文本文件）", re.compile(rb"\\b10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b"), True),',
      '    ("私有网段 IP（仅文本文件）", re.compile(rb"\\b10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b"), False),'),
-]
+    ("M7 zip 路径不归一化（ditto 前缀让判定失效、虚报凭据）",
+     "                yield _rebase(shown), z, info.file_size, raw, shown",
+     "                yield shown, z, info.file_size, raw, shown"),
 
-# 每项变异跑守卫时，期望**变红**的具体断言（便于人读；不匹配也不致命）
+    ("M8 不跳过 AppleDouble 伴生文件（噪音混进我方区垃圾）",
+     '        if base.startswith("._") or "/__MACOSX/" in shown or shown.startswith("__MACOSX/"):',
+     '        if False:'),
+]
 EXPECT_RED = {
     "M1": "抓到明文凭据",
     "M2": "base64 中的 AKIA 不再误报",
@@ -58,6 +63,8 @@ EXPECT_RED = {
     "M4": "抓到我方区垃圾",
     "M5": "20MB 主可执行里的凭据被抓到",
     "M6": "二进制版本号 10.11.12.13 不再误报",
+    "M7": "第三方库仍被白名单",
+    "M8": "AppleDouble 伴生文件归噪音",
 }
 
 

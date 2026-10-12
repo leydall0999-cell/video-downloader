@@ -117,23 +117,54 @@ def _mask(b: bytes, keep: int = 4) -> str:
     return (s[:keep] + "…" + f"(len={len(b)})") if len(s) > keep else s
 
 
+def _rebase(rel: str) -> str:
+    """把包内路径归一到以 `Contents/` 开头。
+
+    发布用的 zip 是 `ditto --keepParent` 打的，条目形如
+    `VideoDownloader.app/Contents/Resources/...` —— 不归一化的话，所有「是否第三方 /
+    是否我方区」的判断都会失效（2026-10-13 实测：第三方 dylib 里的 PRIVATE KEY 字符串
+    被当成 A 类命中，虚报 5 条）。
+    """
+    idx = rel.find("Contents/")
+    return rel[idx:] if idx > 0 else rel
+
+
+def _decode_zip_name(info: zipfile.ZipInfo) -> str:
+    """还原 zip 条目名的真实编码。
+
+    `ditto -c -k` 打的包**不置 UTF-8 标志位**，中文名按 CP437 解出来是乱码
+    （实测：`Contents/MacOS/视频工坊` → `ΦºåΘóæσ╖Ñσ¥è`）。不还原的话，
+    一切按路径的判定（我方区 / 第三方区）对中文名条目都会失效。
+    """
+    nm = info.filename
+    if info.flag_bits & 0x800:
+        return nm
+    try:
+        return bytes(nm, "cp437").decode("utf-8")
+    except Exception:  # noqa: BLE001 - 非 UTF-8 原名就按 zipfile 给的原样用
+        return nm
+
+
 def _iter_files(root: pathlib.Path):
+    """产出 (归一化相对路径, zip句柄|None, 体积, 读文件用的名字, 展示用原始名)。"""
     if root.is_file() and root.suffix == ".zip":
         with zipfile.ZipFile(root) as z:
             for info in z.infolist():
-                if info.is_dir():
-                    yield info.filename, None, info.file_size
-                else:
-                    yield info.filename, z, info.file_size
+                raw = info.filename
+                if info.is_dir() or raw.endswith("/"):
+                    continue                      # ditto 会把每个目录也写成条目
+                shown = _decode_zip_name(info)
+                yield _rebase(shown), z, info.file_size, raw, shown
         return
     for p in root.rglob("*"):
         if p.is_file() and not p.is_symlink():
-            yield str(p.relative_to(root)), None, p.stat().st_size
+            rel = str(p.relative_to(root))
+            yield rel, None, p.stat().st_size, rel, rel
 
 
-def _read(rel: str, zf, root: pathlib.Path, limit: int) -> bytes:
+def _read(rel: str, zf, root: pathlib.Path, limit: int, open_name: str | None = None) -> bytes:
     if zf is not None:
-        with zf.open(rel) as fh:
+        with zf.open(open_name or rel) as fh:
             return fh.read(limit)
     return (root / rel).read_bytes()[:limit]
 
@@ -153,8 +184,14 @@ def audit(root: pathlib.Path, strict_internal: bool = False) -> dict:
     public_certs: list[str] = []
     counted = 0
 
-    for rel, zf, size in _iter_files(root):
+    for rel, zf, size, open_name, shown in _iter_files(root):
         counted += 1
+        base = shown.rsplit("/", 1)[-1]
+        # AppleDouble 伴生文件（ditto 为带扩展属性的文件生成的 `._xxx`）与
+        # `__MACOSX/` 元数据：只有 xattr，没有内容，归噪音（不阻断）。
+        if base.startswith("._") or "/__MACOSX/" in shown or shown.startswith("__MACOSX/"):
+            hits["F2-第三方区冗余"].append(f"{shown}（AppleDouble 元数据，非内容）")
+            continue
         name = rel.rsplit("/", 1)[-1]
         parts = set(rel.split("/"))
         in_frameworks = rel.startswith("Contents/Frameworks")
@@ -194,7 +231,7 @@ def audit(root: pathlib.Path, strict_internal: bool = False) -> dict:
         if size and size > SCAN_LIMIT_BYTES:
             partial.append(rel)
         try:
-            blob = _read(rel, zf, root, SCAN_LIMIT_BYTES)
+            blob = _read(rel, zf, root, SCAN_LIMIT_BYTES, open_name)
         except Exception:  # noqa: BLE001
             continue
         if not blob:
