@@ -843,6 +843,12 @@ fi
 #     配套变异测试 tests/mutation_image_download.py：8 项注入缺陷必须变红。
 run_one test_image_download.py
 
+# 61. test_launcher_window_guard.py —— 桌面窗口「被导航到应用外就导回」护栏：
+#      WKWebView 会把主框架导航到非 UI 资源（2026-09-21 保存二维码 → blob: 图片；
+#      2026-10-12 用户实机看到整页乱码 JSON）。launcher 在 window.events.loaded 上核对
+#      窗口地址，不是应用自己的源就 load_url 导回。判定是纯函数，本文件离线验证。
+run_one test_launcher_window_guard.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

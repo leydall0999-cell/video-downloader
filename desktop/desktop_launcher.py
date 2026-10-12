@@ -307,6 +307,39 @@ URL = f"http://{HOST}:{PORT}"
 _app_terminating = False
 
 
+def _origin_of(url: str) -> str:
+    """取 URL 的源（scheme://host:port），无 scheme/host 时返回空串。"""
+    import urllib.parse as _up
+    try:
+        parts = _up.urlsplit((url or "").strip())
+        if not parts.scheme or not parts.netloc:
+            return ""
+        return f"{parts.scheme}://{parts.netloc}".lower()
+    except Exception:
+        return ""
+
+
+def _window_url_is_foreign(current_url: str, app_url: str) -> bool:
+    """窗口当前地址是否「已离开应用」→ 需要导回应用首页。
+
+    纯函数（便于离线单测）。判定规则：
+      · 空地址 / about:blank / data: → **不算离开**（启动期与内联下载的正常中间态，
+        否则 load_url 会在启动瞬间反复触发）；
+      · 与应用不同源（外链、file://、blob:、API 绝对地址）→ 算离开；
+      · 同源的任何路径（/、/index.html、/ops-board…）→ 不算离开。
+    """
+    cur = (current_url or "").strip()
+    if not cur or cur.lower().startswith("about:") or cur.lower().startswith("data:"):
+        return False
+    app_origin = _origin_of(app_url)
+    if not app_origin:
+        return False                      # 应用地址异常时宁可不动作，也不误伤
+    cur_origin = _origin_of(cur)
+    if not cur_origin:
+        return True# blob: / file: 之类没有 netloc 的 → 一定不是应用页面
+    return cur_origin != app_origin
+
+
 def _choose_save_path_via_osascript(prompt: str, suggested: str, log_path: str = "") -> str:
     """★ 兜底路径（面板会是**英文**）：直接调 osascript 的 `choose file name`。
 
@@ -2264,6 +2297,39 @@ def main() -> None:
             return False  # 取消关闭，用最小化代替（返回桌面）
 
         window.events.closing += _on_closing
+
+        # ── 窗口自愈：主框架被导航到应用外就导回（2026-10-12 用户报「窗口里是一整页乱码 JSON」）──
+        # 成因是一类**已复发两次**的老问题：WKWebView 会把主框架导航到非 UI 资源。
+        #   2026-09-21「点保存二维码」导航到 blob: 图片（那次只修了那一个路径）；
+        #   2026-10-12 窗口停在 `{"detail": "…乱码…"}` —— 某条链接回退走了
+        #   `window.open(url)`，API 地址的 JSON 错误被当文档渲染，且 JSON 无 charset
+        #   被按 GBK 解码 → 满屏乱码，用户既看不懂也回不去，只能重启 App。
+        # 这里做**兜底**：不管哪条路径把窗口带走，每次加载完成都核对一次地址，
+        # 不是应用自己的源就导回应用根 —— 覆盖全部路径，而不是逐个补 fallback。
+        _last_recover = 0.0
+
+        def _on_loaded(*_args):
+            nonlocal _last_recover
+            try:
+                try:
+                    cur = window.get_current_url() or ""
+                except Exception:
+                    cur = ""
+                if not _window_url_is_foreign(cur, URL):
+                    return
+                now = time.time()
+                if now - _last_recover < 3.0:      # 防抖：load_url 失败时别反复导回
+                    return
+                _last_recover = now
+                _launch_log(f"窗口被导航到应用外，已导回应用首页：{cur[:160]}")
+                window.load_url(URL)
+            except Exception:
+                pass
+
+        try:
+            window.events.loaded += _on_loaded
+        except Exception:
+            pass
 
         # Windows 端退出 webview 后清理资源
         _launch_log("原生窗口已创建，启动 webview 主循环")

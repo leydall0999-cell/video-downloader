@@ -18,6 +18,15 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.60",
+        "date": "2026-10-12",
+        "items": [
+            "修复：某些情况下点击链接会把整个主窗口带走到别的页面，"
+            "窗口里只剩一片乱码、只能重启 App 才能回来。",
+            "现在只要窗口离开了 App 界面，会自动回到首页。",
+        ],
+    },
+    {
         "version": "1.0.59",
         "date": "2026-10-12",
         "items": [
