@@ -849,6 +849,13 @@ run_one test_image_download.py
 #      窗口地址，不是应用自己的源就 load_url 导回。判定是纯函数，本文件离线验证。
 run_one test_launcher_window_guard.py
 
+# 62. test_cloud_matting_gateway.py —— 云端抠图改走「本产品服务端」（2026-10-13 定档
+#     「钥匙不出保险柜」）：网关接入时必须走网关且出站请求不含任何火山凭据；
+#     未接入时保留本机直连；就绪判定与凭据来源（server/local/none）语义正确；
+#     网关服务自身的新端点鉴权有效、响应不回显凭据。
+#     配套变异测试 tests/mutation_cloud_matting_gateway.py：10 项注入缺陷必须变红。
+run_one test_cloud_matting_gateway.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

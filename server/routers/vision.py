@@ -92,7 +92,11 @@ _ENHANCE_VERSIONS = ("", "auto", "off", "standard", "professional", "max")
 
 @router.get("/api/cloud-matting/config")
 def cloud_matting_config_get() -> dict:
-    """返回云端抠图配置（AK/SK / MediaKit Key 脱敏，仅显示首尾各 4 位）。"""
+    """返回云端抠图配置（AK/SK / MediaKit Key 脱敏，仅显示首尾各 4 位）。
+
+    `source` 说明凭据落在哪一侧：`server`（本产品服务端代做，本机没有任何上游凭据）
+    / `local`（本机配置的键）/ `none`。
+    """
     cfg = _cm.get_cloud_matting_config()
     return {
         "provider": cfg.get("provider", "volcengine"),
@@ -104,6 +108,7 @@ def cloud_matting_config_get() -> dict:
         "auto_vlm_classify": bool(cfg.get("auto_vlm_classify", True)),
         "enabled": bool(cfg.get("enabled", False)),
         "ready": _cm.is_cloud_matting_ready(),
+        "source": _cm.cloud_matting_source(),
     }
 
 
@@ -142,7 +147,8 @@ def cloud_matting_config_save(req: CloudMattingConfigRequest) -> dict:
         "enabled": bool(req.enabled),
     }
     _cm.save_cloud_matting_config(data)
-    return {"ok": True, "ready": _cm.is_cloud_matting_ready()}
+    return {"ok": True, "ready": _cm.is_cloud_matting_ready(),
+            "source": _cm.cloud_matting_source()}
 
 
 # ───────────────────────────── 图片转文字（OCR，2026-10-09 竞品对标水印云） ─────────────────────────────

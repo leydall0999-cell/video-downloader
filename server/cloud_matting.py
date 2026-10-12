@@ -147,12 +147,56 @@ def _decode_foreground(parsed: dict) -> Image.Image:
     raise RuntimeError(f"火山抠图响应缺少 foreground/mask 字段: {str(data)[:200]}")
 
 
+def _gateway_on() -> bool:
+    """是否接入云端网关（接入后本机无需持有火山 AK/SK）。"""
+    try:
+        from gateway_config import get_gateway_config
+
+        return bool(get_gateway_config().get("enabled"))
+    except Exception:  # noqa: BLE001 - 缺模块/配置损坏一律按未接入处理
+        return False
+
+
+def _gw_segment(rgb: Image.Image, person: bool, timeout: int) -> Image.Image:
+    """经网关做 CV 分割（签名在服务端完成，本机不接触 AK/SK）。"""
+    from gateway_config import gateway_opener, gateway_request_base, gateway_token
+
+    base = gateway_request_base()
+    token = gateway_token()
+    if not base or not token:
+        raise RuntimeError("未接入云端网关")
+    payload = {"image_b64": _to_b64_png(rgb), "person": bool(person)}
+    req = urllib.request.Request(base + "/v1/image/segment",
+                                 data=json.dumps(payload).encode("utf-8"), method="POST")
+    req.add_header("Authorization", "Bearer " + token)
+    req.add_header("Content-Type", "application/json")
+    opener = gateway_opener() or urllib.request.build_opener()
+    with opener.open(req, timeout=timeout) as resp:
+        body = resp.read().decode("utf-8")
+    data = json.loads(body)
+    if not data.get("ok") or not data.get("image_b64"):
+        raise RuntimeError(f"网关分割返回失败: {body[:200]}")
+    img = Image.open(io.BytesIO(base64.b64decode(data["image_b64"])))
+    if data.get("kind") == "mask":
+        # 与 _decode_foreground 的 mask 分支同构：灰度 mask 作 alpha，白底作 RGB
+        mask = img.convert("L")
+        white = Image.new("RGB", mask.size, (255, 255, 255))
+        return Image.merge("RGBA", (*white.split(), mask))
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    return img
+
+
 def _segment_call(action: str, rgb: Image.Image, ak: str, sk: str, timeout: int = 60) -> Image.Image:
     """调火山视觉智能分割/抠图接口（GeneralSegment / HumanSegment 等），返回 RGBA 前景图。
 
     action: 接口名（"GeneralSegment" / "HumanSegment"）。
     统一参数：image_base64 + return_foreground_image=1（返回透明前景 PNG）+ refine=1（边缘精细）。
+
+    接入网关时改由服务端签名调用（本机不再需要 AK/SK）。
     """
+    if _gateway_on():
+        return _gw_segment(rgb, person=(action == "HumanSegment"), timeout=timeout)
     b64 = _to_b64_png(rgb)
     # form-urlencoded：value 整体 percent-encode，避免 base64 的 + / = 被误解析
     import urllib.parse
@@ -189,7 +233,7 @@ def cloud_matting_rgba(rgb: Image.Image, box: list | None = None,
     cfg = get_cloud_matting_config()
     ak = (cfg.get("access_key") or "").strip()
     sk = (cfg.get("secret_key") or "").strip()
-    if not ak or not sk:
+    if not _gateway_on() and (not ak or not sk):
         raise RuntimeError("云端抠图未配置火山 AK/SK（设置→视觉模型栏→云端抠图）")
     orig_w, orig_h = rgb.size
     _seg = _human_segment if person else _general_segment

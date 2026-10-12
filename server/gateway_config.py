@@ -24,8 +24,10 @@ import atomic_io
 
 DEFAULT_TIMEOUT = 3.0          # 探测可用模型时的超时：宁可拿不到，也不能卡住任务
 MODELS_CACHE_TTL = 300.0       # 模型列表缓存 5 分钟，避免每次任务都打一次网关
+MATTING_CAPS_TTL = 300.0       # 抠图能力位同频缓存（服务端能力很少变）
 
 _MODELS_CACHE: dict[str, Any] = {"ts": 0.0, "models": []}
+_MATTING_CAPS_CACHE: dict[str, Any] = {"ts": 0.0, "caps": None}
 
 
 def _config_dir() -> Path:
@@ -221,6 +223,57 @@ def cloud_env(preferred_model: str = "") -> dict[str, str] | None:
         "model": resolve_model(preferred_model),
         "api_key": cfg["token"],
     }
+
+
+def gateway_request_base() -> str:
+    """可请求的网关基址（剥掉 `direct://` 前缀）；未接入返回空串。"""
+    cfg = get_gateway_config()
+    if not cfg["enabled"]:
+        return ""
+    return _strip_direct(cfg["url"])
+
+
+def gateway_opener():
+    """与当前网关配置匹配的 urllib opener（`direct://` 时绕开系统代理）；未接入返回 None。"""
+    cfg = get_gateway_config()
+    if not cfg["enabled"]:
+        return None
+    return _opener_for(cfg["url"])
+
+
+def gateway_token() -> str:
+    """网关令牌（可单独吊销）；未接入返回空串。**不是**上游 API Key。"""
+    cfg = get_gateway_config()
+    return cfg["token"] if cfg["enabled"] else ""
+
+
+def matting_capability(ttl: float = MATTING_CAPS_TTL, force: bool = False) -> dict[str, bool] | None:
+    """服务端能代做哪种抠图：`{'mediakit': bool, 'visual': bool}`。
+
+    返回 None 表示**探不到**（网关未接入 / 网络抖动 / 刚重启）——调用方据此区分
+    「服务端明确说没有」与「不知道」，不要混为一谈。
+    与 `upstream_models` 同构：短期缓存，避免每张图都打一次网关。
+    """
+    base = gateway_request_base()
+    if not base:
+        return None
+    now = time.time()
+    cached = _MATTING_CAPS_CACHE.get("caps")
+    if (not force) and cached is not None and now - float(_MATTING_CAPS_CACHE["ts"]) < ttl:
+        return dict(cached)
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(base + "/v1/matting/capabilities", method="GET")
+        req.add_header("Authorization", "Bearer " + gateway_token())
+        opener = gateway_opener() or urllib.request.build_opener()
+        with opener.open(req, timeout=DEFAULT_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        caps = {"mediakit": bool(data.get("mediakit")), "visual": bool(data.get("visual"))}
+        _MATTING_CAPS_CACHE.update({"ts": now, "caps": caps})
+        return dict(caps)
+    except Exception:  # noqa: BLE001 - 探测失败一律按「未知」处理，绝不抛给调用方
+        return None
 
 
 def save_managed_gateway(data: dict[str, Any]) -> None:

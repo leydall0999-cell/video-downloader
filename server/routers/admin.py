@@ -788,35 +788,44 @@ def _volcengine_account() -> dict:
         "note": "按量计费，余额请登录火山控制台「费用中心」查看。",
     }
     try:
-        from cloud_matting_config import get_cloud_matting_config
+        from cloud_matting_config import cloud_matting_source, get_cloud_matting_config
         cfg = get_cloud_matting_config()
         ak = (cfg.get("access_key") or "").strip()
         sk = (cfg.get("secret_key") or "").strip()
         mk = (cfg.get("mediakit_api_key") or "").strip()
         enabled = bool(cfg.get("enabled"))
-        visual_ready = bool(ak and sk)
-        mk_ready = bool(mk)
-        info["account"] = _mask(ak) if ak else "(未配置 AccessKey)"
-        # 模块清单带实时就绪标记，用户一眼看到哪条链路可用
+        # 2026-10-13：凭据可能由**服务端**代持（网关代做，火山钥匙不落到用户机器上）
+        info["key_source"] = cloud_matting_source()          # server / local / none
+        by_server = info["key_source"] == "server"
+        visual_ready = bool(ak and sk) or by_server
+        mk_ready = bool(mk) or by_server
+        info["account"] = ("本产品服务端（钥匙不下发）" if by_server
+                           else (_mask(ak) if ak else "(未配置 AccessKey)"))
+        # 模块清单带实时就绪标记，用户一眼看到哪条链路可用，以及凭据落在哪一侧
         info["modules"] = [
-            f"云端抠图 / 说扣什么（visual · AK/SK）{'✓ 已配置' if visual_ready else '✗ 未配置 AK/SK'}",
-            f"抠图增强 / AI 画质增强（AI MediaKit · Bearer Key）{'✓ 已配置' if mk_ready else '✗ 未配置 Key'}",
+            "云端抠图 / 说扣什么（visual）" + (
+                "✓ 服务端代做" if by_server else ("✓ 本机 AK/SK" if visual_ready else "✗ 未配置")),
+            "抠图增强 / AI 画质增强（AI MediaKit）" + (
+                "✓ 服务端代做" if by_server else ("✓ 本机 Key" if mk_ready else "✗ 未配置")),
         ]
         if not enabled:
             info["status"] = "disabled"
             info["note"] = "云端抠图开关未启用（抠图设置 → ☁️ 云端抠图）；启用后「说扣什么」走火山像素级。"
         elif visual_ready:
             info["status"] = "enabled"
-            # 🔴 2026-10-05：原先只说「MediaKit 增强已就绪 / 未配…回退」，
-            # 顶部状态标签却是「已启用」—— 用户会以为画质增强也能用。补明确说明。
-            info["note"] = ("云端抠图已就绪。" + (
-                "AI 画质增强 / 增强抠图已就绪。"
-                if mk_ready else
-                "⚠️ AI 画质增强 / 增强抠图**不可用**（缺 MediaKit Bearer Key），"
-                "目前会回退 visual/本地处理 —— 右上角「已启用」仅代表云端抠图。"))
+            # 🔴 2026-10-05：原先只说「MediaKit 增强已就绪 / 未配…回退」，顶部状态标签
+            # 却是「已启用」—— 用户会以为画质增强也能用。补明确说明。
+            # 🔴 2026-10-13：服务端代做时钥匙根本不在本机，文案必须如实说清来源。
+            note = ("云端抠图已就绪：由**本产品服务端**代做，火山凭据不下发到本机。"
+                    if by_server else "云端抠图已就绪，凭据来自本机配置。")
+            if not mk_ready:
+                note += ("⚠️ AI 画质增强 / 增强抠图**不可用**（缺 MediaKit 凭据），"
+                         "目前会回退 visual/本地处理 —— 右上角「已启用」仅代表云端抠图。")
+            info["note"] = note
         else:
             info["status"] = "no_api_key"
-            info["note"] = "已启用但缺 AK/SK：云端抠图不可用，将回退本地 SAM/MODNet。"
+            info["note"] = ("未取得云端抠图凭据（服务端未启用代做，本机也未配置）："
+                            "将回退本地 SAM/MODNet。")
     except Exception as e:  # noqa: BLE001
         info["note"] = f"读取火山配置失败：{e}"
         info["status"] = "error"
@@ -848,6 +857,7 @@ def admin_ai_accounts(request: Request = None) -> dict[str, Any]:
 def admin_ai_managed(request: Request = None) -> dict[str, Any]:
     """超级管理员：读取三家的受管凭据状态（**永不返回明文**）。"""
     require_admin(request)
+    from cloud_matting_config import cloud_matting_source
     from cloud_matting_config import managed_status as mat_managed
     from vision_config import managed_status as vis_managed
     from gateway_config import gateway_status
@@ -862,6 +872,8 @@ def admin_ai_managed(request: Request = None) -> dict[str, Any]:
             "url": gw.get("url", ""),
             "token_masked": gw.get("token_masked", ""),
         },
+        # 2026-10-13：云端抠图可能由服务端代做（钥匙只在网关机）——把来源摊开给后台看
+        "matting_source": cloud_matting_source(),
     }
 
 

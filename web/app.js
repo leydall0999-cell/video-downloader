@@ -526,6 +526,7 @@
     cloudSk: $('cloudSk'),
     cloudMattingSave: $('cloudMattingSave'),
     cloudMattingStatus: $('cloudMattingStatus'),
+    cloudMattingSource: $('cloudMattingSource'),
     cloudMk: $('cloudMk'),
     matLassoKeepAll: $('matLassoKeepAll'),
     cloudEnhance: $('cloudEnhance'),
@@ -21009,6 +21010,16 @@ el.dwVidPlayer.hidden = true;
         if (el.cloudAk) el.cloudAk.value = r2.access_key || '';
         if (el.cloudSk) el.cloudSk.value = r2.secret_key || '';
         if (el.cloudMk) el.cloudMk.value = r2.mediakit_api_key || '';
+        // 凭据来源：服务端代做 / 本机 / 无。让用户一眼知道钥匙在哪一侧（不暴露内容）
+        if (el.cloudMattingSource) {
+          const srcMap = {
+            server: '🔒 云端抠图由本产品服务端统一提供：火山凭据只在服务端，不会出现在你的电脑上。',
+            local: '云端抠图使用本机保存的凭据。',
+            none: '云端抠图尚未取得凭据：会自动回退本地抠图，不影响使用。',
+          };
+          el.cloudMattingSource.hidden = false;
+          el.cloudMattingSource.textContent = srcMap[(r2.source || '').trim()] || srcMap.none;
+        }
         if (el.matEnhanceToggle) {
           const ev = (r2.enhance_version || '').trim();
           el.matEnhanceToggle.checked = ev !== 'off';
@@ -21046,8 +21057,15 @@ el.dwVidPlayer.hidden = true;
             enabled: el.cloudMattingEnabled ? el.cloudMattingEnabled.checked : false,
           }),
         });
-        if (r && r.ok) show(r.ready ? '✅ 云端抠图已启用（说扣什么将走火山像素级）' : '✅ 已保存（云端未启用或无完整 AK/SK，仍走本地兜底）', false);
-        else show('❌ 保存失败', true);
+        if (r && r.ok) {
+          if (!r.ready) {
+            show('✅ 已保存（云端未启用或未取得凭据，仍走本地兜底）', false);
+          } else if ((r.source || '') === 'server') {
+            show('✅ 云端抠图已启用（由服务端代做，火山凭据不下发到本机）', false);
+          } else {
+            show('✅ 云端抠图已启用（说扣什么将走火山像素级）', false);
+          }
+        } else show('❌ 保存失败', true);
       } catch (e) { show('❌ 保存失败：' + (e.message || e), true); }
     });
   }

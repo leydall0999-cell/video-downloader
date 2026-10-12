@@ -148,13 +148,56 @@ def save_cloud_matting_config(data: dict[str, Any]) -> None:
     atomic_io.atomic_write_json(_config_path(), data)
 
 
+def _gateway_matting_ready(feature: str) -> bool:
+    """服务端代抠图是否可用（feature: `mediakit` | `visual`）。
+
+    网关接入后，本机**不再需要**持有火山凭据——钥匙只在服务端 `matting.json`。
+    探不到能力位（网关未接入 / 网络抖动）时返回 False，让调用方继续按本机凭据判；
+    真到调用失败那一步，`matting_ai` 本来就会优雅回退本地模型。
+    """
+    try:
+        from gateway_config import get_gateway_config, matting_capability
+    except Exception:  # noqa: BLE001 - 老包缺模块时按未接入处理
+        return False
+    if not get_gateway_config().get("enabled"):
+        return False
+    caps = matting_capability()
+    if caps is None:
+        return False
+    return bool(caps.get(feature))
+
+
+def cloud_matting_source() -> str:
+    """云端抠图凭据的来源：`server`（服务端代做）/ `local`（本机键）/ `none`。
+
+    「服务端代做」是本产品的默认形态——火山钥匙只存在于网关机的 `matting.json`，
+    用户机器上没有任何上游凭据可被读取。
+    """
+    if _gateway_matting_ready("mediakit") or _gateway_matting_ready("visual"):
+        return "server"
+    cfg = get_cloud_matting_config()
+    has_vis = bool(cfg.get("access_key")) and bool(cfg.get("secret_key"))
+    has_mk = bool((cfg.get("mediakit_api_key") or "").strip())
+    return "local" if (has_vis or has_mk) else "none"
+
+
 def is_cloud_matting_ready() -> bool:
-    """是否已配置可用的云端抠图（开关开 + AK/SK 非空）。"""
+    """是否已配置可用的云端抠图（CV 通道）。
+
+    两条来源：**服务端代做（网关）** 优先，其次本机 AK/SK（管理员自用/离线兜底）。
+    """
+    if _gateway_matting_ready("visual"):
+        return True
     cfg = get_cloud_matting_config()
     return bool(cfg.get("enabled")) and bool(cfg.get("access_key")) and bool(cfg.get("secret_key"))
 
 
 def is_cloud_matting_mediakit_ready() -> bool:
-    """是否已配置 AI MediaKit Bearer Key（通用软 alpha 抠图，豆包级）。"""
+    """是否已配置 AI MediaKit 软 alpha 抠图（豆包级）。
+
+    同样：服务端代做优先，其次本机 Bearer Key。
+    """
+    if _gateway_matting_ready("mediakit"):
+        return True
     cfg = get_cloud_matting_config()
     return bool((cfg.get("mediakit_api_key") or "").strip())

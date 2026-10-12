@@ -612,6 +612,100 @@ def _enhance_image(rgb: Image.Image, version: str = 'professional',
         raise RuntimeError(f"MediaKit 画质增强未返回结果图: {resp}")
     return _download(out_url, timeout).convert("RGB")
 
+# ── 网关代做（钥匙只在服务端，本机不持有火山凭据）──────────────────────────
+# 为什么：原先客户端**直连火山**，Bearer Key 必须落到用户机器上（0600 挡不住 App
+# 自己读）⇒ 分发即等于把钥匙发出去。接入 `VDL 网关` 后由服务端代做「增强 + 抠图」，
+# 本机只持可单独吊销的令牌。本机键仍在时保留直连能力（管理员自用/离线排障）。
+def _gateway_on() -> bool:
+    """是否接入云端网关（接入后本机无需任何火山凭据）。"""
+    try:
+        from gateway_config import get_gateway_config
+
+        return bool(get_gateway_config().get("enabled"))
+    except Exception:  # noqa: BLE001 - 缺模块/配置损坏一律按未接入处理
+        return False
+
+
+def _gw_b64(rgb: Image.Image) -> str:
+    buf = io.BytesIO()
+    rgb.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _gw_call(path: str, payload: dict, timeout: int) -> dict:
+    """向网关发一个 JSON 请求，返回 `{ok, image_b64, ...}`；失败抛异常由调用方回退。"""
+    from gateway_config import gateway_opener, gateway_request_base, gateway_token
+
+    base = gateway_request_base()
+    token = gateway_token()
+    if not base or not token:
+        raise RuntimeError("未接入云端网关")
+    req = urllib.request.Request(base + path,
+                                 data=json.dumps(payload).encode("utf-8"), method="POST")
+    req.add_header("Authorization", "Bearer " + token)
+    req.add_header("Content-Type", "application/json")
+    opener = gateway_opener() or urllib.request.build_opener()
+    with opener.open(req, timeout=timeout) as resp:
+        body = resp.read().decode("utf-8")
+    data = json.loads(body)
+    if not data.get("ok") or not data.get("image_b64"):
+        raise RuntimeError(f"网关返回失败: {body[:200]}")
+    return data
+
+
+def _cloud_enhance(rgb: Image.Image, version: str, multiple: float, timeout: int) -> Image.Image:
+    """AI 画质增强：网关接入时由服务端代做，否则本机凭据直连。"""
+    if _gateway_on():
+        data = _gw_call("/v1/image/enhance",
+                        {"image_b64": _gw_b64(rgb), "version": version, "multiple": multiple},
+                        timeout)
+        return Image.open(io.BytesIO(base64.b64decode(data["image_b64"]))).convert("RGB")
+    return _enhance_image(rgb, version=version, multiple=multiple, timeout=timeout)
+
+
+def _cloud_remove_bg(work_rgb: Image.Image, scene: str, timeout: int) -> Image.Image:
+    """软 alpha 抠图（**不含**增强）：网关接入时由服务端代做，否则本机凭据直连。"""
+    if _gateway_on():
+        data = _gw_call("/v1/image/remove-background",
+                        {"image_b64": _gw_b64(work_rgb), "scene": scene,
+                         "enhance_version": ""},
+                        timeout)
+        return Image.open(io.BytesIO(base64.b64decode(data["image_b64"]))).convert("RGBA")
+
+    cfg = _read_cfg()
+    api_key = (cfg.get("mediakit_api_key") or "").strip()
+    if not api_key:
+        raise RuntimeError("云端通用抠图未配置 AI MediaKit API Key")
+    buf = io.BytesIO()
+    work_rgb.save(buf, format="PNG")
+    img_bytes = buf.getvalue()
+    up = _request_upload(api_key, timeout)
+    file_id = up.get("file_id")
+    upload_url = up.get("upload_url")
+    if not file_id or not upload_url:
+        raise RuntimeError(f"MediaKit 上传地址字段缺失: {up}")
+    _put_upload(upload_url, img_bytes, "image/png", timeout)
+    payload = {"image_url": file_id, "scene": scene}
+    try:
+        resp = _post_json(_REMOVE_URL, api_key, payload, timeout)
+        if not resp.get("success"):
+            raise RuntimeError(f"MediaKit 抠图失败: {resp.get('error') or resp}")
+        out_url = ((resp.get("result") or {}).get("image_url") or "")
+        if not out_url:
+            raise RuntimeError(f"MediaKit 未返回结果图: {resp}")
+        return _download(out_url, timeout)
+    except Exception:
+        logger.warning("MediaKit 抠图请求失败，2s 后重试 1 次")
+        time.sleep(2.0)
+        resp = _post_json(_REMOVE_URL, api_key, payload, timeout)
+        if not resp.get("success"):
+            raise RuntimeError(f"MediaKit 抠图失败: {resp.get('error') or resp}")
+        out_url = ((resp.get("result") or {}).get("image_url") or "")
+        if not out_url:
+            raise RuntimeError(f"MediaKit 未返回结果图: {resp}")
+        return _download(out_url, timeout)
+
+
 def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
                        timeout: int = 120, upscale: int | None = None,
                        suppress_bg: bool = True,
@@ -626,9 +720,8 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
     任一环节失败都抛异常，由调用方回退本地链路。
     """
     cfg = _read_cfg()
-    api_key = (cfg.get("mediakit_api_key") or "").strip()
-    if not api_key:
-        raise RuntimeError("云端通用抠图未配置 AI MediaKit API Key")
+    if not (cfg.get("mediakit_api_key") or "").strip() and not _gateway_on():
+        raise RuntimeError("云端通用抠图未配置 AI MediaKit API Key（且未接入云端网关）")
 
     if scene not in ("general", "human", "product"):
         scene = "general"
@@ -648,10 +741,10 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
             # 增强是计费步骤，重试仅在失败时发生（失败不扣费或已失败无产出）；
             # 瞬时网络/服务抖动直接回退会损失整条云端链路质量，故重试 1 次。
             try:
-                enhanced = _enhance_image(rgb, version=ver, multiple=2.0, timeout=timeout)
+                enhanced = _cloud_enhance(rgb, version=ver, multiple=2.0, timeout=timeout)
             except Exception:
                 time.sleep(2.0)
-                enhanced = _enhance_image(rgb, version=ver, multiple=2.0, timeout=timeout)
+                enhanced = _cloud_enhance(rgb, version=ver, multiple=2.0, timeout=timeout)
             logger.info("AI 画质增强完成(%s): %s", ver, enhanced.size)
         except Exception as exc:  # noqa: BLE001
             logger.warning("AI 画质增强失败(含1次重试)，回退原始链路: %s", exc)
@@ -679,44 +772,12 @@ def mediakit_remove_bg(rgb: Image.Image, scene: str = "general",
             work_rgb = rgb.resize((rgb.width * upscale, rgb.height * upscale), Image.LANCZOS)
         orig_size = rgb.size
 
-    # 本地图编码为 PNG 二进制（无损），上传走 mediakit:// 客户端直传
-    buf = io.BytesIO()
-    work_rgb.save(buf, format="PNG")
-    img_bytes = buf.getvalue()
-
-    # ① 申请上传地址
-    up = _request_upload(api_key, timeout)
-    file_id = up.get("file_id")
-    upload_url = up.get("upload_url")
-    if not file_id or not upload_url:
-        raise RuntimeError(f"MediaKit 上传地址字段缺失: {up}")
-
-    # ② PUT 上传
-    _put_upload(upload_url, img_bytes, "image/png", timeout)
-
-    # ③ 提交抠图 + ④ 下载（瞬时抖动重试 1 次：提交/查询阶段失败不产出、
-    # 不重复计费——file_id 复用，避免一次网络抖动就掉到低质量本地兜底）
-    payload = {"image_url": file_id, "scene": scene}
-    try:
-        resp = _post_json(_REMOVE_URL, api_key, payload, timeout)
-        if not resp.get("success"):
-            raise RuntimeError(f"MediaKit 抠图失败: {resp.get('error') or resp}")
-        result = resp.get("result") or {}
-        out_url = result.get("image_url")
-        if not out_url:
-            raise RuntimeError(f"MediaKit 未返回结果图: {resp}")
-        out = _download(out_url, timeout)
-    except Exception:
-        logger.warning("MediaKit 抠图请求失败，2s 后重试 1 次")
-        time.sleep(2.0)
-        resp = _post_json(_REMOVE_URL, api_key, payload, timeout)
-        if not resp.get("success"):
-            raise RuntimeError(f"MediaKit 抠图失败: {resp.get('error') or resp}")
-        result = resp.get("result") or {}
-        out_url = result.get("image_url")
-        if not out_url:
-            raise RuntimeError(f"MediaKit 未返回结果图: {resp}")
-        out = _download(out_url, timeout)
+    # ③④ 抠图并取回结果：网关接入时服务端代做（本机不接触火山凭据），
+    #      否则本机凭据直连（上传走 mediakit:// 客户端直传）。
+    #      ⚠️ 直连分支与代做分支的产物必须是同一张图 —— 网关侧刻意做成
+    #      「增强」「抠图」两个端点，与这里的两步一一对应，后续本地精修
+    #      （alpha 精炼 / 去溢色 / 超分 / 收尾）对两条路径完全一致。
+    out = _cloud_remove_bg(work_rgb, scene=scene, timeout=timeout)
 
     # ⑤ 若做了放大，只把 alpha 缩回原尺寸再贴回原图 RGB，保持原图清晰度
     if upscale > 1:
