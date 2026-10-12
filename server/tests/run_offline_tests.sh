@@ -138,6 +138,10 @@ run_one test_batch3_history.py
 #  带 device 不含无归属/他人任务）、/api/version 不外泄内部信息、
 #  /api/media/proxy 域名分散度限流。改动任一处都会立刻红。
 run_one test_pentest_fixes_20261012.py
+#  test_cookie_pull_diag_auth.py —— /api/cookie/pull-diag 必须校验令牌，
+#  且校验必须在「经隧道拉 Cookie 写公共池」的重操作之前（2026-10-12 安全盘点实测：
+#  该端点经 nginx/CF 公网可达，未带令牌即 200，默认 mode=full 是状态变更重操作）。
+run_one test_cookie_pull_diag_auth.py
 run_one test_ai_free_trial_web.py
 run_one e2e_ai_trial_check.py
 

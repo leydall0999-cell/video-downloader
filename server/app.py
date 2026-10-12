@@ -3548,19 +3548,39 @@ def vps_resolve_proxy(platform: str, url: str, token: str = "", cookie: str = ""
 
 
 @app.get("/api/cookie/pull-diag")
-def cookie_pull_diag(mode: str = "full") -> dict:
-    """隧道健康/诊断接口。
+def cookie_pull_diag(mode: str = "full", token: str = "", request: Request = None) -> dict:
+    """隧道健康/诊断接口（**已加令牌校验**，2026-10-12）。
+
+    🔴 为什么忽然要令牌：本端点此前**没有任何鉴权**，而它经 nginx/CF 暴露在公网
+    （2026-10-12 实测：`GET https://hanyuxz.top/api/cookie/pull-diag` 不带任何令牌
+      返回 200），并且默认 `mode=full` 是**重操作**——会同步经隧道拉取 VPS Cookie
+    并**写入公共池**。也就是「任何人都能空手触发一次跨隧道写池 + 占用出口带宽」，
+    属未鉴权的状态变更端点。现与同文件 `/v1/resolve` 同口径校验令牌
+    （`VDL_COOKIE_REFILL_TOKEN` / `VDL_COOKIE_SYNC_TOKEN`），令牌可经
+    `Authorization: Bearer <t>`、`X-Api-Key: <t>` 或 `?token=<t>` 任一传入。
+    自动化调用方：现有监控脚本明确不再用它当探针（`tunnel_monitor.sh` 注释），
+    故收紧不影响任何在跑的定时任务；人工排查按上面三种方式带令牌即可。
 
     mode=quick：轻量健康探针——只返回本机状态字段（token_present / tunnel_ready /
-    vps_ok / requests_available），秒回，不做任何跨隧道网络操作。供自愈探针与周期
-    监控使用，避免「同步拉 Cookie（内部 timeout=90s）拖垮探针响应、把健康隧道误判
-    为半死、触发无谓重连/重启循环」的问题（2026-08-27 根治）。
-
+            vps_ok / requests_available），秒回，不做任何跨隧道网络操作。
     mode=full（默认）：完整诊断——同步经隧道拉取 VPS Cookie 写公共池，返回逐环节
-    结果与候选明细（重操作，响应可能数十秒，仅人工排查时使用）。
+            结果与候选明细（重操作，响应可能数十秒，仅人工排查时使用）。
 
     两种模式均不含敏感内容（Cookie 只报长度不报明文）。
     """
+    _expected = (
+        os.environ.get("VDL_COOKIE_REFILL_TOKEN") or os.environ.get("VDL_COOKIE_SYNC_TOKEN", "")
+    ).strip()
+    _hdr = ""
+    if request is not None:
+        _auth = (request.headers.get("Authorization") or "").strip()
+        if _auth.lower().startswith("bearer "):
+            _hdr = _auth[7:].strip()
+        else:
+            _hdr = (request.headers.get("X-Api-Key") or "").strip()
+    if not _expected or (_hdr or token or "").strip() != _expected:
+        raise HTTPException(status_code=403, detail="无效令牌")
+
     import cn_tunnel as _cn
     out: dict = {
         "token_present": bool(os.environ.get("VDL_COOKIE_SYNC_TOKEN") or os.environ.get("VDL_COOKIE_REFILL_TOKEN")),
