@@ -57,10 +57,10 @@ import app as server_app  # noqa: E402
 import image_download  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from platforms import LinkError  # noqa: E402
-from tasks import DownloadTask, TaskStore  # noqa: E402
+from tasks import TaskStore  # noqa: E402
 
 try:
-    from PIL import Image as _PILImage  # noqa: E402
+    from PIL import Image as _PILImage  # noqa: E402,F401  （仅探测可用性）
     _HAS_PIL = True
 except Exception:  # noqa: BLE001
     _HAS_PIL = False
@@ -636,6 +636,11 @@ def test_run_image_download_success():
         check("filesize 正确", task.filesize == len(_PNG))
         want_q = "4×4" if _HAS_PIL else "原图"
         check("宽高入库（PIL 探测）", task.quality == want_q, task.quality)
+        if _HAS_PIL:
+            with _PILImage.open(task.filepath) as im:
+                check("PIL 探测宽高与库一致",
+                      f"{im.width}×{im.height}" == task.quality,
+                      f"{im.width}×{im.height} vs {task.quality}")
         check("步骤落 done", any(s.get("name") == "下载图片" and s.get("status") == "done"
                                  for s in task.steps))
         check("无 .part 残留", not (task.workdir / "image.part").exists())
