@@ -90,12 +90,16 @@ def _stage_tree() -> str:
     下一个跑测试的人看到的是「 inexplicable 的失败」，而 harness 自身毫无察觉。
     ⇒ 铁律：**变异只在副本上做**，真实源码全程只读。
     """
-    stage = tempfile.mkdtemp(prefix="vdl_mut_tree_")
-    dst = os.path.join(stage, "server")
+    root = tempfile.mkdtemp(prefix="vdl_mut_tree_")
+    dst = os.path.join(root, "server")
     subprocess.run(["rsync", "-a", "--exclude", "__pycache__", "--exclude", ".pytest_cache",
                     f"{SERVER}/", f"{dst}/"], check=True, capture_output=True)
-    os.symlink(os.path.join(REPO, "web"), os.path.join(stage, "web"))
-    return dst
+    os.symlink(os.path.join(REPO, "web"), os.path.join(root, "web"))
+    return root          # 返回根目录（server/ 与 web/ 都在它下面）
+
+
+def _target_server(root: str) -> str:
+    return os.path.join(root, "server")
 
 
 def run_test(server_dir: str) -> tuple[bool, str]:
@@ -121,7 +125,7 @@ def main() -> int:
     # 基线自检：未变异必须先全绿。否则后续每一项「变红」都可能是环境问题的
     # 假阳性（曾踩：base python 缺 requests，注入缺陷后 import 就失败，
     # 8 项变异全「如期变红」但原因完全不对）。
-    base_ok, base_out = run_test(stage + "/server")
+    base_ok, base_out = run_test(_target_server(stage))
     if not base_ok:
         print("❌ 基线自检失败：未变异的测试套件未全绿，本次变异结果全部作废")
         for ln in [l for l in base_out.splitlines() if l.strip()][-10:]:
@@ -150,7 +154,7 @@ def main() -> int:
             continue
         try:
             path.write_text(mutated, encoding="utf-8")
-            passed, out = run_test(stage + "/server")
+            passed, out = run_test(_target_server(stage))
             if passed:
                 print(f"❌ {name}: 注入缺陷后测试仍然全绿 —— 断言没咬住！")
                 ok = False
@@ -168,7 +172,7 @@ def main() -> int:
         finally:
             path.write_text(src, encoding="utf-8")
     # 还原后必须全绿（副本已还原，真实源码从未被动过）
-    passed, out = run_test(stage + "/server")
+    passed, out = run_test(_target_server(stage))
     if not passed:
         tail = [ln for ln in out.splitlines() if ln.strip()][-12:]
         print("---- 还原后失败输出尾部 ----")
