@@ -831,6 +831,18 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# 60. test_image_download.py —— 图片直链下载（2026-10-12 P0）全链路回归：
+#     server/image_download.py 新增的「URL → SSRF-safe 流式落盘 → 落终态」管线 +
+#     /api/image/download 路由 + tasks.py 的 kind 字段 + core.py 的 kind 分流
+#     （重试换执行器 / 暂停拒绝 / /file 媒体类型）。35 项断言覆盖：
+#     魔数识别（13 格式）、scheme 拒绝清单、SSRF（入口+重定向每一跳）、
+#     体积上限（CL 预检+流式）、协作式取消、停滞看门狗、文件名清洗/去重、
+#     执行器成功必须落 filepath（曾漏：用户看得到完成却取不到文件）、
+#     HTTP 端到端（含 /file 取回、SVG 强制附件下载）、kind 持久化 round-trip、
+#     以及 routers/image.py / routers/core.py / app.py / 前端 mode-switch 的接线棘轮。
+#     配套变异测试 tests/mutation_image_download.py：8 项注入缺陷必须变红。
+run_one test_image_download.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
