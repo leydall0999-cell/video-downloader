@@ -239,24 +239,54 @@ def _commentary_credit_op(engine: str, duration_sec: float) -> str:
     return "commentary_llm"
 
 
+# 🔴 2026-10-12 定档：视频解说**按时间**计费 —— 每半小时 50 积分。
+#    此前一律按次收 40：一条 8 分钟短片与一条 2 小时长片同价，而长片的真实成本
+#    （转写 + 脚本 + 修复重试）是短片的十几倍，等于短片用户在补贴长片。
+COMMENTARY_BILLING_UNIT_SEC: float = 1800.0      # 一个计费单位 = 半小时
+
+
+def commentary_billing_units(duration_sec: float) -> int:
+    """折算计费单位数：不足半小时按半小时（向上取整），时长未知按 1 个单位收。"""
+    try:
+        dur = max(0.0, float(duration_sec or 0.0))
+    except (TypeError, ValueError):
+        dur = 0.0
+    return max(1, int(-(-dur // COMMENTARY_BILLING_UNIT_SEC)))
+
+
+def commentary_credit_total(op: str, duration_sec: float) -> int:
+    """解说本次应收积分 = 每半小时单价 × 计费单位数。
+
+    单价仍取 `credit_cost(op)`（后台 plans.json 覆盖层照旧生效），只是把它重新
+    解释为「每半小时的价」，因此后台改价依旧对所有用户即时生效、无需重新构建。
+    """
+    from membership import credit_cost
+    unit_price = int(credit_cost(op))
+    if unit_price <= 0:
+        return 0
+    return unit_price * commentary_billing_units(duration_sec)
+
+
 def charge_commentary_credits(
     request: Optional[Request] = None,
     engine: str = "",
     duration_sec: float = 0.0,
 ) -> dict[str, Any]:
-    """按实际引擎扣 AI 积分；不足抛 402。返回扣费结果供调用方忽略。"""
+    """按实际引擎 **× 实际时长** 扣 AI 积分；不足抛 402。返回扣费结果供调用方忽略。"""
     import app as _app
-    from membership import credit_cost, gate_message
     op = _commentary_credit_op(engine, duration_sec)
+    units = commentary_billing_units(duration_sec)
+    total = commentary_credit_total(op, duration_sec)
     store = _app.current_member_store(request) if request is not None else _app.member_store
-    if int(credit_cost(op)) <= 0:
-        return {"ok": True, "spent": 0, "free": True, "op": op}
-    msg = gate_message(store, op, reason=f"commentary:{op}")
+    if total <= 0:
+        return {"ok": True, "spent": 0, "free": True, "op": op, "units": units}
+    from membership import gate_message
+    msg = gate_message(store, op, reason=f"commentary:{op}", cost=total)
     if msg:
         from fastapi import HTTPException
         raise HTTPException(status_code=402,
                             detail=f"MEMBER_QUOTA|{msg}")
-    return {"ok": True, "op": op}
+    return {"ok": True, "op": op, "spent": total, "units": units}
 
 
 def assert_upload_allowed(request: Optional[Request], duration_sec: float,

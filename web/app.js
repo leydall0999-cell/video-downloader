@@ -213,6 +213,10 @@
     batchConcurrency: $('batchConcurrency'),
     batchConcVal: $('batchConcVal'),
     batchBtn: $('batchBtn'),
+    // 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）
+    modeVideoBtn: $('modeVideoBtn'),
+    modeImageBtn: $('modeImageBtn'),
+    imageModeNote: $('imageModeNote'),
     // 正版素材库入口 & 下载用途确认
     consentModal: $('consentModal'),
     consentCommercialBox: $('consentCommercialBox'),
@@ -1177,6 +1181,11 @@
   let resolved = null;
   let selectedQuality = 'best';
   let allPlatforms = [];
+  // 下载类型（2026-10-12 图片下载 P0）：'video'=解析平台链接拿视频；
+  // 'image'=直接把粘贴的图片直链排队下载（不解析、不走清晰度）。
+  let dlMode = 'video';
+  const URL_PLACEHOLDER_VIDEO = '粘贴视频链接，每行一个可批量下载（例如 https://www.bilibili.com/video/BV1...）';
+  const URL_PLACEHOLDER_IMAGE = '粘贴图片直链，每行一个可批量下载（例如 https://xxx.com/photo.jpg）';
   const trackers = new Map();
   // 正在删除的任务 ID 集合：防止 syncMissingCards 在 DELETE 生效前把卡片重建回来
   const _deletingIds = new Set();
@@ -1743,7 +1752,33 @@
   const setLoading = (loading) => {
     el.resolveBtn.classList.toggle('loading', loading);
     el.resolveBtn.disabled = loading;
-    el.resolveBtn.querySelector('.btn-label').textContent = loading ? '解析中…' : '解析链接';
+    // 按钮文案随下载类型切换（图片模式是「下载图片」，没有解析阶段）
+    const _img = dlMode === 'image';
+    el.resolveBtn.querySelector('.btn-label').textContent =
+      loading ? (_img ? '下载中…' : '解析中…') : (_img ? '下载图片' : '解析链接');
+  };
+
+  /** 切换下载类型（视频 / 图片）：改占位符、按钮文案、图片提示与批量入口可见性。 */
+  const setDownloadMode = (mode) => {
+    dlMode = mode === 'image' ? 'image' : 'video';
+    const _img = dlMode === 'image';
+    if (el.modeVideoBtn) {
+      el.modeVideoBtn.classList.toggle('is-active', !_img);
+      el.modeVideoBtn.setAttribute('aria-selected', String(!_img));
+    }
+    if (el.modeImageBtn) {
+      el.modeImageBtn.classList.toggle('is-active', _img);
+      el.modeImageBtn.setAttribute('aria-selected', String(_img));
+    }
+    if (el.imageModeNote) el.imageModeNote.hidden = !_img;
+    // 图片模式：批量面板是视频概念（统一画质/并发），隐藏避免误导；
+    // 图片本身就是每行一个的批量，输入框即批量。
+    if (el.batchToggle) el.batchToggle.hidden = _img;
+    if (_img && el.batchBox && !el.batchBox.hidden) el.batchBox.hidden = true;
+    if (el.input) {
+      el.input.placeholder = _img ? URL_PLACEHOLDER_IMAGE : URL_PLACEHOLDER_VIDEO;
+    }
+    setLoading(false);
   };
 
   // ------------------------------------------------------------------ 渲染
@@ -2045,7 +2080,8 @@
     const downloading = st === 'downloading' || st === 'merging';
     // 乐观意图锁：点击后短时间内按钮以「用户意图」渲染，避免被尚未变化的轮询/SSE 刷回
     const opState = (refs._opPauseUntil && Date.now() < refs._opPauseUntil) ? refs._opState : null;
-    refs.togglePause.hidden = !(downloading || isPaused || isPausing);
+    // 图片任务（kind=image）无 .part 续传语义，暂停按钮直接隐藏（后端也会拒绝）
+    refs.togglePause.hidden = task.kind === 'image' || !(downloading || isPaused || isPausing);
     if (opState === 'pausing' || isPausing) {
       refs.togglePause.textContent = '暂停中…';
       refs.togglePause.disabled = true;
@@ -2188,16 +2224,20 @@
       refs.saveHint.textContent = '文件已自动保存到你的下载文件夹；若浏览器拦截未出现，请点上方按钮手动保存。';
     } else {
       refs.saveHint.hidden = false;
-      refs.saveHint.textContent = '点上方「保存到本机」即可把处理好的视频从服务器下载到你的电脑（浏览器限制，网站无法直接写入你本地）。';
+      refs.saveHint.textContent = task.kind === 'image'
+        ? '点上方「保存到本机」即可把图片从服务器下载到你的电脑（浏览器限制，网站无法直接写入你本地）。'
+        : '点上方「保存到本机」即可把处理好的视频从服务器下载到你的电脑（浏览器限制，网站无法直接写入你本地）。';
     }
 
-    // 已完成任务展示格式转换入口（增值能力）
-    refs.convertWrap.hidden = false;
-    if (!refs.convertBtn.dataset.bound) {
-      refs.convertBtn.dataset.bound = '1';
-      refs.convertBtn.addEventListener('click', () => startConvert(task.task_id, refs));
+    // 已完成任务展示格式转换入口（增值能力；仅视频，图片转换走图片处理链路）
+    refs.convertWrap.hidden = task.kind === 'image';
+    if (task.kind !== 'image') {
+      if (!refs.convertBtn.dataset.bound) {
+        refs.convertBtn.dataset.bound = '1';
+        refs.convertBtn.addEventListener('click', () => startConvert(task.task_id, refs));
+      }
+      if (node.convertSubRequired) updateConvertQuota(refs, null);
     }
-    if (node.convertSubRequired) updateConvertQuota(refs, null);
 
     lastCompletedTask = task.task_id;
     lastCompletedRefs = refs;
@@ -9736,6 +9776,52 @@ el.dwVidPlayer.hidden = true;
     }
   };
 
+  /** 图片下载（2026-10-12 P0）：粘贴的图片直链逐条排队，走 /api/image/download。
+   *  与视频的区别：不解析、无清晰度、无平台目录匹配；一行一个即批量。
+   *  合规：仅下载用户有权获取的公开图片（需求文档模块二硬约束）。 */
+  const runImageDownload = async (raw, cookie, proxy) => {
+    if (!(await ensureConsent())) return;
+    clearError();
+    // 优先按 http(s) 提取（容忍带标题/参数的杂糅粘贴）；提取不到就按行/空白切，
+    // 裸域名（example.com/a.jpg）由后端补 scheme。
+    let urls = extractUrls(raw);
+    if (!urls.length) urls = raw.split(/[\s,，]+/).filter((u) => u && !u.startsWith('#'));
+    if (!urls.length) {
+      showError('请输入图片链接', '把图片直链粘贴到输入框，每行一个');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await request('/api/image/download', {
+        method: 'POST',
+        body: JSON.stringify({ urls, cookie: cookie || '', proxy: proxy || '' }),
+      });
+      el.alert.hidden = true;
+      (data.task_ids || []).forEach((tid) => {
+        const refs = createTaskCard(tid, { title: '图片下载中…', platform: '图片' });
+        trackTask(tid, refs, '');
+      });
+      if (data.skipped) {
+        showError(`已创建 ${data.count} 个下载任务，${data.skipped} 个链接无法识别`,
+                  '仅支持 http/https 图片直链；内网 / 本地地址会被拒绝');
+      }
+      // 提交成功即清空输入（一行一个都已成任务），并同步清空按钮显隐
+      el.input.value = '';
+      toggleClearButton();
+    } catch (error) {
+      const msg = (error && error.message) || '';
+      if (msg.indexOf('MEMBER_QUOTA|') === 0) {
+        const tip = msg.split('|').slice(1).join('|') || '今日免费下载次数已用尽';
+        try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) {}
+        showError(tip, '开通VIP会员即可继续下载（免费额度每日 24:00 刷新）');
+        return;
+      }
+      showError(error.message || '图片下载提交失败', error.hint);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   /** 用 SSE 跟踪进度，浏览器不支持或连接断开时回退到轮询。 */
   const trackTask = (taskId, refs, base = '') => {
     let finished = false;
@@ -10028,6 +10114,12 @@ el.dwVidPlayer.hidden = true;
     } else {
       try { localStorage.removeItem('vdl_cookie'); } catch (e) {}
     }
+    // 图片模式（2026-10-12 P0）：不解析、直接排队下载图片直链（空输入由它自己提示）
+    if (dlMode === 'image') {
+      await runImageDownload(raw, cookie, proxy);
+      return;
+    }
+
     if (!raw) {
       showError('请输入视频链接', '把视频页面的地址粘贴到输入框即可');
       return;
@@ -16008,6 +16100,9 @@ el.dwVidPlayer.hidden = true;
   const toggleClearButton = () => { el.clearBtn.hidden = el.input.value.length === 0; };
 
   el.form.addEventListener('submit', handleResolve);
+  // 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）
+  if (el.modeVideoBtn) el.modeVideoBtn.addEventListener('click', () => setDownloadMode('video'));
+  if (el.modeImageBtn) el.modeImageBtn.addEventListener('click', () => setDownloadMode('image'));
   el.batchBtn.addEventListener('click', () => {
     const urls = el.batchInput.value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
     if (!urls.length) { showError('请先粘贴至少一个视频链接'); return; }
@@ -19385,10 +19480,13 @@ el.dwVidPlayer.hidden = true;
         balance = `<span class="pu-num">${f.balance} ${unit}</span>`;
       }
       let cost = '—';
+      // 🔴 2026-10-12：按时间计费的功能（视频解说 50 积分/半小时）计价单位不是「次」，
+      //    后端会带 credit_unit；沿用 unit（次）会显示成「50 积分/次」，与真实扣费口径不符。
+      const costUnit = esc(f.credit_unit || unit);
       if (f.credit_cost_label) {
-        cost = `<span class="pu-num">${esc(f.credit_cost_label)}</span> 积分/${unit}`;
+        cost = `<span class="pu-num">${esc(f.credit_cost_label)}</span> 积分/${costUnit}`;
       } else if (f.credit_cost != null && f.credit_cost > 0) {
-        cost = `<span class="pu-num">${f.credit_cost}</span> 积分/${unit}`;
+        cost = `<span class="pu-num">${f.credit_cost}</span> 积分/${costUnit}`;
       } else if (!f.unlimited && f.credit_cost === 0) {
         cost = '<span class="pu-tag pu-tag-free">免费</span>';
       }

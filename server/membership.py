@@ -251,7 +251,10 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     # ⚠️ 拆行**不改变**任何计数逻辑：同一个 resource 的几行加起来还是那一份额度。
     {"key": "video_parse",      "name": "视频下载",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
     {"key": "subscribe",        "name": "订阅追更",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0, "shared_note": "与「视频下载」共用下载额度"},
-    {"key": "commentary",       "name": "视频解说",     "resource": "cloud_commentary", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 40, "credit_op": "commentary_llm", "shared_note": "走「终身云端 3 次」额度（按功能独立计），并按 AI 积分计费（自动解说 40 积分 / 画面理解 50）"},
+    # 🔴 2026-10-12 起按**时长**计费：50 积分/半小时（不足半小时按半小时计），
+    #    故单价列要显示成「50 积分/半小时」而非「50 积分/次」—— 用 `credit_unit`
+    #    单独指定计价单位，`unit`（次）仍服务于「每日次数」列，两者不混用。
+    {"key": "commentary",       "name": "视频解说",     "resource": "cloud_commentary", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 50, "credit_unit": "半小时", "credit_op": "commentary_llm", "shared_note": "走「终身云端 3 次」额度（按功能独立计），并按 AI 积分按时长计费（50 积分/半小时；画面理解另收 50）"},
     # ⚠️ 名称不带「本地」：用户 2026-10-04 定档「会员权益文案不得出现 云端/算力/AI/本地」，
     # 当时把「本地一键抠图」改成「一键抠图」；这里同理（守卫 test_membership_benefits）。
     {"key": "subtitle_extract", "name": "字幕提取",     "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 5, "credit_op": "subtitle_asr"},
@@ -351,10 +354,12 @@ AI_CREDIT_COSTS: dict[str, dict[str, Any]] = {
     "commentary_llm": {
         "name": "自动解说（大模型写稿）",
         "where": "commentary-pipeline/scripts/llm_script.py:1646/2541/1111（云端网关）",
-        "cost": 40,
+        "cost": 50,
         "real_cost": "¥0.04~0.19/次（实测：story 3518+317 token、script 3742+6474、tail 3949+4554；"
                      "DeepSeek V4-Flash 峰谷价，闲时 1.5/4.5、高峰 3/9 元每百万 token）",
-        "note": "剧情分析 + 脚本生成 + 修复重试，一次任务一份（2~4 次调用）。走 ECS 网关，"
+        "note": "🔴 2026-10-12 起按**时长**计费：50 积分/半小时（不足半小时按半小时计），"
+                "cost 字段是「每半小时单价」，总扣费 = 单价 × ceil(时长/1800)（routers/quota.py::"
+                "commentary_credit_total）。剧情分析 + 脚本生成 + 修复重试。走 ECS 网关，"
                 "真实 Key 不在本机。⚠️ DeepSeek 2026-08-17 已涨价 50%~125%，涨价要重算。",
     },
     "commentary_vision": {
@@ -404,11 +409,12 @@ AI_CREDIT_COSTS: dict[str, dict[str, Any]] = {
     "commentary_local_mlx": {
         "name": "本机大模型解说",
         "where": "commentary-pipeline/scripts/llm_script.py:1221/1243（MLX 权重）",
-        "cost": 40,
+        "cost": 50,
         "real_cost": "¥0（MLX 跑在用户机器；但长片会退化——llm_script.py:1167 实测本机 3B-4bit "
                      "在 45 分钟片上会变复读机，同一句解说词重复 147 次）",
-        "note": "⚠️ 定 40 而非 0：定 0 用户会一律选本机，把成本转嫁给算力最差的机器、"
-                "并换来更差的出片质量。定与云端同价（40）让「本机优先、云端兜底」这条路由"
+        "note": "⚠️ 定 50 而非 0：定 0 用户会一律选本机，把成本转嫁给算力最差的机器、"
+                "并换来更差的出片质量。🔴 2026-10-12 起与云端同价（50 积分/半小时，"
+                "不足半小时按半小时计）并同口径按时长计费，让「本机优先、云端兜底」这条路由"
                 "（llm_script.py:2364）自然生效 —— 长片自动转云端不额外加价。"
                 "若你更看重防套利，可上调至 120。",
     },
@@ -1036,10 +1042,14 @@ def can_afford(store: "MembershipStore", op: str, sub: str | None = None) -> str
 
 
 def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
-                 reason: str | None = None) -> str | None:
+                 reason: str | None = None, cost: int | None = None) -> str | None:
     """扣积分并产出拦截原因：None=放行；非 None=「积分不足」原因字符串（供 402 detail）。
 
     成本 <=0 视为免费放行；spend 系统异常时降级放行（记日志），不阻断主流程。
+
+    🔴 2026-10-12 新增 `cost`：**按量计价**的功能（视频解说按时间收 50 积分/半小时）
+    总金额不是表里的单价，而是「单价 × 计费单位数」。不传 = 沿用旧口径（表内单价），
+    其余按次计费的功能行为完全不变。
 
     🔴 2026-10-05「免费用户首次体验」：这里的判定顺序是
         **先扣积分 → 扣不动才动用试用名额 → 都不行才拦**。
@@ -1049,11 +1059,14 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
        3. 都不行：文案里如实说明「该功能的免费体验是否已用过」，别只丢一句
           「积分不足」—— 用户上次明明跑通了同一个操作，会以为是系统出错了。
     """
-    cost = credit_cost(op, sub)
-    if cost <= 0:
+    try:
+        total = int(cost) if cost is not None else int(credit_cost(op, sub))
+    except (TypeError, ValueError):
+        total = int(credit_cost(op, sub))
+    if total <= 0:
         return None
     try:
-        res = store.spend_credits(cost, reason=reason or op)
+        res = store.spend_credits(total, reason=reason or op)
     except Exception as e:  # noqa: BLE001
         logging.getLogger("membership").warning("credit gate error op=%s: %s", op, e)
         return None
@@ -1063,11 +1076,11 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
     left = res.get("credits_left", 0)
     pol = free_trial_policy()
     hint = ""
-    if pol.get("enabled") and store.trial_available(op, cost):
+    if pol.get("enabled") and store.trial_available(op, total):
         try:
             if store.trial_consume(op, reason=reason or op):
                 logging.getLogger("membership").info(
-                    "free trial consumed op=%s cost=%s user=%s", op, cost,
+                    "free trial consumed op=%s cost=%s user=%s", op, total,
                     getattr(store.path, "name", ""))
                 return None
             # 被另一台领走：trial_consume 已把本机标记为已用 → 走下面的 402 提示
@@ -1085,7 +1098,7 @@ def gate_message(store: "MembershipStore", op: str, sub: str | None = None,
         else:
             hint = ("本功能的免费体验已用过一次，请开通 AI 会员或购买积分包"
                     if store.trial_used(op, pol) else "请开通 AI 会员或购买积分包")
-    return f"AI 积分不足：本次操作需 {cost} 积分，当前 {left}（{hint}）"
+    return f"AI 积分不足：本次操作需 {total} 积分，当前 {left}（{hint}）"
 
 # --------------------------------------------------------------------------- #
 # 状态文件
@@ -2183,6 +2196,7 @@ def feature_usage_status(store: MembershipStore, period: str = "today") -> list[
                 "unlimited": True,
                 "balance": None,
                 "credit_cost": _effective_credit_cost(d),
+                "credit_unit": d.get("credit_unit"),
             })
             continue
         _lim = limit_map.get(d["resource"])
@@ -2208,6 +2222,7 @@ def feature_usage_status(store: MembershipStore, period: str = "today") -> list[
             "unlimited": False,
             "balance": balance,
             "credit_cost": _effective_credit_cost(d),
+            "credit_unit": d.get("credit_unit"),
         })
     # 🔴 纯 AI 积分功能（无日配额墙）：追加进表格，积分单价必须可见（2026-10-12）。
     #    daily_limit 置 None ⇒ 前端「体验剩余」列显示「—」；单价多档显示「N 起」。

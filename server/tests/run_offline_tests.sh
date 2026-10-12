@@ -611,6 +611,15 @@ run_one test_ai_credit_costs.py
 #      tasks/subscriptions list_for_owner 匿名请求一律空（web-dev 同源漏洞修复）。
 run_one test_credit_price_display.py
 
+#  42c. test_commentary_duration_pricing.py —— 视频解说「按时间计费」（2026-10-12 用户定档
+#       「按时间半个小时50积分」）：此前一律按次收 40，8 分钟短片与 2 小时长片同价 ——
+#       长片真实成本（转写+脚本+修复重试）是短片十几倍，等于短片用户在补贴长片。
+#       本守卫钉：① 折算向上取整（不足半小时按半小时，时长未知按 1 个单位，绝不算出 0 分）；
+#       ② 总价 = 每半小时单价 × 单位数且随时长单调不降；③ 真实扣费必须把 total 传进
+#       gate_message（漏了就静默退回按次收）；④ 个人中心显示「50 积分/半小时」
+#       且「每日次数」列仍用「次」（两列不混用）。
+run_one test_commentary_duration_pricing.py
+
 #  43. test_ai_free_trial.py —— 免费用户「首次体验」（2026-10-05 用户定档：
 #      **每个功能各免一次**，口径可在后台改 per_op / once / off）。
 #      背景：上一轮把 AI 积分墙补齐后，积分池为 0 的免费用户**第一次点任何 AI 功能
