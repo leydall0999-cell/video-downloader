@@ -395,19 +395,10 @@ def create_matting_image(
         _gate = _credit_gate(request, "local_matting_ai", reason="local_matting")
         if _gate:
             raise app.HTTPException(status_code=402, detail=_gate)
-    # 🧱 本地抠图日配额墙（2026-09-13）：免费 8 次/日 → 会员 500 次/日；
-    # 云端火山抠图走积分计费，不占此日配额（见上方 fc 分支）。
-    if not fc:
-        _mstore = app.current_member_store(request)
-        _q = _mstore.quota_state("matting")
-        if not _q.get("allowed"):
-            _free = _q.get("free_limit", 8)
-            _mem = _q.get("member_limit", 500)
-            raise app.HTTPException(
-                status_code=402,
-                detail="MEMBER_QUOTA|今日本地抠图额度已用尽（" + str(int(_q.get("limit", _free))) + "/日）— 开通会员可解锁 " + str(int(_mem)) + " 次/日",
-            )
-        _mstore.use_daily("matting", 1)
+    # 🔴 2026-10-11 定档：一键抠图**取消每日免费次数**，纯按 AI 积分计费
+    #   （本机 `local_matting_ai` 10 / 显式云端 `matting_cloud` 50，见上方门禁）。
+    #   原先这里还有一道「免费 8 次/日 → 会员 500 次/日」的本地日配额墙，与积分
+    #   门禁叠加 ⇒ 用户有积分也会被日配额拦（第 9 次必 402），与定档冲突，故移除。
     # 把云端升级记账钩子挂进 job —— job 会作为 `meta` 传给 `matting_ai.matting_image`，
     # 于是升级真实发生那一刻（matting_ai.py:1670 附近）能回调扣费。
     # job 里不能存闭包以外的不可序列化对象吗？—— job 只在进程内用，不落盘，OK。

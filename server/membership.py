@@ -76,7 +76,7 @@ LEGACY_QUOTA_KEYS: tuple[str, ...] = ("app_compute", "cloud")
 
 DAILY_QUOTA_LIMITS: dict[str, int] = {
     "download": 1000,         # 下载任务 / 日（会员）
-    "matting": 500,           # 本地一键抠图 / 日（会员）；云端火山抠图走积分不计此配额
+    # 一键抠图 2026-10-11 起改为纯 AI 积分计费，不再走每日配额
     "cloud": 200,             # 网页版在线处理 / 日（会员）—— 旧总池，2026-10-06 拆池后无写入点，仅存量归集
     # 🔴 2026-10-06 拆池：8 个云端功能各自独立「每日免费次数」键（会员档）
     "cloud_commentary": 200,   # 视频解说 / 日（会员）
@@ -106,7 +106,7 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
 # 免费档每日配额
 FREE_DAILY_LIMITS: dict[str, int] = {
     "download": 10,
-    "matting": 8,             # 免费本地抠图 8 次/日
+    # 一键抠图 2026-10-11 起改为纯 AI 积分计费，不再有每日免费次数
     "cloud": 3,               # 网页版在线处理 3 次/日（旧总池，保留向后兼容）
     "subtitle": 2,            # 免费字幕提取 2 次/日（faster-whisper 本地推理）；会员无限
     # 🔴 2026-10-06 拆池：云端功能各自独立「每日免费次数」（默认各 3 次/日）
@@ -264,7 +264,8 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     {"key": "sr",               "name": "高清修复",     "resource": "sr",          "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "图片修复；视频超分已独立计次"},
     {"key": "sr_video",         "name": "视频超分",     "resource": "sr_video",    "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "视频放大重建细节（独立额度）"},
     {"key": "bridge",           "name": "音视频桥接",   "resource": "bridge",     "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "合成 / 替换（此前无任何配额，现独立计）"},
-    {"key": "local_matting",    "name": "一键抠图",     "resource": "matting",     "unit": "次", "free_limit": 8,  "member_limit": 500,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机跑；选云端抠图时按 AI 积分计费（云端抠图 50 积分）"},
+    # 🔴 一键抠图 2026-10-11 起从本表移除：改为纯 AI 积分计费（本机 10 / 云端 50），不再有每日免费次数。
+    #    守卫 test_feature_usage_gate 要求「表里每一行都必须有真实配额拦截点」，而抠图已无日配额墙 ⇒ 留着会红。
     # 🔴 下面三行是**网页版**的云端功能（跑在服务器上），与桌面端「视频解说」一起
     #    构成 4 个独立云端功能，各自独立「每日免费次数」+ 各自独立「终身免费次数」
     #    （2026-10-06 拆池，此前 4 个共用一个 cloud 总池，名字分了计数器没分）。
@@ -374,12 +375,19 @@ AI_CREDIT_COSTS: dict[str, dict[str, Any]] = {
         "real_cost": "¥0（占 1.5~2GB 内存 + 长时间 CPU）",
         "note": "🔴 原先**连日配额都没有**，等于白用本机 CPU（Explore 2026-10-05 实测）。",
     },
+    "dewatermark_video_ai": {
+        "name": "AI 视频去水印",
+        "where": "server/routers/dewatermark.py → create_dw_video → dewatermark_ai.ai_video_inpaint（逐帧 LaMa）",
+        "cost": 30,
+        "real_cost": "¥0（占 1.5~2GB 内存 + 长时间 CPU；一次任务几百~几千帧推理）",
+        "note": "🔴 2026-10-11 才接入计费：此前视频去水印**完全没有任何门禁**（连日配额都没有），而它比图片去水印重 2~3 个数量级（10 分钟片 ≈ 2250 帧推理）。按次定价，与图片去水印分开计价（图片 10 / 视频 30）。",
+    },
     "local_matting_ai": {
         "name": "本地 AI 抠图（BiRefNet / MODNet）",
         "where": "server/matting_ai.py（onnxruntime，本机）",
         "cost": 10,
         "real_cost": "¥0（只占用户机器）",
-        "note": "另有日配额（免费 8/日、会员 500/日）。",
+        "note": "🔴 2026-10-11 起取消每日免费次数（原免费 8/日、会员 500/日），纯按积分计费。",
     },
     "commentary_local_mlx": {
         "name": "本机大模型解说",
@@ -1157,7 +1165,7 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 # 「云端 / 算力 / AI / 本地」——用「在线」「本机」以外的中性说法。
 _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("download", "下载任务 {v} 次/日"),
-    ("matting", "一键抠图 {v} 次/日"),
+    # 一键抠图 2026-10-11 起纯走 AI 积分，不再作为「每日次数」权益列出
     # 🔴 2026-10-06 拆池：4 个云端功能各自独立权益（此前共用「在线处理」一条）
     ("cloud_commentary", "视频解说 {v} 次/日"),
     ("cloud_convert", "在线转码 {v} 次/日"),

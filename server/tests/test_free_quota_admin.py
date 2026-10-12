@@ -394,8 +394,12 @@ def test_effective_limits_default_unchanged():
     check(free == M.FREE_DAILY_LIMITS, "无覆盖时免费档 == 代码常量")
     check(mem == M.DAILY_QUOTA_LIMITS, "无覆盖时会员档 == 代码常量")
     # 关键：不能因为加了覆盖机制就把「字幕 2 次/日」这种既有配额弄丢
-    for k in ("download", "matting", "cloud", "app_compute", "subtitle"):
+    for k in ("download", "cloud", "app_compute", "subtitle"):
         check(k in free, f"免费档保留 {k}")
+    # 🔴 2026-10-11：一键抠图改为纯 AI 积分计费 ⇒ 配额表里已无 matting 键，
+    #   后台「免费额度」栏也不应再出现它（改了也不会生效）。
+    check("matting" not in free, "免费档不再有 matting（抠图已改纯积分）")
+    check("matting" not in mem, "会员档不再有 matting（抠图已改纯积分）")
 
 
 def test_free_quota_panel_covers_every_quota_key():
@@ -438,13 +442,13 @@ def test_override_applies_and_merges():
     """覆盖生效，且未覆盖的键保留默认（字段级合并，不是整条替换）。"""
     import membership as M
     M.save_plan_overrides({"free_quota": {
-        "daily_free_limits": {"download": 99, "matting": 1},
+        "daily_free_limits": {"download": 99, "sr": 1},
         "daily_member_limits": {"download": 2000},
     }})
     M._PLAN_OVERRIDE_CACHE = None
     mem, free = M.effective_daily_limits()
     check(free.get("download") == 99, "免费档 download 被覆盖 99", str(free.get("download")))
-    check(free.get("matting") == 1, "免费档 matting 被覆盖 1")
+    check(free.get("sr") == 1, "免费档 sr 被覆盖 1")
     check(mem.get("download") == 2000, "会员档 download 被覆盖 2000")
     check(free.get("subtitle") == 2, "未覆盖的 subtitle 保留默认 2（字段级合并）")
     check(free.get("cloud") == 3, "未覆盖的 cloud 保留默认 3")
@@ -465,12 +469,12 @@ def test_dirty_value_does_not_break_limits():
     """脏值（字符串/None/非数字）必须被忽略而不是让整张配额表炸掉。"""
     import membership as M
     M.save_plan_overrides({"free_quota": {"daily_free_limits": {
-        "download": "abc", "matting": None, "cloud": 3.7, "": 5, "app_compute": 7,
+        "download": "abc", "sr": None, "cloud": 3.7, "": 5, "app_compute": 7,
     }}})
     M._PLAN_OVERRIDE_CACHE = None
     mem, free = M.effective_daily_limits()
     check(free.get("download") == 10, "脏值 'abc' 被忽略、回退默认 10")
-    check(free.get("matting") == 8, "None 被忽略、回退默认 8")
+    check(free.get("sr") == 5, "None 被忽略、回退默认 5")
     check(free.get("cloud") == 3, "3.7 被收敛为 3")
     check(free.get("app_compute") == 7, "合法值 7 正常生效")
     check("" not in free, "空 key 被丢弃")
@@ -553,17 +557,17 @@ def test_white_list_preserves_sibling_fields():
     """白名单的核心价值：只提交一个子表，不得抹掉另一个子表的既有值。"""
     import membership as M
     M.save_plan_overrides({"free_quota": {
-        "daily_free_limits": {"matting": 3},
-        "daily_member_limits": {"matting": 777},
+        "daily_free_limits": {"sr": 3},
+        "daily_member_limits": {"sr": 777},
     }})
     M._PLAN_OVERRIDE_CACHE = None
     # 再只提交 free_limits（不带 member_limits）
     M.save_plan_overrides({"free_quota": {"daily_free_limits": {"download": 2}}})
     M._PLAN_OVERRIDE_CACHE = None
     mem, free = M.effective_daily_limits()
-    check(free.get("matting") == 3, "free_limits.matting 保留 3")
+    check(free.get("sr") == 3, "free_limits.sr 保留 3")
     check(free.get("download") == 2, "free_limits.download 更新为 2")
-    check(mem.get("matting") == 777, "member_limits 未受影响（仍是 777）")
+    check(mem.get("sr") == 777, "member_limits 未受影响（仍是 777）")
 
 
 def test_has_cost_gate_matches_reality():
@@ -576,7 +580,7 @@ def test_has_cost_gate_matches_reality():
     # 已接入的（实测业务代码里真有扣费调用点）
     for op in ("matting_cloud", "matting_vision", "local_matting_ai",
                "commentary_llm", "commentary_local_mlx", "subtitle_asr",
-               "subtitle_translate", "dewatermark_ai",
+               "subtitle_translate", "dewatermark_ai", "dewatermark_video_ai",
                # 2026-10-06 补上的两个真实拦截点
                "commentary_vision", "voice_clone"):
         check(A._has_cost_gate(op) is True, f"{op} 判为已接入扣费")

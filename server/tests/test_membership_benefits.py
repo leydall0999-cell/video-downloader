@@ -93,13 +93,17 @@ def test_benefits_wording_only() -> None:
     check("[条目] no_credits 说明项仍在", "no_credits" in by_key)
 
     # ③ 配额与限流数值原样（改措辞不该顺手改额度）
-    EXPECTED = {"download": (1000, 10), "matting": (500, 8),
+    EXPECTED = {"download": (1000, 10),
                 "cloud": (200, 3), "app_compute": (200, 5)}
     for key, (member_v, free_v) in EXPECTED.items():
         check(f"[限流] {key} 会员限额仍为 {member_v}/日",
               int(M.DAILY_QUOTA_LIMITS.get(key) or 0) == member_v)
         check(f"[限流] {key} 免费限额仍为 {free_v}/日",
               int(M.FREE_DAILY_LIMITS.get(key) or 0) == free_v)
+    # 🔴 2026-10-11：一键抠图改为**纯 AI 积分计费**、取消每日免费次数 ⇒
+    #   两条配额表里都不该再有 matting（否则后台又能改出「抠图 N 次/日」这种已废除的口径）。
+    check("[限流] 会员档已无 matting（抠图改纯积分）", "matting" not in M.DAILY_QUOTA_LIMITS)
+    check("[限流] 免费档已无 matting（抠图改纯积分）", "matting" not in M.FREE_DAILY_LIMITS)
     # ⚠️ FEATURE_USAGE_DEFS 的 key 与配额键不同名（local_matting↔matting），
     #   必须按 resource 关联，直接用 key 找会「找不到 ⇒ 误判为配额被删」。
     # cloud 例外：桌面端本就没有 cloud 拦截点（App 算力全在本机跑），

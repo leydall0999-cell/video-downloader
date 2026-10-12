@@ -2,11 +2,11 @@
 
 隔离 HOME 下 TestClient：
   1. 引擎标记：birefnet-portrait/hr/isnet/sam 标 member_only；birefnet-matting 保持免费
-  2. 免费本地抠图 8 次/日成功计数 → 第 9 次 402 + MEMBER_QUOTA|（引导开会员）
-  3. 激活会员 → 恢复本地抠图，档位 member（limit 500）
+  2. 一键抠图纯按 AI 积分：有积分连发 12 次全过（**无 8 次/日 上限**），日配额计数恒 0
+  3. 激活会员**不再**解锁「抠图 500 次/日」—— 配额表已无 matting 键
   4. 会员专享引擎（birefnet-portrait）免费用户直调 → 402 拦截；会员 → 放行
   5. /api/matting/models 列表：免费隐藏 member_only 引擎，会员可见（HR 仍受 RAM 隐藏）
-  6. 云端火山抠图走积分、不占日配额（force_cloud=1 不计 matting 用量）
+  6. 本机 / 云端抠图都不再写 daily_usage.matting（日配额整条移除）
 
 运行（独立进程，HOME 隔离）：
     cd server && .build_venv/bin/python tests/test_matting_member.py
@@ -56,9 +56,9 @@ def _reset_state():
     if os.path.exists(p):
         os.remove(p)
     server_app.member_store._loaded = False
-    # 🔴 2026-10-05：本机重算力也计入积分（用户定档），本文件验的是**日配额墙**
-    #   （免费 8 次/日），与积分无关 ⇒ 这里给测试账号补足积分，避免被 402 积分门禁
-    #   抢先拦下而测不到配额墙。真实免费用户没积分会被拦，那正是期望行为。
+    # 🔴 2026-10-11 定档：本机重算力计入积分，且**取消每日免费次数**。本文件现在
+    #   验的是「没有 8 次/日 这道墙」⇒ 先给账号补足积分，把积分因素排除掉。
+    #   零积分被拦由 test_ai_free_trial / test_membership 单独钉，此处不复测。
     server_app.member_store.add_credits(100000, reason="test_matting_member_setup")
 
 
@@ -85,37 +85,40 @@ def test_engine_flags():
     print("✅ 引擎标记：4 高级引擎 member_only；birefnet-matting 免费；list_models 已暴露")
 
 
-def test_free_local_8_then_402():
-    """免费本地抠图 8 次/日 → 第 9 次 402 + MEMBER_QUOTA|。"""
+def test_local_matting_needs_credits_no_daily_cap():
+    """🔴 2026-10-11 定档：一键抠图取消每日免费次数，纯按 AI 积分计费。
+
+    钉两件事：
+      1) 有积分 → 连发 12 次全部 200（远超旧的 8 次/日 上限也不拦）；
+      2) `daily_usage.matting` 始终为 0 —— 日配额墙已整条移除，不再计数。
+    """
     _reset_state()
     _setup()
-    for i in range(8):
+    for i in range(12):
         r = _post_matting(model="birefnet-general")
-        assert r.status_code == 200, f"第 {i+1} 次应 200，实际 {r.status_code}: {r.text[:200]}"
+        assert r.status_code == 200, (
+            f"有积分时第 {i+1} 次应 200（已无 8/日 上限），实际 {r.status_code}: {r.text[:200]}")
     used = server_app.member_store.status()["daily_usage"].get("matting", 0)
-    assert used == 8, f"matting 用量应 8，实际 {used}"
-    r = _post_matting(model="birefnet-general")
-    assert r.status_code == 402, f"第 9 次应 402，实际 {r.status_code}"
-    detail = r.json().get("detail", "")
-    assert detail.startswith("MEMBER_QUOTA|"), detail
-    assert "500 次/日" in detail, detail
-    print("✅ 免费本地抠图 8 次成功计数；第 9 次 402 + MEMBER_QUOTA| 引导开会员（500/日）")
+    assert used == 0, f"抠图已取消日配额，daily_usage.matting 应为 0，实际 {used}"
+    print("✅ 一键抠图：有积分连发 12 次全过（无 8/日 上限），日配额计数恒 0")
 
 
-def test_member_unblocks_local():
-    """免费满 8 → 激活VIP会员 → 恢复本地抠图，member 档 500/日。"""
+def test_member_no_longer_unlocks_daily_matting():
+    """🔴 2026-10-11：会员**不再**解锁「抠图 500 次/日」—— 抠图改纯积分，无日配额。
+
+    反向钉死：旧行为是激活会员把 matting 日配额抬到 500。现在 `quota_state("matting")`
+    必须是「未知资源、fail-open」，会员与否都一样 —— 拦不拦只看积分。
+    """
     _reset_state()
     _setup()
-    for _ in range(8):
-        assert _post_matting(model="birefnet-general").status_code == 200
-    assert _post_matting(model="birefnet-general").status_code == 402
     r = server_app.member_store.activate("download_month")
     assert r["ok"]
     q = server_app.member_store.quota_state("matting")
-    assert q["tier"] == "member" and q["limit"] == 500, q
+    assert q["unknown"] is True, f"抠图已无日配额 ⇒ 应为未知资源，实际 {q}"
+    assert q["allowed"] is True
     r = _post_matting(model="birefnet-general")
-    assert r.status_code == 200, f"激活后应恢复：{r.text[:200]}"
-    print("✅ 免费满 8 → 激活VIP会员 → 恢复本地抠图，member 档 500/日")
+    assert r.status_code == 200, f"会员 + 有积分应放行：{r.text[:200]}"
+    print("✅ 会员不再解锁抠图日配额（改纯积分）；有积分即放行")
 
 
 def test_member_only_engine_gate():
@@ -153,28 +156,28 @@ def test_models_list_filter():
     print("✅ 模型列表：免费隐藏 4 高级引擎、会员可见；birefnet-matting 两档均可见")
 
 
-def test_cloud_not_counted_in_daily():
-    """云端火山抠图走积分、不占本地日配额（force_cloud=1，8GB 无积分应 402 但 matting 用量不变）。"""
+def test_matting_writes_no_daily_usage():
+    """🔴 2026-10-11：抠图（本机 / 云端）都不再写 `daily_usage.matting`。
+
+    旧行为：本地抠图每次 `use_daily("matting", 1)`。现在日配额整条移除 ⇒ 无论
+    force_cloud 与否，计数器都必须是 0（有积分时两条路径都 200）。
+    """
     _reset_state()
     _setup()
-    before = server_app.member_store.status()["daily_usage"].get("matting", 0)
-    # 本机无 AI 积分 → 云端门禁 402（积分不足），但本地 matting 日配额不应被消耗
-    r = _post_matting(force_cloud=True)
-    after = server_app.member_store.status()["daily_usage"].get("matting", 0)
-    assert after == before, f"云端抠图不应占本地日配额，before={before} after={after}"
-    # 本地仍可用 8 次
-    for _ in range(8):
+    _post_matting(force_cloud=True)
+    for _ in range(3):
         assert _post_matting(model="birefnet-general").status_code == 200
-    assert server_app.member_store.status()["daily_usage"].get("matting", 0) == before + 8
-    print("✅ 云端抠图走积分不计本地日配额；本地 8 次额度独立可用")
+    used = server_app.member_store.status()["daily_usage"].get("matting", 0)
+    assert used == 0, f"抠图已取消日配额，daily_usage.matting 应为 0，实际 {used}"
+    print("✅ 抠图（本机 / 云端）均不再写日配额计数；只走 AI 积分")
 
 
 if __name__ == "__main__":
     test_engine_flags()
-    test_free_local_8_then_402()
-    test_member_unblocks_local()
+    test_local_matting_needs_credits_no_daily_cap()
+    test_member_no_longer_unlocks_daily_matting()
     test_member_only_engine_gate()
     test_models_list_filter()
-    test_cloud_not_counted_in_daily()
+    test_matting_writes_no_daily_usage()
     print("\n🎉 抠图会员模式单测全部通过（6 项）")
     shutil.rmtree(_TMP, ignore_errors=True)

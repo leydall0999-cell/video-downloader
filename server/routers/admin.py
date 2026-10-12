@@ -98,6 +98,7 @@ _COST_GATE_SITES: dict[str, tuple[str, ...]] = {
     "subtitle_asr": ("routers/subtitle.py",),
     "subtitle_translate": ("routers/subtitles.py",),
     "dewatermark_ai": ("routers/dewatermark.py",),
+    "dewatermark_video_ai": ("routers/dewatermark.py",),
     # 🔴 2026-10-06 补上两项真实扣费点：
     #   · commentary_vision（50 积分，单次真实成本 ¥0.24，全表最贵）此前只在
     #     成本表登记、代码里从无扣费点 ⇒ 用户勾「画面理解」会真去调多模态模型

@@ -260,22 +260,19 @@ def create_dw_image(
         elif engine == "ai":
             if model not in dwc_ai.list_models():
                 raise app.HTTPException(status_code=400, detail=f"未知 AI 模型: {model}（可选: {', '.join(dwc_ai.list_models())}）")
-    # AI 去水印（LaMa ONNX / 扩散模型）为**本机**重算力：占 1.5~2GB 内存、长时间 CPU，
-    # 按用户定档（2026-10-05「云端 + 本机重算力都计入积分」）扣 `dewatermark_ai`。
-    # ⚠️ `engine=auto`（默认）先走 OpenCV、难例才回落 LaMa（本文件 :98-110），
-    #   而回落与否**取决于跑完 OpenCV 后的检测结果**，请求阶段无法预知。
-    #   ⇒ 显式 ai / diffusion 在此预扣；auto 则注入回调，由 `_run_image` 在真正
-    #   回落时记账（同 matting 的 `_make_cloud_charge_hook` 思路）。
-    #   上方旧注释「AI 去水印为本地 ONNX 推理，不扣 AI 积分」作废。
-    if engine in ("ai", "diffusion"):
-        from membership import gate_message as _gate_message
-        _gate = _gate_message(app.current_member_store(request), "dewatermark_ai",
-                              reason="dewatermark_ai")
-        if _gate:
-            raise app.HTTPException(status_code=402, detail=_gate)
-        dw_charge_hook = None
-    else:
-        dw_charge_hook = _make_dw_charge_hook(request)
+    # 🔴 2026-10-11 定档：图片去水印**取消每日免费次数**，无论哪个引擎都按
+    #   `dewatermark_ai` 扣一次积分（10/次）。此前只有显式 ai / diffusion 预扣、
+    #   auto 只在真回落时扣 ⇒ 默认档走纯 OpenCV 的路径**一分不收**（功能用了、
+    #   平台颗粒无收）。现改为入口统一预扣，auto 的难例回落不再重复扣。
+    from membership import gate_message as _gate_message
+    _gate = _gate_message(app.current_member_store(request), "dewatermark_ai",
+                          reason="dewatermark_ai")
+    if _gate:
+        raise app.HTTPException(status_code=402, detail=_gate)
+    # 回落钩子照样建（守卫 test_ai_credit_costs B3 钉住「auto 难例回落必须记账」），
+    # 但本次入口已预扣 ⇒ 标记 charged，防止 auto 回落 LaMa 时**重复扣一次**。
+    dw_charge_hook = _make_dw_charge_hook(request)
+    dw_charge_hook["charged"] = True
     save_path = _save_upload(file, "dw_up")
     job_id = app.uuid.uuid4().hex[:12]
     with app.DW_LOCK:
@@ -765,6 +762,14 @@ def create_dw_video(
         regions_list = _parse_regions(regions, x, y, w, h)
         if not regions_list:
             raise app.HTTPException(status_code=400, detail="请框选水印区域（regions 或 x/y/w/h / segments 需有效）")
+    # 🔴 2026-10-11 定档：视频去水印**取消免费**，按 `dewatermark_video_ai` 扣积分
+    #   （30/次）。此前本端点**完全没有任何门禁** —— 逐帧 LaMa 跑几百到几千帧推理
+    #   （占 1.5~2GB 内存 + 长时间 CPU）却白用，是 2026-10-05 盘点漏掉的最后一处。
+    from membership import gate_message as _gate_message
+    _gate = _gate_message(app.current_member_store(request), "dewatermark_video_ai",
+                          reason="dewatermark_video_ai")
+    if _gate:
+        raise app.HTTPException(status_code=402, detail=_gate)
     save_path = _save_upload(file, "dw_vid_up")
     job_id = app.uuid.uuid4().hex[:12]
     work_dir = str(app.DW_DIR / f"dw_work_{job_id}")

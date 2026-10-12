@@ -152,7 +152,9 @@ def test_free_quota_10_then_blocked():
     assert q["tier"] == "free" and q["limit"] == 10 and q["used"] == 10
     # 2026-10-04：原画/批量两条占位配额已下线（原画是清晰度档位门而非次数配额），
     # 这里改为钉住真实存在的免费档上限 + 未接线资源必须 fail-open 放行。
-    assert st.quota_state("matting")["limit"] == 8
+    # 一键抠图 2026-10-11 起改为纯 AI 积分 ⇒ 不再有日配额，视为未知资源 fail-open
+    assert st.quota_state("matting")["unknown"] is True
+    assert st.quota_state("matting")["allowed"] is True
     # 🔴 2026-10-06 拆键：重活已拆成 6 个独立键（转换三兄弟也拆开 —— 用户
     # 17:11 要求「几个分开不要几个放一起」），免费各 5 次/日。
     # 老键 app_compute 仅用于存量归集，不再是业务写入点。
@@ -161,7 +163,7 @@ def test_free_quota_10_then_blocked():
         assert st.quota_state(_k)["limit"] == 5, f"{_k} 免费档应仍为 5/日"
     assert st.quota_state("original")["unknown"] is True, "已下线资源不应再被当配额拦"
     assert st.quota_state("original")["allowed"] is True
-    print("✅ 免费档 download 10/日，超限带 MEMBER_QUOTA；matting 8 / 重活各 5；未知资源 fail-open")
+    print("✅ 免费档 download 10/日，超限带 MEMBER_QUOTA；抠图已改纯积分（无日配额）/ 重活各 5；未知资源 fail-open")
 
 def test_app_compute_quota_free5_member200():
     """convert_video（视频格式转换，2026-10-06 从 app_compute 拆出）：免费 5/日、会员 200/日、跨日重置。"""
@@ -230,8 +232,10 @@ def test_member_quota_upgrade_after_activation():
     # 会员解锁本地重算力与抠图（2026-10-04：原画/批量占位配额已下线）
     assert st.quota_state("app_compute")["tier"] == "member"
     assert st.quota_state("app_compute")["limit"] == DAILY_QUOTA_LIMITS["app_compute"]
-    assert st.quota_state("matting")["limit"] == DAILY_QUOTA_LIMITS["matting"]
-    print("✅ 会员激活后 download 升 1000/日、抠图与本地重算力解锁、计数延续")
+    # 一键抠图 2026-10-11 起纯走 AI 积分：会员也不再解锁「次数」⇒ 配额表里已无此键
+    assert "matting" not in DAILY_QUOTA_LIMITS
+    assert st.quota_state("matting")["unknown"] is True
+    print("✅ 会员激活后 download 升 1000/日、本地重算力解锁、计数延续（抠图已改纯积分，不再按次解锁）")
 
 def test_daily_quota_unlimited_and_unknown():
     cur = [T0]
