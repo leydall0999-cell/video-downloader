@@ -163,6 +163,32 @@ def test_display_unit_is_half_hour():
           "f.credit_unit || unit" in js)
 
 
+def test_precheck_reports_cost():
+    """预检响应必须带「本次将消耗 N 积分」（与扣费点同源，选完视频就能看到价钱）。"""
+    cases = [
+        (600.0, 50, 1, "10 分钟片 → 50 积分"),
+        (2700.0, 100, 2, "45 分钟片 → 100 积分"),
+        (7200.0, 200, 4, "2 小时片 → 200 积分"),
+    ]
+    for dur, want_cost, want_units, why in cases:
+        res = QR.precheck_commentary(None, dur, engine="cloud")
+        check(f"[预检] {why}（credit_cost）",
+              int(res.get("credit_cost") or 0) == want_cost,
+              f"实际 {res.get('credit_cost')}")
+        check(f"[预检] {why}（credit_units）",
+              int(res.get("credit_units") or 0) == want_units,
+              f"实际 {res.get('credit_units')}")
+        check(f"[预检] {why}（credit_op 同扣费口径）",
+              str(res.get("credit_op") or "") == "commentary_llm",
+              f"实际 {res.get('credit_op')!r}")
+
+    # 前端必须真的展示这个字段（不然白算）
+    js = pathlib.Path(_SERVER.parent, "web", "app.js").read_text(encoding="utf-8")
+    check("[前端] comApplyPrecheck 展示「本次将消耗 N 积分」",
+          "res.credit_cost > 0" in js and "本次将消耗" in js,
+          "漏了展示 = 用户仍要等扣费失败才知道价钱")
+
+
 def main():
     print("=== 视频解说按时间计费守卫 ===")
     print("  ── 计费单位折算 ──")
@@ -173,6 +199,8 @@ def main():
     test_charge_uses_total_not_unit_price()
     print("  ── 显示口径 ──")
     test_display_unit_is_half_hour()
+    print("  ── 预检费用提示 ──")
+    test_precheck_reports_cost()
 
     print()
     if FAILS:

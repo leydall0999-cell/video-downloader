@@ -14905,14 +14905,22 @@ el.dwVidPlayer.hidden = true;
     comPrecheckBlocked = blocked;
     if (el.comGenerateScript) el.comGenerateScript.disabled = blocked;
     if (!el.comStatus) return;
+    // 🔴 2026-10-12 按时间计费：后端按本片实际时长折算「本次将消耗 N 积分」
+    //    （50 积分/半小时，不足半小时按半小时）。选完视频就能看到价钱，
+    //    不用等扣费失败或跑完才知道。与扣费点同源（routers/quota.py 同一组函数）。
+    let costTip = '';
+    if (!blocked && res.credit_cost > 0) {
+      const _u = res.credit_units > 1 ? `（${res.credit_units} 个半小时）` : '';
+      costTip = `本次将消耗 ${res.credit_cost} 积分${_u}。`;
+    }
     if (blocked) {
       el.comStatus.hidden = false;
       el.comStatus.style.color = '#e67e22';
       el.comStatus.textContent = `⚠️ ${res.reason || '当前无法开始'}。${res.hint || ''}`;
-    } else if (res.hint) {
+    } else if (costTip || res.hint) {
       el.comStatus.hidden = false;
       el.comStatus.style.color = '';
-      el.comStatus.textContent = res.hint;
+      el.comStatus.textContent = `${costTip}${res.hint || ''}`.trim();
     } else {
       el.comStatus.style.color = '';
       el.comStatus.hidden = true;
