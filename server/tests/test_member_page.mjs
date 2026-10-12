@@ -77,10 +77,21 @@ assert.ok(/const isAnyExtra = [^;]*\|\| isMem/.test(sv),
 assert.ok(/el\.memberView\.hidden = !isMem/.test(sv), 'switchView 未切换 #memberView 显隐');
 assert.ok(/el\.tabMember\.classList\.toggle\('is-active', isMem\)/.test(sv), 'switchView 未切换会员 tab 高亮');
 assert.ok(/if \(isMem\) memRender\(\);/.test(sv), 'switchView 未在进入会员页时拉取价目');
-// 🔴 启动竞态保护（2026-09-30 真机实测）：boot 的 .then 里若无条件 switchView('download')，
-//    会把用户在加载窗口期点开的「会员」弹回下载视图。必须先判断已有非默认视图选中。
-assert.ok(/if \(!document\.querySelector\('\.tab\.is-active:not\(#tabDownload\)'\)\)/.test(appJs),
-  'boot 默认视图必须带「用户已选中非默认视图则不覆盖」保护，否则会员页会被启动竞态弹回下载');
+// 🔴 启动竞态保护（2026-09-30 真机实测）：boot 里若无条件 switchView('download')，
+//    会把用户在加载窗口期点开的「会员」弹回下载视图。
+// 2026-10-12 更新：保护已从「查询 .tab.is-active:not(#tabDownload)」演化为
+//    `bootViewSet` 标志位（web/app.js L103/L104/L10379/L10419）—— 原断言钉的是旧写法，
+//    变得永久红灯（red 的是过期断言，不是源码）。新断言同时钉三件事，比原来更强：
+//    ① 标志存在；② setTimeout 兜底受 !bootViewSet 保护；③ 标志真被置位（否则兜底必触发）；
+//    ④ 保留「用户已选非默认视图则不覆盖」这一原始意图。
+assert.ok(/let bootViewSet = false;/.test(appJs),
+  'boot 竞态保护标志 bootViewSet 丢失（会员页会被启动竞态弹回下载）');
+assert.ok(/if \(!bootViewSet\) switchView\('download'\)/.test(appJs),
+  'setTimeout 兜底必须受 !bootViewSet 保护，否则会覆盖用户已选视图');
+assert.ok(/bootViewSet = true;/.test(appJs),
+  'bootViewSet 必须真被置位，否则兜底恒触发（等于没有保护）');
+assert.ok(/!document\.querySelector\('\.tab\.is-active:not\(#tabDownload\)'\)/.test(appJs),
+  'boot 需尊重「用户已选中非默认视图」这一原始意图（不得覆盖用户选择）');
 // 2026-10-01 放宽：点击处理里允许附带埋点等额外语句（箭头函数可有花括号块），
 // 只要仍然调用 switchView('member') 即视为已接线 —— 守卫本意是「点击能切到会员页」。
 assert.ok(/if \(el\.tabMember\) el\.tabMember\.addEventListener\('click', \(\) => \{?\s*switchView\('member'\)/.test(appJs),

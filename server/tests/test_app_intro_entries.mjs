@@ -8,6 +8,9 @@
 //
 // 2026-09-30 修订：删掉「账号」组（用户拍板「web 不要」）—— 这张卡讲的是网页自己的账号会员，
 // 不属于「介绍 App 功能」，留着只会和页面主旨打架。卡片 25 → 24、分组 6 → 5、网页可用 9 → 8。
+// 2026-10-12 修订：页面新增「证件照制作」卡（`data-cap="idphoto"`，标 `tag-desktop` 仅桌面端，
+// 网页版确实没有该入口）而本守卫未同步 ⇒ 套件长期红灯（red 的是过期断言，不是页面）。
+// 本次把卡片 24 → 25、仅桌面端 16 → 17；网页可用仍 8。
 //
 // 说明：不做 DOM 运行时（该区块依赖整页初始化），用「源码切片 + 结构断言」，锚点被挪走立即红。
 import assert from 'node:assert/strict';
@@ -43,7 +46,7 @@ const WEB_CAPS = {
 // 仅桌面端 → 网页版不得声称可用
 const DESK_CAPS = [
   'subscribe', 'torrent', 'extension', 'commentary', 'compress', 'sr', 'share', 'page',
-  'bridge', 'dwvideo', 'matting', 'ffmpeg_tools', 'library', 'retention', 'crypto', 'archive',
+  'bridge', 'dwvideo', 'matting', 'idphoto', 'ffmpeg_tools', 'library', 'retention', 'crypto', 'archive',
 ];
 
 // 卡片格式：<div class="app-intro-card" data-cap="xxx"> … <span class="app-intro-tag tag-web|tag-desktop">
@@ -52,7 +55,7 @@ const cards = [];
 let m;
 while ((m = cardRe.exec(intro)) !== null) cards.push({ cap: m[1], body: m[2] });
 
-assert.equal(cards.length, 24, `「更多功能」页应有 24 张能力卡片，实际 ${cards.length}`);
+assert.equal(cards.length, 25, `「更多功能」页应有 25 张能力卡片，实际 ${cards.length}`);
 
 const caps = cards.map((c) => c.cap);
 assert.equal(new Set(caps).size, caps.length, 'data-cap 不得重复：' + caps.filter((c, i) => caps.indexOf(c) !== i).join(','));
@@ -130,4 +133,4 @@ assert.ok(/<span id="buildTag" class="build-tag"><\/span>/.test(indexHtml),
 assert.ok(/\.build-tag:empty \{ display: none; \}/.test(stylesCss),
   '空 .build-tag 必须隐藏，否则会在页脚留下一个孤立圆点');
 
-console.log('✅ 「更多功能」页回归守卫通过：24 项能力 / 5 组 / 标签齐备 / 网页可用项入口存在 / 计数接线与样式完好');
+console.log('✅ 「更多功能」页回归守卫通过：25 项能力 / 5 组 / 标签齐备 / 网页可用项入口存在 / 计数接线与样式完好');
