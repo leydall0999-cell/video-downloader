@@ -605,6 +605,12 @@ run_one test_ai_credential_delivery.py
 #      ⚠️ 需带 venv 跑（app.py 顶层 import requests）。
 run_one test_ai_credit_costs.py
 
+#  42b. test_credit_price_display.py —— 积分单价显示 + 匿名归属（2026-10-12）：
+#      个人中心「积分单价」列必须显示生效价（credit_cost(op)，跟随后台覆盖层），
+#      纯积分功能（抠图/视频去水印/声音克隆）必须出现在使用统计表；
+#      tasks/subscriptions list_for_owner 匿名请求一律空（web-dev 同源漏洞修复）。
+run_one test_credit_price_display.py
+
 #  43. test_ai_free_trial.py —— 免费用户「首次体验」（2026-10-05 用户定档：
 #      **每个功能各免一次**，口径可在后台改 per_op / once / off）。
 #      背景：上一轮把 AI 积分墙补齐后，积分池为 0 的免费用户**第一次点任何 AI 功能

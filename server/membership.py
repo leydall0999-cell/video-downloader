@@ -251,10 +251,10 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     # ⚠️ 拆行**不改变**任何计数逻辑：同一个 resource 的几行加起来还是那一份额度。
     {"key": "video_parse",      "name": "视频下载",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0},
     {"key": "subscribe",        "name": "订阅追更",     "resource": "download",    "unit": "次", "free_limit": 10, "member_limit": 1000, "ai_bonus": 0, "credit_cost": 0, "shared_note": "与「视频下载」共用下载额度"},
-    {"key": "commentary",       "name": "视频解说",     "resource": "cloud_commentary", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "走「终身云端 3 次」额度（按功能独立计），并按 AI 积分计费（自动解说 40 积分 / 画面理解 50）"},
+    {"key": "commentary",       "name": "视频解说",     "resource": "cloud_commentary", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 40, "credit_op": "commentary_llm", "shared_note": "走「终身云端 3 次」额度（按功能独立计），并按 AI 积分计费（自动解说 40 积分 / 画面理解 50）"},
     # ⚠️ 名称不带「本地」：用户 2026-10-04 定档「会员权益文案不得出现 云端/算力/AI/本地」，
     # 当时把「本地一键抠图」改成「一键抠图」；这里同理（守卫 test_membership_benefits）。
-    {"key": "subtitle_extract", "name": "字幕提取",     "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 0},
+    {"key": "subtitle_extract", "name": "字幕提取",     "resource": "subtitle",    "unit": "次", "free_limit": 2,  "member_limit": -1,   "ai_bonus": 0, "credit_cost": 5, "credit_op": "subtitle_asr"},
     {"key": "convert_video",    "name": "视频格式转换", "resource": "convert_video", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "只含格式转换；视频拼接已独立计次"},
     {"key": "concat_video",     "name": "视频拼接",     "resource": "concat_video",  "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "多段视频合并为一条（独立额度）"},
     {"key": "convert_audio",    "name": "音乐转换",     "resource": "convert_audio", "unit": "次", "free_limit": 5,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "音频格式互转；音频拼接已独立计次"},
@@ -276,11 +276,23 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     #     视频解说走 quota.py 的终身额度 + 这里 use_daily(cloud_commentary)。
     {"key": "cloud_convert",    "name": "在线转码",     "resource": "cloud_convert",   "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：上传到服务器转码（免重传重转）"},
     {"key": "cloud_concat",     "name": "在线拼接",     "resource": "cloud_concat",    "unit": "次", "free_limit": 3,  "member_limit": 200,  "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：多片段合并为一条（独立额度）"},
-    {"key": "cloud_dewatermark","name": "图片去水印",   "resource": "cloud_dewatermark", "unit": "次", "free_limit": 3,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：图片框选去水印（另按 AI 积分计费）"},
+    {"key": "cloud_dewatermark","name": "图片去水印",   "resource": "cloud_dewatermark", "unit": "次", "free_limit": 3,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 10, "credit_op": "dewatermark_ai", "shared_note": "网页版：图片框选去水印（另按 AI 积分计费）"},
     {"key": "cloud_dewatermark_pdf", "name": "PDF 去水印", "resource": "cloud_dewatermark_pdf", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：PDF 框选去水印（独立额度）"},
     {"key": "cloud_subtitle",   "name": "字幕提取",     "resource": "cloud_subtitle",   "unit": "次", "free_limit": 3,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕识别 / 提取"},
     {"key": "cloud_subtitle_burn", "name": "字幕烧录",   "resource": "cloud_subtitle_burn", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕压进画面（独立额度）"},
-    {"key": "cloud_subtitle_translate", "name": "字幕翻译", "resource": "cloud_subtitle_translate", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕翻译（另按 AI 积分计费）"},
+    {"key": "cloud_subtitle_translate", "name": "字幕翻译", "resource": "cloud_subtitle_translate", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 5, "credit_op": "subtitle_translate", "shared_note": "网页版：字幕翻译（另按 AI 积分计费）"},
+]
+
+# ── 🔴 纯 AI 积分功能（2026-10-12）──────────────────────────────────────────
+# 这些功能**没有每日配额墙**（2026-10-11 起抠图取消每日免费、视频去水印此前连
+# 配额都没有），因此不能进 FEATURE_USAGE_DEFS（守卫 test_feature_usage_gate
+# 要求每行必须有真实日配额拦截点）。但个人中心「使用统计」必须展示它们、
+# 且「积分单价」列不得显示「免费」——用户 2026-10-12 截图反馈的正是这点。
+# ops: 该功能的计费 op；多个 = 按模式分价，单价列显示「N 起」。
+PURE_CREDIT_FEATURES: list[dict[str, Any]] = [
+    {"key": "credit_matting",  "name": "一键抠图",   "unit": "次", "ops": ("local_matting_ai", "matting_cloud")},
+    {"key": "credit_dw_video", "name": "视频去水印", "unit": "次", "ops": ("dewatermark_video_ai",)},
+    {"key": "credit_voice",    "name": "声音克隆",   "unit": "次", "ops": ("voice_clone",)},
 ]
 
 # --------------------------------------------------------------------------- #
@@ -2122,6 +2134,19 @@ def usage_summary(store: MembershipStore, period: str = "today") -> dict[str, in
     return totals
 
 
+def _effective_credit_cost(d: dict[str, Any]) -> int:
+    """取某功能行的**生效**积分单价。
+
+    行里带 credit_op 的走 credit_cost()（与真实扣费同源，跟随后台
+    plans.json credit_costs 覆盖层）；没有 op 的回退行内烘焙值。
+    显示层与扣费层不同源 = 又一次「改了后台没生效」的错位（2026-10-07 教训）。
+    """
+    op = d.get("credit_op")
+    if op:
+        return int(credit_cost(op))
+    return int(d.get("credit_cost", 0))
+
+
 def feature_usage_status(store: MembershipStore, period: str = "today") -> list[dict[str, Any]]:
     """生成个人中心「使用统计」表格所需的每行数据。
 
@@ -2157,7 +2182,7 @@ def feature_usage_status(store: MembershipStore, period: str = "today") -> list[
                 "period_used": 0,
                 "unlimited": True,
                 "balance": None,
-                "credit_cost": int(d.get("credit_cost", 0)),
+                "credit_cost": _effective_credit_cost(d),
             })
             continue
         _lim = limit_map.get(d["resource"])
@@ -2182,6 +2207,26 @@ def feature_usage_status(store: MembershipStore, period: str = "today") -> list[
             "period_used": period_totals.get(d["resource"], 0),
             "unlimited": False,
             "balance": balance,
-            "credit_cost": int(d.get("credit_cost", 0)),
+            "credit_cost": _effective_credit_cost(d),
+        })
+    # 🔴 纯 AI 积分功能（无日配额墙）：追加进表格，积分单价必须可见（2026-10-12）。
+    #    daily_limit 置 None ⇒ 前端「体验剩余」列显示「—」；单价多档显示「N 起」。
+    for p in PURE_CREDIT_FEATURES:
+        prices = [credit_cost(o) for o in (p.get("ops") or ())]
+        label = None
+        if prices:
+            label = str(min(prices)) if len(set(prices)) == 1 else f"{min(prices)} 起"
+        rows.append({
+            "key": p["key"],
+            "name": p["name"],
+            "unit": p["unit"],
+            "daily_used": 0,
+            "daily_limit": None,
+            "daily_remaining": None,
+            "period_used": 0,
+            "unlimited": False,
+            "balance": None,
+            "credit_cost": (min(prices) if prices else 0),
+            "credit_cost_label": label,
         })
     return rows

@@ -412,14 +412,19 @@ class TaskStore:
             return list(self._tasks.values())
 
     def list_for_owner(self, owner_id: str) -> list["DownloadTask"]:
-        """按归属列出任务：新任务严格匹配 owner；历史遗留（owner_id 为空）保持可见。
+        """按归属列出任务（安全修复 2026-10-12，web-dev 同源漏洞）：
 
-        与 routers/convert.py 的设备隔离同口径（历史无归属 job 兼容可见），
-        避免升级后老用户的历史任务凭空消失。
+        · owner_id 为空（匿名请求：无登录态也无设备标识）→ **一律返回空**。
+          旧规则「无归属任务对所有人可见」会让任何匿名请求拿到他人任务列表
+          （含 source_url / play_url / watch_options 成品直链）。
+        · 非匿名 → 本人任务 + 历史遗留（升级前创建、owner_id 为空）任务。
+          桌面端单用户本机，保留老任务可见性，避免升级后历史凭空消失。
         """
         with self._lock:
+            if not owner_id:
+                return []
             return [t for t in self._tasks.values()
-                    if not getattr(t, "owner_id", "") or t.owner_id == owner_id]
+                    if t.owner_id == owner_id or not getattr(t, "owner_id", "")]
 
     def purge_expired(self, ttl: int = TASK_TTL_SECONDS) -> int:
         """TTL 清理：**只处理已终结的任务**，进行中的任务永不被清理。

@@ -19385,7 +19385,9 @@ el.dwVidPlayer.hidden = true;
         balance = `<span class="pu-num">${f.balance} ${unit}</span>`;
       }
       let cost = '—';
-      if (f.credit_cost != null && f.credit_cost > 0) {
+      if (f.credit_cost_label) {
+        cost = `<span class="pu-num">${esc(f.credit_cost_label)}</span> 积分/${unit}`;
+      } else if (f.credit_cost != null && f.credit_cost > 0) {
         cost = `<span class="pu-num">${f.credit_cost}</span> 积分/${unit}`;
       } else if (!f.unlimited && f.credit_cost === 0) {
         cost = '<span class="pu-tag pu-tag-free">免费</span>';

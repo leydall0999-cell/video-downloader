@@ -2559,8 +2559,12 @@ def _require_owned_task(task_id: str, request):
     凭空消失；新任务一律带 owner_id。
     """
     task = _require_task(task_id)
+    req_owner = _task_owner(request)
+    if not req_owner:
+        # 匿名请求（无登录态、无设备标识）不 touch 任何任务（2026-10-12 安全修复）
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
     owner = getattr(task, "owner_id", "") or ""
-    if owner and owner != _task_owner(request):
+    if owner and owner != req_owner:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     return task
 

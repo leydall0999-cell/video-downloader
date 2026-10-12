@@ -86,8 +86,11 @@ class SubscriptionStore:
             return sorted(self._subs.values(), key=lambda s: s.created_at, reverse=True)
 
     def list_for_owner(self, owner_id: str) -> list[Subscription]:
-        """按归属过滤：只返回本人订阅 + 历史遗留（owner_id 为空）订阅。"""
+        """按归属过滤（安全修复 2026-10-12）：匿名请求一律空；
+        非匿名 = 本人订阅 + 历史遗留（owner_id 为空）订阅。"""
         with self._lock:
+            if not owner_id:
+                return []
             return sorted(
                 (s for s in self._subs.values()
                  if not getattr(s, "owner_id", "") or s.owner_id == owner_id),
