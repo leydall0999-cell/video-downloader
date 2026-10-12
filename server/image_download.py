@@ -305,11 +305,16 @@ def _name_from_content_disposition(value: str) -> str:
 
 
 def derive_filename(final_url: str, content_disposition: str, ext: str,
-                    workdir: Path | None = None) -> str:
-    """推导落盘文件名：Content-Disposition > URL 末段 > image，扩展名以魔数为准。
+                    workdir: Path | None = None, name_hint: str = "") -> str:
+    """推导落盘文件名：name_hint > Content-Disposition > URL 末段 > image，
+    扩展名以魔数为准。
+
+    `name_hint` 是调用方给的可读名（分享页展开的图片传 "图片-1"…）—— 优先级最高，
+    否则小红书这类 CDN 的 URL 末段是一串哈希天书，用户在一堆文件夹里根本认不出来。
 
     同名冲突时自动加序号（image.jpg → image-1.jpg），避免批量下载互相覆盖。
     """
+    hint = _sanitize(name_hint or "") if name_hint else ""
     cd_name = _sanitize(_name_from_content_disposition(content_disposition))
     url_name = ""
     try:
@@ -317,7 +322,7 @@ def derive_filename(final_url: str, content_disposition: str, ext: str,
         url_name = _sanitize(urllib.parse.unquote(path.rsplit("/", 1)[-1]))
     except Exception:  # noqa: BLE001
         url_name = ""
-    name = cd_name or url_name or "image"
+    name = hint or cd_name or url_name or "image"
     # 扩展名以魔数识别结果为准（CDN 常把 .php/.weixin 动态地址当图片 served）
     stem = name.rsplit(".", 1)[0] or "image" if "." in name else name
     candidate = f"{stem}{ext}"
@@ -790,13 +795,16 @@ def run_image_download(task: DownloadTask, store: TaskStore,
             task.log(f"页面无可下载图片：{task.url}")
             return
         created = []
-        for u in imgs:
+        for idx, u in enumerate(imgs, start=1):
             try:
                 child = store.create(
                     url=u, title='', platform='图片', quality='原图',
                     quality_key='origin', kind='image',
                     cookie=task.cookie, proxy=task.proxy,
                     referer=task.referer, owner_id=task.owner_id,
+                    # 可读名（用户报「一堆文件夹我上哪找去」）：CDN 的 URL 末段是
+                    # 哈希天书，落盘名与卡片标题都该是「图片-1」这种能认出来的。
+                    name_hint=f"图片-{idx}",
                 )
             except Exception:  # noqa: BLE001 - 单张建任务失败不影响其余
                 continue
@@ -842,7 +850,8 @@ def run_image_download(task: DownloadTask, store: TaskStore,
         return
 
     # ---- 成功：.part → 最终名（同目录 rename，原子）----
-    filename = derive_filename(meta["final_url"], "", meta["ext"], workdir)
+    filename = derive_filename(meta["final_url"], "", meta["ext"], workdir,
+                               name_hint=task.name_hint)
     final = workdir / filename
     try:
         part.rename(final)

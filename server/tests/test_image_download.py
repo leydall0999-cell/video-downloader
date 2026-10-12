@@ -1278,6 +1278,83 @@ def test_expanded_children_are_discoverable():
     print("✅ 展开的子任务可被发现：children 随父任务下发 + 持久化 + 前端建卡片接线")
 
 
+def test_saved_file_is_findable():
+    """🔴 2026-10-12 用户报「你得让我知道在哪里啊，一堆文件夹我上哪找去」。
+
+    两个落点都要管：
+      · 落盘文件名：分享页展开的图片，URL 末段是 CDN 哈希天书
+        （1040g2sg31…!nd_dft_wlteh_webp_3.webp）⇒ 必须给可读名（图片-1…）；
+      · 「文件在哪」：桌面版把成品**本机绝对路径**随任务下发，前端才能显示
+        「已下载到本机：<路径>」+「在访达中显示」；网页版绝不下发（那是服务器路径）。
+    """
+    store, tmp = _mkstore()
+    try:
+        # ① 可读名提示优先于 CDN 名（否则用户在一堆哈希文件里认不出来）
+        check("derive_filename：name_hint 优先",
+              image_download.derive_filename(
+                  "https://cdn.x/1040g2sg31abc!nd_dft_wlteh_webp_3.webp", "", ".webp",
+                  None, name_hint="图片-1") == "图片-1.webp",
+              image_download.derive_filename(
+                  "https://cdn.x/abc.webp", "", ".webp", None, name_hint="图片-1"))
+        check("derive_filename：name_hint 也压过 Content-Disposition",
+              image_download.derive_filename(
+                  "https://cdn.x/abc.webp", 'attachment; filename="cd.webp"', ".webp",
+                  None, name_hint="图片-2") == "图片-2.webp", "")
+        check("derive_filename：不给 name_hint 时行为不变（直链仍用 URL 末段）",
+              image_download.derive_filename(
+                  "https://cdn.x/abc.webp", "", ".webp", None) == "abc.webp", "")
+
+        # ② 走一遍真实下载：落盘名就是可读名（含扩展名以魔数为准）
+        t = store.create(url=_u("/real.png"), title="", platform="图片", quality="原图",
+                         kind="image", name_hint="图片-7")
+        image_download.run_image_download(t, store, None, InlineSched())
+        check("单张图片按 name_hint 落盘",
+              t.status == "completed" and t.filename == "图片-7.png",
+              f"{t.status} {t.filename!r} {t.error[:40]}")
+        check("filepath 与 filename 一致且文件真在",
+              bool(t.filepath) and t.filepath.name == t.filename and t.filepath.exists(),
+              str(t.filepath))
+
+        # ③ 桌面版下发本机绝对路径（前端据此显示位置 + 在访达中显示）
+        old_plat = os.environ.get("VDL_PLATFORM")
+        try:
+            os.environ["VDL_PLATFORM"] = "macos"
+            pub = t.to_public_dict()
+            check("桌面版：公开输出带 local_path（就是成品在本机的绝对路径）",
+                  pub.get("local_path") == str(t.filepath), str(pub.get("local_path")))
+            os.environ["VDL_PLATFORM"] = "web"
+            pub_web = t.to_public_dict()
+            check("网页版：绝不下发 local_path（那是服务器上的路径，别泄露部署结构）",
+                  "local_path" not in pub_web, str(pub_web.get("local_path")))
+        finally:
+            if old_plat is None:
+                os.environ.pop("VDL_PLATFORM", None)
+            else:
+                os.environ["VDL_PLATFORM"] = old_plat
+
+        # ④ 分享页展开：子任务拿到「图片-1..N」可读名（父任务负责编号）
+        p = store.create(url=_u("/share.html"), title="", platform="图片",
+                         quality="原图", kind="image")
+        image_download.run_image_download(p, store, None, InlineSched())
+        kids = sorted([x for x in store.list_all() if x.id not in (t.id, p.id)],
+                      key=lambda k: k.name_hint)
+        check("展开的子任务都带可读名提示",
+              [k.name_hint for k in kids] == [f"图片-{i}" for i in range(1, len(kids) + 1)],
+              str([k.name_hint for k in kids]))
+        check("展开的图片按可读名落盘（不再是 CDN 哈希天书）",
+              all(k.status == "completed" and k.filename == f"{k.name_hint}.png"
+                  for k in kids),
+              str([(k.name_hint, k.filename, k.status) for k in kids]))
+        # 持久化往返：重启后 name_hint 不能丢，否则重试又变回天书名
+        store.flush()
+        back = TaskStore(root=tmp / "root", state_dir=tmp / "state").get(kids[0].id)
+        check("重启后 name_hint 仍在", back is not None and back.name_hint == kids[0].name_hint,
+              str(getattr(back, "name_hint", None)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("✅ 成品可发现：可读落盘名（图片-N）+ 桌面版下发本机绝对路径")
+
+
 class InlineSched:
     """测试用调度器：就地执行子任务（生产里是 BatchScheduler）"""
 
@@ -1433,6 +1510,7 @@ def main():
         test_run_image_download_expands_page_into_children,
         test_run_image_download_page_without_images_platform_hint,
         test_expanded_children_are_discoverable,
+        test_saved_file_is_findable,
         test_router_source_wiring,
         test_core_kind_routing_wiring,
         test_app_registers_image_router,

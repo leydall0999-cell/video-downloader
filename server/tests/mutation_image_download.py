@@ -11,7 +11,9 @@ SERVER = "/Users/suixindelang/WorkBuddy/video-downloader-app/server"
 # 🔴 必须用 .build_venv 的解释器：base python 缺 requests 等依赖，
 # 注入缺陷后「变红」会是 import 失败的假阳性（红灯但原因不对）。
 PY = os.path.join(os.path.dirname(SERVER), ".build_venv", "bin", "python")
-TEST = "tests/test_image_download.py"
+# 2026-10-12：把桌面桥套件一并纳入 —— save_task_file / 前端保存接线 的缺陷
+# 只有 test_desktop_bridge.py 咬得住，只跑图片套件会让这些变异「假绿」。
+TESTS = ["tests/test_image_download.py", "tests/test_desktop_bridge.py"]
 
 MUTATIONS = [
     ("M1 漏落 filepath=final（完成却取不到文件）",
@@ -41,7 +43,7 @@ MUTATIONS = [
      "app.py", "app.include_router(_image_rtr.router)", "pass"),
     ("M7 _sanitize 空值兜底抢先（所有图片被命名成 image.png）",
      "image_download.py",
-     '    name = cd_name or url_name or "image"',
+     '    name = hint or cd_name or url_name or "image"',
      '    name = "image"'),
     ("M8 非 http(s) scheme 不再显式拒绝（data: 偷渡）",
      "image_download.py",
@@ -76,6 +78,24 @@ MUTATIONS = [
      "tasks.py", '            "children": list(self.children or []),', ""),
     ("M19 前端不建子卡片（回归：只剩「已展开 N 张」的汇总卡片）",
      "../web/app.js", "    ensureChildCards(task);", "    void task;"),
+    # —— 2026-10-12 「我上哪找去」：可读落盘名 + 桌面另存桥 ——
+    ("M20 derive_filename 忽略 name_hint（落盘名又变回 CDN 哈希天书）",
+     "image_download.py", "    name = hint or cd_name or url_name or \"image\"",
+     "    name = cd_name or url_name or \"image\""),
+    ("M21 父任务不给子任务可读名（展开的图片全是天书名）",
+     "image_download.py", '                    name_hint=f"图片-{idx}",', ""),
+    ("M22 local_path 不再按桌面/网页分流（把服务器路径下发给网页版）",
+     "tasks.py", "            if is_desktop() and self.filepath:",
+     "            if self.filepath:"),
+    ("M23 另存不弹面板（直接塞进「下载」，用户要的「自己选位置」没了）",
+     "../desktop/desktop_launcher.py",
+     '            chosen = _choose_save_path("保存到", suggested, "/tmp/vdl_task_save.log")',
+     "            chosen = \"\""),
+    ("M24 前端桌面壳下不移除 href（回到 <a download> 静默吞掉的老状态）",
+     "../web/app.js", "      refs.save.removeAttribute('href');", "      void 0;"),
+    ("M25 前端桌面版也自动点保存（多张图会连弹一串系统面板）",
+     "../web/app.js", "    const webAutoSave = autoSave && !isDesktopShell();",
+     "    const webAutoSave = autoSave;"),
 ]
 
 
@@ -95,6 +115,14 @@ def _stage_tree() -> str:
     subprocess.run(["rsync", "-a", "--exclude", "__pycache__", "--exclude", ".pytest_cache",
                     f"{SERVER}/", f"{dst}/"], check=True, capture_output=True)
     os.symlink(os.path.join(REPO, "web"), os.path.join(root, "web"))
+    # desktop/ 也要有副本：test_desktop_bridge.py 会 import desktop_launcher，
+    # 且它按 `__file__.parents[2]` 推仓库根 —— 只搬 .py 顶层文件即可（不含
+    # .release_baselines 那 1.6G 产物），变异 desktop_launcher.py 也就只动副本。
+    dst_desktop = os.path.join(root, "desktop")
+    os.makedirs(dst_desktop, exist_ok=True)
+    subprocess.run(["rsync", "-a", "--include", "*.py", "--exclude", "*",
+                    f"{os.path.join(REPO, 'desktop')}/", dst_desktop + "/"],
+                   check=True, capture_output=True)
     return root          # 返回根目录（server/ 与 web/ 都在它下面）
 
 
@@ -106,9 +134,16 @@ def run_test(server_dir: str) -> tuple[bool, str]:
     env = dict(os.environ)
     env.setdefault("VDL_DATA_DIR", tempfile.mkdtemp(prefix="vdl_mut_"))
     env.setdefault("VDL_LOGIN_GATE", "0")
-    p = subprocess.run([PY, TEST], cwd=server_dir, env=env,
-                       capture_output=True, text=True, timeout=600)
-    return p.returncode == 0, (p.stdout or "") + (p.stderr or "")
+    out_all = []
+    ok_all = True
+    for rel in TESTS:
+        p = subprocess.run([PY, rel], cwd=server_dir, env=env,
+                           capture_output=True, text=True, timeout=600)
+        if p.returncode != 0:
+            ok_all = False
+        out_all.append(f"---- {rel} (rc={p.returncode}) ----\n"
+                       + (p.stdout or "") + (p.stderr or ""))
+    return ok_all, "\n".join(out_all)
 
 
 def _sha(text: str) -> str:
@@ -163,8 +198,12 @@ def main() -> int:
                 ok = False
             else:
                 bad = [ln for ln in out.splitlines() if "AssertionError" in ln]
+                if not bad:
+                    # test_desktop_bridge 逐项打「❌ 描述」计数、不抛异常 —— 不认这种
+                    # 失败风格的话，原因栏只会写「非零退出」，看不出是断言还是崩溃。
+                    bad = [ln for ln in out.splitlines() if ln.strip().startswith("❌")]
                 why = (bad[0].strip()[:70] if bad
-                       else "非零退出（未见 AssertionError，需人工核对）")
+                       else "非零退出（未见任何失败项，需人工核对）")
                 print(f"✅ {name}: 如期变红（{why}）")
         except Exception as e:  # noqa: BLE001
             print(f"⚠️  {name}: harness 异常 {e}")

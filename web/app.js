@@ -2060,6 +2060,93 @@
     return refs;
   };
 
+  /** 把「文件在本机哪儿」渲染到提示行：路径 + 「在访达中显示」直达。
+   *  用户原话：「你得让我知道在哪里啊，一堆文件夹我上哪找去」——
+   *  光说「已保存」不够，必须给出路径本身，并且一键能定位到文件。 */
+  function renderPathHint(box, prefix, path) {
+    box.hidden = false;
+    box.textContent = '';
+    box.appendChild(document.createTextNode(prefix));
+    const code = document.createElement('code');
+    code.className = 'saved-path';
+    code.textContent = path;
+    box.appendChild(code);
+    box.appendChild(document.createTextNode(' '));
+    const link = document.createElement('a');
+    link.href = '#';
+    link.className = 'saved-reveal';
+    link.textContent = '在访达中显示';
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const api = window.pywebview && window.pywebview.api;
+      if (!api || typeof api.reveal_path !== 'function') return;
+      Promise.resolve(api.reveal_path(path)).then((r) => {
+        if (typeof r === 'string' && r.indexOf('ERROR:') === 0) {
+          showToast(r.replace(/^ERROR:\s*/, ''));
+        }
+      }).catch(() => { /* 定位失败不值得打断用户 */ });
+    });
+    box.appendChild(link);
+  }
+
+  /** 完成卡的提示行文案：桌面版说清「文件在哪 / 怎么另存」，浏览器版沿用旧文案。 */
+  function renderSavedHint(refs, task) {
+    const box = refs.saveHint;
+    box.hidden = false;
+    if (!isDesktopShell()) {
+      box.textContent = task.kind === 'image'
+        ? '点上方「保存到本机」即可把图片下载到你的电脑（浏览器限制，网站无法直接写入你本地）。'
+        : '点上方「保存到本机」即可把处理好的视频下载到你的电脑（浏览器限制，网站无法直接写入你本地）。';
+      return;
+    }
+    if (task.local_path) {
+      renderPathHint(box, '已下载到本机：', task.local_path);
+      const more = document.createElement('span');
+      more.className = 'save-hint-more';
+      more.textContent = ' 想放到别的位置？点上方「保存到本机」另存（默认到「下载」文件夹）。';
+      box.appendChild(more);
+      return;
+    }
+    box.textContent = '点上方「保存到本机」可选择保存位置（默认到「下载」文件夹）。';
+  }
+
+  /** 桌面版「保存到本机」：走原生桥（弹系统保存面板 → 写盘 → 回报真实路径）。
+   *  幂等绑定：paintTask 会被反复调用，但只允许挂一个 click 监听。 */
+  function bindTaskSaveBridge(refs, task) {
+    const btn = refs.save;
+    if (btn.dataset.bridgeTask === task.task_id) return;
+    btn.dataset.bridgeTask = task.task_id;
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const api = window.pywebview && window.pywebview.api;
+      if (!api || typeof api.save_task_file !== 'function') {
+        showToast('当前版本不支持本机保存，请更新应用');
+        return;
+      }
+      if (btn.dataset.saving === '1') return;
+      btn.dataset.saving = '1';
+      const label = btn.textContent;
+      btn.textContent = '正在保存…';
+      try {
+        const res = await api.save_task_file(
+          task.task_id, btn.dataset.saveName || '下载文件', deviceId(), authBearerToken());
+        if (res === 'CANCELLED') {
+          refs.saveHint.hidden = false;
+          refs.saveHint.textContent = '已取消保存（文件仍在本机，可随时再点「保存到本机」）。';
+        } else if (typeof res === 'string' && res.indexOf('ERROR:') === 0) {
+          showToast('保存失败：' + res.replace(/^ERROR:\s*/, ''), 8000);
+        } else if (res) {
+          renderPathHint(refs.saveHint, '✅ 已保存到：', String(res));
+        }
+      } catch (err) {
+        showToast('保存失败：' + ((err && err.message) || err), 8000);
+      } finally {
+        btn.dataset.saving = '';
+        btn.textContent = label;
+      }
+    });
+  }
+
   const paintTask = (refs, task, autoSave) => {
     const active = ACTIVE_STATES.includes(task.status);
     refs.title.textContent = task.title || refs.fallbackTitle || '解析中…';
@@ -2222,22 +2309,30 @@
       return;
     }
     refs.save.hidden = false;
-    // 任务在哪个节点跑，文件就从哪个节点取
-    refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file?download=1&device=${encodeURIComponent(deviceId())}`;
     refs.save.setAttribute('download', task.filename || '');
+    // 另存面板预填的文件名：每次重绘都刷新（重试后文件名会变），
+    // 桥接回调读 dataset 而不是捕获闭包里的旧 task 对象。
+    refs.save.dataset.saveName = task.filename || '';
     refs.save.textContent = '保存到本机 ⬇';
-    refs.status.textContent = autoSave
-      ? '已完成 · 已自动保存到本机'
-      : '已完成 · 点「保存到本机」';
-    if (autoSave) {
-      refs.save.click();
-      refs.saveHint.hidden = false;
-      refs.saveHint.textContent = '文件已自动保存到你的下载文件夹；若浏览器拦截未出现，请点上方按钮手动保存。';
+    if (isDesktopShell()) {
+      // 🔴 2026-10-12 用户报「保存到本机点了没反应，文件埋在一堆文件夹里我上哪找去」：
+      //   桌面壳是 pywebview 的 WKWebView，`<a download>` 想弹系统保存面板必须开
+      //   ALLOW_DOWNLOADS（pywebview 默认 False，本项目从未开启）⇒ 点击被**静默
+      //   吞掉**（不报错、不弹框、不落盘）。改走原生桥：弹「保存到哪里」面板 →
+      //   Python 从本机后端写盘 → 回报真实路径，与去水印/二维码/解说成片同款。
+      refs.save.removeAttribute('href');
+      bindTaskSaveBridge(refs, task);
     } else {
-      refs.saveHint.hidden = false;
-      refs.saveHint.textContent = task.kind === 'image'
-        ? '点上方「保存到本机」即可把图片从服务器下载到你的电脑（浏览器限制，网站无法直接写入你本地）。'
-        : '点上方「保存到本机」即可把处理好的视频从服务器下载到你的电脑（浏览器限制，网站无法直接写入你本地）。';
+      // 任务在哪个节点跑，文件就从哪个节点取（浏览器版交给浏览器保存）
+      refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file?download=1&device=${encodeURIComponent(deviceId())}`;
+    }
+    const webAutoSave = autoSave && !isDesktopShell();
+    refs.status.textContent = webAutoSave ? '已完成 · 已自动保存到本机' : '已完成';
+    renderSavedHint(refs, task);
+    if (webAutoSave) {
+      // 桌面版**绝不**在这里自动弹系统保存框：多张图片会连着弹一串面板，
+      // 而文件本来就已经在本机（App 的下载目录）——提示行负责说清在哪 / 怎么另存。
+      refs.save.click();
     }
 
     // 已完成任务展示格式转换入口（增值能力；仅视频，图片转换走图片处理链路）
@@ -10279,7 +10374,12 @@ el.dwVidPlayer.hidden = true;
   // 修法：桌面版走本机原生桥 save_direct_url（Python 带 Referer/UA 拉流写盘，与后端
   //       下载同源，仍不经过外网服务器）；浏览器版仅无防盗链时用 <a download>，其余
   //       交给服务器下载（渲染时已按 directOk 切到普通下载流程）。
-  const isDesktopShell = () => !!(window.pywebview && window.pywebview.api);
+  // 是否桌面壳（pywebview 原生桥可用）。刻意写成**函数声明**而不是 const 箭头：
+  // paintTask 会用它决定「保存」走原生桥还是 <a download>，函数声明有提升，
+  // 不会踩 const 的暂时性死区（本项目踩过 paintTask 里用未初始化 const 的坑）。
+  function isDesktopShell() {
+    return !!(window.pywebview && window.pywebview.api);
+  }
 
   const directNeedsReferer = (video) => !!(video && video.direct_needs_referer);
 

@@ -47,7 +47,7 @@ _PERSIST_FIELDS = (
     "error", "hint", "created_at", "extract_mode",
     "concurrent_fragments", "downloader_type", "cookie", "proxy", "referer",
     "source_url", "play_url", "watch_options", "is_hls", "resumable",
-    "file_expired", "owner_id", "children",
+    "file_expired", "owner_id", "children", "name_hint",
 )
 
 
@@ -133,6 +133,13 @@ class DownloadTask:
     #   而 syncMissingCards 只给「活跃状态」补卡片 ⇒ 图片在服务端却一张都不显示。
     #   把子任务 ID 挂在父任务上随 to_public_dict 下发，前端据此建卡片（见 app.js）。
     children: list[str] = field(default_factory=list)
+    # 🔴 2026-10-12 落盘文件名的**可读名提示**（用户报「一堆文件夹我上哪找去」）：
+    #   分享链接展开的图片，其 URL 末段是 CDN 的哈希串
+    #   （如 1040g2sg31...!nd_dft_wlteh_webp_3.webp），落盘名与卡片标题都是一串天书。
+    #   父任务在展开时写入 name_hint（"图片-1"…），执行器据此命名落盘文件。
+    #   刻意做成独立字段而不是复用 title：title 会在完成时被改写为最终文件名，
+    #   且用户直贴的图片直链不该被改名。
+    name_hint: str = ""
 
     def __post_init__(self):
         # 初始任务自动带有"排队等待"步骤，让前端过程面板一创建就有东西展示
@@ -170,7 +177,7 @@ class DownloadTask:
             self.logs[:] = self.logs[-_MAX_LOG_LINES:]
 
     def to_public_dict(self) -> dict:
-        return {
+        d = {
             "task_id": self.id,
             "status": self.status,
             "kind": self.kind,
@@ -199,7 +206,19 @@ class DownloadTask:
             "steps": self.steps,
             "logs": self.logs,
             "children": list(self.children or []),
+            "name_hint": self.name_hint,
         }
+        # 桌面版额外下发成品的**本机绝对路径**（用户报「你得让我知道在哪里啊，
+        # 一堆文件夹我上哪找去」）：前端据此显示「已下载到本机：<路径>」并提供
+        # 「在访达中显示」直达。网页版**绝不下发** —— 那是服务器上的路径，对网页
+        # 用户毫无意义，还把部署目录结构泄露出去。能力探测失败也不影响序列化。
+        try:
+            from platform_model import is_desktop
+            if is_desktop() and self.filepath:
+                d["local_path"] = str(self.filepath)
+        except Exception:  # noqa: BLE001
+            pass
+        return d
 
 
 class TaskStore:
@@ -317,6 +336,8 @@ class TaskStore:
                 # 分享页展开出的子任务 ID（2026-10-12）：不还原的话，
                 # 重启/刷新后父任务就「忘了」自己派生了哪些图片，前端无从建卡片。
                 children=[str(c) for c in (row.get("children") or [])],
+                # 可读名提示（2026-10-12）：漏还原则中断重试后落盘名又变回 CDN 天书串
+                name_hint=str(row.get("name_hint") or ""),
             )
             task.steps = []   # 恢复条目不带走历史步骤，__post_init__ 重建初始步骤
             task.__post_init__()
@@ -355,7 +376,8 @@ class TaskStore:
                 cookie: str = "", proxy: str = "",
                 play_url: str = "", watch_options: list[dict] | None = None,
                 is_hls: bool = False, referer: str = "",
-                owner_id: str = "", kind: str = "video") -> DownloadTask:
+                owner_id: str = "", kind: str = "video",
+                name_hint: str = "") -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -366,6 +388,7 @@ class TaskStore:
             cookie=cookie, proxy=proxy,
             play_url=play_url, watch_options=watch_options or [], is_hls=is_hls,
             referer=referer, owner_id=owner_id, kind=kind or "video",
+            name_hint=name_hint,
         )
         with self._lock:
             self._tasks[task_id] = task

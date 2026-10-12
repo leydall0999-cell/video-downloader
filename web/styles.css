@@ -520,6 +520,17 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 .task.is-collapsed .task-foot > .task-stats { display: none; }
 .task.is-collapsed .convert-box { display: none; }
 .task.is-collapsed .save-hint { display: none; }
+/* 完成卡的「文件在哪」提示（2026-10-12 用户报「你得让我知道在哪里啊」）：
+   路径等宽可选中，「在访达中显示」是一眼能认出的链接 */
+.save-hint .saved-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; word-break: break-all; opacity: .92;
+  background: rgba(127, 127, 127, .14); padding: 1px 5px; border-radius: 4px;
+}
+.save-hint .saved-reveal {
+  margin-left: 6px; cursor: pointer; color: var(--brand); text-decoration: underline;
+}
+.save-hint .save-hint-more { opacity: .75; }
 .task.is-collapsed .cloud-status-line { display: none; }
 .task.is-collapsed .task-steps-box { display: none; }
 .bar-fill {

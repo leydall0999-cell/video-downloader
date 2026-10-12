@@ -81,7 +81,6 @@ def _direct_save_section():
     import tempfile
     import types
 
-    import os
     # ---- applet 源码级棘轮（2026-09-22 用户报「面板是英文」的根治点）----
     src = dl._SAVE_PANEL_APPLET_SRC
     check("applet 源码用 choose file name 弹面板", "choose file name" in src, src[:60])
@@ -372,6 +371,163 @@ def _direct_save_section():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _task_save_section():
+    """「任务成品另存到用户自选位置」原生桥（2026-10-12 用户报「我上哪找去」）。
+
+    背景：桌面壳是 pywebview 的 WKWebView，`<a download>` 想弹系统保存面板必须开
+    `webview.settings['ALLOW_DOWNLOADS']`（pywebview 默认 False，本项目从未开启）——
+    于是「保存到本机」被**静默吞掉**：不报错、不弹框、不落盘，唯一的一份文件还在
+    `~/Downloads/VideoDownloader/<任务号>/` 里（一堆哈希目录），用户根本找不到。
+    修法：改走原生桥 `VdlApi.save_task_file`（弹面板 → Python 写盘 → 回报真实路径）。
+
+    本段全程拦掉 subprocess 与 requests、并把 `Path.home()` 指到临时目录，
+    既不弹面板、不联网，也绝不往用户真实的「下载」文件夹写测试文件。
+    """
+    import pathlib
+    import tempfile
+    import types
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="vdl_task_save_test_"))
+    api = dl.VdlApi()
+    real_choose = dl._choose_save_path
+    real_requests = sys.modules.get("requests")
+    real_home = pathlib.Path.home
+    pathlib.Path.home = classmethod(lambda cls: tmpdir / "home")
+
+    http_calls = []
+
+    class _Resp:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size=0):
+            return iter([b"a" * 1024, b"b" * 512])
+
+    def fake_get(url, headers=None, stream=False, timeout=None, **kw):
+        http_calls.append({"url": url, "headers": headers or {}, "stream": stream})
+        return _Resp()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    sys.modules["requests"] = fake_requests
+    try:
+        # ① 用户取消：不发任何请求（不能白拉一遍文件再丢弃）
+        dl._choose_save_path = lambda *a, **kw: "CANCELLED"
+        out_cancel = api.save_task_file("a1b2c3d4e5f6", "图片-1.webp", "dev-1", "tok-1")
+        check("另存：取消 → 返回 CANCELLED", out_cancel == "CANCELLED", out_cancel)
+        check("另存：取消时不得发起请求", http_calls == [], http_calls)
+
+        # ② 选定位置：落到该路径，请求带归属凭据，URL 指向本机后端的任务文件接口
+        target = tmpdir / "选定" / "图片-1.webp"
+        dl._choose_save_path = lambda *a, **kw: str(target)
+        out_ok = api.save_task_file("a1b2c3d4e5f6", "图片-1.webp", "dev 1", "tok-1")
+        check("另存：落到用户选定的路径", out_ok == str(target), out_ok)
+        check("另存：文件真的写出来了（有内容）",
+              target.exists() and target.stat().st_size == 1536,
+              target.stat().st_size if target.exists() else "缺失")
+        check("另存：自动创建所选目录", target.parent.is_dir(), target.parent)
+        check("另存：不留 .part 残根", not (target.parent / (target.name + ".part")).exists())
+        call = http_calls[-1]
+        check("另存：请求打到本机后端的任务文件接口（download=1 走附件）",
+              call["url"].startswith(f"http://{dl.HOST}:{dl.PORT}/api/tasks/a1b2c3d4e5f6/file")
+              and "download=1" in call["url"], call["url"])
+        check("另存：设备标识同时进 query 与 X-Device-Id（未登录用户的归属校验）",
+              "device=dev%201" in call["url"] and call["headers"].get("X-Device-Id") == "dev 1",
+              (call["url"], call["headers"]))
+        check("另存：登录态随 Authorization 头带上",
+              call["headers"].get("Authorization") == "Bearer tok-1", call["headers"])
+        check("另存：流式下载（大视频不能整个读进内存）", call["stream"] is True, call["stream"])
+
+        # ③ 同名不覆盖（与访达行为一致）
+        out_dup = api.save_task_file("a1b2c3d4e5f6", "图片-1.webp")
+        check("另存：同名不覆盖，自动加 (1)",
+              out_dup == str(target.with_name("图片-1(1).webp")), out_dup)
+
+        # ④ 面板机制整体不可用（返回空串）→ 兜底到「下载」文件夹，且文件名被清洗
+        dl._choose_save_path = lambda *a, **kw: ""
+        out_fb = api.save_task_file("a1b2c3d4e5f6", "../../逃逸/图:片.webp")
+        check("另存：面板不可用 → 兜底到「下载」且文件名被清洗（不逃出该目录）",
+              Path(out_fb).parent == tmpdir / "home" / "Downloads"
+              and "/" not in Path(out_fb).name and ":" not in Path(out_fb).name, out_fb)
+
+        # ⑤ 非法任务号：不能拼进 URL 路径
+        out_bad_id = api.save_task_file("../etc/passwd", "x.webp")
+        check("另存：非法任务号被拒", out_bad_id.startswith("ERROR:"), out_bad_id)
+
+        # ⑥ 后端报错（404/409）→ 如实回传 ERROR，且不留半截文件
+        class _Bad:
+            status_code = 404
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def raise_for_status(self):
+                raise RuntimeError("404 Client Error: File not ready")
+
+        fake_requests.get = lambda *a, **kw: _Bad()
+        target_bad = tmpdir / "选定6" / "x.webp"
+        dl._choose_save_path = lambda *a, **kw: str(target_bad)
+        out_err = api.save_task_file("a1b2c3d4e5f6", "x.webp")
+        check("另存：后端报错如实回传 ERROR（含原因）",
+              out_err.startswith("ERROR:") and "404" in out_err, out_err)
+        check("另存：失败不留半截文件（.part 也不留）",
+              not target_bad.exists()
+              and not (target_bad.parent / (target_bad.name + ".part")).exists())
+
+        # ⑦ 「在访达中显示」：文件存在 → 交系统定位选中；不存在 → 如实报错
+        opened = []
+        real_popen = subprocess.Popen
+        subprocess.Popen = lambda cmd, *a, **kw: (opened.append(list(cmd))
+                                                 or types.SimpleNamespace())
+        try:
+            got_reveal = api.reveal_path(str(target))
+            got_missing = api.reveal_path(str(tmpdir / "不存在.webp"))
+        finally:
+            subprocess.Popen = real_popen
+        check("在访达中显示：文件存在 → OK", got_reveal == "OK", got_reveal)
+        check("在访达中显示：macOS 用 open -R（定位并选中，而不是只打开目录）",
+              bool(opened) and opened[-1][:2] == ["open", "-R"], opened[:1])
+        check("在访达中显示：路径不存在 → 如实报错（不静默）",
+              got_missing.startswith("ERROR:"), got_missing)
+    finally:
+        dl._choose_save_path = real_choose
+        pathlib.Path.home = real_home
+        if real_requests is not None:
+            sys.modules["requests"] = real_requests
+        else:  # pragma: no cover
+            sys.modules.pop("requests", None)
+        import shutil as _sh
+        _sh.rmtree(tmpdir, ignore_errors=True)
+
+    # ---- 前端 / launcher 源码级接线棘轮：桥建好了，还得真被调用 ----
+    app_js = (REPO / "web" / "app.js").read_text(encoding="utf-8")
+    launcher_src = Path(dl.__file__).read_text(encoding="utf-8")
+    check("接线：launcher 里 save_task_file 复用统一保存面板（_choose_save_path）",
+          "def save_task_file" in launcher_src
+          and launcher_src.split("def save_task_file", 1)[1].split("def ")[0].count("_choose_save_path") >= 1,
+          "")
+    check("接线：前端桌面壳下把保存按钮绑到原生桥",
+          "bindTaskSaveBridge(refs, task)" in app_js, "")
+    check("接线：前端调用的正是桥的入口名", "api.save_task_file(" in app_js, "")
+    check("接线：桌面壳下移除 href（<a download> 在壳里是静默吞掉）",
+          "refs.save.removeAttribute('href')" in app_js, "")
+    check("接线：桌面版**不**自动点保存（否则多张图会连弹一串系统面板）",
+          "const webAutoSave = autoSave && !isDesktopShell();" in app_js, "")
+    check("接线：前端展示本机真实路径 + 「在访达中显示」",
+          "task.local_path" in app_js and "api.reveal_path(" in app_js, "")
+
+
 def _clipboard_section():
     """桌面壳「复制到剪贴板」原生桥（VdlApi.copy_to_clipboard）。
 
@@ -544,6 +700,10 @@ def main():
     print("")
     print("▶ 桌面桥「直接保存到本机」：保存位置面板 + 落盘行为")
     _direct_save_section()
+
+    print("")
+    print("▶ 桌面桥「任务成品另存」：保存位置面板 + 真实路径回报 + 在访达中显示")
+    _task_save_section()
 
     print("")
     print("▶ 桌面桥「复制到剪贴板」：原生剪贴板写入（修「复制链接」按钮静默失效）")

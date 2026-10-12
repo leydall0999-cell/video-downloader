@@ -703,12 +703,60 @@ def _choose_save_path(prompt: str, suggested: str, log_path: str = "") -> str:
     return _choose_save_path_via_osascript(prompt, suggested, log_path)
 
 
+def _download_url_to_path(url: str, dest: str, *, headers: dict | None = None,
+                          timeout=(10, 600)) -> str:
+    """把 url 流式下载写入 dest，返回最终写入的绝对路径字符串。
+
+    行为约定（与桥接方法的用户预期一致）：
+      · 先写同目录 `xxx.part`，成功后 `os.replace` 原子改名 —— 中途失败不会在用户
+        选定的位置留下半截文件名（那比失败本身更让人困惑）；
+      · 同名不覆盖：`片子.mp4` 已存在则写 `片子(1).mp4`（macOS 访达同款习惯）；
+      · 自动创建所选目录（用户可能在保存面板里直接输入一个新文件夹名）。
+
+    抽成**模块级纯函数**（不弹面板、不碰 UI）是为了能离线测：给夹具 HTTP 服务器打
+    真实请求即可覆盖「落盘 / 同名 / 报错不留残根」，见 tests/test_desktop_bridge.py。
+    """
+    import os as _os
+    import requests
+    from pathlib import Path
+
+    target = Path(dest).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():                       # 同名不覆盖，与访达行为一致
+        stem, suf = target.stem, target.suffix
+        i = 1
+        while target.exists():
+            target = target.parent / f"{stem}({i}){suf}"
+            i += 1
+    partial = target.with_name(target.name + ".part")
+    try:
+        resp = requests.get(url, headers=headers or {}, timeout=timeout, stream=True)
+        resp.raise_for_status()
+        with open(partial, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=256 * 1024):
+                if chunk:
+                    fh.write(chunk)
+        _os.replace(partial, target)
+    except Exception:
+        try:
+            _os.remove(partial)
+        except OSError:
+            pass
+        raise
+    return str(target)
+
+
 class VdlApi:
     """暴露给前端 JS 的桥接 API（仅 pywebview 桌面模式生效）。
 
-    桌面版无法通过 <a download> 触发系统保存框（WebKit 限制），
-    因此解说成片的「保存到本机」改由前端调用本 API，由 Python 直接把文件
-    复制到用户「下载」文件夹；返回保存路径或 "ERROR: ..."。
+    🔴 2026-10-12 更正一条被误信很久的结论：此前这里写着「桌面版无法通过
+      <a download> 触发系统保存框（WebKit 限制）」。**不准确** —— pywebview 的
+      cocoa 后端是有下载委托的（`DownloadDelegate.download_decideDestinationUsing
+      Response_…` 会弹 NSSavePanel），但两条分支都要求
+      `webview.settings['ALLOW_DOWNLOADS']` 为真，而它**默认 False**、本项目从未开启。
+      于是 `<a download>` 在桌面壳里是**静默吞掉**（不报错、不弹框、不落盘），
+      用户以为保存了却什么都没有（2026-10-12 用户报「图片埋在一堆文件夹里找不到」）。
+    因此「让用户把文件拿到手」的操作一律走本类的方法：面板 + 写盘 + 回报真实路径。
     """
 
     def open_external(self, url: str) -> str:
@@ -1252,6 +1300,100 @@ class VdlApi:
                 pass
             return f"ERROR: {exc}"
         return str(dest)
+
+    def save_task_file(self, task_id: str, suggested_name: str = "",
+                       device: str = "", token: str = "") -> str:
+        """把某个下载任务（视频 / 图片）的成品另存到**用户自选的位置**（原生桥）。
+
+        为什么必须走原生桥（2026-10-12 用户实测「保存到本机点了没反应，文件埋在
+        一堆哈希文件夹里，我上哪找去」）：
+          旧实现是前端 `<a href=/api/tasks/{id}/file download>`。桌面壳是 pywebview
+          的 WKWebView，`<a download>` 想弹系统保存面板必须开
+          `webview.settings['ALLOW_DOWNLOADS']`（默认 False，本项目从未开启）——
+          于是点击被**静默吞掉**：不报错、不弹框、不落盘。用户以为保存了，其实
+          唯一的一份文件还在 `~/Downloads/VideoDownloader/<任务号>/` 里，极难找。
+        本方法复用 `_choose_save_path()`（去水印 / 文案 / 二维码 / 解说成片同款原生
+        面板，默认位置「下载」且预填好文件名），用户选定后由 Python 从本机后端拉文件
+        写入 —— 用户明确知道文件去了哪，返回的绝对路径还会显示在界面上。
+
+        参数：device/token 用于通过后端归属校验（登录用 token，未登录用设备标识；
+        两者都带最稳）。返回保存的绝对路径；取消返回 "CANCELLED"；失败返回 "ERROR: ..."。
+        """
+        import re as _re
+        import urllib.parse as _urlparse
+        import datetime as _dt
+        from pathlib import Path
+
+        def _log(msg: str) -> None:
+            try:
+                with open("/tmp/vdl_task_save.log", "a") as f:
+                    f.write(f"[{_dt.datetime.now().isoformat()}] {msg}\n")
+            except Exception:
+                pass
+
+        tid = str(task_id or "").strip()
+        # 任务 id 只可能是十六进制短串：白名单校验顺带堵住把它拼进 URL 路径的口子
+        if not _re.fullmatch(r"[A-Za-z0-9_-]{4,64}", tid):
+            return "ERROR: 无效的任务编号"
+        suggested = _re.sub(r"[\\/:*?\"<>|\r\n\t]+", "_", str(suggested_name or "")).strip(" .")
+        if not suggested:
+            suggested = "下载文件"
+        if len(suggested) > 120:              # 超长名部分文件系统会失败
+            stem, dot, suf = suggested.rpartition(".")
+            suggested = (stem[:110] + dot + suf) if dot else suggested[:120]
+
+        downloads = Path.home() / "Downloads"
+        try:
+            downloads.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            downloads = Path.home()
+
+        try:
+            chosen = _choose_save_path("保存到", suggested, "/tmp/vdl_task_save.log")
+        except Exception as exc:  # noqa: BLE001 - 面板异常不该让「保存」变成崩溃
+            _log(f"choose-save-path exception: {exc!r}")
+            chosen = ""
+        if chosen == "CANCELLED":
+            return "CANCELLED"
+        dest = Path(chosen) if chosen else (downloads / suggested)
+
+        url = f"http://{HOST}:{PORT}/api/tasks/{tid}/file?download=1"
+        if device:
+            url += "&device=" + _urlparse.quote(str(device))
+        headers = {}
+        if device:
+            headers["X-Device-Id"] = str(device)
+        if token:
+            headers["Authorization"] = "Bearer " + str(token)
+        try:
+            saved = _download_url_to_path(url, str(dest), headers=headers)
+        except Exception as exc:  # noqa: BLE001 - 把原因交回前端展示
+            _log(f"write error: {exc!r}")
+            return f"ERROR: {exc}"
+        _log(f"saved -> {saved}")
+        return saved
+
+    def reveal_path(self, path: str) -> str:
+        """在系统文件管理器里定位并选中该文件（访达 / 资源管理器 / xdg）。
+
+        配合 `save_task_file` 使用：用户在提示里点「在访达中显示」就能直接看到文件
+        ——「文件到底在哪」不该靠用户自己在一堆目录里翻。返回 "OK" 或 "ERROR: ..."。
+        """
+        import os as _os
+        import subprocess
+        p = _os.path.expanduser(str(path or "").strip())
+        if not p or not _os.path.exists(p):
+            return "ERROR: 文件不存在（可能已被移动或删除）"
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", p])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", "/select,", _os.path.normpath(p)])
+            else:
+                subprocess.Popen(["xdg-open", _os.path.dirname(p) or "."])
+            return "OK"
+        except Exception as exc:  # noqa: BLE001
+            return f"ERROR: {exc}"
 
     def save_dw_file_dialog(self, job_id: str, kind: str, suggested_name: str) -> str:
         """弹出系统保存面板让用户自选去水印结果位置（桌面版原生下载）。
