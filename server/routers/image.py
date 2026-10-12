@@ -73,7 +73,9 @@ def create_image_download(payload: ImageDownloadRequest,
             quality_key='origin', kind='image',
             cookie=cookie, proxy=proxy, referer=referer, owner_id=owner,
         )
-        app.scheduler.submit(image_download.run_image_download, task, app.store)
+        # 传入 scheduler：链接若是分享页，执行器会把页面里的图片逐张建成子任务
+        app.scheduler.submit(image_download.run_image_download, task, app.store,
+                             None, app.scheduler)
         # 任务创建成功才计费（失败/被拒不烧免费额度）—— 与 /api/download 同规
         app.current_member_store(request).use_daily('download', 1)
         task_ids.append(task.id)

@@ -678,7 +678,9 @@ def retry_task(task_id: str, request: app.Request) -> dict:
     app.store.update(task_id, status='pending', error='', hint='', progress=task.progress if resume else 0.0, downloaded_bytes=task.downloaded_bytes if resume else 0, total_bytes=task.total_bytes if resume else 0, speed=0.0, eta=0, filesize=0, filename='', resumable=False, file_expired=False, filepath=None)
     if _is_image:
         import image_download
-        app.scheduler.submit(image_download.run_image_download, task, app.store)
+        # 传 scheduler：重试的链接若是分享页，同样要能展开成子任务
+        app.scheduler.submit(image_download.run_image_download, task, app.store,
+                             None, app.scheduler)
     else:
         app.scheduler.submit(app.downloader.run_download, task, app.store, task.quality_key, task.cookie, task.proxy, app.BATCH_RETRIES_DEFAULT, '', task.concurrent_fragments, task.downloader_type, resume)
     if not resume:

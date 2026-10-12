@@ -35,6 +35,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,57 @@ DEFAULT_MAX_BYTES = 64 * 1024 * 1024   # 单张图片体积上限（64MB，远�
 IO_TIMEOUT = 30                        # 每个 socket 操作（建连/读）的超时（秒）
 IMAGE_HARD_TIMEOUT = int(os.environ.get("VDL_IMAGE_HARD_TIMEOUT", "1800"))
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+# 🔴 2026-10-12 实测（小红书分享页，三个变量逐一隔离）：
+#    ① urllib 默认发 `Accept-Encoding: identity` → xhs WAF 直接 302 去登录页
+#       （真实浏览器一定声明支持压缩，identity 是典型机器人特征）；
+#    ② UA 与 sec-ch-ua 版本不一致（UA 124 / sec-ch-ua 131）也会被墙；
+#    ③ 只有 `gzip, deflate` 这个精确串能过（单写 gzip、或加 br 都被墙）。
+#    声明了压缩就必须**真的解压**：服务端会返回 gzip（77KB 页面 → 27KB）。
+_BROWSER_HEADERS = {
+    "User-Agent": _UA,
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"),
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "sec-ch-ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Upgrade-Insecure-Requests": "1",
+}
+# 分享页解析：页面正文最多读这么多（足够覆盖 og:image 与 __INITIAL_STATE__），
+# 超过即按「页面太大」放弃，绝不无限读。
+PAGE_MAX_BYTES = 1024 * 1024
+# 单个分享页最多展开成几张图片（防「一个链接 200 张图」把队列和配额打爆）
+MAX_PAGE_IMAGES = 12
+# 页面里这些 URL 一律不当候选：站点静态资源 / 图标 / 脚本 / 样式
+_PAGE_JUNK_RE = re.compile(
+    r"(picasso-static|fe-static|fe-platform|fe-video|/logo|/icon|/avatar|"
+    r"\.js$|\.css$|\.ico$|\.svg$|\.woff|placeholder|default_?avatar)", re.I)
+# 小红书 CDN 的图片处理令牌：prv=预览小图，dft=默认大图 → 同一张图只留 dft
+_XHS_TOKEN_RE = re.compile(r"!(nd_(?:prv|dft)|prv|dft)[^/]*$", re.I)
+# 预览图判定（只认 prv）：用于「同图多令牌只留大图」的偏好
+_IS_PREVIEW_RE = re.compile(r"!(?:nd_)?prv[^/]*$", re.I)
+
+
+class PageLinkError(LinkError):
+    """链接返回的是网页而不是图片。
+
+    images：从页面里提取到的图片候选（可能为空 —— 空表示页面里没找到可用图片，
+    调用方应给「页面里没有图片」的提示而不是笼统的「不是图片」）。
+    """
+
+    def __init__(self, images: list[str], final_url: str = ""):
+        super().__init__(
+            "该链接打开的是网页，不是图片",
+            "已尝试从页面里提取图片" if images
+            else "页面里没有找到可下载的图片")
+        self.images = list(images or [])
+        self.final_url = final_url
+
 
 # 与 app._PRIVATE_NETS 同口径（100.64.0.0/10 CGNAT 在 Python 3.13 is_private=False，
 # 必须显式列举，否则运营级内网段漏放）
@@ -282,10 +333,249 @@ def derive_filename(final_url: str, content_disposition: str, ext: str,
 
 
 # --------------------------------------------------------------------------- #
+# 分享页解析（用户粘贴的是「页面链接」而不是图片直链时）
+# --------------------------------------------------------------------------- #
+# 页面抓取的最大跳转次数（与 _SafeRedirectHandler 的默认上限同量级）
+_PAGE_MAX_HOPS = 5
+
+
+def _fetch_page_text(url: str, referer: str = "", cookie: str = "",
+                     proxy: str = "", should_stop=None) -> tuple[str, str]:
+    """带 Chrome TLS 指纹抓网页正文，返回 (页面文本, 最终URL)；失败返回 ("", "")。
+
+    🔴 为什么必须有这一条（2026-10-12 实测定位）：小红书等平台的 WAF 校验
+    **TLS 指纹（JA3）**——urllib 就算把浏览器请求头全带对（UA / sec-ch-ua /
+    Sec-Fetch-* / Accept-Encoding: gzip, deflate 一个不差），仍会被 302 去登录页，
+    拿到的是登录墙 HTML，页面里提取不到笔记配图。curl_cffi 的 chrome131 伪装
+    （项目 downloader.py 解析 Rumble 时已在用同一招）可直接拿到正文。
+
+    🔴 安全：**不跟随重定向**。逐跳取 Location 后重新过 assert_public_url ——
+    与 _SafeRedirectHandler 完全同口径，杜绝「公网入口 302 到 169.254.169.254」。
+    """
+    try:
+        from curl_cffi import requests as _cf  # type: ignore
+    except Exception:  # noqa: BLE001 - 没装就放弃这条兜底（返回空 = 用 urllib 的结果）
+        return "", ""
+    headers = {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
+    if referer:
+        headers["Referer"] = referer
+    if cookie:
+        headers["Cookie"] = cookie
+    cur = url
+    for _hop in range(_PAGE_MAX_HOPS):
+        if should_stop is not None and should_stop():
+            return "", ""
+        try:
+            assert_public_url(cur)          # 每一跳都过 SSRF 护栏（fail-closed）
+        except Exception:  # noqa: BLE001
+            return "", ""
+        try:
+            kw = {"impersonate": "chrome131", "headers": headers,
+                  "timeout": 20, "allow_redirects": False, "stream": True}
+            if (proxy or "").strip():
+                kw["proxies"] = {"http": proxy.strip(), "https": proxy.strip()}
+            resp = _cf.get(cur, **kw)
+        except Exception:  # noqa: BLE001 - 网络类失败一律放弃兜底
+            return "", ""
+        code = int(getattr(resp, "status_code", 0) or 0)
+        if code in (301, 302, 303, 307, 308):
+            loc = (resp.headers.get("Location") or resp.headers.get("location") or "")
+            nxt = _resolve_against(_clean_candidate(loc), cur)
+            if not nxt:
+                return "", ""
+            cur = nxt
+            continue
+        if code != 200:
+            return "", ""
+        try:
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+        except Exception:  # noqa: BLE001
+            ctype = ""
+        if "html" not in ctype and "text" not in ctype:
+            return "", ""
+        buf = b""
+        try:
+            for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                if should_stop is not None and should_stop():
+                    return "", ""
+                if not chunk:
+                    break
+                buf += chunk
+                if len(buf) >= PAGE_MAX_BYTES:
+                    break
+        except Exception:  # noqa: BLE001
+            if not buf:
+                return "", ""
+        return _decode_page(buf), cur
+    return "", ""
+
+
+def _looks_like_html(head: bytes, content_type: str) -> bool:
+    """判断响应是不是网页：content-type 命中 html，或正文头就是 HTML 标签。"""
+    if "html" in (content_type or "").lower():
+        return True
+    probe = (head or b"")[:512].lstrip().lower()
+    return probe.startswith(b"<!doctype html") or probe.startswith(b"<html") \
+        or b"<head" in probe[:256]
+
+
+def _decode_page(raw: bytes) -> str:
+    """网页字节 → 文本：优先 utf-8，乱码率过高按 GBK 解（老牌中文站）。
+
+    图片 URL 本身是 ASCII，即便中文部分解错也不影响提取；这里只求「标签结构可读」。
+    """
+    text = (raw or b"").decode("utf-8", errors="replace")
+    if text.count("\ufffd") > max(8, len(text) // 40):
+        try:
+            text = (raw or b"").decode("gbk", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+    return text
+
+
+def _clean_candidate(u: str) -> str:
+    """清洗候选 URL：去空白 / 反转义 / 去 HTML 实体。"""
+    u = (u or "").strip().strip("'").strip('"')
+    u = u.replace("\\u002F", "/").replace("\\/", "/")
+    u = u.replace("&amp;", "&")
+    return u
+
+
+def _resolve_against(u: str, base_url: str) -> str:
+    """把协议相对（//host/x）与相对路径（/x）解析成绝对 URL。"""
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith(("http://", "https://")):
+        return u
+    try:
+        return urllib.parse.urljoin(base_url or "", u)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _candidate_key(u: str) -> str:
+    """同一张图的多个变体共用一个 key：忽略协议头（http/https 同图）与处理令牌。"""
+    no_scheme = re.sub(r"^https?://", "", u or "", flags=re.I)
+    return _XHS_TOKEN_RE.sub("", no_scheme)
+
+
+def extract_page_images(html: str, base_url: str = "") -> list[str]:
+    """从网页正文里提取可下载的图片候选（按可信度排序、去重、限量）。
+
+    优先级：og:image（平台给分享场景准备的主图，几乎都是笔记/博文真实配图）
+            → <img src> → srcset 里的最大图。
+    过滤：data: URI、站点静态资源（logo/icon/js/css/字体）、SVG（页面图标多为 SVG）。
+    小红书 CDN 的 !nd_prv（预览小图）在同图有 !nd_dft（默认大图）时丢弃。
+    """
+    text = html or ""
+    found: list[str] = []
+
+    def _add(u: str) -> None:
+        u = _clean_candidate(u)
+        if not u or u.lower().startswith("data:"):
+            return
+        u = _resolve_against(u, base_url)
+        if not u or not u.lower().startswith(("http://", "https://")):
+            return
+        if _PAGE_JUNK_RE.search(u):
+            return
+        found.append(u)
+
+    # ① og:image（property / name 两种写法都覆盖；content 可能在引号前后有空白）
+    for m in re.finditer(
+            r'<meta[^>]+(?:property|name)\s*=\s*["\']og:image["\'][^>]*>', text, re.I):
+        tag = m.group(0)
+        c = re.search(r'content\s*=\s*["\']([^"\']+)["\']', tag, re.I)
+        if c:
+            _add(c.group(1))
+    # ② <img src=...>
+    for m in re.finditer(r'<img[^>]+>', text, re.I):
+        tag = m.group(0)
+        s = re.search(r'\bsrc\s*=\s*["\']([^"\']+)["\']', tag, re.I)
+        if s:
+            _add(s.group(1))
+    # ③ srcset（取每个候选里描述尺寸最大的那个）
+    for m in re.finditer(r'srcset\s*=\s*["\']([^"\']+)["\']', text, re.I):
+        best = ""
+        for part in m.group(1).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            bits = part.split()
+            if len(bits) >= 2 and bits[1].endswith("w"):
+                try:
+                    if int(bits[1][:-1]) >= 999 or not best:
+                        best = bits[0]
+                except ValueError:
+                    if not best:
+                        best = bits[0]
+            elif not best:
+                best = bits[0]
+        if best:
+            _add(best)
+
+    # 去重 + 预览图降级：同 key 只保留一个，优先非预览（dft 大图）
+    chosen: dict[str, str] = {}
+    for u in found:
+        key = _candidate_key(u)
+        cur = chosen.get(key)
+        if cur is None:
+            chosen[key] = u
+            continue
+        if _IS_PREVIEW_RE.search(cur) and not _IS_PREVIEW_RE.search(u):
+            chosen[key] = u          # 现有的是预览小图，换成默认大图
+    return list(chosen.values())[:MAX_PAGE_IMAGES]
+
+
+# --------------------------------------------------------------------------- #
 # 核心传输
 # --------------------------------------------------------------------------- #
 class _Stopped(Exception):
     """内部用：should_stop 命中（用户取消 / 看门狗停滞 / 硬超时）。"""
+
+
+def _decompressed_chunks(resp, chunk_size: int = CHUNK_SIZE, should_stop=None):
+    """按 Content-Encoding 流式解压，产出**解压后**的块（identity 直通）。
+
+    为什么需要：声明了 `Accept-Encoding: gzip, deflate`（浏览器特征，见
+    _BROWSER_HEADERS 注释）之后，服务端真的会 gzip —— 不解压则魔数嗅探拿到的
+    是 1f 8b 而不是 PNG/JPEG 头，会误判「不是图片」。
+
+    should_stop 在**每次读之前**检查：单块响应（小图）读完即结束生成器，
+    只在循环体里检查会漏掉「写块后取消」那一次（2026-10-12 回归教训）。
+    """
+    enc = (resp.headers.get("Content-Encoding") or "").lower().strip()
+    dec = None
+    if "gzip" in enc:
+        dec = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    elif "deflate" in enc:
+        dec = zlib.decompressobj(-zlib.MAX_WBITS)   # raw deflate
+    if dec is None:
+        while True:
+            if should_stop is not None and should_stop():
+                raise _Stopped()
+            b = resp.read(chunk_size)
+            if not b:
+                return
+            yield b
+        return
+    buf = b""
+    while True:
+        if should_stop is not None and should_stop():
+            raise _Stopped()
+        raw = resp.read(chunk_size)
+        if not raw:
+            try:
+                buf += dec.flush()
+            except zlib.error:  # noqa: BLE001 - 流被截断时能解多少算多少
+                pass
+            break
+        buf += dec.decompress(raw)
+        while len(buf) >= chunk_size:
+            yield buf[:chunk_size]
+            buf = buf[chunk_size:]
+    if buf:
+        yield buf
 
 
 def fetch_image(url: str, dest: Path, *, max_bytes: int | None = None,
@@ -299,8 +589,8 @@ def fetch_image(url: str, dest: Path, *, max_bytes: int | None = None,
     """
     limit = int(max_bytes or DEFAULT_MAX_BYTES)
     req = urllib.request.Request(url, method="GET")
-    req.add_header("User-Agent", _UA)
-    req.add_header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
+    for _k, _v in _BROWSER_HEADERS.items():
+        req.add_header(_k, _v)
     if referer:
         req.add_header("Referer", referer)
     if cookie:
@@ -310,6 +600,7 @@ def fetch_image(url: str, dest: Path, *, max_bytes: int | None = None,
     dest.parent.mkdir(parents=True, exist_ok=True)
     downloaded = 0
     head = b""
+    first_raw = None
     ext = None
     content_type = ""
     final_url = url
@@ -317,26 +608,57 @@ def fetch_image(url: str, dest: Path, *, max_bytes: int | None = None,
     with opener.open(req, timeout=IO_TIMEOUT) as resp:
         final_url = resp.geturl() or url
         content_type = (resp.headers.get("Content-Type") or "")
+        # 有 Content-Encoding 时 Content-Length 是**压缩后**的大小，拿它做体积
+        # 预检会低估；真正的上限由下面的「解压后字节数」把守。
+        _enc = (resp.headers.get("Content-Encoding") or "").lower().strip()
         try:
             total = int(resp.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
             total = 0
-        if total and total > limit:
+        if total and total > limit and not _enc:
             raise LinkError(
                 f"图片体积 {total // 1024 // 1024}MB 超过上限 {limit // 1024 // 1024}MB",
                 "可调大 VDL_IMAGE_MAX_BYTES 后重试（仅 desktop 端生效）")
         with open(dest, "wb") as fh:
-            while True:
+            for chunk in _decompressed_chunks(resp, should_stop=should_stop):
                 if should_stop is not None and should_stop():
                     raise _Stopped()
-                chunk = resp.read(CHUNK_SIZE)
                 if not chunk:
                     break
+                if first_raw is None:
+                    # 整块留底：确认是 HTML 时页面正文就在这一块里（head 只留 32B）
+                    first_raw = chunk
                 if len(head) < 32:
                     head += chunk[:32 - len(head)]
                 if ext is None and len(head) >= 12:
                     ext = sniff_image_ext(head, content_type)
                     if ext is None:
+                        # 不是图片：若返回的是网页（分享页 / 登录墙 / 错误页），
+                        # 把正文读出来提取 og:image 等候选，让上层展开成子任务；
+                        # 读到的 HTML 一律**不落盘**（_cleanup 由调用方兜底）。
+                        if _looks_like_html(head, content_type):
+                            page = first_raw or head
+                            for more in _decompressed_chunks(
+                                resp, should_stop=should_stop):
+                                if should_stop is not None and should_stop():
+                                    raise _Stopped()
+                                if not more:
+                                    break
+                                page += more
+                                if len(page) >= PAGE_MAX_BYTES:
+                                    break
+                            images = extract_page_images(
+                                _decode_page(page), final_url)
+                            if not images:
+                                # urllib 拿到的可能是登录墙 / 验证页（TLS 指纹被
+                                # WAF 识别）→ 用浏览器指纹再抓一次同一链接
+                                alt_text, alt_final = _fetch_page_text(
+                                    url, referer=referer, cookie=cookie,
+                                    proxy=proxy, should_stop=should_stop)
+                                if alt_text:
+                                    images = extract_page_images(
+                                        alt_text, alt_final or final_url)
+                            raise PageLinkError(images, final_url)
                         raise LinkError(
                             "该链接返回的不是图片",
                             "请确认粘贴的是图片直链（右键图片「复制图片地址」）")
@@ -362,9 +684,40 @@ def fetch_image(url: str, dest: Path, *, max_bytes: int | None = None,
 # --------------------------------------------------------------------------- #
 # 任务执行器（复用 DownloadTask / TaskStore 框架）
 # --------------------------------------------------------------------------- #
+# 常见「分享页」平台的落地提示：用户手里的链接形态 → 正确的图片地址怎么拿
+_PLATFORM_HINTS = [
+    (("xhslink.cn", "xiaohongshu.com", "小红书"), "小红书",
+     "这是小红书笔记页面链接。请在 App 里打开该笔记 → 点开想存的图片 → 右下角"
+     "「分享」→ 复制链接拿到的仍是页面链接；正确做法：长按图片选「复制图片地址」，"
+     "或在浏览器打开笔记后右键图片「复制图片地址」再粘贴到这里。"),
+    (("weibo.com", "weibo.cn", "微博"), "微博",
+     "这是微博页面链接。请在浏览器打开该微博 → 在图片上右键「复制图片地址」后粘贴。"),
+    (("zhihu.com", "知乎"), "知乎",
+     "这是知乎页面链接。请在浏览器打开回答 → 在图片上右键「复制图片地址」后粘贴。"),
+    (("bilibili.com", "b23.tv", "B站"), "B站",
+     "这是 B 站页面链接。请在浏览器打开动态/专栏 → 在图片上右键「复制图片地址」后粘贴。"),
+    (("douyin.com", "iesdouyin.com", "抖音"), "抖音",
+     "这是抖音页面链接。请在浏览器打开 → 在图片上右键「复制图片地址」后粘贴。"),
+]
+
+
+def _platform_hint(url: str) -> str:
+    """按链接主机给「怎么拿图片直链」的落地提示（认不出来返回空）。"""
+    low = (url or "").lower()
+    for hosts, _name, hint in _PLATFORM_HINTS:
+        if any(h in low for h in hosts):
+            return hint
+    return ""
+
+
 def run_image_download(task: DownloadTask, store: TaskStore,
-                       max_bytes: int | None = None) -> None:
-    """后台线程执行：URL → SSRF-safe 流式落盘 → 落终态。全部异常写回任务，不向外抛。"""
+                       max_bytes: int | None = None,
+                       scheduler: Any = None) -> None:
+    """后台线程执行：URL → SSRF-safe 流式落盘 → 落终态。全部异常写回任务，不向外抛。
+
+    scheduler 可选：传入后，若链接打开的是**网页**（分享页），会把页面里提取到的
+    图片逐张建成子任务提交调度，本任务变成「已展开 N 张」的汇总条目。
+    """
     workdir = Path(task.workdir) if task.workdir else None
     if workdir is None:
         store.update(task.id, status="failed", error="任务缺少工作目录")
@@ -422,6 +775,50 @@ def run_image_download(task: DownloadTask, store: TaskStore,
     except _Stopped:
         _cleanup(part)
         _finalize_terminated(store, task)
+        return
+    except PageLinkError as e:
+        # 链接是网页（分享页 / 登录墙）：提取页面里的图片，逐张建成子任务
+        _cleanup(part)
+        imgs = [u for u in (e.images or [])][:MAX_PAGE_IMAGES]
+        if not imgs:
+            hint = _platform_hint(task.url) or (
+                "页面里没有找到可下载的图片。若这是需要登录的页面，可在「高级选项」"
+                "填写该站的 Cookie 后重试；或直接粘贴图片直链。")
+            store.update(task.id, status="failed", error="网页里没有找到图片",
+                         hint=hint)
+            task.add_step("下载图片", "error", "网页里没有找到图片")
+            task.log(f"页面无可下载图片：{task.url}")
+            return
+        created = []
+        for u in imgs:
+            try:
+                child = store.create(
+                    url=u, title='', platform='图片', quality='原图',
+                    quality_key='origin', kind='image',
+                    cookie=task.cookie, proxy=task.proxy,
+                    referer=task.referer, owner_id=task.owner_id,
+                )
+            except Exception:  # noqa: BLE001 - 单张建任务失败不影响其余
+                continue
+            created.append(child)
+            if scheduler is not None:
+                try:
+                    scheduler.submit(run_image_download, child, store, None,
+                                     scheduler)
+                except Exception:  # noqa: BLE001 - 调度失败也保持任务可见（可重试）
+                    pass
+        if not created:
+            store.update(task.id, status="failed", error="页面图片提取失败",
+                         hint="请稍后重试，或直接粘贴图片直链")
+            task.add_step("下载图片", "error", "页面图片提取失败")
+            return
+        names = len(created)
+        store.update(task.id, status="completed", progress=100.0,
+                     title=f"已展开 {names} 张图片", filename="", filesize=0,
+                     downloaded_bytes=0, total_bytes=0)
+        task.add_step("解析页面", "done",
+                      f"从网页提取到 {names} 张图片，已逐张开始下载")
+        task.log(f"分享页展开：{task.url} → {names} 张图片任务")
         return
     except LinkError as e:
         _cleanup(part)

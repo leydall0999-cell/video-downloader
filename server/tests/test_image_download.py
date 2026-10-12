@@ -23,6 +23,7 @@ SSRF 重定向护栏 / 魔数识别 / 文件名清洗 / kind=image 任务分流�
 """
 import atexit
 import contextlib
+import gzip as gzip_module
 import http.server
 import json
 import os
@@ -91,6 +92,24 @@ _PNG = _make_png(4, 4)
 _SVG = (b'<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">'
         b'<rect width="4" height="4" fill="#e11d48"/></svg>')
 
+# 分享页素材：og:image 真图 + 站点 logo + 同图 prv/dft 双令牌 + http/https 重复 +
+# srcset + 一个站外脚本（应被过滤）。{} 占位符由 _ImgHandler 填成本地端口。
+_SHARE_PAGE_TMPL = """<!doctype html><html><head>
+<meta property="og:image" content="//picasso-static.xhscdn.com/fe-platform/logo.png">
+<meta property="og:image" content="http://127.0.0.1:{port}/real.png">
+<meta name="viewport" content="width=device-width">
+</head><body>
+<img src="//127.0.0.1:{port}/real.png">
+<img src="http://127.0.0.1:{port}/pic/abc123!nd_prv_wlteh_webp_3">
+<img src="http://127.0.0.1:{port}/pic/abc123!nd_dft_wlteh_webp_3">
+<img src="https://127.0.0.1:{port}/real.png">
+<img src="http://127.0.0.1:{port}/assets/icon.svg">
+<img src="/relative/real2.png">
+<img src="data:image/png;base64,iVBORw0KGgo=">
+<img srcset="http://127.0.0.1:{port}/pic/small.png 480w, http://127.0.0.1:{port}/pic/big.png 1080w">
+<script src="http://127.0.0.1:{port}/assets/app.js"></script>
+</body></html>"""
+
 
 # --------------------------------------------------------------------------- #
 # 本地 HTTP 服务器（离线：全部流量落 127.0.0.1，不碰外网）
@@ -124,7 +143,10 @@ class _ImgHandler(http.server.BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         _LAST_REQ = {"referer": self.headers.get("Referer") or "",
                      "cookie": self.headers.get("Cookie") or "",
-                     "ua": self.headers.get("User-Agent") or ""}
+                     "ua": self.headers.get("User-Agent") or "",
+                     "accept_encoding": self.headers.get("Accept-Encoding") or "",
+                     "sec_ch_ua": self.headers.get("sec-ch-ua") or "",
+                     "sec_fetch_mode": self.headers.get("Sec-Fetch-Mode") or ""}
         if path == "/real.png":
             self._send(200, _PNG, "image/png")
         elif path == "/real.svg":
@@ -174,6 +196,45 @@ class _ImgHandler(http.server.BaseHTTPRequestHandler):
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 pass
+        elif path == "/gz.png":              # gzip 压缩的图片（必须解压后再嗅探）
+            gz = gzip_module.compress(_PNG, 6)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(gz)))
+            self.end_headers()
+            try:
+                self.wfile.write(gz)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        elif path == "/df.png":              # deflate 压缩的图片
+            co = zlib.compressobj(6, zlib.DEFLATED, -zlib.MAX_WBITS)
+            body = co.compress(_PNG) + co.flush()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Encoding", "deflate")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        elif path == "/share.html":          # 分享页：og:image + logo + prv/dft + srcset
+            html = _SHARE_PAGE_TMPL.format(port=port)
+            self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
+        elif path == "/login-wall.html":     # 登录墙：只有站点静态 logo，没有正文图
+            self._send(200,
+                       b"<html><head><meta property='og:image' "
+                       b"content='//picasso-static.xhscdn.com/fe-platform/logo.png'>"
+                       b"</head><body><div id='login'>\xe7\x99\xbb\xe5\xbd\x95</div>"
+                       b"<img src='/assets/icon.svg'></body></html>",
+                       "text/html; charset=utf-8")
+        elif path == "/redir-to-loopback":   # 302 → 环回：_fetch_page_text 必须逐跳拦下
+            self._send(302, b"", "text/plain",
+                       extra={"Location": f"http://127.0.0.1:{port}/real.png"})
+        elif path.endswith(".png") or "!nd_" in path:
+            # 分享页候选的统一素材（含 !nd_dft_wlteh_webp_3 这类带处理令牌的路径）
+            self._send(200, _PNG, "image/png")
         else:
             self.send_error(404)
 
@@ -652,11 +713,13 @@ def test_run_image_download_success():
 def test_run_image_download_failure_paths():
     store, tmp = _mkstore()
     try:
-        # 非图片
+        # 非图片：/page.html 是 HTML 错误页 → 现在会尝试提图，提不到才落 failed
         t1 = store.create(url=_u("/page.html"), title="", platform="图片",
                           quality="原图", kind="image")
         image_download.run_image_download(t1, store)
-        check("非图片落 failed", t1.status == "failed" and "不是图片" in t1.error,
+        check("HTML 错误页落 failed",
+              t1.status == "failed" and ("没有找到图片" in t1.error
+                                         or "不是图片" in t1.error),
               f"{t1.status} {t1.error}")
         check("失败无 .part 残留", not (t1.workdir / "image.part").exists())
         # 404
@@ -979,6 +1042,201 @@ def test_image_download_mixed_batch_skips_bad_links():
 
 
 # --------------------------------------------------------------------------- #
+# 分享页解析（2026-10-12 用户实测小红书分享链接触发）
+# --------------------------------------------------------------------------- #
+def test_browser_headers_consistent_and_compressed():
+    """浏览器特征必须自洽：UA 与 sec-ch-ua 同版本、声明 gzip/deflate。
+
+    🔴 2026-10-12 实测：xhs WAF 校验 TLS 指纹 + 请求头自洽性 ——
+    urllib 默认的 `Accept-Encoding: identity` 会直接被 302 去登录页；
+    UA 与 sec-ch-ua 版本不一致同样被墙。这里把两条都钉死。
+    """
+    h = image_download._BROWSER_HEADERS
+    ua_ver = re.search(r"Chrome/(\d+)\.", h.get("User-Agent", ""))
+    ch_ver = re.search(r'Chromium";v="(\d+)"', h.get("sec-ch-ua", ""))
+    check("UA 与 sec-ch-ua 版本一致",
+          ua_ver and ch_ver and ua_ver.group(1) == ch_ver.group(1),
+          f"UA={ua_ver and ua_ver.group(1)} sec-ch-ua={ch_ver and ch_ver.group(1)}")
+    check("声明 gzip/deflate（不是 identity）",
+          h.get("Accept-Encoding") == "gzip, deflate", h.get("Accept-Encoding"))
+    check("带 Sec-Fetch-Mode=navigate", h.get("Sec-Fetch-Mode") == "navigate")
+    check("带 Upgrade-Insecure-Requests", h.get("Upgrade-Insecure-Requests") == "1")
+    # 服务器侧真的收到这些头
+    _ensure_server()
+    with tempfile.TemporaryDirectory() as d:
+        image_download.fetch_image(_u("/real.png"), Path(d) / "a.part")
+    check("服务器收到 Accept-Encoding: gzip, deflate",
+          _LAST_REQ.get("accept_encoding") == "gzip, deflate",
+          _LAST_REQ.get("accept_encoding"))
+    check("服务器收到 sec-ch-ua", bool(_LAST_REQ.get("sec_ch_ua")))
+    print("✅ 浏览器请求头自洽（UA/sec-ch-ua 同版本 + gzip/deflate + Sec-Fetch）")
+
+
+def test_fetch_image_decompresses_gzip_and_deflate():
+    """声明了压缩就必须真解压：否则魔数嗅到的是 1f 8b 而不是 PNG 头。"""
+    for path in ("/gz.png", "/df.png"):
+        with tempfile.TemporaryDirectory() as d:
+            dest = Path(d) / "x.part"
+            meta = image_download.fetch_image(_u(path), dest)
+            check(f"{path} 解压后是 PNG",
+                  meta["ext"] == ".png" and dest.read_bytes() == _PNG,
+                  f"{meta} size={dest.stat().st_size}")
+    print("✅ gzip / deflate 响应均正确解压后嗅探落盘（压缩不误判「不是图片」）")
+
+
+def test_extract_page_images_priority_and_filtering():
+    """og:image 优先、静态资源过滤、prv/dft 与 http/https 去重、srcset 取大图。"""
+    html = _SHARE_PAGE_TMPL.format(port=_ensure_server())
+    imgs = image_download.extract_page_images(html, _u("/share.html"))
+    joined = "\n".join(imgs)
+    check("og:image 真图入选", any("/real.png" in u for u in imgs), str(imgs))
+    check("站点 logo（picasso-static）被过滤", "picasso-static" not in joined)
+    check("svg 图标被过滤", ".svg" not in joined)
+    check("data: URI 被过滤", "data:" not in joined)
+    check("脚本被过滤", "app.js" not in joined)
+    check("prv 预览图被丢弃、同图只留 dft",
+          any("!nd_dft_" in u for u in imgs) and "!nd_prv_" not in joined, str(imgs))
+    check("http/https 同图去重", sum(1 for u in imgs if u.endswith("/real.png")) == 1,
+          str(imgs))
+    check("相对路径解析成绝对 URL", any("/relative/real2.png" in u for u in imgs))
+    check("srcset 取大图（1080w）而非小图",
+          any("big.png" in u for u in imgs) and "small.png" not in joined, str(imgs))
+    check("候选数受 MAX_PAGE_IMAGES 限制",
+          len(imgs) <= image_download.MAX_PAGE_IMAGES, str(len(imgs)))
+    print("✅ 页面提取：og:image 优先 + logo/svg/data/js 过滤 + prv→dft + 协议去重 + srcset 取大图")
+
+
+def test_extract_page_images_respects_max_limit():
+    html = "<html><body>" + "".join(
+        f'<img src="http://127.0.0.1:1/p{i}.png">' for i in range(40)) + "</body></html>"
+    imgs = image_download.extract_page_images(html, "http://127.0.0.1:1/")
+    check("超过上限被截断", len(imgs) == image_download.MAX_PAGE_IMAGES, str(len(imgs)))
+    print(f"✅ 单页最多展开 {image_download.MAX_PAGE_IMAGES} 张（防一个链接打爆队列）")
+
+
+def test_fetch_image_page_link_raises_with_candidates():
+    """分享页 → PageLinkError 且带上候选（执行器据此展开子任务）。"""
+    with tempfile.TemporaryDirectory() as d:
+        dest = Path(d) / "x.part"
+        try:
+            image_download.fetch_image(_u("/share.html"), dest)
+            check("分享页必须抛 PageLinkError", False, "没有抛错")
+        except image_download.PageLinkError as e:
+            check("PageLinkError 带候选", len(e.images) >= 3, str(len(e.images)))
+            check("候选不含静态资源",
+                  all("picasso-static" not in u and ".svg" not in u for u in e.images))
+        except Exception as e:  # noqa: BLE001
+            check("分享页必须抛 PageLinkError", False, f"{type(e).__name__}: {e}")
+        check("HTML 不落盘", not dest.exists() or dest.stat().st_size == 0)
+    print("✅ 分享页抛 PageLinkError（带候选、HTML 不落盘）")
+
+
+def test_fetch_page_text_rejects_private_redirect_hop():
+    """curl_cffi 兜底抓页也必须在每一跳过 SSRF（公网入口 302 到内网必须被拒）。
+
+    🔴 打桩 curl_cffi.requests.get：断言「第二跳根本没发出去」。
+    只断言返回空是不够的 —— 环回那跳若返回图片，抓页函数也会因 content-type
+    不含 html 而返回空，删掉 SSRF 校验照样绿（变异 M14 实测过）。
+    """
+    calls = []
+
+    class FakeResp:
+        def __init__(self, code, headers, body=b""):
+            self.status_code = code
+            self.headers = headers
+            self._body = body
+
+        def iter_content(self, chunk_size=0):
+            yield self._body
+
+    def _fake_get(url, **kw):
+        calls.append(url)
+        if url == "https://cdn.test/share":
+            return FakeResp(302, {"Location": "http://127.0.0.1:9/secret"})
+        return FakeResp(200, {"Content-Type": "text/html; charset=utf-8"},
+                        b"<html><body>internal secret</body></html>")
+
+    with _fake_dns({"cdn.test": "93.184.216.34"}), \
+            patch("curl_cffi.requests.get", _fake_get):
+        txt, final = image_download._fetch_page_text("https://cdn.test/share")
+    check("跳环回被拒（返回空）", txt == "" and final == "", f"{txt[:40]!r} {final}")
+    check("第二跳根本没发出（SSRF 拦在建请求之前）", len(calls) == 1, str(calls))
+    print("✅ _fetch_page_text 逐跳 SSRF：公网入口 302 到内网 → 拒绝且不发出第二跳")
+
+
+def test_fetch_image_login_wall_uses_browser_tls_fallback():
+    """urllib 只拿到登录墙（无图）→ 必须走浏览器指纹兜底再抓一次。"""
+    seen = {"called": False}
+
+    def _fake_page(url, referer="", cookie="", proxy="", should_stop=None):
+        seen["called"] = True
+        return (_SHARE_PAGE_TMPL.format(port=_ensure_server()),
+                "https://www.xiaohongshu.com/discovery/item/x")
+
+    with patch.object(image_download, "_fetch_page_text", _fake_page):
+        with tempfile.TemporaryDirectory() as d:
+            try:
+                image_download.fetch_image(_u("/login-wall.html"), Path(d) / "x.part")
+                check("登录墙也必须抛 PageLinkError", False, "没有抛错")
+            except image_download.PageLinkError as e:
+                check("兜底抓页被调用", seen["called"])
+                check("兜底拿到候选", len(e.images) >= 3, str(len(e.images)))
+            except Exception as e:  # noqa: BLE001
+                check("登录墙必须抛 PageLinkError", False, f"{type(e).__name__}: {e}")
+    print("✅ 登录墙场景：urllib 无图 → 浏览器指纹兜底抓页 → 仍能拿到候选")
+
+
+def test_run_image_download_expands_page_into_children():
+    """父任务（分享页）→ 建 N 个子任务并提交调度 → 父任务落 completed。"""
+    store, tmp = _mkstore()
+    submitted = []
+
+    class FakeScheduler:
+        def submit(self, fn, *args, **kw):
+            submitted.append(args[0].id)
+            fn(*args, **kw)          # 就地执行，验证子任务真能下完
+
+    try:
+        t = store.create(url=_u("/share.html"), title="", platform="图片",
+                         quality="原图", kind="image")
+        image_download.run_image_download(t, store, None, FakeScheduler())
+        kids = [x for x in store.list_all() if x.id != t.id]
+        check("父任务 completed 且标题说明展开数",
+              t.status == "completed" and "已展开" in (t.title or ""),
+              f"{t.status} {t.title!r}")
+        check("子任务全部提交调度", len(submitted) == len(kids) >= 3,
+              f"submitted={len(submitted)} kids={len(kids)}")
+        check("子任务继承 kind=image 与 owner",
+              all(k.kind == "image" and k.owner_id == t.owner_id for k in kids))
+        check("子任务全部落盘完成",
+              all(k.status == "completed" and k.filepath and k.filepath.exists()
+                  for k in kids),
+              str([(k.status, k.error[:30]) for k in kids]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("✅ 分享页展开：父任务 completed「已展开 N 张」+ 子任务逐个提交并落盘")
+
+
+def test_run_image_download_page_without_images_platform_hint():
+    """页面里没有图 → failed + 按平台给「怎么拿图片直链」的落地提示。"""
+    store, tmp = _mkstore()
+    try:
+        t = store.create(url="https://xhslink.cn/o/abc123", title="",
+                         platform="图片", quality="原图", kind="image")
+        with patch.object(image_download, "_fetch_page_text", lambda *a, **k: ("", "")):
+            with patch.object(image_download, "fetch_image",
+                              side_effect=image_download.PageLinkError([])):
+                image_download.run_image_download(t, store, None, None)
+        check("无图页面落 failed", t.status == "failed", t.status)
+        check("错误文案明确", "没有找到图片" in (t.error or ""), t.error)
+        check("提示点名小红书并给出正确拿法",
+              "小红书" in (t.hint or "") and "复制图片地址" in (t.hint or ""), t.hint)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("✅ 页面无图：failed + 平台定制提示（小红书 → 怎么拿图片直链）")
+
+
+# --------------------------------------------------------------------------- #
 # 源码棘轮（防重构把接线改回去）
 # --------------------------------------------------------------------------- #
 def test_router_source_wiring():
@@ -1116,6 +1374,15 @@ def main():
         test_image_download_pause_rejected_and_cancel_works,
         test_image_download_retry_routes_to_image_executor,
         test_image_download_mixed_batch_skips_bad_links,
+        test_browser_headers_consistent_and_compressed,
+        test_fetch_image_decompresses_gzip_and_deflate,
+        test_extract_page_images_priority_and_filtering,
+        test_extract_page_images_respects_max_limit,
+        test_fetch_image_page_link_raises_with_candidates,
+        test_fetch_page_text_rejects_private_redirect_hop,
+        test_fetch_image_login_wall_uses_browser_tls_fallback,
+        test_run_image_download_expands_page_into_children,
+        test_run_image_download_page_without_images_platform_hint,
         test_router_source_wiring,
         test_core_kind_routing_wiring,
         test_app_registers_image_router,

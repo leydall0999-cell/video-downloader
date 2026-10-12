@@ -1185,7 +1185,7 @@
   // 'image'=直接把粘贴的图片直链排队下载（不解析、不走清晰度）。
   let dlMode = 'video';
   const URL_PLACEHOLDER_VIDEO = '粘贴视频链接，每行一个可批量下载（例如 https://www.bilibili.com/video/BV1...）';
-  const URL_PLACEHOLDER_IMAGE = '粘贴图片直链，每行一个可批量下载（例如 https://xxx.com/photo.jpg）';
+  const URL_PLACEHOLDER_IMAGE = '粘贴图片直链，每行一个可批量下载；也支持小红书等平台的分享链接（自动抓页面里的图）';
   const trackers = new Map();
   // 正在删除的任务 ID 集合：防止 syncMissingCards 在 DELETE 生效前把卡片重建回来
   const _deletingIds = new Set();
@@ -2208,6 +2208,17 @@
       refs.saveHint.hidden = true;
       refs.convertWrap.hidden = true;
       refs.status.textContent = '已完成 · 成品文件已清理（超保留期）';
+      return;
+    }
+    // 🔴 2026-10-12 分享页展开的「汇总任务」（标题形如「已展开 4 张图片」）本身
+    // 没有成品文件——真正的图片是它派生出的子任务。此时给「保存」按钮会让用户
+    // 点到一个必然失败的下载（/file 找不到 filepath）。
+    if (!task.filename) {
+      refs.save.hidden = true;
+      refs.saveHint.hidden = false;
+      refs.convertWrap.hidden = true;
+      refs.saveHint.textContent = task.title || '图片已逐张开始下载，见下方各张任务';
+      refs.status.textContent = task.status === 'completed' ? '已展开' : refs.status.textContent;
       return;
     }
     refs.save.hidden = false;
