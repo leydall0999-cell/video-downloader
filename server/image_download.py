@@ -815,7 +815,8 @@ def run_image_download(task: DownloadTask, store: TaskStore,
         names = len(created)
         store.update(task.id, status="completed", progress=100.0,
                      title=f"已展开 {names} 张图片", filename="", filesize=0,
-                     downloaded_bytes=0, total_bytes=0)
+                     downloaded_bytes=0, total_bytes=0,
+                     children=[c.id for c in created])
         task.add_step("解析页面", "done",
                       f"从网页提取到 {names} 张图片，已逐张开始下载")
         task.log(f"分享页展开：{task.url} → {names} 张图片任务")

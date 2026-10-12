@@ -2250,9 +2250,27 @@
       if (node.convertSubRequired) updateConvertQuota(refs, null);
     }
 
+    // 分享页展开出的子任务（图片）：子任务秒下完，轮询到时已 completed，
+    // syncMissingCards 只给活跃任务补卡片 ⇒ 必须由父任务主动把子卡片建出来，
+    // 否则「已展开 4 张图片」下面一张图都没有（2026-10-12 用户报「图片呢」）。
+    ensureChildCards(task);
+
     lastCompletedTask = task.task_id;
     lastCompletedRefs = refs;
   };
+
+  // 为父任务挂着的 children 建卡片并各自跟踪（幂等：已有卡片就跳过）。
+  // 用函数声明而非 const —— paintTask 可能在声明之前被调用，const 会踩暂时性死区。
+  function ensureChildCards(task) {
+    const kids = Array.isArray(task && task.children) ? task.children : [];
+    if (!kids.length) return;
+    kids.forEach((cid) => {
+      if (!cid || _deletingIds.has(cid)) return;
+      if (el.taskList.querySelector(`[data-task-id="${cid}"]`)) return;
+      const refs = createTaskCard(cid, { title: '图片下载中…', platform: '图片' });
+      trackTask(cid, refs, '');
+    });
+  }
 
   const renderTaskSteps = (refs, task) => {
     const steps = Array.isArray(task.steps) ? task.steps : [];

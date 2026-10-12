@@ -27,6 +27,7 @@ import gzip as gzip_module
 import http.server
 import json
 import os
+import pathlib
 import re
 import shutil
 import socket
@@ -1236,6 +1237,54 @@ def test_run_image_download_page_without_images_platform_hint():
     print("✅ 页面无图：failed + 平台定制提示（小红书 → 怎么拿图片直链）")
 
 
+def test_expanded_children_are_discoverable():
+    """🔴 2026-10-12 用户报「没看懂，图片呢」：展开出的子任务必须能被前端发现。
+
+    根因：图片子任务 1 秒内下完，前端轮询到时已是 completed，而
+    syncMissingCards 只给「活跃状态」补卡片 ⇒ 服务端有图、界面一张都不显示。
+    修法：父任务把 children（子任务 ID）随 to_public_dict 下发，前端据此建卡片。
+    """
+    store, tmp = _mkstore()
+    try:
+        t = store.create(url=_u("/share.html"), title="", platform="图片",
+                         quality="原图", kind="image")
+        image_download.run_image_download(t, store, None, InlineSched())
+        kids = [x for x in store.list_all() if x.id != t.id]
+        check("父任务挂了 children", len(t.children) == len(kids) >= 3,
+              f"children={len(t.children)} kids={len(kids)}")
+        check("children 就是那些子任务的 ID",
+              set(t.children) == {k.id for k in kids})
+        pub = t.to_public_dict()
+        check("children 出现在公开输出里（前端拿得到）",
+              isinstance(pub.get("children"), list) and pub["children"] == t.children,
+              str(pub.get("children"))[:60])
+        # 持久化往返：重启后父任务仍要记得它的子任务（否则刷新页面又丢）
+        store.flush()          # 落盘是防抖的，重建 store 前必须显式 flush
+        store2 = TaskStore(root=tmp / "root", state_dir=tmp / "state")
+        back = store2.get(t.id)
+        check("重启后 children 仍在", back is not None and list(back.children) == list(t.children),
+              str(getattr(back, "children", None))[:60])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    # 前端接线：paintTask 里必须调 ensureChildCards，且它真的建卡片
+    js = pathlib.Path(_SERVER_DIR, "..", "web", "app.js").read_text(encoding="utf-8")
+    check("paintTask 调用 ensureChildCards", "ensureChildCards(task);" in js)
+    check("ensureChildCards 用函数声明（非 const，避免暂时性死区）",
+          "function ensureChildCards(task)" in js)
+    check("ensureChildCards 建卡片并跟踪",
+          "createTaskCard(cid" in js and "trackTask(cid, refs" in js)
+    check("建卡片前查重（幂等，不重复建）",
+          'querySelector(`[data-task-id="${cid}"]`)' in js)
+    print("✅ 展开的子任务可被发现：children 随父任务下发 + 持久化 + 前端建卡片接线")
+
+
+class InlineSched:
+    """测试用调度器：就地执行子任务（生产里是 BatchScheduler）"""
+
+    def submit(self, fn, *args, **kw):
+        fn(*args, **kw)
+
+
 # --------------------------------------------------------------------------- #
 # 源码棘轮（防重构把接线改回去）
 # --------------------------------------------------------------------------- #
@@ -1383,6 +1432,7 @@ def main():
         test_fetch_image_login_wall_uses_browser_tls_fallback,
         test_run_image_download_expands_page_into_children,
         test_run_image_download_page_without_images_platform_hint,
+        test_expanded_children_are_discoverable,
         test_router_source_wiring,
         test_core_kind_routing_wiring,
         test_app_registers_image_router,

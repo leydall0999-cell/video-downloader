@@ -70,14 +70,39 @@ MUTATIONS = [
      "image_download.py", "                            if not images:", "                            if False:"),
     ("M16 执行器不把页面展开成子任务（分享链接拿不到任何图）",
      "image_download.py", "            created.append(child)", "            pass"),
+    ("M17 父任务不下发 children（图片在服务端但界面一张都不显示）",
+     "image_download.py", "                     children=[c.id for c in created])", "                     )"),
+    ("M18 to_public_dict 不带 children（前端拿不到子任务 ID）",
+     "tasks.py", '            "children": list(self.children or []),', ""),
+    ("M19 前端不建子卡片（回归：只剩「已展开 N 张」的汇总卡片）",
+     "../web/app.js", "    ensureChildCards(task);", "    void task;"),
 ]
 
 
-def run_test() -> tuple[bool, str]:
+REPO = os.path.dirname(SERVER)
+
+
+def _stage_tree() -> str:
+    """把 server/ 复制到临时目录并返回其路径（web/ 用软链指回真实目录）。
+
+    🔴 2026-10-12 实测踩死过：harness 直接改**真实源码**，进程被工具超时 SIGTERM
+    打断时 finally 根本没机会跑 ⇒ 源码里留下被注入的缺陷代码（`return _XHS_TOKEN_RE...`），
+    下一个跑测试的人看到的是「 inexplicable 的失败」，而 harness 自身毫无察觉。
+    ⇒ 铁律：**变异只在副本上做**，真实源码全程只读。
+    """
+    stage = tempfile.mkdtemp(prefix="vdl_mut_tree_")
+    dst = os.path.join(stage, "server")
+    subprocess.run(["rsync", "-a", "--exclude", "__pycache__", "--exclude", ".pytest_cache",
+                    f"{SERVER}/", f"{dst}/"], check=True, capture_output=True)
+    os.symlink(os.path.join(REPO, "web"), os.path.join(stage, "web"))
+    return dst
+
+
+def run_test(server_dir: str) -> tuple[bool, str]:
     env = dict(os.environ)
     env.setdefault("VDL_DATA_DIR", tempfile.mkdtemp(prefix="vdl_mut_"))
     env.setdefault("VDL_LOGIN_GATE", "0")
-    p = subprocess.run([PY, TEST], cwd=SERVER, env=env,
+    p = subprocess.run([PY, TEST], cwd=server_dir, env=env,
                        capture_output=True, text=True, timeout=600)
     return p.returncode == 0, (p.stdout or "") + (p.stderr or "")
 
@@ -87,94 +112,79 @@ def _sha(text: str) -> str:
 
 
 def main() -> int:
-    # 🔴 原文件内容**全程留在内存**，任何中断/异常都用它写回（不依赖 .mutbak 文件）——
-    # 2026-10-12 实测踩过：变异跑完后源码里残留着 `try: pass`（被注入的缺陷代码），
-    # 说明「落 bak 文件再 copy 回来」这条链路不够硬：进程被杀/并发跑就会留残根。
-    pristine: dict[str, str] = {}
-    for _n, _rel, _o, _w in MUTATIONS:
-        if _rel not in pristine:
-            pristine[_rel] = pathlib.Path(SERVER, _rel).read_text(encoding="utf-8")
-    pristine_sha = {rel: _sha(txt) for rel, txt in pristine.items()}
+    stage = _stage_tree()
+    print(f"变异沙盒（真实源码只读）：{stage}")
 
-    def _restore_all() -> list[str]:
-        """把所有被改过的源文件按内存原样写回，返回仍不一致的文件名。"""
-        bad = []
-        for rel, txt in pristine.items():
-            p = pathlib.Path(SERVER, rel)
-            if not p.exists() or _sha(p.read_text(encoding="utf-8")) != pristine_sha[rel]:
-                p.write_text(txt, encoding="utf-8")
-                if _sha(p.read_text(encoding="utf-8")) != pristine_sha[rel]:
-                    bad.append(rel)
-        return bad
+    def _target(rel: str) -> pathlib.Path:
+        return pathlib.Path(stage, "server", rel)
 
     # 基线自检：未变异必须先全绿。否则后续每一项「变红」都可能是环境问题的
-    # 假阳性（曾踩：base python 缺 requests，注入缺陷后 import 即失败，
+    # 假阳性（曾踩：base python 缺 requests，注入缺陷后 import 就失败，
     # 8 项变异全「如期变红」但原因完全不对）。
-    try:
-        base_ok, base_out = run_test()
-        if not base_ok:
-            print("❌ 基线自检失败：未变异的测试套件未全绿，本次变异结果全部作废")
-            for ln in [l for l in base_out.splitlines() if l.strip()][-10:]:
-                print("   ", ln)
-            return 1
-        print("✅ 基线自检：未变异全绿，开始注入缺陷")
-        ok = True
-        for name, rel, old, new in MUTATIONS:
-            path = pathlib.Path(SERVER, rel)
-            src = path.read_text(encoding="utf-8")
-            # 锚点必须是**完整行且唯一**：否则 12 空格会命中 16 空格行（实测踩过，
-            # 变异打到预期之外的代码上，结论全错）。
-            old_lines = old.split("\n")
-            if src.count(old) != 1 or any(
-                    not src.count(ln) for ln in old_lines):
-                print(f"⚠️  {name}: 锚点不是唯一整行（命中 {src.count(old)} 次），跳过")
-                ok = False
-                continue
-            mutated = src.replace(old, new, 1)
-            if _sha(mutated) == pristine_sha[rel]:
-                print(f"⚠️  {name}: 变异后内容与原文件相同（无效变异），跳过")
-                ok = False
-                continue
-            try:
-                path.write_text(mutated, encoding="utf-8")
-                passed, out = run_test()
-                if passed:
-                    print(f"❌ {name}: 注入缺陷后测试仍然全绿 —— 断言没咬住！")
-                    ok = False
-                elif "ModuleNotFoundError" in out or "ImportError" in out:
-                    print(f"❌ {name}: 变红原因是 import 失败而非断言 —— 环境问题，结果作废")
-                    ok = False
-                else:
-                    bad = [ln for ln in out.splitlines()
-                           if "AssertionError" in ln]
-                    why = (bad[0].strip()[:70] if bad
-                           else "非零退出（未见 AssertionError，需人工核对）")
-                    print(f"✅ {name}: 如期变红（{why}）")
-            except Exception as e:  # noqa: BLE001
-                print(f"⚠️  {name}: harness 异常 {e}")
-                ok = False
-            finally:
-                path.write_text(pristine[rel], encoding="utf-8")
-    finally:
-        # 无论正常结束还是被打断（KeyboardInterrupt / SIGKILL 前能跑到这）都还原
-        residue = _restore_all()
-        if residue:
-            print(f"❌ 还原失败（源码仍是变异态）：{residue}")
+    base_ok, base_out = run_test(stage + "/server")
+    if not base_ok:
+        print("❌ 基线自检失败：未变异的测试套件未全绿，本次变异结果全部作废")
+        for ln in [l for l in base_out.splitlines() if l.strip()][-10:]:
+            print("   ", ln)
+        return 1
+    print("✅ 基线自检：未变异全绿，开始注入缺陷")
+    ok = True
+    pristine: dict[str, str] = {}
+    for _n, rel, _o, _w in MUTATIONS:
+        if rel not in pristine:
+            pristine[rel] = _target(rel).read_text(encoding="utf-8")
+    for name, rel, old, new in MUTATIONS:
+        path = _target(rel)
+        src = pristine[rel]
+        # 锚点必须是**完整行且唯一**：否则 12 空格会命中 16 空格行（实测踩过，
+        # 变异打到预期之外的代码上，结论全错）。
+        old_lines = old.split("\n")
+        if src.count(old) != 1 or any(not src.count(ln) for ln in old_lines):
+            print(f"⚠️  {name}: 锚点不是唯一整行（命中 {src.count(old)} 次），跳过")
             ok = False
-
-    # 还原后必须全绿，且源文件必须与开工前逐字节一致
-    passed, out = run_test()
+            continue
+        mutated = src.replace(old, new, 1)
+        if _sha(mutated) == _sha(src):
+            print(f"⚠️  {name}: 变异后内容与原文件相同（无效变异），跳过")
+            ok = False
+            continue
+        try:
+            path.write_text(mutated, encoding="utf-8")
+            passed, out = run_test(stage + "/server")
+            if passed:
+                print(f"❌ {name}: 注入缺陷后测试仍然全绿 —— 断言没咬住！")
+                ok = False
+            elif "ModuleNotFoundError" in out or "ImportError" in out:
+                print(f"❌ {name}: 变红原因是 import 失败而非断言 —— 环境问题，结果作废")
+                ok = False
+            else:
+                bad = [ln for ln in out.splitlines() if "AssertionError" in ln]
+                why = (bad[0].strip()[:70] if bad
+                       else "非零退出（未见 AssertionError，需人工核对）")
+                print(f"✅ {name}: 如期变红（{why}）")
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️  {name}: harness 异常 {e}")
+            ok = False
+        finally:
+            path.write_text(src, encoding="utf-8")
+    # 还原后必须全绿（副本已还原，真实源码从未被动过）
+    passed, out = run_test(stage + "/server")
     if not passed:
         tail = [ln for ln in out.splitlines() if ln.strip()][-12:]
         print("---- 还原后失败输出尾部 ----")
         for ln in tail:
             print("   ", ln)
-    drift = [rel for rel, txt in pristine.items()
-             if _sha(pathlib.Path(SERVER, rel).read_text(encoding="utf-8"))
-             != pristine_sha[rel]]
-    print(f"✅ 还原后全绿（源文件逐字节一致：{len(pristine) - len(drift)}/{len(pristine)}）"
-          if passed and not drift else
-          f"❌ 还原后状态异常（绿={passed} 漂移={drift}）")
+    print("✅ 还原后全绿（变异全程只发生在副本，真实源码未被改动）" if passed
+          else "❌ 还原后仍红：副本还原链路有问题")
+    # 最后再核对一次真实源码确实没被动过（sha 与开工前一致）
+    drift = []
+    for name, rel, _o, _w in MUTATIONS:
+        real = pathlib.Path(SERVER, rel).read_text(encoding="utf-8")
+        if _sha(real) != _sha(pristine[rel]):
+            drift.append(rel)
+    if drift:
+        print(f"❌ 真实源码疑似被改动：{drift}")
+        ok = False
     return 0 if (ok and passed and not drift) else 1
 
 

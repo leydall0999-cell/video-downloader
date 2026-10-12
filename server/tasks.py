@@ -47,7 +47,7 @@ _PERSIST_FIELDS = (
     "error", "hint", "created_at", "extract_mode",
     "concurrent_fragments", "downloader_type", "cookie", "proxy", "referer",
     "source_url", "play_url", "watch_options", "is_hls", "resumable",
-    "file_expired", "owner_id",
+    "file_expired", "owner_id", "children",
 )
 
 
@@ -128,6 +128,11 @@ class DownloadTask:
     # 过程展示：结构化步骤 + 文本日志
     steps: list[dict] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
+    # 🔴 2026-10-12 图片分享页展开（用户报「没看懂，图片呢」）：
+    #   分享链接展开出的子任务在 1 秒内就下完，前端轮询到时它们已是 completed，
+    #   而 syncMissingCards 只给「活跃状态」补卡片 ⇒ 图片在服务端却一张都不显示。
+    #   把子任务 ID 挂在父任务上随 to_public_dict 下发，前端据此建卡片（见 app.js）。
+    children: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         # 初始任务自动带有"排队等待"步骤，让前端过程面板一创建就有东西展示
@@ -193,6 +198,7 @@ class DownloadTask:
             "is_hls": self.is_hls,
             "steps": self.steps,
             "logs": self.logs,
+            "children": list(self.children or []),
         }
 
 
@@ -308,6 +314,9 @@ class TaskStore:
                 play_url=str(row.get("play_url") or ""),
                 watch_options=list(row.get("watch_options") or []),
                 is_hls=bool(row.get("is_hls")), workdir=workdir, filepath=fp,
+                # 分享页展开出的子任务 ID（2026-10-12）：不还原的话，
+                # 重启/刷新后父任务就「忘了」自己派生了哪些图片，前端无从建卡片。
+                children=[str(c) for c in (row.get("children") or [])],
             )
             task.steps = []   # 恢复条目不带走历史步骤，__post_init__ 重建初始步骤
             task.__post_init__()
