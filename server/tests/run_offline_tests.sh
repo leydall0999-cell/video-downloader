@@ -856,6 +856,14 @@ run_one test_launcher_window_guard.py
 #     配套变异测试 tests/mutation_cloud_matting_gateway.py：10 项注入缺陷必须变红。
 run_one test_cloud_matting_gateway.py
 
+# 63. test_release_audit.py —— 发布包「机密数据」核查工具的离线守卫（2026-10-13 用户要求
+#     「发布的安装包绝对不含机密数据」，并要求写入档案）。七类：明文凭据 / 私钥 / 服务端
+#     凭据文件 / 用户数据 / 内部信息 / 打包垃圾 / 我方明文源码；另含三个**真实误报**的回归钉子
+#     （base64 里的假 AKIA、公开 CA 包 cacert.pem、二进制版本号 10.11.12.13）。
+#     工具本体 server/tools/audit_release_secrets.py 已接入 build_mac.sh 的构建自验证（命中即拦发布）。
+#     配套变异测试 tests/mutation_release_audit.py：6 项注入缺陷必须变红。
+run_one test_release_audit.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

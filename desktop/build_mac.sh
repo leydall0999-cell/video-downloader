@@ -252,6 +252,10 @@ _stage_commentary() {
       ! -name '__pycache__' \
       ! -name '.DS_Store' \
       ! -name '*.log' \
+      ! -name '*.bak*' \
+      ! -name '*.orig' \
+      ! -name '*.rej' \
+      ! -name '*.pyc' \
       -exec cp -R {} "$staging/scripts/" \;
   fi
   # 2026-09-07: 不再随包预置 whisper 模型(改为首次按需下载, 省 ~141MB)。
@@ -403,6 +407,21 @@ if [ ! -f "$SERVER_STAGING/build_info.txt" ] || [ ! -d "$SERVER_STAGING/assets" 
 fi
 echo "   ✔ server 随包资源已 staging：$(find "$SERVER_STAGING" -type f | wc -l | tr -d ' ') 个非源码文件"
 
+# ── yt-dlp 随包插件 staging（2026-10-13）──────────────────────────────────────
+# 原写法 `--add-data "$REPO/yt_dlp_plugins:yt_dlp_plugins"` 会把仓库里的
+# `__pycache__/*.pyc` 一起打进包（用户拿到一堆用不上的编译缓存；发布包机密核查
+# 会把它判为我方区垃圾）。插件本体**必须**保持 .py 明文（yt-dlp 就是按源码加载插件），
+# 所以只排除缓存与编辑器残留，用 staging 复制。
+YDLP_STAGING="${VDL_BUILD_WORKPATH}_ytdlp_plugins"
+if [ -e "$YDLP_STAGING" ]; then
+  mv "$YDLP_STAGING" "$HOME/.Trash/vdl_ydlp_staging_$(date +%s)" 2>/dev/null || rm -rf "$YDLP_STAGING"
+fi
+mkdir -p "$YDLP_STAGING"
+rsync -a --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' \
+      --exclude '*.bak*' --exclude '*.orig' --exclude '*.rej' \
+      "$REPO/yt_dlp_plugins/" "$YDLP_STAGING/"
+echo "   ✔ yt-dlp 插件已 staging：$(find "$YDLP_STAGING" -type f | wc -l | tr -d ' ') 个文件（已剔除 __pycache__）"
+
 # ── P1 加固（2026-09-30）：核心模块 Cython 编译为 .so ────────────────────────
 # 去掉明文 .py 只是关上最敞开的门；PYZ 里的 .pyc 仍能被提取反编译（见下：
 # PyInstaller ≥6.0 已移除 --key）。真正防住源码被读的手段是把核心模块编成 .so：
@@ -475,7 +494,7 @@ echo "   ℹ️  PyInstaller $([ -x "$VENV/bin/pyinstaller" ] && "$VENV/bin/pyin
   --paths "$REPO" \
   --add-data "$REPO/web:web" \
   --add-data "$REPO/extension:extension" \
-  --add-data "$REPO/yt_dlp_plugins:yt_dlp_plugins" \
+  --add-data "$YDLP_STAGING:yt_dlp_plugins" \
   --add-data "$SERVER_STAGING:server" \
   --hidden-import app \
   --hidden-import credential_store \
@@ -521,6 +540,8 @@ fi
 
 # 清理 staging 临时目录（PyInstaller 已把文件拷进 .app，不再需要）
 [ -n "${COMMENTARY_STAGING:-}" ] && [ -d "$COMMENTARY_STAGING" ] && mv "$COMMENTARY_STAGING" "$HOME/.Trash/commentary_staging_$(date +%s)" 2>/dev/null || true
+[ -n "${YDLP_STAGING:-}" ] && [ -d "$YDLP_STAGING" ] && mv "$YDLP_STAGING" "$HOME/.Trash/vdl_ydlp_staging_done_$(date +%s)" 2>/dev/null || true
+[ -n "${SERVER_STAGING:-}" ] && [ -d "$SERVER_STAGING" ] && mv "$SERVER_STAGING" "$HOME/.Trash/vdl_server_staging_done_$(date +%s)" 2>/dev/null || true
 
 echo "▶ 应用中文名称（菜单栏 / Dock / 关于窗口）"
 PLIST="$REPO/dist/VideoDownloader.app/Contents/Info.plist"
@@ -742,6 +763,24 @@ cleanup_old_artifacts
 
 echo "▶ 构建自验证（沙盒内可验，避免发出坏包）"
 _VERIFY_FAIL=0
+
+# 1) 发布包机密核查（2026-10-13 用户要求「发布的安装包绝对不含机密数据」，常态化）
+#    扫 7 类：明文凭据 / 私钥 / 服务端凭据文件 / 用户数据 / 内部信息 / 打包垃圾 / 我方明文源码。
+#    A–D 类与我方区垃圾任一命中即拦发布（不回显任何凭据内容，只报位置与掩码证据）。
+if [ -f "$REPO/server/tools/audit_release_secrets.py" ]; then
+  echo "   ▶ 发布包机密核查（audit_release_secrets）..."
+  if "$VENV/bin/python" "$REPO/server/tools/audit_release_secrets.py" \
+       "$REPO/dist/VideoDownloader.app" >/tmp/vdl_release_audit.log 2>&1; then
+    echo "   ✔ 未发现机密数据（详见 /tmp/vdl_release_audit.log）"
+  else
+    echo "   ❌ 发布包机密核查未通过（详见 /tmp/vdl_release_audit.log）"
+    grep -E "❌|·" /tmp/vdl_release_audit.log | head -20
+    _VERIFY_FAIL=1
+  fi
+else
+  echo "   ⚠️ 机密核查脚本缺失，跳过（务必补回）"
+  _VERIFY_FAIL=1
+fi
 
 
 

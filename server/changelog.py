@@ -18,6 +18,14 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.64",
+        "date": "2026-10-13",
+        "items": [
+            "安装包做了一次彻底的内部核查：确认包里不含任何密钥、账号密码、用户数据。",
+            "顺手清掉了几个跟着打包的冗余文件（旧备份、编译缓存），对使用没有任何影响。",
+        ],
+    },
+    {
         "version": "1.0.63",
         "date": "2026-10-13",
         "items": [
