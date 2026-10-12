@@ -94,7 +94,47 @@ def main():
     img_router = get("routers.image")
     print(f"{'✅' if '/api/image/download' in img_router.co_consts or '/api/image/download' in [c for c in img_router.co_consts if isinstance(c, str)] else '❌'}"
           f" routers.image 路由路径 /api/image/download 在包内")
+    bad += _check_entry_script(exe, src_root)
     return 1 if bad else 0
+
+
+def _check_entry_script(exe, src_root):
+    """核验**入口脚本**（desktop_launcher）而不是只核验 PYZ 里的服务端模块。
+
+    2026-10-12 补：原生窗口桥（保存面板 / 在访达中显示 / 剪贴板）全在启动器里，而它
+    是 PyInstaller 的**入口脚本**——存在 CArchive（`Contents/MacOS/<app>` 内嵌归档）里，
+    不在 PYZ。此前核验工具只看 PYZ ⇒「桥改了但没进包」这类事故根本查不出来
+    （`strings` 也查不到：CArchive 条目是 zlib 压缩的，连老符号 save_direct_url 都是 0 命中）。
+    """
+    import pathlib
+    try:
+        from PyInstaller.archive.readers import CArchiveReader
+    except Exception as exc:  # noqa: BLE001 - 没装 PyInstaller 时只跳过这一项
+        print(f"⚠️  跳过启动器核验（PyInstaller 不可用：{exc}）")
+        return 0
+    src = pathlib.Path(src_root) / "desktop" / "desktop_launcher.py"
+    if not src.exists():
+        print("⚠️  跳过启动器核验（找不到源码 desktop/desktop_launcher.py）")
+        return 0
+    try:
+        data = CArchiveReader(exe).extract("desktop_launcher")
+        code = marshal.loads(data)
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ 启动器：无法从包内解出 desktop_launcher（{exc}）")
+        return 1
+    local = compile(src.read_text(encoding="utf-8"), str(src), "exec")
+    pkg_fp, loc_fp = fp_hex(code), fp_hex(local)
+    ok = pkg_fp == loc_fp
+    print(f"{'✅' if ok else '❌'} desktop_launcher（入口脚本）: 包 {pkg_fp} / 源码 {loc_fp}"
+          f"{'' if ok else '  ← 不一致：包里的启动器不是这版源码'}")
+    bad = 0 if ok else 1
+    for sym in ("save_task_file", "reveal_path", "_download_url_to_path"):
+        found = sym in code.co_names or any(
+            sym in c.co_names for c in code.co_consts if hasattr(c, "co_code"))
+        print(f"{'✅' if found else '❌'} desktop_launcher.{sym} 在包内可见")
+        if not found:
+            bad += 1
+    return bad
 
 
 if __name__ == "__main__":

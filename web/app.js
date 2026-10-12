@@ -2064,6 +2064,9 @@
    *  用户原话：「你得让我知道在哪里啊，一堆文件夹我上哪找去」——
    *  光说「已保存」不够，必须给出路径本身，并且一键能定位到文件。 */
   function renderPathHint(box, prefix, path) {
+    // 完成卡是折叠态、`.save-hint` 在折叠态默认 display:none —— 而这一行
+    // 正是用户要的「文件在哪」，必须加修饰类让它折叠时也可见（见 styles.css）。
+    box.classList.add('save-hint--path');
     box.hidden = false;
     box.textContent = '';
     box.appendChild(document.createTextNode(prefix));
@@ -2094,6 +2097,7 @@
     const box = refs.saveHint;
     box.hidden = false;
     if (!isDesktopShell()) {
+      box.classList.remove('save-hint--path');
       box.textContent = task.kind === 'image'
         ? '点上方「保存到本机」即可把图片下载到你的电脑（浏览器限制，网站无法直接写入你本地）。'
         : '点上方「保存到本机」即可把处理好的视频下载到你的电脑（浏览器限制，网站无法直接写入你本地）。';
@@ -2107,6 +2111,7 @@
       box.appendChild(more);
       return;
     }
+    box.classList.remove('save-hint--path');
     box.textContent = '点上方「保存到本机」可选择保存位置（默认到「下载」文件夹）。';
   }
 

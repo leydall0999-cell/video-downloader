@@ -96,6 +96,9 @@ MUTATIONS = [
     ("M25 前端桌面版也自动点保存（多张图会连弹一串系统面板）",
      "../web/app.js", "    const webAutoSave = autoSave && !isDesktopShell();",
      "    const webAutoSave = autoSave;"),
+    ("M26 折叠态不显示「文件在哪」那行（完成卡默认折叠 ⇒ 用户看不到路径）",
+     "../web/styles.css", ".task.is-collapsed .save-hint.save-hint--path { display: block; }",
+     ".task.is-collapsed .save-hint.save-hint--path { display: none; }"),
 ]
 
 

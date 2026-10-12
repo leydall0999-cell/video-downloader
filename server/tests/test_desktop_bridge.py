@@ -526,6 +526,13 @@ def _task_save_section():
           "const webAutoSave = autoSave && !isDesktopShell();" in app_js, "")
     check("接线：前端展示本机真实路径 + 「在访达中显示」",
           "task.local_path" in app_js and "api.reveal_path(" in app_js, "")
+    # 完成卡默认是折叠态，而 `.save-hint` 在折叠态被 CSS 隐藏 —— 不给路径行开例外，
+    # 「文件在哪」这行用户根本看不到（等于白做）。
+    styles = (REPO / "web" / "styles.css").read_text(encoding="utf-8")
+    check("接线：带路径的提示行加修饰类",
+          "classList.add('save-hint--path')" in app_js, "")
+    check("接线：折叠态也显示带路径的提示行（否则用户看不到「文件在哪」）",
+          ".task.is-collapsed .save-hint.save-hint--path { display: block; }" in styles, "")
 
 
 def _clipboard_section():
