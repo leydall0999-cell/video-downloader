@@ -134,6 +134,10 @@ run_one test_download_matrix.py
 #  「用户取消」；到期完成任务降级为历史条目（保留 50 条元数据、可重新下载）。
 #  （A4 的 proxy.json 分流：web 端验证见 test_yt_warp_proxy.py 的 env 分支。）
 run_one test_batch3_history.py
+#  渗透自查（2026-10-12）修复守卫：/api/tasks 严格归属（无 device → 空队列、
+#  带 device 不含无归属/他人任务）、/api/version 不外泄内部信息、
+#  /api/media/proxy 域名分散度限流。改动任一处都会立刻红。
+run_one test_pentest_fixes_20261012.py
 run_one test_ai_free_trial_web.py
 run_one e2e_ai_trial_check.py
 

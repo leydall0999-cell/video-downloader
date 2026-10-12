@@ -2132,13 +2132,15 @@ class ConvertRequest(BaseModel):
 def _require_task(task_id: str, device_id: str = ""):
     """取任务，可选设备归属校验（2026-08-22 设备隔离）。
 
-    device_id 非空时：任务属于其他设备（device_id 非空且不匹配）→ 视为不存在
-    （404，不泄露任务存在性）；无归属任务（系统任务）对所有设备可见。
+    🔴 安全修复 2026-10-12（渗透自查 · 中危，与 tasks.py::list_all 同源）：
+    旧规则「无归属任务（device_id 为空）对所有设备可见」使任何人都能按 task_id
+    读取他人任务详情。现改为严格匹配：请求方与任务的 device_id **都非空且相等**
+    才放行；其余一律 404（不返回 403，避免任务 id 可枚举探测）。
     """
     task = store.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
-    if device_id and task.device_id and task.device_id != device_id:
+    if not device_id or not task.device_id or task.device_id != device_id:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     return task
 

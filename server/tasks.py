@@ -381,16 +381,25 @@ class TaskStore:
     def list_all(self, device: str = "") -> list["DownloadTask"]:
         """返回当前设备可见的任务安全快照（不暴露内部 dict），供队列概览使用。
 
-        设备隔离规则：
-        - device 非空：返回「无归属（device_id 为空，系统任务）或属于该设备」的任务；
-        - device 为空（未提供/兼容路径）：只返回无归属系统任务——绝不泄露
-          任何设备专属任务（无头请求/老客户端拿不到用户任务）。
+        🔴 安全修复 2026-10-12（渗透自查 · 中危）：device 非空时**不再**返回
+        「无归属任务（device_id 为空）」——旧规则会把他人/系统创建的任务暴露给
+        任何带设备标识的请求方，导致网页版匿名请求可列出他人下载任务
+        （含 source_url / play_url / watch_options 等取件直链）。
+
+        注意分层：
+        - **对外HTTP 入口**（routers/core.py::list_tasks）负责拦「device 为空」——
+          无凭据请求直接返回空列表，本函数不会被无 device 地调用到对外路径；
+        - 本函数 `device=""` 仍保留「只返回无归属任务」的旧语义，供 purge /
+          历史扫描等**内部**调用使用（改动它会误伤维护逻辑）；
+        - 明确需要全量视图的维护代码请显式传 `device=None`。
         """
         with self._lock:
             tasks = list(self._tasks.values())
-        if device:
-            return [t for t in tasks if not t.device_id or t.device_id == device]
-        return [t for t in tasks if not t.device_id]
+        if device is None:          # 内部全量视图（维护用，绝不对外）
+            return tasks
+        if not device:              # 内部兼容语义：只看无归属任务
+            return [t for t in tasks if not t.device_id]
+        return [t for t in tasks if t.device_id == device]
 
     def purge_expired(self, ttl: int = TASK_TTL_SECONDS) -> int:
         deadline = time.time() - ttl

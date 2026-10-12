@@ -72,15 +72,12 @@ def api_version() -> dict:
         }
     except Exception as e:
         pool_info = {'error': str(e)}
-    return {
-        'version': version,
-        'exe': app.sys.executable,
-        'git_sha': _git_sha(repo_root),
-        'railway_commit': os.environ.get('RAILWAY_GIT_COMMIT_SHA', ''),
-        'railway_deployment': os.environ.get('RAILWAY_DEPLOYMENT_ID', ''),
-        'railway_branch': os.environ.get('RAILWAY_GIT_BRANCH', ''),
-        'cookie_pool': pool_info,
-    }
+    # 🔴 安全修复 2026-10-12（渗透自查 · 低危）：
+    # 旧实现把 exe 绝对路径、git_sha、Railway 部署标识、cookie 池目录与文件清单
+    # 全部返回给匿名请求——本身不可直接利用，但为后续攻击提供环境情报。
+    # 前端只消费 version（已 grep 确认 app.js 不读 git_sha / exe / cookie_pool），
+    # 故对外只保留 version；排障需要的内部信息改为仅本机/管理员可见。
+    return {'version': version}
 
 @router.get('/api/ydlp/version')
 def ydlp_version_api() -> dict:
@@ -339,6 +336,41 @@ _MEDIA_EXT_BY_TYPE = {
     'audio/ogg': '.ogg', 'audio/wav': '.wav', 'audio/x-wav': '.wav',
 }
 
+# —— /api/media/proxy 域名分散度限流（2026-10-12 渗透自查 · 低危）——
+# 背景：本端点是下载必需的中继（浏览器跨域拿不到 Content-Length，无法分片），
+# 因此**不能**用域名白名单一刀切（会打断任意直链下载）。内网与云元数据已由
+# _assert_safe_url 拦住，残留风险是「被第三方当作公网开放代理」。
+# 判据刻意不用「请求数」——正常分片下载可达数千次，会误伤；
+# 代理滥用的特征是**同一 IP 短时间访问大量互不相干的域名**，正常用户只打 1~3 个。
+_PROXY_HOST_GUARD: dict = {}
+_PROXY_HOST_WINDOW = 600.0   # 10 分钟窗口
+_PROXY_HOST_MAX = 20         # 窗口内最多 20 个不同 host
+_PROXY_GUARD_SWEEP_AT = [0.0]
+
+
+def _proxy_host_guard(ip: str, host: str) -> bool:
+    """按「单 IP 访问的不同域名数」限流。返回 True = 放行。"""
+    now = _time.time()
+    # 每 5 分钟清理一次过期条目，避免字典随 IP 数无限增长
+    if now - _PROXY_GUARD_SWEEP_AT[0] > 300.0:
+        _PROXY_GUARD_SWEEP_AT[0] = now
+        for k in [k for k, v in _PROXY_HOST_GUARD.items()
+                  if now - v.get('_t', 0.0) > _PROXY_HOST_WINDOW]:
+            _PROXY_HOST_GUARD.pop(k, None)
+    rec = _PROXY_HOST_GUARD.get(ip)
+    if rec is None or now - rec.get('_t', 0.0) > _PROXY_HOST_WINDOW:
+        rec = {'_t': now, 'hosts': set()}
+        _PROXY_HOST_GUARD[ip] = rec
+    rec['_t'] = now
+    hosts = rec['hosts']
+    if host in hosts:
+        return True
+    if len(hosts) >= _PROXY_HOST_MAX:
+        return False
+    hosts.add(host)
+    return True
+
+
 @router.get('/api/media/proxy')
 def media_proxy(u: str='', cookie: str='', dl: str='', request: app.Request=None):
     """下载用媒体中继（对标 DataTool 的 /api/proxy/media）。
@@ -359,6 +391,14 @@ def media_proxy(u: str='', cookie: str='', dl: str='', request: app.Request=None
         raise app.HTTPException(status_code=400, detail='缺少 u 参数')
     app._assert_safe_url(u)
     host = app._host_of(u)
+    # 域名分散度限流：单 IP 在 10 分钟内访问过多互不相干的域名 ⇒ 判定为代理滥用
+    _ip = ''
+    try:
+        _ip = (request.client.host if (request is not None and request.client) else '') or ''
+    except Exception:
+        _ip = ''
+    if _ip and not _proxy_host_guard(_ip, host):
+        raise app.HTTPException(status_code=429, detail='请求过于频繁，请稍后再试')
     _proxies: dict | None = None
     if not app.is_china_host(host):
         _proxy_url = app.downloader._resolve_proxy(host)
@@ -667,7 +707,18 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
 @router.get('/api/tasks')
 def list_tasks(request: app.Request) -> dict:
     """列出当前设备可见的任务（设备隔离：只返回本设备创建 + 系统任务），供前端队列概览。"""
-    tasks = [t.to_public_dict() for t in app.store.list_all(device=_device_of(request))]
+    # 纵深防御（2026-10-12 渗透自查）：队列概览不需要 logs（内部调试日志）
+    # 与 extracted_text（字幕/文案全文），列表接口一律剔除。
+    # 🔴 归属闸门：无设备标识的请求（无 X-Device-Id / 无 device=）直接返回空队列——
+    # 旧实现在此情形下会返回所有「无归属任务」，等于把他人任务列表公开。
+    _dev = _device_of(request)
+    tasks = []
+    if _dev:
+        for _t in app.store.list_all(device=_dev):
+            _d = _t.to_public_dict()
+            _d.pop('logs', None)
+            _d.pop('extracted_text', None)
+            tasks.append(_d)
     stats = {'pending': 0, 'downloading': 0, 'merging': 0, 'completed': 0, 'failed': 0, 'canceled': 0}
     for t in tasks:
         stats[t['status']] = stats.get(t['status'], 0) + 1
