@@ -126,6 +126,18 @@ def precheck_commentary(
     # cloud_lifetime_remaining 是 per-resource 字典，前端升级后用它渲染 4 个独立行。
     res["lifetime_cloud_remaining"] = st["cloud_lifetime_remaining"].get("cloud_commentary")
     res["cloud_lifetime_remaining"] = st["cloud_lifetime_remaining"]
+    # 🔴 2026-10-12 按时间计费后，预检必须把「本次将扣多少积分」一并告知：
+    #    用户选完视频就能看到「50 积分/半小时」折算到本片的实际价钱，
+    #    而不是等扣费失败（402）或任务跑完才知道花了多少。
+    #    口径与 charge_commentary_credits 完全同源（同一组函数），绝不两套算价。
+    try:
+        _op = _commentary_credit_op(eng, duration_sec)
+        res["credit_op"] = _op
+        res["credit_units"] = commentary_billing_units(duration_sec)
+        res["credit_cost"] = commentary_credit_total(_op, duration_sec)
+    except Exception:
+        # 估算失败不阻断预检本身（扣费点仍会在任务入口兜底）
+        pass
     return res
 
 
