@@ -104,7 +104,13 @@ def set_user_disabled(user_id: str, disabled: bool) -> dict[str, Any]:
             return {"ok": False, "error": "用户不存在"}
         user["disabled"] = bool(disabled)
         user["updated_at"] = int(time.time())
+        # 安全审计 2026-10-13（F-02）：禁用 / 解禁都撤销该账号已签发 token。
+        # 此前 web 端禁用完全不撤 token ⇒ 后台「封禁」对已登录用户无效（实测确认）。
+        # ⚠️ 本模块的 `_save_users` 是**直接原子写**、不经 auth_store._save_users，
+        #    故必须显式失效鉴权状态缓存，否则 verify_token 的快照最多滞后 1 秒才看到「已禁用」。
+        auth_store.bump_token_version(user)
         _save_users(data)
+        auth_store._invalidate_status_cache()
     return {"ok": True, "disabled": bool(disabled)}
 
 

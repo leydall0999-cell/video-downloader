@@ -253,6 +253,60 @@ def b64e(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
 
 
+# --------------------------------------------------------------------------- #
+# 账号鉴权状态（安全审计 2026-10-13，F-02）：token_version / disabled / deleted_at
+# --------------------------------------------------------------------------- #
+# verify_token 每个请求都要过 ⇒ 不能每次都读盘。这里做 1 秒 TTL 的进程内快照，
+# 并在**每次账号表落盘**时（_save_users）立刻失效 —— 所以本进程内改密/禁用是
+# **即时**生效的（含测试），只有「双实例窗口」的另一个进程最多滞后 1 秒。
+# （与桌面端 app 仓 auth_store 同语义。）
+_STATUS_CACHE: dict[str, Any] = {"ts": 0.0, "map": {}}
+_STATUS_CACHE_TTL = 1.0
+
+
+def _invalidate_status_cache() -> None:
+    _STATUS_CACHE["ts"] = 0.0
+    _STATUS_CACHE["map"] = {}
+
+
+def _user_auth_state(user_id: str) -> Optional[tuple]:
+    """返回 (token_version, disabled, deleted)；账号不存在 / 账号表不可读 → None。
+
+    读不到账号表一律返回 None（调用方 fail-closed），绝不「当作正常账号放行」。
+    """
+    now = time.time()
+    if (now - float(_STATUS_CACHE.get("ts") or 0.0)) < _STATUS_CACHE_TTL:
+        return _STATUS_CACHE["map"].get(user_id)
+    try:
+        data = _load_users()
+        m = {}
+        for u in data.get("users", []):
+            m[u.get("user_id")] = (int(u.get("token_version", 0) or 0),
+                                   bool(u.get("disabled")),
+                                   bool(u.get("deleted_at")))
+    except Exception:  # noqa: BLE001 — 读不到账号表按 fail-closed
+        return None
+    _STATUS_CACHE["ts"] = now
+    _STATUS_CACHE["map"] = m
+    return m.get(user_id)
+
+
+def _current_token_version(user_id: str) -> int:
+    st = _user_auth_state(user_id)
+    return st[0] if st else 0
+
+
+def bump_token_version(user: dict) -> int:
+    """递增账号的 token_version ⇒ 该账号所有已签发 token 立即失效。
+
+    调用方必须已在 `users_mutation()` 临界区内，且随后调用 `_save_users(data)`
+    （落盘时会使状态缓存失效，本进程内即时生效）。
+    """
+    ver = int(user.get("token_version", 0) or 0) + 1
+    user["token_version"] = ver
+    return ver
+
+
 def b64d(s: str) -> bytes:
     import base64
     pad = "=" * (-len(s) % 4)
@@ -260,25 +314,44 @@ def b64d(s: str) -> bytes:
 
 
 def issue_token(user_id: str) -> str:
+    """签发 bearer。payload = `<uid>.<iat>.<exp>.<token_version>`（base64url）。
+
+    安全审计 2026-10-13（F-02）：payload 第 4 段写入该账号当前 token_version，
+    改密/注销/禁用时 +1 ⇒ 旧 token 立即失效（见 verify_token）。此前只验签名与
+    exp，于是这些操作都不会让已签发 token 失效（TTL 长达 30 天），token 一旦
+    泄漏等于长期后门；且账号被后台禁用后旧 token 仍可用。
+    """
     iat = int(time.time())
     exp = iat + TOKEN_TTL
-    payload = _b64url(f"{user_id}.{iat}.{exp}".encode("utf-8"))
+    ver = _current_token_version(user_id)
+    payload = _b64url(f"{user_id}.{iat}.{exp}.{ver}".encode("utf-8"))
     # 防篡改：对 user_id + payload 签名
     sig = hmac.new(_SECRET, f"{user_id}.{payload}".encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{user_id}.{payload}.{sig}"
 
 
 def verify_token(token: str) -> Optional[str]:
+    """校验 token：HMAC 签名 → exp → **账号状态 + token_version**。
+
+    安全审计 2026-10-13（F-02）：
+      · 账号不存在 / 已注销（deleted_at）/ 已被后台禁用（disabled）→ 一律 None；
+      · payload 里的 token_version ≠ 账号当前 token_version → None（已撤销）。
+    兼容：旧 token 的 payload 只有 3 段（无版本号），按版本 0 处理 —— 账号表里
+    历史账号的 token_version 缺省也是 0，故升级后**不会**把在线用户集体踢下线。
+    """
     if not token or token.count(".") != 2:
         return None
     user_id, payload, sig = token.split(".")
     exp = None
+    ver = 0
     try:
         decoded = b64d(payload).decode("utf-8")
-        # decoded = f"{uid}.{iat}.{exp}"
+        # decoded = f"{uid}.{iat}.{exp}" 或 f"{uid}.{iat}.{exp}.{ver}"
         parts = decoded.split(".")
-        if len(parts) == 3:
+        if len(parts) >= 3:
             exp = int(parts[2])
+        if len(parts) >= 4:
+            ver = int(parts[3])
     except Exception:
         return None
     expected = hmac.new(_SECRET, f"{user_id}.{payload}".encode("utf-8"), hashlib.sha256).hexdigest()
@@ -286,6 +359,14 @@ def verify_token(token: str) -> Optional[str]:
         return None
     if exp is not None and int(time.time()) > exp:
         return None
+    state = _user_auth_state(user_id)
+    if state is None:
+        return None                      # 账号不存在 / 账号表不可读 → fail-closed
+    cur_ver, disabled, deleted = state
+    if disabled or deleted:
+        return None                      # 已注销 / 已被后台禁用
+    if ver != cur_ver:
+        return None                      # 密码/状态已变更，旧 token 作废
     return user_id
 
 
@@ -334,6 +415,7 @@ def _load_users() -> dict:
 
 def _save_users(data: dict) -> None:
     """落盘账号表。**调用方必须已在 users_mutation() 临界区内**（见该函数说明）。"""
+    _invalidate_status_cache()   # F-02：账号状态刚变，token 校验快照立即失效
     p = _users_path()
     # 写前重建索引，保证 by_identifier 与 users 始终一致
     _rebuild_index(data)
@@ -386,6 +468,10 @@ def authenticate(identifier: str, password: str) -> Optional[str]:
         return None
     user = next((u for u in data["users"] if u["user_id"] == user_id), None)
     if not user or user.get("deleted_at"):
+        return None
+    # 安全审计 2026-10-13（F-02）：被后台禁用的账号不得再登录换新 token。
+    # 此前只拦 deleted_at ⇒ 禁用账号仍可用正确密码登录拿到 bearer，与「禁用」语义相悖。
+    if user.get("disabled"):
         return None
     if verify_password(password, user["salt"], user["pw_hash"]):
         return user_id
@@ -467,6 +553,9 @@ def reset_password(identifier: str, new_password: str) -> bool:
         user["salt"] = salt
         user["pw_hash"] = pw_hash
         user["updated_at"] = int(time.time())
+        # 安全审计 2026-10-13（F-02）：改密即撤销该账号所有已签发 token
+        # （此前改密不 bump ⇒ 旧 bearer 在 TTL 内继续可用）。
+        bump_token_version(user)
         _save_users(data)
         return True
 
@@ -483,6 +572,8 @@ def deactivate_user(user_id: str) -> dict[str, Any]:
         ident = user.get("identifier", "")
         user["deleted_at"] = int(time.time())
         user["updated_at"] = int(time.time())
+        # 安全审计 2026-10-13（F-02）：注销即撤销该账号所有已签发 token。
+        bump_token_version(user)
         # 清除索引，防止再次登录/注册
         if ident and ident in data["by_identifier"]:
             del data["by_identifier"][ident]
@@ -516,15 +607,20 @@ def set_user_admin(user_id: str, flag: bool) -> dict[str, Any]:
         return {"ok": True, "is_admin": bool(flag)}
 
 
-def ensure_superusers() -> None:
+def ensure_superusers(allow_bootstrap: bool = False) -> None:
     """Bootstrap 超级用户（幂等，带 60s 缓存避免频繁扫盘）。
 
     - 显式名单：~/.video-downloader/admin.json 的 admin_identifiers（列表），或环境变量
       VDL_ADMIN_IDENTIFIER（逗号分隔）。名单内账号登录后标记为 is_admin=True。
-    - 无显式名单且当前无任何 is_admin 账号时，把最早注册的账号提升为超级用户
-      （避免首次启动锁定；桌面端单机即机主本人）。
+    - 无显式名单且当前无任何 is_admin 账号时，**仅当调用方是本机直连**
+      （`allow_bootstrap=True`）才把最早注册的账号提升为超级用户。
 
     提权为单向：本函数永不降级，降级须经后台面板 /api/admin/users/{id}/set-admin。
+
+    安全审计 2026-10-13（F-03，实测确认）：此前无条件兜底提升「最早注册账号」——
+    公网部署上等于「谁先注册谁就是超管」，可直接拿 `/api/admin/*` 全部权限
+    （含 system_config 返回 SMTP 明文口令）。现与桌面端 app 仓同口径：兜底提升
+    **只允许本机直连**，公网必须靠显式名单（VDL_ADMIN_IDENTIFIER / admin.json）。
     """
     import json as _json
     with users_mutation():
@@ -563,8 +659,10 @@ def ensure_superusers() -> None:
                     u["is_admin"] = True
                     changed = True
         else:
-            # 无显式名单：尚无任何超管时，提升最早注册账号
-            if data["users"] and not has_admin:
+            # 无显式名单：尚无任何超管时，**仅本机直连**才兜底提升最早注册账号。
+            # 安全审计 2026-10-13（F-03）：公网一律不提升 —— 否则「首注册即超管」
+            # 等于把后台双手送给最先注册的那个人。
+            if allow_bootstrap and data["users"] and not has_admin:
                 earliest = min(data["users"], key=lambda u: u.get("created_at", 0))
                 earliest["is_admin"] = True
                 changed = True
