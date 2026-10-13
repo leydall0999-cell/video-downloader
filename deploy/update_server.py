@@ -131,7 +131,12 @@ class _Handler(BaseHTTPRequestHandler):
     def _resolve(self) -> Path | None:
         rel = safe_rel_path(self.path)
         if rel is None:
-            return None
+            # 只有「根 / 空路径」才回退首页（保留原 `python -m http.server` 的 index.html
+            # 行为）；含 `..` 的越界路径一律 404，绝不回退首页。
+            raw = unquote(urlparse(str(self.path or "")).path or "").replace("\\", "/").strip("/")
+            if raw:
+                return None
+            rel = "index.html"
         target = (UPDATE_DIR / rel).resolve()
         try:
             target.relative_to(UPDATE_DIR.resolve())

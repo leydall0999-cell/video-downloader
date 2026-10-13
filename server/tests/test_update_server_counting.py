@@ -35,6 +35,7 @@ _UPDATE_DIR.mkdir(parents=True, exist_ok=True)
 (_UPDATE_DIR / "latest.json").write_text('{"version":"1.0.66"}', encoding="utf-8")
 (_UPDATE_DIR / "VideoDownloader.app.zip").write_bytes(b"PK" + b"z" * 4096)
 (_UPDATE_DIR / "patch.delta").write_bytes(b"d" * 128)
+(_UPDATE_DIR / "index.html").write_text("<h1>vdl-update</h1>", encoding="utf-8")
 _STATS = _TMP / "downloads.json"
 
 import os  # noqa: E402
@@ -143,6 +144,10 @@ def test_http_serving_and_counting() -> None:
         st, _ = _get("/latest.json", "VDL-Update/1.0")
         check("latest.json 可取但不计数",
               st == 200 and json.loads(_STATS.read_text(encoding="utf-8"))["app_update"]["macos"]["total"] == 1)
+
+        st, body = _get("/", "Mozilla/5.0")
+        check("根路径回退 index.html（保留原 http.server 行为）",
+              st == 200 and b"vdl-update" in body, f"{st} {body[:40]!r}")
 
         try:
             _get("/../../etc/passwd", "VDL-Update/1.0")
