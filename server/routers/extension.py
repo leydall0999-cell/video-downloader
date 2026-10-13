@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter
-from fastapi.responses import Response
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, Response
 
 router = APIRouter()
 
@@ -79,7 +80,7 @@ def extension_info() -> dict:
 
 
 @router.get("/api/extension/package")
-def extension_package() -> Response:
+def extension_package(request: Request = None) -> Response:
     src = _source_dir()
     data = _build_zip(src)
     m = _manifest()
@@ -88,8 +89,44 @@ def extension_package() -> Response:
     filename = f"{name}-{version}.zip"
     ascii_name = f"vdl-sniffer-extension-{version}.zip"
     disp = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+    # 🔴 下载计数（2026-10-13「app 加上安装包/扩展下载次数并统计不同平台」）：
+    #    平台维度 = User-Agent 推断的浏览器。统计失败绝不让下载失败。
+    try:
+        import dl_stats
+        ua = (request.headers.get("user-agent") or "") if request is not None else ""
+        dl_stats.record("extension", dl_stats.browser_from_ua(ua))
+    except Exception:  # noqa: BLE001
+        pass
     return Response(
         content=data,
         media_type="application/zip",
-        headers={"Content-Disposition": disp},
+        headers={"Content-Disposition": disp,
+                 "Cache-Control": "no-store"},
     )
+
+
+# ── 桌面安装包下载（2026-10-13）────────────────────────────────────────────
+# 用户要求「安装包下载次数并统计不同平台」。安装包本体在更新通道
+# /opt/vdl-update/VideoDownloader.app.zip（与网页服务同机）——这里计数后
+# 原样流式回给浏览器（FileResponse，不走 8765 直链：https 页面直跳 http
+# 下载会被 Chrome 拦）。?p=macos 预留 windows 等后续包位。
+_INSTALLER_FILES: dict[str, Path] = {
+    "macos": Path(os.environ.get("VDL_INSTALLER_MACOS")
+                  or "/opt/vdl-update/VideoDownloader.app.zip"),
+}
+
+
+@router.get("/download/installer")
+def download_installer(p: str = "macos", request: Request = None) -> Response:
+    plat = str(p or "").strip().lower()
+    path = _INSTALLER_FILES.get(plat)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="该平台的安装包尚未提供")
+    try:
+        import dl_stats
+        dl_stats.record("installer", plat)
+    except Exception:  # noqa: BLE001
+        pass
+    return FileResponse(path, media_type="application/zip",
+                        filename=path.name,
+                        headers={"Cache-Control": "no-store"})
