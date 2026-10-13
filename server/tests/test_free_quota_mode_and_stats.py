@@ -17,6 +17,7 @@ import json
 import pathlib
 import sys
 import tempfile
+import time
 import types
 from unittest.mock import patch
 
@@ -130,10 +131,12 @@ def _extract_fns(source: str, names: tuple[str, ...]) -> types.FunctionDef:
 def test_license_stat_functions() -> None:
     src = (SERVER.parent / "deploy" / "license_server.py").read_text(encoding="utf-8")
     fns = _extract_fns(src, ("stat_aggregate", "_users", "_clean_device_meta",
-                             "_merge_device_meta", "_attach_device"))
+                             "_merge_device_meta", "_attach_device",
+                             "_read_dl_stats"))
     ns = {"MAX_DEVICES": 2, "Any": object, "Optional": None,
           "dict": dict, "list": list, "set": set, "str": str, "float": float,
-          "int": int, "isinstance": isinstance, "min": min}
+          "int": int, "isinstance": isinstance, "min": min,
+          "time": time, "json": json, "Path": pathlib.Path}
     for fn in fns.values():
         exec(compile(ast.Module([fn], []), "license_server_fragment", "exec"), ns)
 
@@ -161,6 +164,8 @@ def test_license_stat_functions() -> None:
     check("扩展按浏览器计数", st["ext"] == {"chrome": 1})
     check("活跃口径（7/30 天）", st["active"] == {"d7": 2, "d30": 3}
           and st["devices_total"] == 3)
+    check("聚合含下载计数字段（本机无计数文件 → 空 dict）",
+          isinstance(st.get("downloads"), dict))
 
     # _clean_device_meta 白名单
     cm = ns["_clean_device_meta"]({"platform": "MACOS", "app_version": "1.0.65",
@@ -189,6 +194,16 @@ def test_license_stat_functions() -> None:
           and "stat_aggregate(st, now)" in src)
     check("心跳分发把 meta 传进实现", "meta=(data.get(\"meta\")" in src)
     check("_attach_device 落 first_seen", '"first_seen": now' in src)
+    # 🔴 布局棘轮（2026-10-13 用户定档「太乱太散，整合一下」）：安装/插件区块必须是
+    #    **一张统一表**；容器不得挂 admin-stats-summary 网格类（那会把每张表排成
+    #    横排挤扁）；表头固定写死，不允许 labelMap.th 式动态表头（undefined 根因）。
+    app_js = (SERVER.parent / "web" / "app.js").read_text(encoding="utf-8")
+    idx_html = (SERVER.parent / "web" / "index.html").read_text(encoding="utf-8")
+    check("安装统计容器不再挂网格类（防多表横排）",
+          'id="adminInstallStats" class="admin-stats-summary"' not in idx_html)
+    check("不再用动态表头（undefined 根因）", "labelMap.th" not in app_js)
+    check("统一表头五列就位",
+          "<th>分类</th><th>平台 / 浏览器</th><th>累计</th><th>今日</th><th>近 7 天</th>" in app_js)
 
 
 def main() -> int:

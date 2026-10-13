@@ -23130,52 +23130,55 @@ el.dwVidPlayer.hidden = true;
           return;
         }
         const st = ir.stats || {};
+        // 🔴 2026-10-13 整合布局（用户定档「太乱太散，整合一下」）：四张散表并成
+        //    一张统一表（列：分类 | 平台/浏览器 | 累计 | 今日 | 近 7 天），
+        //    数据缺位一律显式「—」，不再出现 undefined 表头与横排挤表。
         const ins = st.installs || {};
-        const plats = Object.keys(ins).sort((a, b) => (ins[b].total || 0) - (ins[a].total || 0));
-        const platName = { macos: 'macOS', windows: 'Windows', linux: 'Linux', unknown: '未上报（旧设备）' };
-        let h = '<div class="admin-table-wrap"><table class="admin-table">';
-        h += '<tr><th>平台</th><th>累计安装</th><th>今日新增</th><th>近 7 天</th></tr>';
-        if (plats.length) {
-          plats.forEach((p) => {
-            const s = ins[p] || {};
-            h += `<tr><td>${esc(platName[p] || p)}</td><td>${s.total || 0}</td><td>${s.today || 0}</td><td>${s.d7 || 0}</td></tr>`;
-          });
-        } else {
-          h += '<tr><td colspan="4">暂无设备记录（用户登录后即计入）</td></tr>';
-        }
-        h += `<tr><td><b>合计设备</b></td><td colspan="3"><b>${st.devices_total || 0}</b>`
-          + `（近 7 天活跃 ${st.active?.d7 || 0} / 近 30 天活跃 ${st.active?.d30 || 0}）</td></tr>`;
-        h += '</table></div>';
-        const exts = st.ext || {};
-        const extKeys = Object.keys(exts).sort((a, b) => exts[b] - exts[a]);
-        h += '<div class="fq-sub" style="margin-top:12px">浏览器扩展（最近一次上报）</div>';
-        if (extKeys.length) {
-          const extName = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium', firefox: 'Firefox', safari: 'Safari' };
-          h += '<div class="admin-table-wrap"><table class="admin-table"><tr><th>浏览器</th><th>设备数</th></tr>';
-          extKeys.forEach((b) => { h += `<tr><td>${esc(extName[b] || b)}</td><td>${exts[b]}</td></tr>`; });
-          h += '</table></div>';
-        } else {
-          h += '<p class="admin-hint">暂无扩展上报（老版本 App 尚未携带画像，升级后心跳会带来）。</p>';
-        }
-        // 🔴 下载次数（2026-10-13「app 加上安装包/扩展下载次数并统计不同平台」）：
-        //    网页版下载页落盘 → 授权中心 stat_query 合并下发。数据缺位=还没人从网页下过。
         const dls = st.downloads || {};
-        const dlBucket = (bucket, labelMap) => {
-          const slots = dls[bucket] || {};
-          const keys = Object.keys(slots).sort((a, b) => (slots[b].total || 0) - (slots[a].total || 0));
-          if (!keys.length) return '';
-          let t = '<div class="admin-table-wrap"><table class="admin-table"><tr><th>' + labelMap.th
-            + '</th><th>累计下载</th><th>今日</th></tr>';
-          keys.forEach((k) => {
-            t += `<tr><td>${esc(labelMap[k] || k)}</td><td>${slots[k].total || 0}</td><td>${slots[k].today || 0}</td></tr>`;
-          });
-          return t + '</table></div>';
+        const exts = st.ext || {};
+        const platName = { macos: 'macOS', windows: 'Windows', linux: 'Linux', unknown: '未上报（旧设备）' };
+        const extName = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium', firefox: 'Firefox', safari: 'Safari' };
+        const rows = [];
+        let sumToday = 0, sumD7 = 0;
+        Object.keys(ins).sort((a, b) => (ins[b].total || 0) - (ins[a].total || 0)).forEach((p) => {
+          const s = ins[p] || {};
+          sumToday += s.today || 0; sumD7 += s.d7 || 0;
+          rows.push(['安装设备', platName[p] || p, s.total || 0, s.today || 0, s.d7 || 0]);
+        });
+        if (Object.keys(ins).length) {
+          rows.push(['安装设备', '合计', st.devices_total || 0, sumToday, sumD7]);
+        }
+        const dlRow = (bucket, plat, label) => {
+          const s = (dls[bucket] || {})[plat];
+          if (!s) return;
+          rows.push([bucket === 'installer' ? '安装包下载' : '扩展下载', label,
+                     s.total || 0, s.today || 0, '—']);
         };
-        const dlIns = dlBucket('installer', { macos: 'macOS 安装包', windows: 'Windows 安装包' });
-        const dlExt = dlBucket('extension', { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium', firefox: 'Firefox', safari: 'Safari' });
-        h += '<div class="fq-sub" style="margin-top:12px">下载次数（按平台）</div>';
-        h += (dlIns || '<p class="admin-hint">安装包：暂无网页下载数据（下载页开放后自动出现）。</p>');
-        h += (dlExt || '<p class="admin-hint">扩展：暂无下载数据。</p>');
+        ['macos', 'windows'].forEach((p) => dlRow('installer', p,
+          p === 'macos' ? 'macOS 安装包' : 'Windows 安装包'));
+        Object.keys(dls.extension || {}).sort((a, b) =>
+          (dls.extension[b].total || 0) - (dls.extension[a].total || 0)).forEach((b) => {
+          dlRow('extension', b, extName[b] || b);
+        });
+        Object.keys(exts).sort((a, b) => exts[b] - exts[a]).forEach((b) => {
+          rows.push(['已装扩展的设备', extName[b] || b, exts[b], '—', '—']);
+        });
+        let h = '<div class="admin-table-wrap"><table class="admin-table">';
+        h += '<tr><th>分类</th><th>平台 / 浏览器</th><th>累计</th><th>今日</th><th>近 7 天</th></tr>';
+        if (rows.length) {
+          rows.forEach((r) => {
+            h += `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${r[2]}</td>`
+              + `<td>${r[3]}</td><td>${r[4]}</td></tr>`;
+          });
+        } else {
+          h += '<tr><td colspan="5">暂无数据（用户装好并登录后即计入）</td></tr>';
+        }
+        if (Object.keys(ins).length) {
+          h += `<tr><td colspan="5" class="admin-hint">近 7 天活跃 ${st.active?.d7 || 0} 台 · `
+            + '近 30 天活跃 ' + (st.active?.d30 || 0) + ' 台 · 安装 = 设备首次出现（装好并登录）'
+            + ' · 下载 = 官网下载页（与 App 内自动更新分开计）</td></tr>';
+        }
+        h += '</table></div>';
         box.innerHTML = h;
       } catch (e) { /* 静默 */ }
     };
