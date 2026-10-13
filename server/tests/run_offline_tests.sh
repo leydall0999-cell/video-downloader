@@ -254,11 +254,18 @@ run_one test_config_atomic_write.py
 #                                        dev+本机仍回传（桌面调试不退化）、dev+公网为 None、
 #                                        拿不到码即改不动密码、未知账号不回传、smtp 不回传
 run_one test_auth_reset_code_leak.py
+#  15b. test_update_manifest_signature.py —— 🔴 P0-1 自更新清单 Ed25519 验签守卫：
+#                                        篡改清单被拒 / 错密钥被拒 / 缺签名被拒 / 未配置公钥 fail-closed /
+#                                        验签通过才放行。此前未登记 ⇒ P0-1 无回归网，必须接进门禁。
+run_one test_update_manifest_signature.py
 #  16. test_voice_sample_record.py —— 「我的音色 · 直接录制」落盘守卫：
 #                                      WAV 头时长解析、空/过大/格式/太短/过长 五类拒绝、
 #                                      非 WAV 回落前端报的时长、文件 0600 目录 0700、
 #                                      只保留最近 5 段且不碰配置目录里的其它文件
 run_one test_voice_sample_record.py
+#  voice_studio F-05 守卫：TTS/转写 计费按用户归属（current_member_store(request)）
+#  + tts/transcribe 跨源校验（拒绝外部站点）—— 防止写死全局账本/被跨源调用
+run_one test_voice_studio_hardening_f05.py
 #  17. test_commentary_style_intensity.py —— 解说「风格强度」链路（2026-09-21 新增）：
 #                                        CommentaryRequest.style_intensity 字段必须存在（漏加则
 #                                        router 的 payload.style_intensity 在 JSON 主路径 AttributeError，
@@ -899,6 +906,7 @@ run_one test_update_server_counting.py
 #     工具本体 server/tools/audit_release_secrets.py 已接入 build_mac.sh 的构建自验证（命中即拦发布）。
 #     配套变异测试 tests/mutation_release_audit.py：6 项注入缺陷必须变红。
 run_one test_release_audit.py
+run_one test_retention_library_minimal.py   # I7：app 时效清理/媒体库路径护栏最小回归（零覆盖补盲）
 
 echo ""
 echo "========================================="

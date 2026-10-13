@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -146,8 +147,17 @@ class OrderStore:
         self.base = Path(base_dir)
         self.base.mkdir(parents=True, exist_ok=True)
 
+    # 安全审计 2026-10-13（F-07）：订单号原本直接拼进文件名 ⇒ 传入 `../../x`
+    # 即可让 `_path` 指向 `base` 之外的任意 `*.json`（越权读他人订单 / 任意写）。
+    # 订单号形如 `VDL` + 16 位大写十六进制（见 PaymentService.create），
+    # 因此用白名单收敛：只允许字母数字与 `-_`，长度 1~64。
+    _ORDER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
     def _path(self, oid: str) -> Path:
-        return self.base / f"{oid}.json"
+        safe = str(oid or "").strip()
+        if not self._ORDER_ID_RE.match(safe):
+            raise ValueError("非法订单号")
+        return self.base / f"{safe}.json"
 
     def save(self, order: dict) -> None:
         self._path(order["order_id"]).write_text(
