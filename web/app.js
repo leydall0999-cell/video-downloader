@@ -23157,6 +23157,25 @@ el.dwVidPlayer.hidden = true;
         } else {
           h += '<p class="admin-hint">暂无扩展上报（老版本 App 尚未携带画像，升级后心跳会带来）。</p>';
         }
+        // 🔴 下载次数（2026-10-13「app 加上安装包/扩展下载次数并统计不同平台」）：
+        //    网页版下载页落盘 → 授权中心 stat_query 合并下发。数据缺位=还没人从网页下过。
+        const dls = st.downloads || {};
+        const dlBucket = (bucket, labelMap) => {
+          const slots = dls[bucket] || {};
+          const keys = Object.keys(slots).sort((a, b) => (slots[b].total || 0) - (slots[a].total || 0));
+          if (!keys.length) return '';
+          let t = '<div class="admin-table-wrap"><table class="admin-table"><tr><th>' + labelMap.th
+            + '</th><th>累计下载</th><th>今日</th></tr>';
+          keys.forEach((k) => {
+            t += `<tr><td>${esc(labelMap[k] || k)}</td><td>${slots[k].total || 0}</td><td>${slots[k].today || 0}</td></tr>`;
+          });
+          return t + '</table></div>';
+        };
+        const dlIns = dlBucket('installer', { macos: 'macOS 安装包', windows: 'Windows 安装包' });
+        const dlExt = dlBucket('extension', { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium', firefox: 'Firefox', safari: 'Safari' });
+        h += '<div class="fq-sub" style="margin-top:12px">下载次数（按平台）</div>';
+        h += (dlIns || '<p class="admin-hint">安装包：暂无网页下载数据（下载页开放后自动出现）。</p>');
+        h += (dlExt || '<p class="admin-hint">扩展：暂无下载数据。</p>');
         box.innerHTML = h;
       } catch (e) { /* 静默 */ }
     };
