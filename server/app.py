@@ -1866,7 +1866,10 @@ async def lifespan(_: FastAPI):
     #    网页端永远显示"普通用户"。与桌面端对齐（app.py:2021）。幂等、绝不降级。
     try:
         from auth_store import ensure_superusers
-        ensure_superusers()
+        # 安全审计 2026-10-13（F-03）：启动钩子没有请求上下文 ⇒ 不许无名单兜底提权，
+        # 公网超管只能来自 VDL_ADMIN_IDENTIFIER / admin.json 显式名单
+        # （与桌面端 app 仓同口径）。
+        ensure_superusers(allow_bootstrap=False)
     except Exception:
         logger.exception("确保超级用户失败")
     yield
@@ -1903,6 +1906,71 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-Subscription-Key", "X-Api-Key", "X-Device-Id",
                    "Range", "Authorization"],
 )
+
+
+# ── 本机直连判定（安全审计 2026-10-13，F-06）──────────────────────────────── #
+# 🔴 旧实现 `routers/core.py::_is_local_request` 把「取不到来源地址（host == \"\"）」
+#    也算本机 ——「无法确定来源」被当成「可信」，是最不该有的默认；且 `routers/auth.py`
+#    `_is_loopback` 只比 `request.client.host`，而 uvicorn 默认开 `--proxy-headers`，
+#    `scope["client"]` 已被 X-Forwarded-For 重写 ⇒ 客户端自填 XFF 即可自称本机。
+#
+# 修复：抽出共用真源 `_is_local_direct` = socket 对端环回 **且** 未携带任何代理头。
+#   线上经 nginx + CF 隧道时 nginx 的 $remote_addr 恰为 127.0.0.1，只比对端地址会把
+#   公网请求误判成本机；带任何代理头 ⇒ 一律不按本机对待。判据不依赖反代语义、可离线验证。
+#   （与桌面端 app 仓 `app._is_local_direct` 同源同语义。）
+_PROXY_HEADER_NAMES = (
+    "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "x-forwarded-port",
+    "x-real-ip", "forwarded", "true-client-ip", "x-client-ip",
+    "x-cluster-client-ip", "x-original-forwarded-for",
+    "cf-connecting-ip", "cf-ray", "cf-ipcountry",
+)
+
+
+def _has_proxy_headers(request) -> bool:
+    """请求是否携带任何反代 / 隧道头（带 → 说明不是本机直连）。"""
+    try:
+        for name in _PROXY_HEADER_NAMES:
+            if (request.headers.get(name) or "").strip():
+                return True
+    except Exception:
+        return True          # 取不到头就按「经过代理」从严处理
+    return False
+
+
+def _is_local_direct(request) -> bool:
+    """是否为本机直连（socket 对端环回 **且** 未携带任何代理头）。
+
+    这是全仓「本机免鉴权」判定的唯一真源，路由层不要再自己写 client.host 比较。
+    """
+    if request is None or _has_proxy_headers(request):
+        return False
+    try:
+        host = (request.client.host if request.client else "") or ""
+    except Exception:
+        return False
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+# 安全审计 2026-10-13（F-11 / 移植自 app 仓 R-02）：跨源 CSRF 兜底校验的来源白名单。
+# 全局 CORS 默认对任意 Origin 放行（浏览器扩展 content script 从任意 https 页面回传嗅探项
+# 所必需，见 routers/sniffer.py），因此对**仅前端同源使用**的敏感端点（改配置 / 管理动作类），
+# 必须额外做来源校验，防止恶意网页跨源触发写盘 / 改配置 / 外传用户内容：
+#   - 无 Origin 头 → 放行（同源前端、本机直连 curl）；
+#   - Origin 命中本机 / 扩展白名单 → 放行；
+#   - 其余（含 "null" 的沙箱 iframe、任意外部站点）→ 拒绝。
+_EXT_ORIGIN_RE = re.compile(r"^(chrome|moz|safari-web|ms-browser)-extension://[^\s]*$")
+_LOCAL_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
+
+
+def _cross_site_rejected(request) -> bool:
+    """判断是否应拒绝该跨源请求（CSRF 兜底）。配合全局 `allow_origins=["*"]` 使用。"""
+    try:
+        origin = (request.headers.get("origin") or "").strip()
+    except Exception:
+        return False
+    if not origin:
+        return False
+    return not (_EXT_ORIGIN_RE.match(origin) or _LOCAL_ORIGIN_RE.match(origin))
 
 
 # 前端脚本未做版本化（CSS/JS 文件名固定），需平衡两类缓存需求：

@@ -158,13 +158,18 @@ def test_save_call_sites_inside_mutation():
 # --------------------------------------------------------------------------- #
 # 4. dev_code 仅本机回传（公网不得泄露验证码 → 否则任意账号密码可被改）
 # --------------------------------------------------------------------------- #
-def _fake_request(host):
+def _fake_request(host, headers=None):
+    """最小请求替身：`_is_loopback`（F-06 后）只读 client.host 与 headers。"""
     class _Client:
         def __init__(self, h):
             self.host = h
+
     class _Req:
-        client = _Client(host)
-    return _Req()
+        def __init__(self, h, hdrs):
+            self.client = _Client(h)
+            self.headers = hdrs
+
+    return _Req(host, dict(headers or {}))
 
 
 def test_dev_code_only_loopback():
@@ -181,7 +186,13 @@ def test_dev_code_only_loopback():
     assert mod._is_loopback(_fake_request("203.0.113.5")) is False, "公网 IP 应判为非本机"
     assert mod._is_loopback(_fake_request("127.0.0.1")) is True, "127.0.0.1 应判为本机"
     assert mod._is_loopback(_fake_request("::1")) is True, "::1 应判为本机"
-    print("✅ _is_loopback 对公网/本机判定正确（dev_code 泄漏已封）")
+    # 安全审计 2026-10-13（F-06）：携带任何代理头 ⇒ 一律不按本机。
+    # 原判据只比 `request.client.host`，而 uvicorn 默认开 proxy-headers 会用 XFF
+    # 重写它 ⇒ 公网自填 `X-Forwarded-For: 127.0.0.1` 即可自称本机、骗过 dev 验证码回传。
+    for _h in ("x-forwarded-for", "x-real-ip", "cf-connecting-ip"):
+        assert mod._is_loopback(_fake_request("127.0.0.1", headers={_h: "127.0.0.1"})) is False, \
+            f"携带 {_h} 不得判为本机"
+    print("✅ _is_loopback 对公网/本机/代理头判定正确（dev_code 泄漏已封）")
 
 
 if __name__ == "__main__":

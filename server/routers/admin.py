@@ -38,6 +38,11 @@ from auth_store import user_is_admin, set_user_admin
 
 def require_admin(request: Request) -> None:
     from fastapi import HTTPException
+    import app  # noqa: E402 - 共享内核（_cross_site_rejected 来源校验）
+    # 安全审计 2026-10-13（F-11）：管理端点补跨源 CSRF 兜底。后台面板为同源前端，
+    # 同源请求无 Origin 头或命中本机白名单 → 放行；外部站点跨源 → 403。
+    if app._cross_site_rejected(request):
+        raise HTTPException(status_code=403, detail="拒绝来自外部站点的跨源请求")
     uid = get_current_user_id(request)
     if not uid or not user_is_admin(uid):
         raise HTTPException(status_code=401, detail="未授权：需要超级用户权限")

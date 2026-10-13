@@ -7,6 +7,7 @@ handler 原样搬入、零改引用。路由用 @router.get/post 挂载，已在
 """
 import os
 import subprocess
+import hmac
 import json as _json
 import time as _time
 from pathlib import Path as _Path
@@ -906,21 +907,34 @@ ADMIN_KEY = (os.environ.get("VDL_ADMIN_KEY") or "").strip()
 
 
 def _is_local_request(request) -> bool:
-    """桌面端本机 WebView 通过 127.0.0.1 访问，视为可信，免密钥放行运维端点。"""
-    try:
-        host = request.client.host if request.client else ""
-    except Exception:
-        host = ""
-    return host in ("127.0.0.1", "::1", "localhost", "")
+    """桌面端本机 WebView 通过 127.0.0.1 访问，视为可信，免密钥放行运维端点。
+
+    安全审计 2026-10-13（F-06）：原实现把 `host == ""`（拿不到来源地址）也算本机 ——
+    「无法确定来源」被当成「可信」，是最不该有的默认。现统一走
+    `app._is_local_direct`：socket 对端环回 **且** 未携带任何代理头。
+    """
+    return app._is_local_direct(request)
 
 
 def _require_admin(request):
     """运维端点鉴权：本机（桌面 App）放行；远端必须带正确 X-Admin-Key。
-    未配置 VDL_ADMIN_KEY 时远端一律 403，避免误暴露。"""
+
+    安全审计 2026-10-13（F-08）：原实现两处问题 ——
+      ① `ADMIN_KEY and key == ADMIN_KEY` 是非常量时间比较（`==` 逐字符短路，
+         理论上可被时序侧信道逐位猜出密钥）→ 改用 `hmac.compare_digest`；
+      ② 未配置密钥时给 403，与桌面端契约不一致（app 侧 503 fail-closed），
+         同一个「未配置 VDL_ADMIN_KEY」场景两端表现不同 → 对齐为 503。
+    （两仓都是 fail-closed，不会放行无密钥的远端请求。）
+    """
     if _is_local_request(request):
         return
+    if not ADMIN_KEY:
+        raise app.HTTPException(
+            status_code=503,
+            detail="运维密钥未配置，已拒绝访问（请设置 VDL_ADMIN_KEY）",
+        )
     key = (request.headers.get("X-Admin-Key") or "").strip()
-    if ADMIN_KEY and key == ADMIN_KEY:
+    if key and hmac.compare_digest(key, ADMIN_KEY):
         return
     raise app.HTTPException(status_code=403, detail="需要管理员密钥（X-Admin-Key）")
 

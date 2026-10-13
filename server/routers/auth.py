@@ -60,19 +60,19 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 def _is_loopback(request: Request) -> bool:
-    """判断调用方是否来自本机。
+    """判断调用方是否来自**本机直连**。
 
-    ⚠️ 本判定依赖「反代后的 `request.client.host` 是真实客户端 IP」这一**部署侧前提**：
-    实测生产 VPS 的 `vdl-web` 访问日志为真实公网 IP（uvicorn 采纳了 nginx 的
-    `X-Forwarded-For`），故公网请求不会被误判为本机。该前提**无法在离线测试里钉住**
-    （属 nginx 配置），改反代/换端口后必须复核一次 —— 见 skill `vdl-build-release`。
+    安全审计 2026-10-13（F-06）：原实现只比 `request.client.host`，而 uvicorn 默认开
+    `--proxy-headers` —— `scope["client"]` 已被 X-Forwarded-For 重写，客户端自填 XFF
+    即可自称本机。本函数正 gate 着「dev 模式回传密码重置验证码」，一旦被骗过等于
+    **任意账号接管**，故判据必须不依赖反代语义。
+    现统一走 `app._is_local_direct`：socket 对端环回 **且** 未携带任何代理头。
     """
     try:
-        client = request.client
-        host = (client.host if client else "") or ""
+        import app as _app
+        return _app._is_local_direct(request)
     except Exception:  # noqa: BLE001 — 取不到就当公网，宁可少回传
         return False
-    return host in _LOOPBACK_HOSTS
 
 
 def _auth_user_id(request: Request) -> Optional[str]:
@@ -124,7 +124,9 @@ def _finish_login(request: Request, uid: str, ident: str, cloud: Optional[dict],
                   fp: str, name: str, *, registered: bool = False) -> dict[str, Any]:
     """登录收尾：签发本机 bearer + 落地云端登录态与权益快照。"""
     from auth_store import issue_token, ensure_superusers, user_is_admin
-    ensure_superusers()
+    # 安全审计 2026-10-13（F-03）：仅在「本机直连」登录时才允许无名单兜底提权，
+    # 公网首注册不得自动成为超管（见 auth_store.ensure_superusers）。
+    ensure_superusers(_is_loopback(request))
     token = issue_token(uid)
     notice = ""
     synced = False
