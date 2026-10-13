@@ -735,29 +735,34 @@ _UNSET = object()   # 区分「调用方没传」与「显式传 null 清除覆�
 
 
 def free_quota_impl(state: dict[str, Any], now: float,
-                    cloud_lifetime: Any = _UNSET) -> dict[str, Any]:
-    """管理员下发「免费额度」覆盖（目前只有终身免费次数）。
+                    cloud_lifetime: Any = _UNSET,
+                    mode: Any = _UNSET) -> dict[str, Any]:
+    """管理员下发「免费额度」覆盖（终身免费次数 + 免费额度口径 mode）。
 
     与 `plans_set` 分开的原因：plans_set 的入参契约是**套餐价格**（每档必须含
     `price_cny` 并逐条 round(2)），额度是 `{resource: 次数}` 形状，走同一条路会被
     价格校验拒掉。
     传 `cloud_lifetime=null` = 清除覆盖（回到代码常量）。
 
+    🔴 2026-10-13：新增 `mode`（"on"/"off"）—— 免费额度口径也上云。
+    本机 plans.json 只是缓存，换机/重装后会被重建 ⇒ 口径回默认 on。把 mode 也
+    落到中心的 free_quota_overrides，客户端从 `/api/license/plans` 的 free_quota
+    字段读回（与终身次数同一条通道）。
+    传 `mode=null` = 清除覆盖（回默认 on）；传 "on"/"off" = 设置；不传 = 不动。
+
     🔴 鉴权说明：与 plans_set 一样，**管理员身份由 dispatch 的 `_require_admin`
     校验**（本函数只处理已鉴权后的写入），因此这里不再解析令牌 ——
     管理员令牌（license_admin）与用户令牌（parse_token）本来就是两套，
     误用 parse_token 会把合法的后台保存判成「登录已失效」。
     """
-    if cloud_lifetime is _UNSET:
-        pass                      # 只查询，不改
-    elif cloud_lifetime is None:
-        # 显式清除：回到代码常量（后台「恢复默认」按钮走这条路）
-        fq = dict(_free_quota_overrides(state))
-        fq.pop("cloud_lifetime", None)
-        state["free_quota_overrides"] = fq
-        _save_state(state)
-    else:
-        if isinstance(cloud_lifetime, dict):
+    changed = False
+    fq = dict(_free_quota_overrides(state))
+
+    if cloud_lifetime is not _UNSET:
+        if cloud_lifetime is None:
+            # 显式清除：回到代码常量（后台「恢复默认」按钮走这条路）
+            fq.pop("cloud_lifetime", None)
+        elif isinstance(cloud_lifetime, dict):
             clean: dict[str, int] = {}
             for k, v in cloud_lifetime.items():
                 try:
@@ -767,14 +772,25 @@ def free_quota_impl(state: dict[str, Any], now: float,
                 if n < 0:
                     raise ApiError(400, "BAD_LIMITS", f"{k} 的次数不能为负")
                 clean[str(k)] = n
-            fq = dict(_free_quota_overrides(state))
             fq["cloud_lifetime"] = clean
         elif isinstance(cloud_lifetime, int):
-            fq = dict(_free_quota_overrides(state))
             fq["cloud_lifetime"] = int(cloud_lifetime)
         else:
             raise ApiError(400, "BAD_LIMITS",
                            "cloud_lifetime 必须是整数、{resource: 次数} 字典或 null")
+        changed = True
+
+    if mode is not _UNSET:
+        if mode is None:
+            fq.pop("mode", None)
+        else:
+            m = str(mode).strip().lower()
+            if m not in ("on", "off"):
+                raise ApiError(400, "BAD_MODE", "mode 只能是 on / off 或 null")
+            fq["mode"] = m
+        changed = True
+
+    if changed:
         state["free_quota_overrides"] = fq
         _save_state(state)
     return {"ok": True, "free_quota_overrides": _free_quota_overrides(state),
@@ -903,7 +919,11 @@ def _clean_device_meta(meta: Any) -> dict[str, Any]:
     if isinstance(ext, dict):
         b = str(ext.get("browser") or "").strip().lower()
         v = str(ext.get("version") or "").strip()
-        if b in ("chrome", "edge", "brave", "chromium", "firefox", "safari"):
+        # 2026-10-13（#4 浏览器判定精确化）：扩展在哪个浏览器里跑，UA 就是那个浏览器。
+        # 客户端现在能区分出 opera/vivaldi/yandex，白名单同步放开，否则会被丢弃、
+        # 统计里看不到（等于白判）。
+        if b in ("chrome", "edge", "brave", "chromium", "firefox", "safari",
+                 "opera", "vivaldi", "yandex"):
             e: dict[str, str] = {"browser": b}
             if v:
                 e["version"] = v[:32]
@@ -1585,9 +1605,15 @@ def plan_price(st: dict, plan_code: str) -> str:
 
 
 def plans_payload(st: dict) -> dict:
-    """给各端拉取的价格表：{plan_key: {price_cny, days, credits, label, ...}}。"""
+    """给各端拉取的价格表：{plan_key: {price_cny, days, credits, label, ...}}。
+
+    🔴 2026-10-13：附带 `free_quota`（管理员下发的免费额度覆盖，含 `mode` 口径）。
+    客户端在 `/api/license/plans` 的同一次拉取里就能读回「免费额度口径」，
+    换机/重装后不再回默认 on（与终身次数共用这条通道，避免再加一个往返）。
+    """
     return {
         "plans": _plan_overrides(st),
+        "free_quota": _free_quota_overrides(st),
         "updated_at": float((st or {}).get(PLAN_PRICE_UPDATED_KEY) or 0.0),
     }
 
@@ -2085,7 +2111,9 @@ class Handler(BaseHTTPRequestHandler):
                         out = free_quota_impl(
                             st, now,
                             cloud_lifetime=(data["cloud_lifetime"]
-                                            if "cloud_lifetime" in data else _UNSET))
+                                            if "cloud_lifetime" in data else _UNSET),
+                            # 2026-10-13：免费额度口径 mode 也随之下发/清除。
+                            mode=(data["mode"] if "mode" in data else _UNSET))
                     elif action == "cloud_quota_refund":
                         # 🔴 安全审计 2026-10-11（P0-4）受信额度退还：
                         #   客户端自退 = 消费→退还→再消费的无限套利（真实云端大模型

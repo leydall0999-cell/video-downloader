@@ -197,8 +197,9 @@ def _device_meta() -> dict[str, Any]:
 
     · platform：macos / windows / linux（复用 platform_model 的平台判定）；
     · app_version：App 当前版本号；
-    · ext：浏览器扩展信息（browser = 由扩展加载目录路径推断的 chrome/edge/
-      brave/chromium；version = 扩展 manifest 的 version）。
+    · ext：浏览器扩展信息（browser = **优先**按扩展请求自带的 UA 判定
+      chrome/edge/brave/opera/vivaldi/yandex/chromium/firefox/safari，
+      认不出再退回扩展加载目录路径推断；version = 扩展 manifest 的 version）。
     任何一项取不到就省略 —— 画像缺失只影响统计丰富度，绝不让心跳失败。
     """
     meta: dict[str, Any] = {}
@@ -224,13 +225,20 @@ def _device_meta() -> dict[str, Any]:
         cfg = extension_sync.get_config() or {}
         load_dir = str(cfg.get("load_dir") or "").strip() or str(extension_sync.managed_dir())
         ver = str(extension_sync.read_version(load_dir) or "").strip()
-        if ver:
-            low = load_dir.lower()
-            browser = ("chrome" if "google/chrome" in low or "google chrome" in low
-                       else "edge" if "microsoft edge" in low or "/edge" in low
-                       else "brave" if "brave" in low
-                       else "chromium")
-            meta["ext"] = {"browser": browser, "version": ver[:32]}
+        # 🔴 2026-10-13（接续待办 #4 精确化）：浏览器优先按**扩展请求自带的 UA**判定
+        #    —— 扩展在哪个浏览器里跑，请求的 UA 就是那个浏览器（无需改扩展）。
+        #    UA 认不出再退回「加载目录路径推断」；两者都认不出时**不再瞎填 chromium**。
+        browser = extension_sync.browser_from_ua(cfg.get("last_ua") or "")
+        if not browser:
+            browser = extension_sync.browser_from_load_dir(load_dir)
+        if ver or browser:
+            ext: dict[str, Any] = {}
+            if browser:
+                ext["browser"] = browser
+            if ver:
+                ext["version"] = ver[:32]
+            if ext:
+                meta["ext"] = ext
     except Exception:  # noqa: BLE001
         pass
     return meta

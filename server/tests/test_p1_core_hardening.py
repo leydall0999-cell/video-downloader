@@ -122,9 +122,17 @@ def test_empty_host_is_not_treated_as_local():
 # ---------------------------------------------------------------- P1-3 stream
 
 def test_stream_proxy_has_no_wildcard_cors():
-    """回包不得再带 Access-Control-Allow-Origin:*（跨源读走带登录态内容的开关）。"""
+    """回包不得再带 Access-Control-Allow-Origin:*（跨源读走带登录态内容的开关）。
+
+    ⚠️ 本用例只验**回包头**，与目标 URL 是否可达无关；`_assert_safe_url` 会真的做
+    DNS 解析（2026-10-12 起解析失败还会 fail-closed 抛 LinkError），离线/无 DNS 的
+    沙盒里会误红。故这里把它打桩为放行 —— SSRF 护栏本身由
+    `test_assert_safe_url_rejects_metadata_address` / `test_create_*_applies_ssrf_guard`
+    等用例覆盖，不靠本用例。
+    """
     fake = _FakeResp()
-    with _patch(_stream_get=lambda *a, **k: fake):
+    with _patch(_stream_get=lambda *a, **k: fake,
+                _assert_safe_url=(server_app, lambda u: None)):
         r = C.stream_proxy(u="https://www.bilibili.com/x.m3u8", cookie="x=1",
                            request=_req(host="127.0.0.1"))
     hdrs = {k.lower() for k in r.headers.keys()}

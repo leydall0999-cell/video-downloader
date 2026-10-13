@@ -29,6 +29,11 @@ DEFAULT_BASE = "https://hanyuxz.top"
 
 _BASE_CACHE: dict[str, str] = {}
 
+# 「参数未提供」哨兵：与「显式传 None（=清除覆盖）」区分开。
+# 授权中心按「键在不在 payload 里」判定「动不动这一项」，故客户端不能把未提供的
+# 项一律塞成 null（那会把另一项一起清掉）。
+_UNSET: Any = object()
+
 
 def license_base() -> str:
     """授权中心基址（2026-09-22 授权中心自香港迁国内 ECS 后引入）。
@@ -231,19 +236,31 @@ def cloud_quota_remote(token: str, lifetime: int = 0, daily: int = 0,
                  base_url, timeout, opener)
 
 
-def free_quota_set_remote(token: str, cloud_lifetime: Any = None,
+def free_quota_set_remote(token: str, cloud_lifetime: Any = _UNSET,
+                         mode: Any = _UNSET,
                          base_url: Optional[str] = None,
                          timeout: float = 10.0) -> dict[str, Any]:
-    """管理员下发「免费额度」覆盖到授权中心（2026-10-06）。
+    """管理员下发「免费额度」覆盖到授权中心（2026-10-06；2026-10-13 加 mode）。
 
     🔴 为什么单独一个端点：套餐价格走 `/api/license/plans_set`，那份契约要求每档
     都含 `price_cny`（还会 round(2)），额度是 `{resource: 次数}` 形状，塞进去会被
     价格校验拒掉。中心的放行/拒绝判定在云端，客户端本机 plans.json 只是缓存 ——
     不下发的话后台改了不生效。
+
+    🔴 参数语义（键**在不在** payload 里决定中心动不动这一项）：
+      · 不传（默认 `_UNSET`）→ 该键不进 payload → 中心**不动**这一项；
+      · 传 `None`            → 显式清除该覆盖（回默认）；
+      · 传具体值             → 设置该覆盖。
+    因此**不能**把两个参数都无条件塞进 payload —— 只想改 mode 时会把
+    cloud_lifetime 一并清成 null（反之亦然）。2026-10-13 由 `None` 默认改为
+    `_UNSET` 默认，正是为了区分「不传」与「传 null」。
     """
-    return _post("/api/license/free_quota_set",
-                 {"token": token, "cloud_lifetime": cloud_lifetime},
-                 base_url, timeout)
+    payload: dict[str, Any] = {"token": token}
+    if cloud_lifetime is not _UNSET:
+        payload["cloud_lifetime"] = cloud_lifetime
+    if mode is not _UNSET:
+        payload["mode"] = mode
+    return _post("/api/license/free_quota_set", payload, base_url, timeout)
 
 
 def set_password_remote(email: str, new_password: str, old_password: str = "",

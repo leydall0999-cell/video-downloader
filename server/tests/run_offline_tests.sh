@@ -43,6 +43,15 @@ export VDL_LOGIN_GATE=0
 export VDL_DATA_DIR="${VDL_DATA_DIR:-/tmp/vdl_offline_data}"
 mkdir -p "$VDL_DATA_DIR" 2>/dev/null
 
+# ⚠️ 云端套餐/免费额度「读」隔离（2026-10-13 接续待办 #2 后必设）：
+# 免费额度口径（free_quota.mode）上云后，free_quota_mode() 在本机未设时会回读
+# 授权中心 `/api/license/plans` 的 free_quota 字段（复用 cloud_plan_overrides 的
+# 同一条缓存通道）。若本机恰好配了授权中心基址、且线上把口径设成了 off，
+# 断言「本机语义」的用例（如 test_membership 的免费 10 次/日、test_free_quota_mode_*）
+# 就会被线上状态污染成不确定。离线套件必须与云端解耦，故统一关掉「读云端」。
+# （只关「读」：push_* 下发走 _license_api 直连，不受此开关影响。）
+export VDL_PLANS_CLOUD=0
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVER="$REPO/server"
 
@@ -861,6 +870,27 @@ run_one test_cloud_matting_gateway.py
 #     回退、save_plan_overrides 清洗、GET credit-costs 下发、心跳设备画像接线、
 #     授权中心 stat_aggregate/_attach_device（AST 抽取纯函数执行）。
 run_one test_free_quota_mode_and_stats.py
+
+# 63.6 test_free_quota_mode_cloud.py —— 免费额度口径（free_quota.mode）上云的离线守卫
+#     （2026-10-13 接续待办 #2）。覆盖：授权中心 free_quota_impl 的 mode 三态语义
+#     （设置/清除/不传）与非法值 400、plans_payload 带出 free_quota、客户端
+#     free_quota_set_remote 只发提供了的键（不传 ≠ 传 null）、口径优先级
+#     本机 > 云端 > 默认 on、push_free_quota_to_cloud 一起下发 mode 并刷缓存。
+#     授权中心函数按 AST 抽取执行（不动真实 state）。
+run_one test_free_quota_mode_cloud.py
+
+# 63.7 test_extension_browser_precision.py —— 扩展「浏览器判定精确化」的离线守卫
+#     （2026-10-13 接续待办 #4）。原按扩展加载目录路径推断（默认受管目录中性 ⇒ 恒
+#     chromium；Windows 反斜杠匹配不上）。现优先用扩展请求自带的 UA 判定，路径降为兜底。
+#     钉住：UA→各浏览器识别与顺序敏感、Windows 路径能认出 chrome、中性目录返回空、
+#     _device_meta 优先级（UA > 目录 > 不瞎填）、授权中心白名单放开新浏览器。
+run_one test_extension_browser_precision.py
+
+# 63.8 test_update_server_counting.py —— App 内更新下载计数（8765 分发服务，2026-10-13 接续待办 #5）：
+#     deploy/update_server.py 在分发包/补丁的同时计入 downloads.json 的 app_update bucket
+#     （与官网下载分开计口径，中心 stat_query 同机直读合并）。钉住：只计 .zip/.delta、
+#     只认 App 的 VDL-Update/ UA、HEAD 预检不计数、路径穿越/缺文件 404、by_day 90 天上限。
+run_one test_update_server_counting.py
 
 # 63. test_release_audit.py —— 发布包「机密数据」核查工具的离线守卫（2026-10-13 用户要求
 #     「发布的安装包绝对不含机密数据」，并要求写入档案）。七类：明文凭据 / 私钥 / 服务端

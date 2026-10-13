@@ -81,7 +81,7 @@ def _config_path() -> Path:
 
 def get_config() -> dict:
     """读取自动更新配置。缺省 = 未开启、用受管目录（**安全默认**：只动自己的目录）。"""
-    cfg = {"load_dir": "", "auto": False}
+    cfg = {"load_dir": "", "auto": False, "last_ua": ""}
     cp = _config_path()
     if cp.is_file():
         try:
@@ -90,6 +90,9 @@ def get_config() -> dict:
                 if isinstance(saved.get("load_dir"), str):
                     cfg["load_dir"] = saved["load_dir"].strip()
                 cfg["auto"] = bool(saved.get("auto"))
+                # 最近一次扩展请求的 UA（浏览器判定用，2026-10-13）
+                if isinstance(saved.get("last_ua"), str):
+                    cfg["last_ua"] = saved["last_ua"]
         except (json.JSONDecodeError, OSError):
             pass
     return cfg
@@ -104,6 +107,80 @@ def save_config(load_dir: str | None = None, auto: bool | None = None) -> dict:
         cfg["auto"] = bool(auto)
     atomic_io.atomic_write_json(_config_path(), cfg)
     return cfg
+
+
+# ---------- 浏览器判定（2026-10-13 接续待办 #4：精确化）----------
+# 背景：设备画像里的 ext.browser 原先只按「扩展加载目录路径」推断，而默认加载目录
+# 是受管目录 `~/视频工坊浏览器扩展`（中性名、无浏览器特征）⇒ 几乎恒为 chromium。
+# 精确做法：扩展发往本机的请求**自带浏览器的 User-Agent**（扩展在哪个浏览器里跑，
+# UA 就是那个浏览器），服务端记下最近一次的 UA，据此判定即可，无需改扩展。
+# 路径推断保留为兜底（用户把 load_dir 指向某浏览器的扩展目录时仍有用）。
+
+# UA 里的浏览器标识。**顺序敏感**：Edge/Opera/Brave/Firefox 的 UA 都含
+# "chrome/" 或 "safari/"，必须先匹配各自独有的 token，否则会被误判成 chrome。
+_UA_BROWSERS: tuple[tuple[str, str], ...] = (
+    ("edgios/", "edge"), ("edga/", "edge"), ("edg/", "edge"),
+    ("opios/", "opera"), ("opr/", "opera"),
+    ("vivaldi/", "vivaldi"),
+    ("yabrowser/", "yandex"),
+    ("brave/", "brave"),
+    ("fxios/", "firefox"), ("firefox/", "firefox"),
+    ("crios/", "chrome"),
+    ("chrome/", "chrome"),
+    ("safari/", "safari"),
+)
+
+
+def browser_from_ua(ua: str) -> str:
+    """从 User-Agent 推断浏览器名（小写）；认不出返回 ""（由调用方决定兜底）。"""
+    s = str(ua or "").lower()
+    if not s:
+        return ""
+    for token, name in _UA_BROWSERS:
+        if token in s:
+            return name
+    return ""
+
+
+def browser_from_load_dir(load_dir) -> str:
+    """从扩展加载目录路径推断浏览器（兜底，尽力而为）；认不出返回 ""。
+
+    2026-10-13 修：原先只匹配 "google/chrome"（正斜杠），Windows 路径是反斜杠
+    `...\\Google\\Chrome\\...` ⇒ 永远匹配不上、恒落 chromium。这里先归一化分隔符。
+    """
+    low = str(load_dir or "").lower().replace("\\", "/")
+    if not low:
+        return ""
+    for token, name in (
+        ("microsoft edge", "edge"), ("/microsoft/edge", "edge"), ("/edge/", "edge"),
+        ("brave", "brave"),
+        ("vivaldi", "vivaldi"),
+        ("opera", "opera"),
+        ("yandex", "yandex"),
+        ("google/chrome", "chrome"), ("google chrome", "chrome"),
+        ("/chromium", "chromium"),
+    ):
+        if token in low:
+            return name
+    return ""
+
+
+def record_client_ua(ua: str) -> None:
+    """记录最近一次扩展请求的 User-Agent（供设备画像精确判定浏览器）。
+
+    失败一律静默：画像只是统计丰富度，绝不能影响扩展与本机的任何主流程。
+    """
+    ua = str(ua or "").strip()[:400]
+    if not ua:
+        return
+    try:
+        cfg = get_config()
+        if cfg.get("last_ua") == ua:
+            return                      # 没变就不写盘
+        cfg["last_ua"] = ua
+        atomic_io.atomic_write_json(_config_path(), cfg)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---------- 版本比较 ----------

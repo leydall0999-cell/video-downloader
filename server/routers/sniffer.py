@@ -26,6 +26,26 @@ def _pna(resp: Response) -> Response:
     return resp
 
 
+def _record_ext_ua(request) -> None:
+    """记下扩展请求自带的 User-Agent（设备画像精确判定浏览器用，2026-10-13 #4）。
+
+    扩展发往本机的请求带的是**它所在浏览器的 UA**，这是「浏览器判定精确化」最可靠
+    且无需改扩展的信号。尽力而为：任何异常都不影响端点本身。
+    """
+    try:
+        ua = ""
+        try:
+            ua = (request.headers.get("user-agent") or "") if request is not None else ""
+        except Exception:  # noqa: BLE001
+            ua = ""
+        if not ua:
+            return
+        import extension_sync
+        extension_sync.record_client_ua(ua)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.post('/api/sniffer/connect')
 def sniffer_connect(payload: dict = Body(default={})) -> dict:
     port = int(payload.get("port") or 9222)
@@ -54,7 +74,8 @@ def sniffer_items(limit: int = 100) -> dict:
 
 
 @router.post('/api/sniffer/ext-ping')
-def sniffer_ext_ping(payload: dict = None, response: Response = None) -> dict:  # noqa: RUF013
+def sniffer_ext_ping(payload: dict = None, request: Request = None,  # noqa: RUF013
+                     response: Response = None) -> dict:  # noqa: RUF013
     """扩展心跳（2026-10-01）：service worker 启动 + alarms 每分钟一次。
 
     面板据此显示「扩展已连接 ✓」——用户装完扩展立刻能确认状态，不用靠猜。
@@ -64,9 +85,11 @@ def sniffer_ext_ping(payload: dict = None, response: Response = None) -> dict:  
     `chrome.runtime.reload()`。解压版扩展 Chrome 不会自动更新，这是唯一不需要
     用户手动覆盖目录 / 点 ↻ 的路径（详见 routers/extension.py 顶部注释）。
     心跳不带任何敏感信息，仅本机/回环场景使用。
+    2026-10-13：顺手记录请求 UA（`_record_ext_ua`），供设备画像精确判定浏览器。
     """
     if response is not None:
         _pna(response)
+    _record_ext_ua(request)
     ver, captured, pushed = "", 0, 0
     seen, media, last_mime = 0, 0, ""
     push_ok, push_err, push_page, push_last_err, page_saw = 0, 0, 0, "", 0
@@ -102,7 +125,8 @@ def sniffer_ext_ping(payload: dict = None, response: Response = None) -> dict:  
 
 
 @router.post('/api/sniffer/ext-push')
-def sniffer_ext_push(payload: dict = Body(...), response: Response = None) -> dict:  # noqa: RUF013
+def sniffer_ext_push(payload: dict = Body(...), request: Request = None,  # noqa: RUF013
+                     response: Response = None) -> dict:  # noqa: RUF013
     """扩展自动推送嗅探条目（2026-10-01）：扩展每嗅到**新**媒体 URL 就推一条。
 
     没有这条链路时，扩展嗅到的条目只存在扩展本地，桌面面板列表（读服务端
@@ -111,6 +135,7 @@ def sniffer_ext_push(payload: dict = Body(...), response: Response = None) -> di
     """
     if response is not None:
         _pna(response)
+    _record_ext_ua(request)
     rows = payload.get("items") if isinstance(payload, dict) else None
     added = cdp_sniffer.SNIFFER.add_ext_items(rows if isinstance(rows, list) else [])
     return {"ok": True, "added": added}

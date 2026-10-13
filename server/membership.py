@@ -181,7 +181,7 @@ def effective_daily_limits() -> tuple[dict[str, int], dict[str, int]]:
     #    off（免费用户不再享有每日免费额度 ⇒ 全部归 0，回到付费墙；会员每日不受影响）。
     #    与 daily_*_limits 同一层覆盖、同一个「保存免费额度」按钮，改完即时生效。
     #    脏值一律收敛回 "on"（fail-open 方向是「恢复默认口径」，不是「全站停用」）。
-    if str(fq.get("mode") or "").strip().lower() == "off":
+    if free_quota_mode() == "off":
         free = {k: 0 for k in free}
     return member, free
 
@@ -190,13 +190,29 @@ FREE_QUOTA_MODES = ("on", "off")
 
 
 def free_quota_mode() -> str:
-    """生效的免费额度口径（"on" | "off"），供后台 GET 与前端选择器回显。"""
+    """生效的免费额度口径（"on" | "off"），供后台 GET 与前端选择器回显。
+
+    优先级（2026-10-13 上云后）：
+      1. 本机 `plans.json` 的 `free_quota.mode` —— 管理员在本机改的，**必须即时生效**；
+      2. 授权中心覆盖的 `mode` —— 换机/重装后本机缓存被重建时，从这里恢复；
+      3. 默认 `"on"`。
+
+    只在**本机未设**时才去问云端：既保证「改完即时生效」（本机值不被云端旧值盖掉），
+    又不给每次配额检查都加一次网络往返。
+    """
     try:
         fq = (load_plan_overrides().get("free_quota") or {})
     except Exception:
-        return "on"
+        fq = {}
     m = str((fq or {}).get("mode") or "").strip().lower()
-    return m if m in FREE_QUOTA_MODES else "on"
+    if m in FREE_QUOTA_MODES:
+        return m
+    # 本机没设 → 尝试从云端恢复（换机 / 重装场景）
+    try:
+        cm = str((cloud_free_quota_overrides() or {}).get("mode") or "").strip().lower()
+    except Exception:  # noqa: BLE001 — 云端不可达一律回默认
+        cm = ""
+    return cm if cm in FREE_QUOTA_MODES else "on"
 
 def migrate_legacy_usage(usage: dict[str, Any]) -> dict[str, Any]:
     """把老键 `app_compute` 的已用量归集到新的独立键（2026-10-06 拆键）。
@@ -538,7 +554,7 @@ def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
 # 于是出现「App 159/298、网页 99.90/179、实际扣款按云端」三方分叉。
 # 现在授权中心是唯一真源：本机保存时下发（push_plans_to_cloud），读取时云端优先
 # （cloud_plan_overrides，TTL 5 分钟），云端不可达才回退本机覆盖层 + 代码常量。
-_CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}}
+_CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}, "free_quota": {}}
 # 套餐上架/改价回源节流：原 300s（云端被别处改动后桌面最长 5 分钟才反映）。
 # 2026-10-04 配套修复：降到 15s，与会员状态节流对齐；桌面自己 push_plans_to_cloud
 # 仍会主动刷新缓存，降 TTL 只让「被动感知云端变化」更快。
@@ -580,9 +596,32 @@ def cloud_plan_overrides(force: bool = False) -> dict[str, Any] | None:
             return None
         _CLOUD_PLANS_CACHE["ts"] = now
         _CLOUD_PLANS_CACHE["plans"] = plans
+        # 🔴 2026-10-13：同一次拉取顺带缓存 free_quota（含 mode 口径），
+        #    供 cloud_free_quota_overrides() 读回（换机/重装后恢复口径）。
+        fq = data.get("free_quota") if isinstance(data, dict) else None
+        _CLOUD_PLANS_CACHE["free_quota"] = fq if isinstance(fq, dict) else {}
         return plans
     except Exception:  # noqa: BLE001 — 网络/协议异常一律回退本机
         return None
+
+
+def cloud_free_quota_overrides(force: bool = False) -> dict[str, Any]:
+    """从授权中心拉「免费额度」覆盖（含 `mode` 口径）。失败/未配置返回 {}。
+
+    🔴 2026-10-13：复用 `cloud_plan_overrides` 的**同一条** `/api/license/plans`
+    通道与 TTL 缓存（响应里新增 `free_quota` 字段）。用途：本机 plans.json 只是
+    缓存，换机/重装后会被重建 ⇒ 免费额度口径回默认 on；从云端读回即可恢复。
+
+    开关与 `cloud_plan_overrides` 完全一致（`VDL_PLANS_CLOUD=0` 或未配置授权中心
+    ⇒ 返回 {}，调用方回退本机）——离线测试据此保持隔离、不依赖网络。
+    """
+    if str(os.environ.get("VDL_PLANS_CLOUD") or "1").strip().lower() in ("0", "false", "off"):
+        return {}
+    if not _license_api("/api/license/plans"):
+        return {}
+    cloud_plan_overrides(force=force)          # 触发/复用同一次拉取与缓存
+    fq = _CLOUD_PLANS_CACHE.get("free_quota")
+    return fq if isinstance(fq, dict) else {}
 
 
 def local_plans() -> dict[str, dict[str, Any]]:
@@ -634,11 +673,14 @@ def push_plans_to_cloud() -> dict[str, Any]:
 
 
 def push_free_quota_to_cloud() -> dict[str, Any]:
-    """把本机 `free_quota.cloud_lifetime` 覆盖下发授权中心（后台保存后调用）。
+    """把本机 `free_quota` 覆盖下发授权中心（后台保存后调用）。
 
     🔴 2026-10-06：终身免费次数的**放行判定在云端**，本机 plans.json 只是缓存。
     此前后台保存只写本机 ⇒ 改了不生效（自查发现，承诺了做不到）。现在与套餐价格
     同一套路：保存即下发，云端按覆盖值判定，两端口径一致。
+
+    🔴 2026-10-13：下发项从「只有 cloud_lifetime」扩到「cloud_lifetime + mode」
+    （免费额度口径也上云，换机/重装后不再回默认 on）。
     返回同步状态，**绝不抛出**（云端不可达时后台仍应保存成功，只是云端未同步）。
     """
     url = _license_api("/api/license/free_quota_set")
@@ -655,13 +697,21 @@ def push_free_quota_to_cloud() -> dict[str, Any]:
         fq = (load_plan_overrides().get("free_quota") or {})
         # 键**不存在** = 管理员没配过覆盖 → 不要去动云端（避免把别的机器配的覆盖抹掉）；
         # 键存在但为 null = 显式「恢复默认」→ 下发 null 让中心清除覆盖。
-        has_key = "cloud_lifetime" in fq
-        if not has_key:
+        # 只把**本机显式设过**的键放进 payload（未设的键中心不动）。
+        kwargs: dict[str, Any] = {}
+        if "cloud_lifetime" in fq:
+            kwargs["cloud_lifetime"] = fq.get("cloud_lifetime")
+        if "mode" in fq:
+            kwargs["mode"] = fq.get("mode")
+        if not kwargs:
             return {"ok": True, "reason": "no_override", "effective": {}}
         import license_client
-        r = license_client.free_quota_set_remote(
-            token, cloud_lifetime=(fq.get("cloud_lifetime") if has_key else None))
+        r = license_client.free_quota_set_remote(token, **kwargs)
         if isinstance(r, dict) and r.get("ok"):
+            # 主动刷新缓存：本机改完立刻一致，不用等 TTL（与前端回显同源）。
+            fq_eff = r.get("free_quota_overrides")
+            if isinstance(fq_eff, dict):
+                _CLOUD_PLANS_CACHE["free_quota"] = fq_eff
             return {"ok": True, "effective": r.get("effective_cloud_limits") or {}}
         return {"ok": False, "reason": str((r or {}).get("error") or "cloud_rejected")}
     except Exception as e:  # noqa: BLE001
