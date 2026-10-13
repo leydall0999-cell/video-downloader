@@ -2444,11 +2444,28 @@ _LOGIN_GATED_PREFIXES = (
 )
 
 
+# 「收尾类」任务控制端点放行：暂停 / 继续 / 取消 / 中止已有任务不会产生新结果，
+# 但若登录态中途失效（token 过期）而任务仍在跑，用户必须还能把任务停下来。
+# 🔴 安全审计 2026-10-13（F-09）：旧实现按「后缀」放行（任何以 /pause|/resume|/cancel|/abort
+#    结尾的路径都跳过登录门禁），属过宽白名单 —— 未来新增同后缀写端点会被无声豁免。
+#    改为「精确前缀 + 后缀」双匹配：只放行已知的任务控制端点，杜绝后缀通配。
+_LOGIN_GATE_EXEMPT_TASK_CTRL = (
+    ("/api/torrents/", ("/pause", "/resume")),
+    ("/api/dw/video/", ("/pause", "/resume", "/cancel")),
+    ("/api/commentary/clone-env/", ("/cancel",)),
+    ("/api/tasks/", ("/pause", "/resume", "/cancel", "/abort")),
+)
+_LOGIN_GATE_EXEMPT_EXACT = frozenset({
+    "/api/upload-chunk/abort",
+})
+
+
 def _login_gated_path(path: str) -> bool:
-    # 「收尾类」操作放行：暂停 / 继续 / 取消 / 中止已有任务不会产生新结果，
-    # 但若登录态中途失效（token 过期）而任务仍在跑，用户必须还能把任务停下来。
-    if path.endswith(("/pause", "/resume", "/cancel", "/abort")):
+    if path in _LOGIN_GATE_EXEMPT_EXACT:
         return False
+    for _pfx, _sufs in _LOGIN_GATE_EXEMPT_TASK_CTRL:
+        if path.startswith(_pfx) and path[len(_pfx):].rsplit("/", 1)[-1] in _sufs:
+            return False
     if path in _LOGIN_GATED_EXACT:
         return True
     return any(path.startswith(p) for p in _LOGIN_GATED_PREFIXES)

@@ -39,7 +39,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import Response
 
 import extension_sync
@@ -312,13 +312,18 @@ def _status_payload() -> dict:
 
 
 @router.get("/api/extension/update-status")
-def extension_update_status() -> dict:
+def extension_update_status(request: Request = None) -> dict:
     """自动更新状态：开关、目录、源码版本、磁盘版本、是否待扩展重载。"""
+    # 安全审计 2026-10-13（F-10）：状态读也会触发受管目录写入（read_version），
+    # 且属敏感运维面，补来源校验拒绝外部站点跨源。
+    import app  # noqa: E402 - 惰性导入，避开与 app.py 的循环依赖
+    if app._cross_site_rejected(request):
+        raise HTTPException(status_code=403, detail="拒绝来自外部站点的跨源请求")
     return _status_payload()
 
 
 @router.post("/api/extension/update-config")
-def extension_update_config(payload: dict = Body(default={})) -> dict:
+def extension_update_config(payload: dict = Body(default={}), request: Request = None) -> dict:
     """设置/关闭扩展自动更新。
 
     body:
@@ -356,8 +361,12 @@ def extension_update_config(payload: dict = Body(default={})) -> dict:
 
 
 @router.post("/api/extension/update-now")
-def extension_update_now() -> dict:
+def extension_update_now(request: Request = None) -> dict:
     """立即把内置新版同步进扩展目录（不改开关；未配置则用受管目录）。"""
+    # 安全审计 2026-10-13（F-10）：写盘端点，补来源校验拒绝外部站点跨源。
+    import app  # noqa: E402 - 惰性导入，避开与 app.py 的循环依赖
+    if app._cross_site_rejected(request):
+        raise HTTPException(status_code=403, detail="拒绝来自外部站点的跨源请求")
     cfg = extension_sync.get_config()
     load_dir = _effective_load_dir(cfg)
     try:
