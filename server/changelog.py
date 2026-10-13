@@ -18,6 +18,18 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.66",
+        "date": "2026-10-13",
+        "items": [
+            "后台「使用统计」新增「App 更新下载」一行：单独统计 App 内自动更新的下载次数"
+            "（与官网下载页分开计）。",
+            "后台「使用统计」的浏览器识别更准：Chrome / Edge / Brave / Opera / Vivaldi / "
+            "Yandex 各记各的，不再几乎全记成 Chromium。",
+            "后台「免费额度」的总开关现在会记住在云端：换电脑或重装后，设置好的口径"
+            "不会丢失、也不会自己退回默认。",
+        ],
+    },
+    {
         "version": "1.0.65",
         "date": "2026-10-13",
         "items": [
