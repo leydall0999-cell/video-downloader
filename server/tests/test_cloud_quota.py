@@ -41,6 +41,18 @@ from routers import convert as convert_rt  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 
+# ---------------------------------------------------------------------------
+# 适配 F-02（2026-10-14 全量套件抓到的回归）：verify_token 现在会查账号表
+# （状态 + token_version），不存在的账号 fail-closed。本文件签发的全是
+# 「幻影用户」token（只测配额逻辑、不测鉴权），故把账号状态查询桩化为
+# 「账号存在且正常」，保持这些用例原有语义。鉴权行为由
+# test_web_auth_hardening_f02_f03.py / test_atomic_writes_and_auth.py 覆盖。
+# ---------------------------------------------------------------------------
+import auth_store as _auth_mod
+
+_auth_mod._user_auth_state = lambda uid: (0, False, False)
+
+
 class _StubRequest:
     def __init__(self, auth: str = ""):
         self.headers = {"Authorization": auth} if auth else {}
