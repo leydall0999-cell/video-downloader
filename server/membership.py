@@ -1172,11 +1172,25 @@ class MembershipStore:
         }
 
     # ---- 激活 ----
-    def activate(self, code: str, via: str = "test") -> dict[str, Any]:
-        """按套餐/积分包 code 激活。续费顺延，AI 会员自动捆绑下载权益。"""
+    def activate(self, code: str, via: str = "test",
+                 order_id: str = "") -> dict[str, Any]:
+        """按套餐/积分包 code 激活。续费顺延，AI 会员自动捆绑下载权益。
+
+        安全审计 2026-10-13（F-01 / 同步 app 侧 P0-3 的幂等）：`order_id` 非空时
+        按订单号去重 —— 同一笔支付的重复回调 / 轮询 / 重试**只发放一次**。
+        此前仅靠 PaymentService 的 `order["granted"]` 标记防重，而该标记与
+        「权益是否真的发过」是两份状态，回调重放或跨实例并发时仍可能重复发放
+        （会员天数 / 积分翻倍）。
+        """
         self._ensure_loaded()
         now = self._now()
         st = self._state
+        # 订单级幂等：已发过就直接返回既有结果，绝不再叠加权益。
+        if order_id:
+            done = (st.get("meta") or {}).get("granted_orders") or []
+            if order_id in done:
+                return {"ok": True, "code": code, "via": via, "idempotent": True,
+                        "order_id": order_id}
         result: dict[str, Any] = {"ok": True, "code": code, "via": via}
 
         # 🔴 一律走生效套餐表（覆盖层 → 代码常量）：此前直接用模块常量，
@@ -1239,6 +1253,13 @@ class MembershipStore:
             "code": code, "via": via, "at": now, "type": "activate",
         })
         st["meta"]["history"] = st["meta"]["history"][-200:]  # 只留最近 200 条
+        # F-01 幂等留痕：发过的订单号记入 meta.granted_orders（只留最近 500 单，
+        # 防止无限增长），下次同单号回调直接走上面的幂等短路。
+        if order_id:
+            _go = st["meta"].setdefault("granted_orders", [])
+            if order_id not in _go:
+                _go.append(order_id)
+            st["meta"]["granted_orders"] = _go[-500:]
         self._persist()
         # 限量档售出 +1（写回覆盖层，让后台「已售」实时反映）
         if code in _all_plans and int(_all_plans[code].get("stock") or 0) > 0:

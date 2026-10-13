@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 
 router = APIRouter()
 
@@ -55,11 +55,54 @@ def _require_user(request: Request) -> Optional[str]:
     return app.get_current_user_id(request)
 
 
-def _grant_with(request: Request, plan_code: str, order_id: str) -> dict:
-    """付款成功 → 发放权益。失败 fail-open：订单状态已是 PAID，权益可后续补发。"""
+# ---- 旧 mock 通道（/api/cloud/pay/*）的双重开关（安全审计 2026-10-13，F-01）----- #
+# 🔴 缺陷：原实现里这四个端点**既不要求登录也不检查 mock 开关**，
+#   `MockProvider.simulate_paid` 对任意 order_id 都返回成功；且 `_grant_with` 用的是
+#   **请求者**的 store、与订单归属无关 ⇒ 拿到他人 order_id 即可把权益发到自己账上
+#   （会员 / 积分是计费资产）。
+#
+# 修复（与桌面端 app 仓 P0-3 同口径）：旧 mock 通道需**同时**满足两个条件才可用，
+# 缺一即 404（不暴露该端点存在）：
+#   ① 环境变量 VDL_PAY_MOCK=1（默认关）——生产不设即整条链路关闭；
+#   ② 请求来自**本机直连**（环回且未携带任何代理头）——防误开开关的服务器被公网白嫖。
+# 真正的线上收款走 /api/pay/*（转发 VPS 支付服务），与本开关无关。
+def _mock_pay_allowed(request: Optional[Request]) -> bool:
+    if (os.environ.get("VDL_PAY_MOCK") or "").strip() != "1":
+        return False
+    if request is None:
+        return False
     try:
-        store = _store(request)
-        return store.activate(plan_code, via="payment")
+        import app
+        return bool(app._is_local_direct(request))
+    except Exception:  # noqa: BLE001 —— 判定失败一律当公网，宁严勿宽
+        return False
+
+
+def _require_mock_pay(request: Optional[Request]) -> None:
+    if not _mock_pay_allowed(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+def _grant_with(request: Request, plan_code: str, order_id: str) -> dict:
+    """付款成功 → 发放权益。
+
+    安全审计 2026-10-13（F-01）：改为按**订单记录里的 user_id** 发放
+    （`get_user_store(owner)`），而不是回调 / 轮询**请求者**的 store ——
+    否则「谁触发回调，权益就发给谁」，拿到他人 order_id 即可把权益发到自己账上；
+    同时把 order_id 作为幂等键传给 activate，同一笔支付重复回调只发放一次
+    （见 MembershipStore.activate 的 order_id 幂等）。
+
+    失败仍 fail-open：订单状态已是 PAID，权益可后续补发。
+    """
+    try:
+        order = _service().store.get(order_id) or {}
+        owner_uid = str(order.get("user_id") or "").strip()
+        if not owner_uid:
+            return {"ok": False, "error": "订单缺少归属账号，拒绝发放",
+                    "order_id": order_id, "code": "ORDER_NO_OWNER"}
+        from user_membership import get_user_store
+        store = get_user_store(owner_uid)
+        return store.activate(plan_code, via="payment", order_id=order_id)
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e), "order_id": order_id}
 
@@ -157,7 +200,8 @@ def pay_create(payload: dict[str, Any] = Body(...), request: Request = None) -> 
             r.setdefault("plan_name", _plan_name(plan_code))
         return r
 
-    # —— 离线 / 开发：本地 mock 通道（不碰真钱）——
+    # —— 离线 / 开发：本地 mock 通道（不碰真钱；受双重开关保护，见 F-01）——
+    _require_mock_pay(request)
     try:
         return _service().create(uid, plan_code)
     except Exception as e:  # noqa: BLE001
@@ -184,7 +228,8 @@ def pay_query(payload: dict[str, Any] = Body(...), request: Request = None) -> d
             _refresh_authority(request)
         return r
 
-    # —— 离线 / 开发：本地 mock 通道 ——
+    # —— 离线 / 开发：本地 mock 通道（受双重开关保护，见 F-01）——
+    _require_mock_pay(request)
     try:
         return _service().query(
             order_id, grant_fn=lambda pc, oid: _grant_with(request, pc, oid))
@@ -194,7 +239,12 @@ def pay_query(payload: dict[str, Any] = Body(...), request: Request = None) -> d
 
 @router.post("/api/cloud/pay/notify")
 def pay_notify(payload: dict[str, Any] = Body(...), request: Request = None) -> dict:
-    """支付渠道异步回调（支付宝 / 微信 notify）。校验后翻转订单并发行权益。"""
+    """支付渠道异步回调（支付宝 / 微信 notify）。校验后翻转订单并发行权益。
+
+    安全审计 2026-10-13（F-01）：该端点直接发放权益，必须受 mock 双重开关保护
+    （默认全关）；权益按订单归属发放 + order_id 幂等（见 `_grant_with`）。
+    """
+    _require_mock_pay(request)
     try:
         return _service().notify(
             payload, grant_fn=lambda pc, oid: _grant_with(request, pc, oid))
@@ -204,7 +254,12 @@ def pay_notify(payload: dict[str, Any] = Body(...), request: Request = None) -> 
 
 @router.post("/api/cloud/pay/simulate_paid")
 def pay_simulate(payload: dict[str, Any] = Body(...), request: Request = None) -> dict:
-    """开发用：把 mock 订单置为已付并发行权益（真实通道不可用）。"""
+    """开发用：把 mock 订单置为已付并发行权益（真实通道不可用）。
+
+    安全审计 2026-10-13（F-01）：这是「白拿会员」的直接入口，必须受双重开关保护
+    （默认全关）。
+    """
+    _require_mock_pay(request)
     order_id = str(payload.get("order_id") or "")
     if not order_id:
         return {"ok": False, "error": "缺少订单号"}

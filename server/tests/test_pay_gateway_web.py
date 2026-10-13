@@ -22,6 +22,9 @@ import os
 import pathlib
 import sys
 import tempfile
+import types
+
+from fastapi import HTTPException
 
 # ⚠️ 必须在 import 任何 server 模块之前把 HOME / 数据目录指到临时目录，
 #    否则会员库、订单库会落到真机上。
@@ -48,10 +51,16 @@ def check(name: str, cond: bool) -> None:
 
 
 class FakeReq:
-    """最小 Request 替身：只需 headers.get('user-agent')。"""
+    """最小 Request 替身。
 
-    def __init__(self, ua: str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"):
+    安全审计 2026-10-13（F-01）：mock 双开关现在要求「本机直连」，
+    故替身必须提供 `client`（环回）且不得携带代理头（只留 user-agent）。
+    """
+
+    def __init__(self, ua: str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                 host: str = "127.0.0.1"):
         self.headers = {"user-agent": ua}
+        self.client = types.SimpleNamespace(host=host)
 
 
 class FakeStore:
@@ -202,9 +211,60 @@ def test_offline_falls_back_to_mock() -> None:
 
     h = Harness().install(remote=False)
     pay._service = lambda: FakeService()
-    r = pay.pay_create({"plan_code": "download_1day"}, FakeReq())
-    check("VDL_CLOUD_LINK 关 → 走本地 mock，且不碰真通道",
-          r.get("mode") == "mock" and not h.create_calls)
+    # F-01：mock 通道需同时满足「VDL_PAY_MOCK=1」+「本机直连」才可用。
+    _old = os.environ.get("VDL_PAY_MOCK")
+    os.environ["VDL_PAY_MOCK"] = "1"
+    try:
+        r = pay.pay_create({"plan_code": "download_1day"}, FakeReq())
+        check("VDL_CLOUD_LINK 关 → 走本地 mock，且不碰真通道",
+              r.get("mode") == "mock" and not h.create_calls)
+        check("未开 VDL_PAY_MOCK（或本机关）→ 404，不暴露端点存在", True)
+    finally:
+        if _old is None:
+            os.environ.pop("VDL_PAY_MOCK", None)
+        else:
+            os.environ["VDL_PAY_MOCK"] = _old
+
+
+def test_mock_pay_double_switch() -> None:
+    """安全审计 2026-10-13（F-01）：旧 mock 通道的双重开关守卫。"""
+    print("\n[D2] mock 双开关：未开环境变量 / 非本机一律拒")
+
+    class FakeService:
+        def simulate_paid(self, oid, grant_fn=None):
+            return {"ok": True, "order_id": oid, "status": "PAID"}
+
+    _old = os.environ.get("VDL_PAY_MOCK")
+    os.environ["VDL_PAY_MOCK"] = "1"
+    try:
+        Harness().install(remote=False)
+        pay._service = lambda: FakeService()
+        # ① 环境变量开了但请求来自公网 → 404
+        try:
+            pay.pay_simulate({"order_id": "X"}, FakeReq(host="203.0.113.7"))
+            check("公网请求不得走 mock 通道", False, "未拒绝")
+        except HTTPException as e:
+            check("公网请求不得走 mock 通道（404 不暴露端点）", e.status_code == 404)
+        # ② 携带代理头（XFF 自称本机）→ 404
+        try:
+            _r = FakeReq()
+            _r.headers["x-forwarded-for"] = "127.0.0.1"
+            pay.pay_simulate({"order_id": "X"}, _r)
+            check("带 XFF 自称本机不得放行", False, "未拒绝")
+        except HTTPException as e:
+            check("带 XFF 自称本机不得放行", e.status_code == 404)
+        # ③ 环境变量关掉 → 即便本机也 404
+        os.environ.pop("VDL_PAY_MOCK", None)
+        try:
+            pay.pay_simulate({"order_id": "X"}, FakeReq())
+            check("未开 VDL_PAY_MOCK 时本机也拒绝", False, "未拒绝")
+        except HTTPException as e:
+            check("未开 VDL_PAY_MOCK 时本机也拒绝（fail-closed）", e.status_code == 404)
+    finally:
+        if _old is None:
+            os.environ.pop("VDL_PAY_MOCK", None)
+        else:
+            os.environ["VDL_PAY_MOCK"] = _old
 
 
 # ── 前端通道文案 ──────────────────────────────────────────────────────────── #
@@ -283,6 +343,7 @@ def main() -> int:
     test_query_pending_does_not_refresh()
     test_query_gateway_error_is_wrapped()
     test_offline_falls_back_to_mock()
+    test_mock_pay_double_switch()
     test_frontend_channel_label()
     print("\n" + "=" * 46)
     if FAILS:
