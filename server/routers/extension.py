@@ -32,6 +32,18 @@ _BUNDLED = _SERVER / "assets" / "extension_src"   # 冻结/网页版兜底
 _PKG_NAME = "视频工坊媒体嗅探"
 
 
+def _is_real_download(request: Request | None) -> bool:
+    """是否计入下载统计：只有 GET 才算真实下载。
+
+    2026-10-13：两个下载端点补 HEAD 支持（下载管理器预检用，浏览器无感）。
+    HEAD 会命中同一 handler，若照旧计数，「预检 + 真实下载」会让计数虚高一倍。
+    故统一在这里判定：HEAD 不计，GET 计；request 缺失（异常路径）按 GET 处理。
+    """
+    if request is None:
+        return True
+    return getattr(request, "method", "GET") != "HEAD"
+
+
 def _source_dir() -> Path:
     if _REPO_EXT.is_dir():
         return _REPO_EXT
@@ -79,7 +91,7 @@ def extension_info() -> dict:
     }
 
 
-@router.get("/api/extension/package")
+@router.api_route("/api/extension/package", methods=["GET", "HEAD"])
 def extension_package(request: Request = None) -> Response:
     src = _source_dir()
     data = _build_zip(src)
@@ -91,10 +103,13 @@ def extension_package(request: Request = None) -> Response:
     disp = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
     # 🔴 下载计数（2026-10-13「app 加上安装包/扩展下载次数并统计不同平台」）：
     #    平台维度 = User-Agent 推断的浏览器。统计失败绝不让下载失败。
+    #    仅计 GET：HEAD 是下载管理器「预检」（取 Content-Length/Type 判断是否续传），
+    #    不是真实下载，计入会把计数虚高一倍（预检 + 下载各一次）。
     try:
         import dl_stats
-        ua = (request.headers.get("user-agent") or "") if request is not None else ""
-        dl_stats.record("extension", dl_stats.browser_from_ua(ua))
+        if _is_real_download(request):
+            ua = (request.headers.get("user-agent") or "") if request is not None else ""
+            dl_stats.record("extension", dl_stats.browser_from_ua(ua))
     except Exception:  # noqa: BLE001
         pass
     return Response(
@@ -116,15 +131,17 @@ _INSTALLER_FILES: dict[str, Path] = {
 }
 
 
-@router.get("/download/installer")
+@router.api_route("/download/installer", methods=["GET", "HEAD"])
 def download_installer(p: str = "macos", request: Request = None) -> Response:
     plat = str(p or "").strip().lower()
     path = _INSTALLER_FILES.get(plat)
     if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="该平台的安装包尚未提供")
+    # 仅计 GET：HEAD 是预检，不计入下载次数（口径同扩展包）。
     try:
         import dl_stats
-        dl_stats.record("installer", plat)
+        if _is_real_download(request):
+            dl_stats.record("installer", plat)
     except Exception:  # noqa: BLE001
         pass
     return FileResponse(path, media_type="application/zip",

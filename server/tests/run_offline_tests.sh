@@ -159,6 +159,12 @@ run_one test_cloud_quota_unified.py
 #  三态「?」/关闭整条消失/子面板切换同步，任一被改坏即红。
 run_node test_howto_guide.mjs
 
+#  下载两端点 HEAD 支持（2026-10-13 接续待办 #1）：/api/extension/package 与
+#  /download/installer 补 HEAD（下载管理器预检取 Content-Length/Type）。
+#  守卫钉住：HEAD→200 空 body 但头部齐全、HEAD 不计入下载统计（否则预检+下载虚高一倍）、
+#  未提供安装包的平台仍 404、GET body 不丢。改回 @router.get 会立刻红。
+run_one test_download_head_support.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
