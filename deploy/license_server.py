@@ -884,24 +884,108 @@ def register_impl(state: dict[str, Any], email: str, password: str, now: float,
     return out
 
 
+def _clean_device_meta(meta: Any) -> dict[str, Any]:
+    """清洗客户端上报的设备画像（2026-10-13 安装/插件统计的落库口径）。
+
+    只认白名单字段，逐字段限长；解析失败/缺省 → 空 dict（画像缺失只影响
+    统计丰富度，绝不让心跳/登录失败）。ext.browser 只认固定枚举。
+    """
+    if not isinstance(meta, dict):
+        return {}
+    out: dict[str, Any] = {}
+    p = str(meta.get("platform") or "").strip().lower()
+    if p in ("macos", "windows", "linux"):
+        out["platform"] = p
+    av = str(meta.get("app_version") or "").strip()
+    if av:
+        out["app_version"] = av[:32]
+    ext = meta.get("ext")
+    if isinstance(ext, dict):
+        b = str(ext.get("browser") or "").strip().lower()
+        v = str(ext.get("version") or "").strip()
+        if b in ("chrome", "edge", "brave", "chromium", "firefox", "safari"):
+            e: dict[str, str] = {"browser": b}
+            if v:
+                e["version"] = v[:32]
+            out["ext"] = e
+    return out
+
+
+def _merge_device_meta(rec: dict, meta: dict[str, Any]) -> None:
+    """把画像合并进既有设备记录：字段级刷新，first_seen 只在首次落笔。"""
+    if not meta:
+        return
+    if meta.get("platform"):
+        rec["platform"] = meta["platform"]
+    if meta.get("app_version"):
+        rec["app_version"] = meta["app_version"]
+    if meta.get("ext"):
+        rec["ext"] = meta["ext"]
+
+
 def _attach_device(user: dict, device: Optional[dict], now: float) -> list[dict]:
     """占一个设备位。返回被自动淘汰的设备列表（可能为空）。"""
     dev = device or {}
     fp = str(dev.get("fp") or "").strip()[:128]
     name = str(dev.get("name") or "").strip()[:64] or "未命名设备"
+    meta = _clean_device_meta(dev.get("meta"))
     devices = user.setdefault("devices", [])
     for d in devices:
         if d.get("fp") == fp:                      # 本机已在位 → 只刷新活跃时间
             d["last_seen"] = now
             d["name"] = name or d.get("name", "")
+            _merge_device_meta(d, meta)
             return []
     evicted: list[dict] = []
     while len(devices) >= MAX_DEVICES:             # 超配额：挤掉最久没活动的
         oldest = min(devices, key=lambda x: float(x.get("last_seen", 0)))
         devices.remove(oldest)
         evicted.append(oldest)
-    devices.append({"fp": fp, "name": name, "last_seen": now})
+    rec: dict[str, Any] = {"fp": fp, "name": name, "last_seen": now,
+                           "first_seen": now}      # 安装统计：首次出现 = 安装时刻
+    _merge_device_meta(rec, meta)
+    devices.append(rec)
     return evicted
+
+
+def stat_aggregate(state: dict[str, Any], now: float) -> dict[str, Any]:
+    """「安装 / 插件次数统计（按平台）」聚合（纯函数，便于离线守卫）。
+
+    口径（2026-10-13 用户定档「为后续计划做铺垫」）：
+      · installs  = 设备的 first_seen 分布（首次出现 = 安装），按 platform 分组，
+        给 累计 / 今日 / 近 7 天 三列；
+      · ext       = 按浏览器分组的扩展数量（以最近一次上报为准）；
+      · active    = 近 7 / 30 天有活跃（last_seen）的设备数；
+      · devices_total = 名单内设备总数。
+    platform 缺失的旧设备归入 "unknown"（诚实呈现，不臆测）。
+    """
+    day0 = int(now // 86400) * 86400
+    installs: dict[str, dict[str, int]] = {}
+    exts: dict[str, int] = {}
+    active7 = active30 = total = 0
+    for user in _users(state).values():
+        for d in (user.get("devices") or []):
+            if not isinstance(d, dict):
+                continue
+            total += 1
+            plat = str(d.get("platform") or "").strip().lower() or "unknown"
+            fs = float(d.get("first_seen") or d.get("last_seen") or 0)
+            slot = installs.setdefault(plat, {"total": 0, "today": 0, "d7": 0})
+            slot["total"] += 1
+            if fs >= day0:
+                slot["today"] += 1
+            if fs >= now - 7 * 86400:
+                slot["d7"] += 1
+            ext = d.get("ext")
+            if isinstance(ext, dict) and ext.get("browser"):
+                exts[str(ext["browser"])] = exts.get(str(ext["browser"]), 0) + 1
+            ls = float(d.get("last_seen") or 0)
+            if ls >= now - 7 * 86400:
+                active7 += 1
+            if ls >= now - 30 * 86400:
+                active30 += 1
+    return {"devices_total": total, "installs": installs, "ext": exts,
+            "active": {"d7": active7, "d30": active30}}
 
 
 def login_impl(state: dict[str, Any], email: str, password: str, now: float,
@@ -929,7 +1013,7 @@ def login_impl(state: dict[str, Any], email: str, password: str, now: float,
 
 
 def heartbeat_impl(state: dict[str, Any], token: str, fp: str, now: float,
-                   secret: str) -> dict[str, Any]:
+                   secret: str, meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """续期 + 查自己是否还在设备名单里（被别的机器挤掉则返回 DEVICE_EVICTED）。"""
     uid = parse_token(token, secret, now)
     user = _users(state).get(uid)
@@ -940,10 +1024,12 @@ def heartbeat_impl(state: dict[str, Any], token: str, fp: str, now: float,
                 "error": "账号已被停用，如有疑问请联系客服",
                 "account": _public_user(user, "")}
     fp = (fp or "").strip()
+    clean_meta = _clean_device_meta(meta)
     devices = user.setdefault("devices", [])
     for d in devices:
         if d.get("fp") == fp:
             d["last_seen"] = now
+            _merge_device_meta(d, clean_meta)   # 2026-10-13：画像随心跳刷新
             return {"ok": True, "account": _public_user(user, fp)}
     return {"ok": False, "code": "DEVICE_EVICTED",
             "error": "该账号已在其他两台设备登录，如需使用请重新登录",
@@ -1866,8 +1952,11 @@ class Handler(BaseHTTPRequestHandler):
                             "free_quota_set",
                             # 🔴 安全审计 2026-10-11（P0-4）：受信额度退还。
                             #    客户端不得自行退还（否则消费→退还→再消费可无限白嫖），
-                            #    退还只允许管理端凭消费事件号一次性冲正。
-                            "cloud_quota_refund"):
+
+                            # 退还只允许管理端凭消费事件号一次性冲正。
+                            "cloud_quota_refund",
+                            # 🔴 2026-10-13 安装/插件统计（按平台）聚合查询（只读）
+                            "stat_query"):
                 self._require_admin(data)
                 with _LOCK:
                     st = _load_state()
@@ -1983,6 +2072,11 @@ class Handler(BaseHTTPRequestHandler):
                                                allow_refund=True,
                                                event_id=str(data.get("event_id") or ""))
                         _save_state(st)
+                    elif action == "stat_query":
+                        # 🔴 2026-10-13 安装 / 插件次数统计（按平台）：纯只读聚合，
+                        #   不写 state。设备画像（platform/ext/first_seen）随心跳与
+                        #   登录落入设备记录，这里聚合给管理面板。
+                        out = {"ok": True, "stats": stat_aggregate(st, now)}
                     else:
                         out = users_impl(st)
                 return self._json(200, out)
@@ -2005,7 +2099,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif action == "heartbeat":
                     out = heartbeat_impl(st, str(data.get("token") or ""),
                                          str(data.get("fp") or data.get("fingerprint") or ""),
-                                         now, SECRET)
+                                         now, SECRET,
+                                         meta=(data.get("meta")
+                                               if isinstance(data.get("meta"), dict) else None))
                     if out.get("ok"):
                         _save_state(st)
                 elif action == "password":
@@ -2070,7 +2166,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(e.status, {"ok": False, "error": e.msg, "code": e.code})
 
     @staticmethod
-    def _device(data: dict[str, Any]) -> dict[str, str]:
+    def _device(data: dict[str, Any]) -> dict[str, Any]:
         d = data.get("device")
         if not isinstance(d, dict):
             d = {}
@@ -2080,7 +2176,11 @@ class Handler(BaseHTTPRequestHandler):
         name = str(d.get("name") or "").strip()[:64]
         if not fp:
             raise ApiError(400, "NO_DEVICE", "缺少设备标识 fingerprint")
-        return {"fp": fp, "name": name or "未命名设备"}
+        out: dict[str, Any] = {"fp": fp, "name": name or "未命名设备"}
+        meta = data.get("meta")
+        if isinstance(meta, dict) and meta:
+            out["meta"] = meta          # 设备画像（安装/插件统计），_attach_device 清洗
+        return out
 
     def _require_admin(self, data: dict[str, Any]) -> None:
         global _ADMIN_FAILS, _ADMIN_LOCK_UNTIL

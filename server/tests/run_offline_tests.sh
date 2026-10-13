@@ -856,6 +856,12 @@ run_one test_launcher_window_guard.py
 #     配套变异测试 tests/mutation_cloud_matting_gateway.py：10 项注入缺陷必须变红。
 run_one test_cloud_matting_gateway.py
 
+# 63.5 test_free_quota_mode_and_stats.py —— 免费额度口径（mode on/off）+ 安装/插件
+#     统计的离线守卫（2026-10-13）。覆盖：effective_daily_limits 的 mode 执行与脏值
+#     回退、save_plan_overrides 清洗、GET credit-costs 下发、心跳设备画像接线、
+#     授权中心 stat_aggregate/_attach_device（AST 抽取纯函数执行）。
+run_one test_free_quota_mode_and_stats.py
+
 # 63. test_release_audit.py —— 发布包「机密数据」核查工具的离线守卫（2026-10-13 用户要求
 #     「发布的安装包绝对不含机密数据」，并要求写入档案）。七类：明文凭据 / 私钥 / 服务端
 #     凭据文件 / 用户数据 / 内部信息 / 打包垃圾 / 我方明文源码；另含三个**真实误报**的回归钉子

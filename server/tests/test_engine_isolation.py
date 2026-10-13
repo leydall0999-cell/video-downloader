@@ -680,6 +680,15 @@ _ALLOWED_SHARED_CONFIG = {
     # import membership 会把它绑死在 app/membership 上（管线侧起不来）。
     # 只读不写 ⇒ 单一写入者不变，不会出现「两处各写一份、互相覆盖」。
     "plans.json",
+    # (d) 机密核查工具（tools/audit_release_secrets.py，2026-10-13）是**只读扫描器**：
+    #     它的字面量里必然出现一批用户/功能配置文件名（作为检测模式）。
+    #     它不写任何状态（核查包内容只读是硬规矩），单一写入者不变。
+    #     命中名单：vault.json / cloud_matting(.json/_managed.json) / credentials.json /
+    #     proxy.json / gateway(.json/_managed.json) / llm_managed.json / stats.json /
+    #     tasks_state.json / vision_managed.json。
+    "vault.json", "cloud_matting.json", "cloud_matting_managed.json",
+    "credentials.json", "proxy.json", "gateway.json", "gateway_managed.json",
+    "llm_managed.json", "stats.json", "tasks_state.json", "vision_managed.json",
 }
 
 

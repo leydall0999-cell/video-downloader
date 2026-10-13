@@ -192,6 +192,50 @@ def _fp_name() -> tuple[str, str]:
     return fp, name[:64]
 
 
+def _device_meta() -> dict[str, Any]:
+    """设备画像（2026-10-13）：随心跳上报，供后台「安装 / 插件次数统计（按平台）」。
+
+    · platform：macos / windows / linux（复用 platform_model 的平台判定）；
+    · app_version：App 当前版本号；
+    · ext：浏览器扩展信息（browser = 由扩展加载目录路径推断的 chrome/edge/
+      brave/chromium；version = 扩展 manifest 的 version）。
+    任何一项取不到就省略 —— 画像缺失只影响统计丰富度，绝不让心跳失败。
+    """
+    meta: dict[str, Any] = {}
+    try:
+        import platform_model
+        p = platform_model.current_platform()
+        # 🔴 current_platform() 返回的是 Platform 枚举（str() 会得到
+        #    "Platform.MACOS"，服务端白名单会把它丢掉）——必须取 .value。
+        p = str(getattr(p, "value", p) or "").strip().lower()
+        if p and p != "web":
+            meta["platform"] = p
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import system
+        v = str(getattr(system, "VERSION", "") or "").strip()
+        if v and v != "0.0.0":
+            meta["app_version"] = v[:32]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import extension_sync
+        cfg = extension_sync.get_config() or {}
+        load_dir = str(cfg.get("load_dir") or "").strip() or str(extension_sync.managed_dir())
+        ver = str(extension_sync.read_version(load_dir) or "").strip()
+        if ver:
+            low = load_dir.lower()
+            browser = ("chrome" if "google/chrome" in low or "google chrome" in low
+                       else "edge" if "microsoft edge" in low or "/edge" in low
+                       else "brave" if "brave" in low
+                       else "chromium")
+            meta["ext"] = {"browser": browser, "version": ver[:32]}
+    except Exception:  # noqa: BLE001
+        pass
+    return meta
+
+
 def _apply_account_state(store, acct: dict[str, Any], mirror: bool = True) -> None:
     """云端权益落地（2026-09-25 防破解核心切换点）。
 
@@ -624,7 +668,7 @@ def cloud_sync(request: Request) -> dict[str, Any]:
     if not fp:
         return {"ok": False, "error": "无法取得本机设备标识"}
     try:
-        r = license_client.heartbeat_remote(token, fp)
+        r = license_client.heartbeat_remote(token, fp, meta=_device_meta())
     except license_client.LicenseCloudError as e:
         return {"ok": True, "offline": True, "warning": str(e)}
     if not r.get("ok"):
@@ -708,7 +752,7 @@ def maybe_sync_account(store) -> None:
         fp, name = _fp_name()
         if not fp:
             return
-        r = license_client.heartbeat_remote(token, fp)
+        r = license_client.heartbeat_remote(token, fp, meta=_device_meta())
         if r.get("ok"):
             acct = r.get("account") or {}
             store.set_evicted(False)

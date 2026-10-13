@@ -125,10 +125,29 @@ def login_remote(email: str, password: str, fp: str, name: str = "",
 
 def heartbeat_remote(token: str, fp: str, base_url: Optional[str] = None,
                      timeout: float = 8.0,
-                     opener: Optional[Callable] = None) -> dict[str, Any]:
-    """心跳续期 / 配额校验。被挤掉时返回 {"ok": False, "code": "DEVICE_EVICTED"}。"""
-    return _post("/api/license/heartbeat", {"token": token, "fp": fp},
-                 base_url, timeout, opener)
+                     opener: Optional[Callable] = None,
+                     meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """心跳续期 / 配额校验。被挤掉时返回 {"ok": False, "code": "DEVICE_EVICTED"}。
+
+    `meta`（2026-10-13 新增，可选）：设备画像 —— {"platform", "app_version",
+    "ext": {"browser", "version"}}，授权中心落到设备记录上，供后台
+    「安装 / 插件次数统计（按平台）」聚合。字段全部可选；服务端逐字段
+    白名单清洗，缺失不报错。
+    """
+    payload: dict[str, Any] = {"token": token, "fp": fp}
+    if isinstance(meta, dict) and meta:
+        payload["meta"] = meta
+    return _post("/api/license/heartbeat", payload, base_url, timeout, opener)
+
+
+def stat_query_remote(admin_token: str, base_url: Optional[str] = None,
+                      timeout: float = 10.0) -> dict[str, Any]:
+    """管理员查询「安装 / 插件次数统计（按平台）」聚合（2026-10-13 新增）。
+
+    与 free_quota_set 同一套管理员鉴权（授权中心 ADMIN_TOKEN，非用户 token）。
+    """
+    return _post("/api/license/stat_query", {"token": admin_token},
+                 base_url, timeout)
 
 
 def redeem_remote(token: str, code: str, base_url: Optional[str] = None,

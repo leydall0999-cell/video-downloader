@@ -176,7 +176,27 @@ def effective_daily_limits() -> tuple[dict[str, int], dict[str, int]]:
                 dst[key] = int(v)
             except (TypeError, ValueError):
                 continue          # 脏值忽略：宁可回退默认，也不让整个配额表炸掉
+    # 🔴 免费额度口径（2026-10-13 用户定档「免费额度做个可选项，后期有可能修改
+    #    每日免费额度，先把接口做好」）：`free_quota.mode` = on（默认，按上表执行）｜
+    #    off（免费用户不再享有每日免费额度 ⇒ 全部归 0，回到付费墙；会员每日不受影响）。
+    #    与 daily_*_limits 同一层覆盖、同一个「保存免费额度」按钮，改完即时生效。
+    #    脏值一律收敛回 "on"（fail-open 方向是「恢复默认口径」，不是「全站停用」）。
+    if str(fq.get("mode") or "").strip().lower() == "off":
+        free = {k: 0 for k in free}
     return member, free
+
+
+FREE_QUOTA_MODES = ("on", "off")
+
+
+def free_quota_mode() -> str:
+    """生效的免费额度口径（"on" | "off"），供后台 GET 与前端选择器回显。"""
+    try:
+        fq = (load_plan_overrides().get("free_quota") or {})
+    except Exception:
+        return "on"
+    m = str((fq or {}).get("mode") or "").strip().lower()
+    return m if m in FREE_QUOTA_MODES else "on"
 
 def migrate_legacy_usage(usage: dict[str, Any]) -> dict[str, Any]:
     """把老键 `app_compute` 的已用量归集到新的独立键（2026-10-06 拆键）。
@@ -831,6 +851,16 @@ def save_plan_overrides(data: dict[str, Any]) -> dict[str, Any]:
                 existing[k] = merged
             else:
                 existing[k] = v
+        # 🔴 免费额度口径（2026-10-13）：`free_quota.mode` 只认 on/off；
+        #    非法值**丢弃该键**（生效层自动回退 "on"），绝不把脏值写进覆盖层
+        #    —— 与 effective_daily_limits 的 fail-closed 方向一致。
+        fq = existing.get("free_quota")
+        if isinstance(fq, dict) and "mode" in fq:
+            m = str(fq.get("mode") or "").strip().lower()
+            if m in FREE_QUOTA_MODES:
+                fq["mode"] = m
+            else:
+                fq.pop("mode", None)
         p = plan_override_path()
         atomic_io.atomic_write_json(p, existing)
         _PLAN_OVERRIDE_CACHE = (p.stat().st_mtime_ns, existing)

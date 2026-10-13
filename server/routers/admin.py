@@ -218,6 +218,17 @@ def _cloud_lifetime_per_resource() -> dict[str, int]:
     return defaults
 
 
+def _M_free_quota_mode() -> str:
+    """生效的免费额度口径（on/off）—— 独立小包装便于测试打桩。"""
+    from membership import free_quota_mode
+    return free_quota_mode()
+
+
+def _M_free_quota_modes() -> tuple[str, ...]:
+    from membership import FREE_QUOTA_MODES
+    return FREE_QUOTA_MODES
+
+
 def _daily_feature_rows() -> list[dict[str, Any]]:
     """后台「免费额度」右栏的功能列表（**按用户看到的功能名**）。
 
@@ -365,6 +376,35 @@ def admin_stats(request: Request = None) -> dict[str, Any]:
     return {"ok": True, **usage_stats()}
 
 
+@router.get("/api/admin/stats/install")
+def admin_stats_install(request: Request = None) -> dict[str, Any]:
+    """超级管理员：安装 / 插件次数统计（按平台）——数据源=授权中心设备记录。
+
+    🔴 2026-10-13 新增（用户要求「app安装包安装/插件次数统计，不同平台的统计，
+    为后续计划做铺垫」）。设备画像（platform / app_version / ext）随心跳上报，
+    授权中心在设备记录上落 `first_seen`（= 安装时间）并聚合。本端点只做
+    转发：管理面板 → 本机 /api/admin/*（require_admin）→ 授权中心
+    /api/license/stat_query（ADMIN_TOKEN）。云端不可达时如实回报，不抛出。
+    """
+    require_admin(request)
+    try:
+        import admin_store
+        token = admin_store._license_admin_token()  # noqa: SLF001 — 复用既有令牌读取
+    except Exception:  # noqa: BLE001
+        token = ""
+    if not token:
+        return {"ok": False, "reason": "no_admin_token"}
+    try:
+        import license_client
+        r = license_client.stat_query_remote(token)
+    except Exception as e:  # noqa: BLE001 - 云端异常只降级不炸面板
+        return {"ok": False, "reason": type(e).__name__}
+    if not isinstance(r, dict) or not r.get("ok"):
+        return {"ok": False,
+                "reason": str((r or {}).get("error") or (r or {}).get("detail") or "cloud_rejected")}
+    return {"ok": True, "stats": (r.get("stats") or {})}
+
+
 @router.post("/api/admin/stats/reset")
 def admin_stats_reset(request: Request = None) -> dict[str, Any]:
     require_admin(request)
@@ -429,6 +469,11 @@ def admin_ai_credit_costs(request: Request = None) -> dict[str, Any]:
         #   · 消耗积分的功能（AI_CREDIT_COSTS）：扣积分，可用**首次体验**免费名额
         # 两者口径不同，混在一起会让人以为「下载 10/日」和「首次体验 1 次」是一回事。
         "free_quota": {
+            # 🔴 免费额度口径（2026-10-13「免费额度做个可选项」）：on=按下面数字执行
+            #    （默认）；off=免费用户不再享有每日免费（回到付费墙，会员每日不变）。
+            #    与 daily_*_limits 同层覆盖、同一个「保存免费额度」按钮，即时生效。
+            "mode": _M_free_quota_mode(),
+            "modes": list(_M_free_quota_modes()),
             "daily_features": _daily_feature_rows(),
             "credit_features": [
                 {

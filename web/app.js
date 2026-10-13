@@ -22509,6 +22509,19 @@ el.dwVidPlayer.hidden = true;
       const ov = fq.overrides || {};
       let h = '';
 
+      // 🔴 免费额度口径（2026-10-13「免费额度做个可选项」）：on=按下表执行（默认）
+      //    / off=免费用户回到付费墙（会员每日不变）。与下面的数字同一个「保存免费
+      //    额度」按钮一并提交，即时生效；后期调整数字也是这里改，不需要重新打包。
+      const fqModeOff = String(fq.mode || 'on') === 'off';
+      h += '<div class="admin-trial-box" data-page-node-id="fqModeBox">'
+        + '<div class="admin-trial-head" data-page-node-id="fqModeHead">'
+        + '<label class="admin-switch" data-page-node-id="fqModeSwitch">'
+        + `<input type="checkbox" id="adminFqModeOn" data-page-node-id="fqModeOn"${fqModeOff ? '' : ' checked'}>`
+        + '<span>免费用户每日额度</span></label>'
+        + '<span class="admin-hint" style="margin:0" data-page-node-id="fqModeSub">'
+        + '开启（推荐）＝免费用户按下表「每日免费」次数使用；关闭＝免费用户回到付费墙（会员每日不受影响）。'
+        + '与下面的数字随「保存免费额度」一并生效，后期调整也是这里改。</span></div></div>';
+
       h += '<div class="fq-sub">① 纯免费功能（不扣积分，按每日次数限制）</div>';
       // 🔴 2026-10-06 文案必须与数据一致。此前这句写「高效压缩 / 高清修复都走
       // 本地算力共用」—— 拆键后它们已各自独立，文字在骗人（用户截图据此以为
@@ -22642,6 +22655,9 @@ el.dwVidPlayer.hidden = true;
       const exclude = [];
       box.querySelectorAll('.fq-trial').forEach((el) => { if (!el.checked) exclude.push(el.dataset.op); });
       if (exclude.length) payload.exclude = exclude;
+      // 🔴 免费额度口径（2026-10-13）：开关随「保存免费额度」一并提交
+      const fqModeEl = document.getElementById('adminFqModeOn');
+      if (fqModeEl) payload.mode = fqModeEl.checked ? 'on' : 'off';
 
       if (!Object.keys(payload).length) { showToast('没有改动', 1600); return; }
       const btn = $('adminFqSave');
@@ -22650,12 +22666,14 @@ el.dwVidPlayer.hidden = true;
         // free_quota 走套餐接口、free_trial 走积分成本接口（各自归属自己的覆盖层）
         let ok = true;
         if (payload.daily_free_limits || payload.daily_member_limits
-            || payload.cloud_lifetime !== undefined || payload.daily_auto !== undefined) {
+            || payload.cloud_lifetime !== undefined || payload.daily_auto !== undefined
+            || payload.mode !== undefined) {
           const fq = {};
           if (payload.daily_free_limits) fq.daily_free_limits = payload.daily_free_limits;
           if (payload.daily_member_limits) fq.daily_member_limits = payload.daily_member_limits;
           if (payload.cloud_lifetime !== undefined) fq.cloud_lifetime = payload.cloud_lifetime;
           if (payload.daily_auto !== undefined) fq.daily_auto = payload.daily_auto;
+          if (payload.mode !== undefined) fq.mode = payload.mode;
           const r1 = await adminRequest('/api/admin/config/plans', {
             method: 'POST', body: JSON.stringify({ free_quota: fq }),
           });
@@ -23100,6 +23118,46 @@ el.dwVidPlayer.hidden = true;
         const r = await adminRequest('/api/admin/stats');
         if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
         renderStats(r);
+      } catch (e) { /* 静默 */ }
+      // 🔴 安装 / 插件统计（2026-10-13）：云端聚合失败时如实显示原因（云端不可达
+      //    ≠ 没有数据），面板不因这块挂掉。
+      try {
+        const box = document.getElementById('adminInstallStats');
+        if (!box) return;
+        const ir = await adminRequest('/api/admin/stats/install');
+        if (!ir || !ir.ok) {
+          box.innerHTML = `<div class="admin-empty">安装统计不可用：${esc((ir && ir.reason) || '未知原因')}</div>`;
+          return;
+        }
+        const st = ir.stats || {};
+        const ins = st.installs || {};
+        const plats = Object.keys(ins).sort((a, b) => (ins[b].total || 0) - (ins[a].total || 0));
+        const platName = { macos: 'macOS', windows: 'Windows', linux: 'Linux', unknown: '未上报（旧设备）' };
+        let h = '<div class="admin-table-wrap"><table class="admin-table">';
+        h += '<tr><th>平台</th><th>累计安装</th><th>今日新增</th><th>近 7 天</th></tr>';
+        if (plats.length) {
+          plats.forEach((p) => {
+            const s = ins[p] || {};
+            h += `<tr><td>${esc(platName[p] || p)}</td><td>${s.total || 0}</td><td>${s.today || 0}</td><td>${s.d7 || 0}</td></tr>`;
+          });
+        } else {
+          h += '<tr><td colspan="4">暂无设备记录（用户登录后即计入）</td></tr>';
+        }
+        h += `<tr><td><b>合计设备</b></td><td colspan="3"><b>${st.devices_total || 0}</b>`
+          + `（近 7 天活跃 ${st.active?.d7 || 0} / 近 30 天活跃 ${st.active?.d30 || 0}）</td></tr>`;
+        h += '</table></div>';
+        const exts = st.ext || {};
+        const extKeys = Object.keys(exts).sort((a, b) => exts[b] - exts[a]);
+        h += '<div class="fq-sub" style="margin-top:12px">浏览器扩展（最近一次上报）</div>';
+        if (extKeys.length) {
+          const extName = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium', firefox: 'Firefox', safari: 'Safari' };
+          h += '<div class="admin-table-wrap"><table class="admin-table"><tr><th>浏览器</th><th>设备数</th></tr>';
+          extKeys.forEach((b) => { h += `<tr><td>${esc(extName[b] || b)}</td><td>${exts[b]}</td></tr>`; });
+          h += '</table></div>';
+        } else {
+          h += '<p class="admin-hint">暂无扩展上报（老版本 App 尚未携带画像，升级后心跳会带来）。</p>';
+        }
+        box.innerHTML = h;
       } catch (e) { /* 静默 */ }
     };
     const renderStats = (s) => {
