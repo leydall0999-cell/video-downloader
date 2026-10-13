@@ -948,6 +948,33 @@ def _attach_device(user: dict, device: Optional[dict], now: float) -> list[dict]
     return evicted
 
 
+def _read_dl_stats(path: str = "/opt/vdl-dl-stats/downloads.json") -> dict[str, Any]:
+    """读取下载计数文件（网页版服务写的：安装包 / 浏览器扩展，按平台）。
+
+    与 stat_aggregate 同机不同服务 —— 网页版落盘固定路径，这里只读合并。
+    today 由 by_day 现算；文件缺失/损坏 → 空 dict（统计缺位不影响设备数据）。
+    """
+    try:
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    day = time.strftime("%Y-%m-%d")
+    out: dict[str, Any] = {}
+    for bucket, slots in d.items():
+        if bucket == "updated_at" or not isinstance(slots, dict):
+            continue
+        b = out.setdefault(str(bucket), {})
+        for plat, slot in slots.items():
+            if not isinstance(slot, dict):
+                continue
+            by_day = slot.get("by_day") or {}
+            b[str(plat)] = {"total": int(slot.get("total") or 0),
+                            "today": int(by_day.get(day) or 0)}
+    return out
+
+
 def stat_aggregate(state: dict[str, Any], now: float) -> dict[str, Any]:
     """「安装 / 插件次数统计（按平台）」聚合（纯函数，便于离线守卫）。
 
@@ -984,8 +1011,10 @@ def stat_aggregate(state: dict[str, Any], now: float) -> dict[str, Any]:
                 active7 += 1
             if ls >= now - 30 * 86400:
                 active30 += 1
-    return {"devices_total": total, "installs": installs, "ext": exts,
-            "active": {"d7": active7, "d30": active30}}
+    out = {"devices_total": total, "installs": installs, "ext": exts,
+           "active": {"d7": active7, "d30": active30},
+           "downloads": _read_dl_stats()}
+    return out
 
 
 def login_impl(state: dict[str, Any], email: str, password: str, now: float,
