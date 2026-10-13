@@ -616,10 +616,12 @@ def test_commentary_vision_charged_at_every_entry():
     本用例数出现次数，个数不对就红。
     """
     src = (_SERVER / "routers" / "commentary.py").read_text(encoding="utf-8")
-    n_pre = src.count("precheck_or_raise(None,")
-    n_up = src.count("assert_upload_allowed(None, _dur")
-    check(n_pre == 2, f"2 处 precheck_or_raise 入口", str(n_pre))
-    check(n_up == 2, f"2 处 assert_upload_allowed 入口", str(n_up))
+    # 安全审计 2026-10-13（F-04）：4 个入口现在传真实 `request`（按登录用户归属计费），
+    # 不再是 `None`（落全局匿名账本）。计数改为 `request` 形式。
+    n_pre = src.count("precheck_or_raise(request,")
+    n_up = src.count("assert_upload_allowed(request, _dur")
+    check(n_pre == 2, f"2 处 precheck_or_raise 入口（传 request）", str(n_pre))
+    check(n_up == 2, f"2 处 assert_upload_allowed 入口（传 request）", str(n_up))
     # 每一处都必须带 vision=
     check(src.count("vision=bool(payload.vision)") == n_pre,
           "所有 precheck 入口都传了 vision=payload.vision")
@@ -635,11 +637,11 @@ def test_commentary_vision_charged_at_every_entry():
 def test_voice_clone_gate_added():
     """`/api/voice-studio/tts` 必须有积分门禁（此前完全无鉴权无计费）。"""
     src = (_SERVER / "routers" / "voice_studio.py").read_text(encoding="utf-8")
-    check("_credit_gate(\"voice_clone\"" in src, "tts 端点有 voice_clone 门禁")
+    check('_credit_gate(request, "voice_clone"' in src, "tts 端点有 voice_clone 门禁（按请求归属计费）")
     check("status_code=402" in src, "不足时抛 402（前端统一弹会员中心）")
     # 门禁必须在「服务未就绪」之后：没启用不该收钱
     i_ready = src.index("if not _vsc.is_ready()")
-    i_gate = src.index('_credit_gate("voice_clone"')
+    i_gate = src.index('_credit_gate(request, "voice_clone"')
     check(i_gate > i_ready, "门禁在 is_ready 之后（没启用不收钱）")
 
 

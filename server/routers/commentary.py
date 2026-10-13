@@ -385,7 +385,7 @@ def create_commentary(payload: app.CommentaryRequest, request: app.Request) -> d
     # 历史缺口：此入口与本地拖拽入口都没有校验，用户要等转写+脚本全跑完才被告知
     # 额度不够，白等十几分钟且拿到废片（2026-09-15 用户实测反馈）。
     from routers.quota import precheck_or_raise
-    precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end,
+    precheck_or_raise(request, _effective_duration(src_path, payload.trim_start, payload.trim_end,
                                                 payload.drama_start_sec, payload.drama_end_sec),
                       vision=bool(payload.vision))
 
@@ -488,8 +488,13 @@ def create_commentary_upload(
     drama_end_sec: float = app.Form(None),
     export_jianying: str = app.Form(""),
     feather_opt: str = app.Form(""),
+    request: app.Request = None,
 ) -> dict:
-    """上传本地视频 → 直接生成解说成片。"""
+    """上传本地视频 → 直接生成解说成片。
+
+    安全审计 2026-10-13（F-04）：补 `request` 形参 —— 否则下方计费/配额闸门只能传
+    `None`，落到**全局** member_store，登录用户的解说费用不计入本人账户。
+    """
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -510,7 +515,7 @@ def create_commentary_upload(
         from routers.quota import assert_upload_allowed
         _dur = _effective_duration(dest, trim_start, trim_end,
                                    drama_start_sec, drama_end_sec)
-        assert_upload_allowed(None, _dur, vision=bool(vision))
+        assert_upload_allowed(request, _dur, vision=bool(vision))
     except app.HTTPException:
         raise
     except Exception:
@@ -574,8 +579,13 @@ def create_script_only_upload(
     correct_transcript: str = app.Form(""),
     title: str = app.Form(""),
     export_jianying: str = app.Form(""),
+    request: app.Request = None,
 ) -> dict:
-    """上传本地视频 → 只生成脚本不渲染成片。"""
+    """上传本地视频 → 只生成脚本不渲染成片。
+
+    安全审计 2026-10-13（F-04）：补 `request` 形参 —— 否则下方计费/配额闸门只能传
+    `None`，落到**全局** member_store，登录用户的解说费用不计入本人账户。
+    """
     if not app.COMMENTARY_ENABLED:
         raise app.HTTPException(status_code=503, detail="该实例未启用解说功能")
     if app.COMMENTARY_MODE == "http":
@@ -598,7 +608,7 @@ def create_script_only_upload(
         from routers.quota import assert_upload_allowed
         _dur = _effective_duration(dest, trim_start, trim_end,
                                    drama_start_sec, drama_end_sec)
-        assert_upload_allowed(None, _dur, vision=bool(vision))
+        assert_upload_allowed(request, _dur, vision=bool(vision))
     except app.HTTPException:
         raise
     except Exception:
@@ -955,7 +965,7 @@ def create_script_only(payload: app.CommentaryRequest, request: app.Request) -> 
     # 前置闸门（本地拖拽 / 下载库主路径）：这是「不能等做完才说额度不够」的关键点——
     # 免费用户跑一条超能力的片子，若在此放行，会白等十几分钟后才失败并产出废片。
     from routers.quota import precheck_or_raise
-    precheck_or_raise(None, _effective_duration(src_path, payload.trim_start, payload.trim_end,
+    precheck_or_raise(request, _effective_duration(src_path, payload.trim_start, payload.trim_end,
                                                 payload.drama_start_sec, payload.drama_end_sec),
                       vision=bool(payload.vision))
 
