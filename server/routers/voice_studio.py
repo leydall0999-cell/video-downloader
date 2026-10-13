@@ -20,17 +20,22 @@ router = APIRouter()
 _COMMERCIAL_NOTE = _vsc.COMMERCIAL_NOTE
 
 
-def _credit_gate(op: str, reason: str | None = None) -> str | None:
+def _credit_gate(request, op: str, reason: str | None = None) -> str | None:
     """AI 积分门禁：按成本扣费，None=放行，字符串=拦截原因（供 402 detail）。
 
     与 `routers/matting._credit_gate` 同一套语义（内部走 membership.gate_message：
     先扣积分 → 扣不动才动用首次体验名额 → 都不行才拦），故首次体验免费在这里
-    同样生效。**取不到 store 时按放行处理**（与其它路由一致：宁可少收一次，
+    同样生效。
+
+    安全审计 2026-10-13（F-05）：计费必须落到**发起请求的用户**账本，而非全局
+    `app.member_store` —— 否则任何登录用户调 TTS 都扣在共享匿名账本上，本人积分
+    不减、且无法按用户追责。改用 `app.current_member_store(request)`。
+    **取不到 store 时按放行处理**（与其它路由一致：宁可少收一次，
     也不能让加固失败变成功能不可用）。
     """
     try:
         import membership as _mem
-        return _mem.gate_message(app.member_store, op, None, reason)
+        return _mem.gate_message(app.current_member_store(request), op, None, reason)
     except Exception:
         return None
 
@@ -88,15 +93,18 @@ def voice_studio_voices() -> dict:
 
 
 @router.post("/api/voice-studio/tts")
-def voice_studio_tts(req: TTSRequest, background_tasks: BackgroundTasks):
+def voice_studio_tts(req: TTSRequest, background_tasks: BackgroundTasks, request: app.Request = None):
     if not _vsc.is_ready():
         return _not_ready()
+    # 安全审计 2026-10-13（F-05）：敏感端点补全来源校验，拒绝外部站点跨源调用。
+    if app._cross_site_rejected(request):
+        raise app.HTTPException(status_code=403, detail="拒绝来自外部站点的跨源请求")
     # 🔴 2026-10-06 补扣费点（用户定档「每次调用收 30 积分」）：
     # 此前这个接口**完全没有任何鉴权与计费** —— 任何能打到本机端口的人都能
     # 无限免费调 TTS（每句一次 Qwen3-TTS 推理，占用用户本机算力）。
     # 放在「服务未就绪」判断之后：没启用就不该收钱。
     # 首次体验免费名额由 gate_message 内部统一处理（免费用户首次不扣积分）。
-    _gate = _credit_gate("voice_clone", reason="voice_clone")
+    _gate = _credit_gate(request, "voice_clone", reason="voice_clone")
     if _gate:
         raise app.HTTPException(status_code=402, detail={
             "message": _gate, "hint": "声音克隆配音会消耗 AI 积分",
@@ -123,9 +131,12 @@ def voice_studio_tts(req: TTSRequest, background_tasks: BackgroundTasks):
 
 
 @router.post("/api/voice-studio/transcribe")
-async def voice_studio_transcribe(file: app.UploadFile = app._FastAPIFile(...)):
+async def voice_studio_transcribe(file: app.UploadFile = app._FastAPIFile(...), request: app.Request = None):
     if not _vsc.is_ready():
         return _not_ready()
+    # 安全审计 2026-10-13（F-05）：敏感端点补全来源校验，拒绝外部站点跨源调用。
+    if app._cross_site_rejected(request):
+        raise app.HTTPException(status_code=403, detail="拒绝来自外部站点的跨源请求")
     data = await file.read()
     try:
         text = _vs.VoiceStudioClient().transcribe(
