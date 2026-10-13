@@ -80,6 +80,11 @@ run_node() {
 run_one test_app_smoke.py
 run_one test_index_cache_invalidation.py   # 首页内存缓存失效判据：只改 index.html 也必须重读（2026-09-30 线上吐旧页事故）
 run_one test_atomic_writes_and_auth.py
+#  账号体系加固（安全审计 2026-10-13，F-02 / F-03，桌面端修复未同步到 web 的补齐）：
+#  F-02 token 撤销（禁用/改密/注销都 bump token_version；authenticate 拒 disabled；
+#       旧格式 3 段 token 不集体踢下线）；
+#  F-03 超管引导仅本机直连（公网首注册不得自动提权；显式名单仍生效）。
+run_one test_web_auth_hardening_f02_f03.py
 run_one test_worker_proxy_direct.py
 run_one test_peer_overseas_fallback.py
 run_one test_member_download_quota.py
@@ -138,6 +143,7 @@ run_one test_batch3_history.py
 #  带 device 不含无归属/他人任务）、/api/version 不外泄内部信息、
 #  /api/media/proxy 域名分散度限流。改动任一处都会立刻红。
 run_one test_pentest_fixes_20261012.py
+run_one test_subtitle_minimal.py              # I8：web AI 字幕路径护栏 + _fmt_ts 最小回归（零覆盖补盲）
 #  test_cookie_pull_diag_auth.py —— /api/cookie/pull-diag 必须校验令牌，
 #  且校验必须在「经隧道拉 Cookie 写公共池」的重操作之前（2026-10-12 安全盘点实测：
 #  该端点经 nginx/CF 公网可达，未带令牌即 200，默认 mode=full 是状态变更重操作）。
@@ -164,6 +170,50 @@ run_node test_howto_guide.mjs
 #  守卫钉住：HEAD→200 空 body 但头部齐全、HEAD 不计入下载统计（否则预检+下载虚高一倍）、
 #  未提供安装包的平台仍 404、GET body 不丢。改回 @router.get 会立刻红。
 run_one test_download_head_support.py
+
+# ---------------------------------------------------------------------------
+#  根 tests/ 安全测试段（F-13/I2）：网页版根 tests/ 此前 0 登记，crypto/torrent/
+#  auth 等安全测试常年不跑。这些测试是脚本式（直跑 python）或 pytest 式，且部分
+#  需要 PYTHONPATH=server:tests 或功能开关（VDL_CRYPTO_ENABLED 等）才能启用。
+#  下面对「已验证可离线通过」的安全测试单独接线；需要功能开关的依赖测试若在当前
+#  默认环境下失败，先不纳入（避免把门禁染红），改由专项复跑确认。
+# ---------------------------------------------------------------------------
+run_root() {
+  local f="$1"
+  echo ""
+  echo "=== (root) $f ==="
+  if PYTHONPATH="$SERVER:$REPO/tests" VDL_DATA_DIR="/tmp/vdl_root_${f}" \
+        "$PY" "$REPO/tests/$f" 2>&1; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+}
+
+run_pytest_root() {
+  local f="$1"
+  echo ""
+  echo "=== (root pytest) $f ==="
+  if PYTHONPATH="$SERVER:$REPO/tests" VDL_DATA_DIR="/tmp/vdl_root_${f}" \
+        "$PY" -m pytest "$REPO/tests/$f" -q 2>&1; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+}
+
+# crypto 保险箱：单元（密文头/加解密/跨端标识）+ 路由集成（status/set-pass/unlock/加解密）
+run_root test_crypto_unit.py
+# torrent：URI 校验 / SSRF 护栏 / 穿越防护 / 状态映射 等纯逻辑单测
+run_root test_torrent_unit.py
+# API Token 鉴权中间件：/api/* 拦截逻辑（pytest 式）
+run_pytest_root test_auth_routes.py
+# Cookie 加固：跨站读写 / 属性防护
+run_root test_cookie_hardened.py
+# 路由隔离：静态/API 边界、不得越权
+run_root test_router_isolation.py
+# 加工队列：并发/出队/状态（零测试覆盖补充，I9）
+run_root test_process_queue.py
 
 echo ""
 echo "========================================="

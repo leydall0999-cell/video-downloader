@@ -10,7 +10,7 @@
 
 - 桌面版后端 = FastAPI 单进程，前端 = 零依赖原生 HTML/JS（同 `web/`），打包后跑在 `127.0.0.1:随机端口`。
 - 下载产物目录：桌面版 `~/Downloads/VideoDownloader/<task_id>/<标题>.<ext>`；转换产物 `~/Downloads/VideoDownloader/conversions/`。
-- 任务状态**只存内存，重启即丢**；所以"媒体库"必须**以磁盘文件为准**（扫目录），不能依赖内存任务表。
+- 任务状态写入数据目录 `tasks_state.json`，**重启可恢复**（见 `server/tasks.py` 的 `TaskStore`）；媒体库仍以磁盘文件为准（扫目录），不依赖内存任务表，但任务进度/状态不再因重启丢失。
 - 前端所有动态文本用 `textContent` 写入（防 XSS，沿用 app.js 约定）。
 - 媒体库功能仅在桌面版（frozen）或显式 `VDL_LIBRARY_ENABLED=true` 时暴露给前端；网页版（Railway）文件 TTL 1 小时、目录临时，默认不开。
 
@@ -153,7 +153,12 @@ macOS 上 `tell application "Finder" to delete` 需要「自动化 → Finder」
 - 开关同媒体库：桌面 frozen 或 `VDL_RETENTION_ENABLED=true` 才暴露。
 - 前端：媒体库头部「🧹 自动清理」按钮 + 独立弹窗（磁盘占用条、总开关+检查周期、五档规则、预览清单、危险档二次确认）。
 
-## 2.8 一键归档网盘（已实现）
+## 2.8 一键归档网盘（已移除）
+
+> ⚠️ 状态更新（安全审计 2026-10-13 · I4）：本功能已从代码库移除——`server/archive.py`
+> （`ArchiveConfig`/`ArchiveStore`/`run_archive` 等）已删除，对应的 `/api/archive/*` 路由
+> 一并下线，前端「☁️ 归档网盘」入口亦不再暴露。下方需求/设计要点仅作历史参考，
+> 当前版本**不提供**网盘归档能力。如需恢复，应作为新功能重新评估（含凭据存储与 SSRF 护栏）。
 
 ### 需求
 本机下完 / 加工完的文件，按规则**批量 / 定时上传到用户自己的网盘**（WebDAV / 百度网盘），把本地媒体库兜底备份到云端。只搬用户自己的文件，服务端不留存、不中转。
@@ -188,7 +193,7 @@ macOS 上 `tell application "Finder" to delete` 需要「自动化 → Finder」
 2. **算法**：PBKDF2-HMAC-SHA256（600k 迭代）派生主密钥 → 切 enc_key(32B) 作 AES-256 密钥；每个文件独立随机 nonce_base，按 1MB 分块 GCM 加密，每块 nonce = nonce_base XOR 块序号，带 16B 认证标签，篡改即解密失败。
 3. **文件头明文仅含原名/类型**：`magic + nonce_base + 原名 + 类型`，便于扫描时显示原名与图标而无需解密内容；正文密文。
 4. **原件保底**：加密成功后原件移回收站（复用 `retention.move_to_trash` 四级兜底），回收站不可用则跳过加密并提示，绝不硬删用户资产。
-5. **解密播放为临时文件**：`/api/library/encfile/{id}` 把 `.vdlenc` 解密到 `.vault_tmp/` 再 `FileResponse`（HTML5 播放器原生支持 Range），由 `_prune_vault_tmp` 定时清理明文临时文件，避免长期留盘。
+5. **解密播放为内存流**：`/api/library/encfile/{id}` 直接**流式解密** `.vdlenc` 并借 `StreamingResponse` 输出（HTML5 播放器原生支持 Range），**不再落 `.vault_tmp/` 明文临时文件**——`.vault_tmp` 目录现仅用于承接升级前遗留 `.dec` 的一次性清理，新代码请勿使用。内存流确保明文永不留盘。
 6. **锁定态**：内存密钥 `VAULT_KEY=None` 即锁定；`encfile`/加密/解密均要求解锁（423），重启即自动锁定。
 
 ### 技术方案
