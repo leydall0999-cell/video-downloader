@@ -23137,7 +23137,11 @@ el.dwVidPlayer.hidden = true;
         const dls = st.downloads || {};
         const exts = st.ext || {};
         const platName = { macos: 'macOS', windows: 'Windows', linux: 'Linux', unknown: '未上报（旧设备）' };
-        const extName = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium', firefox: 'Firefox', safari: 'Safari' };
+        // 浏览器名（2026-10-13 #4 精确化后新增 opera/vivaldi/yandex）
+        const extName = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium',
+                          firefox: 'Firefox', safari: 'Safari', opera: 'Opera', vivaldi: 'Vivaldi', yandex: 'Yandex' };
+        // 下载计数分类名（含 2026-10-13 #5 新增的 App 内更新）
+        const dlCat = { installer: '安装包下载', extension: '扩展下载', app_update: 'App 更新下载' };
         const rows = [];
         let sumToday = 0, sumD7 = 0;
         Object.keys(ins).sort((a, b) => (ins[b].total || 0) - (ins[a].total || 0)).forEach((p) => {
@@ -23151,14 +23155,18 @@ el.dwVidPlayer.hidden = true;
         const dlRow = (bucket, plat, label) => {
           const s = (dls[bucket] || {})[plat];
           if (!s) return;
-          rows.push([bucket === 'installer' ? '安装包下载' : '扩展下载', label,
-                     s.total || 0, s.today || 0, '—']);
+          rows.push([dlCat[bucket] || bucket, label, s.total || 0, s.today || 0, '—']);
         };
         ['macos', 'windows'].forEach((p) => dlRow('installer', p,
           p === 'macos' ? 'macOS 安装包' : 'Windows 安装包'));
         Object.keys(dls.extension || {}).sort((a, b) =>
           (dls.extension[b].total || 0) - (dls.extension[a].total || 0)).forEach((b) => {
           dlRow('extension', b, extName[b] || b);
+        });
+        // 🔴 2026-10-13 #5：App 内自动更新（8765 直链）的下载，与官网下载分开计口径。
+        Object.keys(dls.app_update || {}).sort((a, b) =>
+          (dls.app_update[b].total || 0) - (dls.app_update[a].total || 0)).forEach((p) => {
+          dlRow('app_update', p, (platName[p] || p) + ' App 内更新');
         });
         Object.keys(exts).sort((a, b) => exts[b] - exts[a]).forEach((b) => {
           rows.push(['已装扩展的设备', extName[b] || b, exts[b], '—', '—']);
@@ -23176,7 +23184,7 @@ el.dwVidPlayer.hidden = true;
         if (Object.keys(ins).length) {
           h += `<tr><td colspan="5" class="admin-hint">近 7 天活跃 ${st.active?.d7 || 0} 台 · `
             + '近 30 天活跃 ' + (st.active?.d30 || 0) + ' 台 · 安装 = 设备首次出现（装好并登录）'
-            + ' · 下载 = 官网下载页（与 App 内自动更新分开计）</td></tr>';
+            + ' · 下载 = 官网下载页 + App 内自动更新（分开计口径）</td></tr>';
         }
         h += '</table></div>';
         box.innerHTML = h;

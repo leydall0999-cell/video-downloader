@@ -204,6 +204,14 @@ def test_license_stat_functions() -> None:
     check("不再用动态表头（undefined 根因）", "labelMap.th" not in app_js)
     check("统一表头五列就位",
           "<th>分类</th><th>平台 / 浏览器</th><th>累计</th><th>今日</th><th>近 7 天</th>" in app_js)
+    # 🔴 2026-10-13 #5：App 内自动更新下载（bucket app_update）必须渲染成一行
+    #    （原先分类名写死三元 `installer ? ... : 扩展下载`，app_update 会被漏掉）。
+    check("App 更新下载分类名就位",
+          "app_update: 'App 更新下载'" in app_js, "分类名映射缺 app_update")
+    check("面板渲染 app_update 行", "dls.app_update" in app_js)
+    # #4 精确化后新增的浏览器名也要有标签（否则显示英文原名）
+    check("浏览器标签含 opera/vivaldi/yandex",
+          "opera: 'Opera'" in app_js and "vivaldi: 'Vivaldi'" in app_js and "yandex: 'Yandex'" in app_js)
 
 
 def main() -> int:
