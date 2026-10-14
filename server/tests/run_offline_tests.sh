@@ -208,6 +208,7 @@ run_root test_crypto_unit.py
 run_root test_torrent_unit.py
 # API Token 鉴权中间件：/api/* 拦截逻辑（pytest 式）
 run_pytest_root test_auth_routes.py
+run_pytest_root test_dl_stats_browser.py # 下载统计的浏览器判定：顺序敏感(Edge≠chrome/iOS Firefox≠safari)+非浏览器落 unknown 而非 chromium（2026-10-14 接续待办 #7）
 # Cookie 加固：跨站读写 / 属性防护
 run_root test_cookie_hardened.py
 # 路由隔离：静态/API 边界、不得越权

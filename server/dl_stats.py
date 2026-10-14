@@ -30,10 +30,20 @@ _STATS_PATH = Path(os.environ.get("VDL_DL_STATS_PATH")
                    or "/opt/vdl-dl-stats/downloads.json")
 _LOCK = threading.Lock()
 
+# 🔴 **顺序敏感**：Edge / Opera / iOS Firefox 的 UA 都同时含 "chrome/" 或
+# "safari/"，必须先匹配各自独有的 token，否则会被误判成 chrome / safari。
+# 实测翻车点：iOS Firefox（FxiOS）的 UA 带 "Safari/605.1.15"，表里漏了 "fxios/"
+# 就被记成 safari；桌面 Edge 带 "Chrome/120 … Edg/120"，排错就被记成 chrome。
 _UA_BROWSERS: tuple[tuple[str, str], ...] = (
-    ("edg/", "edge"), ("edga/", "edge_android"), ("edgios/", "edge_ios"),
-    ("opr/", "opera"), ("firefox/", "firefox"), ("crios/", "chrome_ios"),
-    ("chrome/", "chrome"), ("safari/", "safari"),
+    ("edgios/", "edge_ios"), ("edga/", "edge_android"), ("edg/", "edge"),
+    ("opios/", "opera_ios"), ("opr/", "opera"),
+    ("vivaldi/", "vivaldi"),
+    ("yabrowser/", "yandex"),
+    ("brave/", "brave"),
+    ("fxios/", "firefox_ios"), ("firefox/", "firefox"),
+    ("crios/", "chrome_ios"),
+    ("chrome/", "chrome"),
+    ("safari/", "safari"),
 )
 
 
@@ -42,14 +52,20 @@ def stats_path() -> Path:
 
 
 def browser_from_ua(ua: str) -> str:
-    """从 User-Agent 推断浏览器名（小写枚举），认不出 → chromium 兜底。"""
+    """从 User-Agent 推断浏览器名（小写枚举），认不出 → "unknown"。
+
+    🔴 2026-10-14 修正：兜底原为 "chromium"，且末尾两个分支**完全等价**
+       （`if "chrome" in s …: return "chromium"` 与 `return "chromium"`）⇒ 死代码。
+       后果：curl / 空 UA / 任何非浏览器一律被记成 chromium ⇒ 统计里凭空多一批
+       「Chromium 用户」。现改为 unknown —— 认不出就是认不出，不要冒充浏览器。
+    ⚠️ Brave 桌面版**不发**品牌 token（UA 与 Chrome 完全一致），业界无解，只能记
+       成 chrome；表里保留 "brave/" 只为兼容少数会发标识的版本。
+    """
     s = (ua or "").lower()
     for token, name in _UA_BROWSERS:
         if token in s:
             return name
-    if "chrome" in s or "chromium" in s or "crios" in s:
-        return "chromium"
-    return "chromium"
+    return "unknown"
 
 
 def platform_from_ua(ua: str) -> str:
