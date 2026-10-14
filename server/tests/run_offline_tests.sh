@@ -1047,6 +1047,7 @@ run_pytest_root test_youku_card_removed.py
 run_pytest_root test_youtube_player_skip.py
 run_pytest_root test_title_propagation.py
 run_pytest_root test_upload_title_fallback.py
+run_pytest_root test_extension_package_head.py # 扩展包下载端点 HEAD 预检：HEAD 空 body 但 Content-Length=GET 真实体积（2026-10-14 接续待办 #5）
 
 echo ""
 echo "========================================="

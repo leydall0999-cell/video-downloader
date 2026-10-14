@@ -136,8 +136,8 @@ def extension_info() -> dict:
     }
 
 
-@router.get("/api/extension/package")
-def extension_package() -> Response:
+def _package_payload() -> tuple[bytes, str]:
+    """打包 zip 并算出 Content-Disposition（GET / HEAD 共用，保证两法响应头同源）。"""
     src = _source_dir()
     data = _build_zip(src)
     m = _manifest()
@@ -146,10 +146,31 @@ def extension_package() -> Response:
     filename = f"{name}-{version}.zip"
     ascii_name = f"vdl-sniffer-extension-{version}.zip"
     disp = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+    return data, disp
+
+
+@router.api_route("/api/extension/package", methods=["GET", "HEAD"])
+def extension_package() -> Response:
+    """下载扩展 zip；同时接受 HEAD 供下载管理器预检（2026-10-14 接续待办 #5）。
+
+    原先只注册 GET ⇒ 预检发来的 HEAD 一律 **405**（实测：只注册 GET 时 HEAD 返回 405，
+    Starlette 不会自动 fallback），探测方只能真拉整包才知道体积。
+
+    🔴 与 web-dev 同构：用 `api_route` 一次注册两法，**照常返回 content=data** ——
+       Starlette 对 HEAD **自动剥离 body 并保留真实 Content-Length**（实测 HEAD
+       body 0 / length 与 GET 一致）。不要手工填 Content-Length：一旦与实际长度
+       不一致，下载器会按错的体积截断文件。
+    🔴 若将来要给本端点加下载计数，必须先判 `request.method != "HEAD"`（web-dev 的
+       `_is_real_download` 就是干这个的），否则「预检 + 真实下载」会把计数虚高一倍。
+    🔴 `Accept-Ranges: none`：zip 每次请求内存现打，不支持 Range，如实声明，免得
+       下载器以为能续传而白发 Range 请求。
+    """
+    data, disp = _package_payload()
     return Response(
         content=data,
         media_type="application/zip",
-        headers={"Content-Disposition": disp},
+        headers={"Content-Disposition": disp,
+                 "Accept-Ranges": "none"},
     )
 
 
