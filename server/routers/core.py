@@ -1404,6 +1404,62 @@ def ecs_license_alerts_ack(payload: dict, request: app.Request):
         raise app.HTTPException(status_code=502, detail=f"确认告警失败：{e}")
 
 
+# ── 反破解风控转发（2026-10-14 第 1 批纯观测）：看板「风险复核队列」的 ECS 侧落点 ──
+# 链路：App 本机 /api/app/license-risk/*（X-Admin-Key）→ 本文件 /api/license-risk/*
+#       → 127.0.0.1:8902 /api/license/{risk_top|risk_query|risk_clear}（body token 门禁）。
+# 🔴 三个路由都必须 _require_admin —— 授权中心日志含全站账号的风险画像，泄露即等于
+#    把「谁在被风控」告诉对方，是比告警更敏感的数据。
+
+@router.get("/api/license-risk/top")
+def ecs_license_risk_top(request: app.Request, limit: int = 50, min_score: int = 1):
+    """风险最高的账号列表（授权中心现场重算，不落库缓存）。"""
+    _require_admin(request)
+    try:
+        resp = app.requests.post(
+            f"{_license_base()}/api/license/risk_top",
+            json={"token": _license_admin_token(),
+                  "limit": max(1, min(int(limit), 200)),
+                  "min_score": max(1, int(min_score))},
+            timeout=20,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"拉取风险队列失败：{e}")
+
+
+@router.post("/api/license-risk/query")
+def ecs_license_risk_query(payload: dict, request: app.Request):
+    """查询单账号风险画像（含命中信号明细）。"""
+    _require_admin(request)
+    try:
+        resp = app.requests.post(
+            f"{_license_base()}/api/license/risk_query",
+            json={"token": _license_admin_token(),
+                  "email": str(payload.get("email") or "")},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"查询风险画像失败：{e}")
+
+
+@router.post("/api/license-risk/clear")
+def ecs_license_risk_clear(payload: dict, request: app.Request):
+    """人工抹平（确认误报）：清空该账号风险摘要并留审计事件。"""
+    _require_admin(request)
+    try:
+        resp = app.requests.post(
+            f"{_license_base()}/api/license/risk_clear",
+            json={"token": _license_admin_token(),
+                  "email": str(payload.get("email") or ""),
+                  "note": str(payload.get("note") or "")},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"清除风险失败：{e}")
+
+
 # 查账区间（2026-10-09 用户要求「入账可查 1 天/3 天/7 天/1 个月/半年/1 年」）：
 # 默认 7 天（与授权中心自扫窗口一致），上限 400 天（前端最大 365 = 近 1 年）。
 # 🔴 与桌面 App `server/routers/core.py`、授权中心 `deploy/license_server.py` 的
