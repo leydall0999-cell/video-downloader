@@ -57,6 +57,7 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("youku", "优酷", ("youku.com",), "🟠"),
     Platform("iqiyi", "爱奇艺", ("iqiyi.com", "iq.com", "iqy.net", "qy.net"), "🔴"),
     Platform("mgtv", "芒果TV", ("mgtv.com", "imgo.tv"), "🥭"),
+    Platform("nmwchxx", "金牌影院", ("nmwchxx.com",), "🎬"),
     Platform("sohu", "搜狐视频", ("tv.sohu.com", "sohu.com"), "🐺"),
     Platform("zhihu", "知乎", ("zhihu.com",), "💡"),
     Platform("ximalaya", "喜马拉雅", ("ximalaya.com",), "🎧"),
@@ -223,6 +224,7 @@ CHINA_DOMAINS: tuple[str, ...] = (
     "bestv.com.cn", "xinpianchang.com", "hongguoduanju.com",
     "yy.com", "cc.163.com", "inke.cn", "shturl.cc", "taolive.taobao.com",
     "chrqj.com",
+    "nmwchxx.com",
 )
 
 
