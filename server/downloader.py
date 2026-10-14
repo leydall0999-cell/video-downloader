@@ -3883,6 +3883,134 @@ def _ne_info(url: str, proxy: str = "") -> dict[str, Any]:
         "http_headers": {"User-Agent": _NE_UA, "Referer": "https://music.163.com/"},
     }
 
+
+# 金牌影院（nmwchxx.com）：第三方影视聚合站（Next.js SPA），yt-dlp 无提取器。
+# 播放地址不在页面里，而是前端 JS 调自签 API：
+#   GET /api/mw-movie/anonymous/v2/video/episode/url?clientType=1&id={vodId}&nid={集ID}
+# 签名算法（2026-10-14 从前端 webpack 模块 49858 逆出，两组真实抓包交叉验证）：
+#   x    = "排序参数串&key=<SIGN_KEY>&t=<毫秒时间戳>"
+#   sign = SHA1( MD5_hex(x) )        # 注意是 SHA1(MD5(x)) 双层，不是单层 SHA1
+# SIGN_KEY 硬编码在前端 JS 里；匿名接口免登录，deviceId 随机 UUID 即可。
+# ⚠️ CDN 侧 m3u8 URL 带 whip=<请求方IP>，IP 绑定：解析与下载必须同机（桌面端
+#    本机解析本机下，天然成立；换 IP 直拉会 403）。
+_NMW_SIGN_KEY = "cb808529bae6b6be45ecfab29a4889bc"
+_NMW_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+def _nmw_api(path: str, params: dict, referer: str, proxy: str = "") -> dict:
+    """调用 nmwchxx 自签 API，返回 JSON dict；网络/解析异常抛 ResolveError。"""
+    import hashlib
+    import uuid
+
+    import requests as _req
+
+    t = str(int(time.time() * 1000))
+    qs = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    x = f"{qs}&key={_NMW_SIGN_KEY}&t={t}"
+    sign = hashlib.sha1(hashlib.md5(x.encode()).hexdigest().encode()).hexdigest()
+    try:
+        r = _req.get(
+            f"https://nmwchxx.com/api{path}?{qs}",
+            headers={
+                "sign": sign,
+                "t": t,
+                "client-type": "1",
+                "deviceId": str(uuid.uuid4()),
+                "authorization": "",
+                "Referer": referer,
+                "User-Agent": _NMW_UA,
+                "Accept": "application/json, text/plain, */*",
+            },
+            proxies={"http": proxy, "https": proxy} if proxy else None,
+            timeout=20,
+        )
+        return r.json()
+    except Exception as e:
+        raise ResolveError(
+            "金牌影院解析失败", f"请求接口异常：{type(e).__name__} {e}", category="parse_failed"
+        ) from None
+
+
+def _nmw_info(url: str, proxy: str = "") -> dict[str, Any]:
+    """金牌影院解析（nmwchxx.com/vod/play/{id}/sid/{nid}）。
+
+    链路：detail 接口拿片名/集名（失败不阻断）→ episode/url 接口拿多清晰度
+    m3u8（蓝光/高清/标清；auth_key 带时效，解析后应尽快下载）。
+    """
+    m = re.search(r"/vod/play/(\d+)/sid/(\d+)", url)
+    if not m:
+        raise ResolveError(
+            "金牌影院解析失败",
+            "无法从链接中识别视频 ID。请粘贴播放页链接（形如 "
+            "nmwchxx.com/vod/play/数字/sid/数字）；详情页请先点开某一集再复制地址栏链接。",
+            category="parse_failed",
+        )
+    vid, nid = m.group(1), m.group(2)
+
+    # 片名 + 集名（detail 失败不阻断：拿不到标题就用 ID 兜底）
+    title = f"金牌影院视频 {nid}"
+    try:
+        d = _nmw_api("/mw-movie/anonymous/video/detail", {"id": vid}, url, proxy=proxy)
+        data = d.get("data") or {}
+        vod_name = str(data.get("vodName") or "").strip()
+        eps = data.get("episodeList") or []
+        ep = next((e for e in eps if str(e.get("nid")) == nid), None)
+        ep_name = str((ep or {}).get("name") or "").strip()
+        if vod_name:
+            title = f"{vod_name} 第{ep_name}集" if (ep_name and len(eps) > 1) else vod_name
+    except ResolveError:
+        pass
+
+    r = _nmw_api(
+        "/mw-movie/anonymous/v2/video/episode/url",
+        {"clientType": "1", "id": vid, "nid": nid}, url, proxy=proxy,
+    )
+    if r.get("code") != 200:
+        raise ResolveError(
+            "金牌影院解析失败",
+            f"接口返回：{r.get('msg') or r.get('code')}（该视频可能已下架或链接失效）。",
+            category="parse_failed",
+        )
+    lst = (r.get("data") or {}).get("list") or []
+    entries = [e for e in lst if isinstance(e, dict) and e.get("url")]
+    if not entries:
+        raise ResolveError(
+            "金牌影院解析失败", "接口未返回任何播放地址（该集可能已下架）。",
+            category="parse_failed",
+        )
+    entries.sort(key=lambda e: int(e.get("resolution") or 0), reverse=True)
+    best = entries[0]
+    formats = [
+        {
+            "format_id": f"nmw-{e.get('resolution') or 'sd'}",
+            "url": e["url"],
+            "ext": "mp4",
+            "height": int(e.get("resolution") or 0) or None,
+            "format": str(e.get("resolutionName") or ""),
+            "protocol": "m3u8_native",
+            "http_headers": {"User-Agent": _NMW_UA, "Referer": "https://nmwchxx.com/"},
+        }
+        for e in entries
+    ]
+    return {
+        "id": nid,
+        "title": title,
+        "webpage_url": url,
+        "extractor_key": "NMWChxx",
+        "extractor": "nmwchxx",
+        "ext": "mp4",
+        "direct": True,
+        "url": best["url"],
+        "protocol": "m3u8_native",
+        "formats": formats,
+        "http_headers": {"User-Agent": _NMW_UA, "Referer": "https://nmwchxx.com/"},
+        # 标记 m3u8 直连（下载时用 ffmpeg/yt-dlp 带 header 拉流）
+        "_nmw_m3u8": True,
+    }
+
 def _tudou_info(url: str, proxy: str = "") -> dict[str, Any]:
     """土豆：2016 年起已并入优酷、主站停止运营。
 
@@ -4179,6 +4307,9 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 百视TV：web 端播放地址需 wasm 签名（makepreviewquery），走 VPS Playwright 解析
     if "bestv.com.cn" in (host or ""):
         return _bestv_info(url)
+    # 金牌影院（nmwchxx.com）：第三方影视聚合站，自签 API（SHA1(MD5)）拿 m3u8
+    if "nmwchxx.com" in (host or ""):
+        return _nmw_info(url, proxy=effective_proxy)
     # 红果短剧：字节系 CDN 流需真实浏览器点开播放器捕获，走 VPS Playwright 解析
     if ("hongguoduanju.com" in (host or "")) or ("novelquickapp.com" in (host or "")):
         return _hongguo_info(url)
@@ -5143,6 +5274,9 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "bestv.com.cn" in (_task_host or ""):
                 # 百视TV：wasm 签名，VPS Playwright 解析出 m3u8 直链
                 info = _bestv_info(task.url)
+            elif "nmwchxx.com" in (_task_host or ""):
+                # 金牌影院：自签 API（SHA1(MD5)）拿多清晰度 m3u8
+                info = _nmw_info(task.url, proxy=effective_proxy)
             elif ("hongguoduanju.com" in (_task_host or "")) or ("novelquickapp.com" in (_task_host or "")):
                 # 红果短剧：字节 CDN 流，VPS Playwright 点开播放器捕获真流直链
                 info = _hongguo_info(task.url)

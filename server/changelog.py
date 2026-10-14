@@ -18,6 +18,14 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.68",
+        "date": "2026-10-14",
+        "items": [
+            "新增解析平台「金牌影院」（nmwchxx.com）：粘贴播放页链接即可解析，"
+            "自动识别片名与集数，支持蓝光 / 高清 / 标清三档清晰度。",
+        ],
+    },
+    {
         "version": "1.0.67",
         "date": "2026-10-14",
         "items": [
