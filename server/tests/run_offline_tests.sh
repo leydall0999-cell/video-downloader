@@ -191,15 +191,28 @@ run_root() {
 }
 
 run_pytest_root() {
-  local f="$1"
+  local f="$1" path=""
   echo ""
   echo "=== (root pytest) $f ==="
-  if PYTHONPATH="$SERVER:$REPO/tests" VDL_DATA_DIR="/tmp/vdl_root_${f}" \
-        "$PY" -m pytest "$REPO/tests/$f" -q 2>&1; then
+  # 🔴 2026-10-14：用例同时存在于 $REPO/tests/ 与 $SERVER/tests/ 两处，
+  #    原实现写死 "$REPO/tests/$f" ⇒ server/tests/ 的用例会「文件不存在」被误判
+  #    FAIL（web-dev 侧漏改：app-dev 已于同日加固，本树仍为旧实现）。
+  for cand in "$REPO/tests/$f" "$SERVER/tests/$f"; do
+    if [ -f "$cand" ]; then path="$cand"; break; fi
+  done
+  if [ -z "$path" ]; then
+    echo "❌ 找不到用例文件：$f"
+    FAIL=$((FAIL+1)); return
+  fi
+  local d
+  d=$(mktemp -d "/tmp/vdl_approot_XXXXXX")
+  if PYTHONPATH="$SERVER:$REPO/tests" VDL_LOGIN_GATE=0 VDL_PLANS_CLOUD=0 \
+        VDL_DATA_DIR="$d" env -u HTTP_PROXY -u HTTPS_PROXY "$PY" -m pytest "$path" -q 2>&1; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
   fi
+  /bin/rm -rf "$d"
 }
 
 # crypto 保险箱：单元（密文头/加解密/跨端标识）+ 路由集成（status/set-pass/unlock/加解密）
