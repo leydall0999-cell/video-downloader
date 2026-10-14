@@ -215,6 +215,49 @@ run_root test_router_isolation.py
 # 加工队列：并发/出队/状态（零测试覆盖补充，I9）
 run_root test_process_queue.py
 
+# ---------------------------------------------------------------------------
+#  根测试大收编（2026-10-14，F-13/I2 终章）：39 个未登记根测试逐一盲测甄别后
+#  36 个通过并纳入门禁（34 个直过 + 2 个修复：cjk 适配设备严格归属、
+#  crypto_routes 裁掉桌面专属 library 节）；2 个 archive 死测试归档；
+#  kuaishou_e2e 设计内自跳过（需 VDL_RUN_KS_E2E=1 真网络）不纳入。
+# ---------------------------------------------------------------------------
+run_root test_commentary_routes.py          # 解说桥接路由（http 模式 mock 算力）
+run_root test_douyin_direct.py
+run_root test_merged_modules_verify.py
+run_root test_upload_convert.py
+run_root test_web_contract.py
+run_root test_b23tv_cookie_alias.py
+run_root test_b23tv_expand.py
+run_root test_bilibili_cookie_fix.py        # B站 Cookie 容错
+run_root test_bilibili_url_normalize.py     # B站 URL 归一化（8 项）
+run_root test_chrqj_extractor.py
+run_root test_cookie_cache.py
+run_root test_cookie_pool_save.py
+run_root test_cookie_sync_ratelimit.py      # Cookie 同步限速
+run_root test_dewatermark.py                # 去水印路由
+run_root test_download_file_cjk.py          # CJK 文件名下载（适配设备严格归属）
+run_root test_download_phases.py
+run_root test_download_watchdog.py
+run_root test_error_category.py
+run_root test_extract_text_unit.py
+run_root test_ffmpeg_tools_unit.py
+run_root test_friendly_error_403.py         # 403 诊断分层
+run_root test_iqiyi_short_url.py
+run_root test_iqiyi_worker.py
+run_root test_kuaishou_extractor.py
+run_root test_new_platforms.py
+run_root test_probe_youtube_log_passthrough.py
+run_root test_proxy_cn_routing.py
+run_root test_share_url_normalize.py        # 分享 URL 归一化（15 项）
+run_root test_summarize_title.py
+run_root test_tasks.py
+run_root test_worker_direct_play.py
+run_root test_ydlp_update.py
+run_root test_youku_series_title.py
+run_root test_youtube_autofallback.py
+run_root test_youtube_player_skip.py
+run_root test_crypto_routes.py              # crypto 路由（web 适用节，自设开关）
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

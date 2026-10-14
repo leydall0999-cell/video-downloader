@@ -15,6 +15,7 @@ def _make_completed_task(filename: str) -> str:
         platform="test",
         quality="best",
         quality_key="best",
+        device_id="testdev",  # 适配 2026-10-12 设备严格归属（无 device 一律 404）
     )
     out = task.workdir / filename
     out.write_bytes(b"fake video bytes")
@@ -28,7 +29,7 @@ def _make_completed_task(filename: str) -> str:
 def test_download_ascii_filename():
     tid = _make_completed_task("normal.mp4")
     client = TestClient(app.app)
-    r = client.get(f"/api/tasks/{tid}/file?download=1")
+    r = client.get(f"/api/tasks/{tid}/file?download=1", headers={"X-Device-Id": "testdev"})
     assert r.status_code == 200, r.text
     cd = r.headers.get("content-disposition", "")
     assert "attachment" in cd
@@ -38,7 +39,7 @@ def test_download_ascii_filename():
 def test_download_cjk_filename():
     tid = _make_completed_task("中文视频_测试.mp4")
     client = TestClient(app.app)
-    r = client.get(f"/api/tasks/{tid}/file?download=1")
+    r = client.get(f"/api/tasks/{tid}/file?download=1", headers={"X-Device-Id": "testdev"})
     assert r.status_code == 200, r.text
     cd = r.headers.get("content-disposition", "")
     assert "attachment" in cd
@@ -49,7 +50,7 @@ def test_download_cjk_filename():
 def test_download_cjk_with_space_and_symbol():
     tid = _make_completed_task("我的视频 (2026) #抖音.mp4")
     client = TestClient(app.app)
-    r = client.get(f"/api/tasks/{tid}/file?download=1")
+    r = client.get(f"/api/tasks/{tid}/file?download=1", headers={"X-Device-Id": "testdev"})
     assert r.status_code == 200, r.text
     cd = r.headers.get("content-disposition", "")
     assert "filename*=UTF-8''" in cd

@@ -1,12 +1,16 @@
-"""crypto 路由集成测试（TestClient）：status/set-pass/unlock错对/encrypt移回收站+库识别/
-decrypt还原/lock清密钥/encfile播放内容一致/禁用 404。
+"""crypto 路由集成测试（TestClient，web 适用节）：status/set-pass/unlock 错对/禁用 404。
 
-运行：VDL_CRYPTO_ENABLED=1 VDL_VAULT_CONFIG=/tmp/vault_test.json python3 tests/test_crypto_routes.py
+安全审计 2026-10-14（F-13/I2 收尾）裁剪：原 5-9 节（encrypt/encfile/decrypt/lock）
+深度耦合 /api/library —— **library 是桌面专属，web 有意不挂载**（app.py 剥离注释），
+在 web 永远无法运行，故裁掉；crypto 逻辑本体由 test_crypto_unit.py 覆盖，
+本文件保住 web 的 crypto 路由级回归（status/set-pass/unlock/开关）。
+
+自给自足：import 后直接置 m.CRYPTO_ENABLED=True，无需外部环境变量。
+运行：python3 tests/test_crypto_routes.py
 """
 
 import os
 import sys
-import time
 import tempfile
 from pathlib import Path
 
@@ -15,6 +19,8 @@ if SERVER not in sys.path:
     sys.path.insert(0, SERVER)
 
 import app as m  # noqa: E402
+
+m.CRYPTO_ENABLED = True  # 与 torrents 测试同款：动态开关直接置位，无需 VDL_CRYPTO_ENABLED
 
 
 def check(name, cond):
@@ -32,7 +38,6 @@ def setup_module():
     if m.VAULT_PATH.exists():
         m.VAULT_PATH.unlink()
     # 清空内存密钥
-    global VAULT_KEY  # noqa
     m.VAULT_KEY = None
     return TMP
 
@@ -60,52 +65,13 @@ def main():
     r = client.post("/api/crypto/unlock", json={"passwd": "bad"})
     check("unlock wrong 401", r.status_code == 401)
 
-    # 5. 放一个媒体文件并加密
-    f = TMP / "clip.mp4"
-    orig = os.urandom(5000)
-    f.write_bytes(orig)
-    items = client.get("/api/library").json()["items"]
-    check("lib has plain item", len(items) == 1 and items[0]["encrypted"] is False)
-    lid = items[0]["id"]
-    r = client.post("/api/crypto/encrypt", json={"lib_ids": [lid]})
-    check("encrypt submit", r.status_code == 200 and "job_id" in r.json())
-    jid = r.json()["job_id"]
-    time.sleep(1.5)
-    j = client.get(f"/api/crypto/job/{jid}").json()
-    check("encrypt job completed", j["status"] == "completed" and j["errors"] == [])
-
-    # 6. 原件移回收站，.vdlenc 在，库识别为加密
-    check("orig moved to trash", not f.exists())
-    check("vdlenc exists", (TMP / "clip.mp4.vdlenc").exists())
-    items = client.get("/api/library").json()["items"]
-    enc = [i for i in items if i["encrypted"]]
-    check("lib shows encrypted", len(enc) == 1 and enc[0]["name"] == "clip.mp4" and enc[0]["kind"] == "video")
-
-    # 7. encfile 播放内容 == 原文（且 Range 支持）
-    elid = enc[0]["id"]
-    r = client.get(f"/api/library/encfile/{elid}")
-    check("encfile 200 + content matches", r.status_code == 200 and r.content == orig)
-
-    # 8. decrypt 还原
-    r = client.post("/api/crypto/decrypt", json={"lib_ids": [elid]})
-    check("decrypt submit", r.status_code == 200 and "job_id" in r.json())
-    jid2 = r.json()["job_id"]
-    time.sleep(1.5)
-    j2 = client.get(f"/api/crypto/job/{jid2}").json()
-    check("decrypt job completed + restored", j2["status"] == "completed" and j2["errors"] == [] and f.exists() and not (TMP / "clip.mp4.vdlenc").exists())
-
-    # 9. lock 后 encfile → 423
-    client.post("/api/crypto/lock")
-    r = client.get(f"/api/library/encfile/{elid}")
-    check("encfile locked 423", r.status_code == 423)
-
-    # 10. 禁用保险箱 → 404
+    # 5. 禁用保险箱 → 404（web 剥离守卫同款动态开关）
     m.CRYPTO_ENABLED = False
     r = client.get("/api/crypto/status")
     check("disabled 404", r.status_code == 404)
     m.CRYPTO_ENABLED = True
 
-    print("\nALL_PASS crypto routes")
+    print("\nALL_PASS crypto routes (web 适用节)")
 
 
 if __name__ == "__main__":
