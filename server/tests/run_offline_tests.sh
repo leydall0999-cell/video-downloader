@@ -928,24 +928,33 @@ run_root() {
   local f="$1"
   echo ""
   echo "=== (root) $f ==="
+  # 🔴 2026-10-14：VDL_DATA_DIR 必须每次运行都**全新**（mktemp -d），不能用固定
+  # /tmp/vdl_approot_<test>——固定目录会把上一次运行的消耗型状态（免费体验/配额/
+  # 账号表）带进来，第二次起必红（test_title_propagation 就这样 402 过）。
+  local d
+  d=$(mktemp -d "/tmp/vdl_approot_XXXXXX")
   if PYTHONPATH="$SERVER:$REPO/tests" VDL_LOGIN_GATE=0 VDL_PLANS_CLOUD=0 \
-        VDL_DATA_DIR="/tmp/vdl_approot_$f" "$PY" "$REPO/tests/$f" 2>&1; then
+        VDL_DATA_DIR="$d" "$PY" "$REPO/tests/$f" 2>&1; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
   fi
+  /bin/rm -rf "$d"
 }
 
 run_pytest_root() {
   local f="$1"
   echo ""
   echo "=== (root pytest) $f ==="
+  local d
+  d=$(mktemp -d "/tmp/vdl_approot_XXXXXX")
   if PYTHONPATH="$SERVER:$REPO/tests" VDL_LOGIN_GATE=0 VDL_PLANS_CLOUD=0 \
-        VDL_DATA_DIR="/tmp/vdl_approot_$f" env -u HTTP_PROXY -u HTTPS_PROXY "$PY" -m pytest "$REPO/tests/$f" -q 2>&1; then
+        VDL_DATA_DIR="$d" env -u HTTP_PROXY -u HTTPS_PROXY "$PY" -m pytest "$REPO/tests/$f" -q 2>&1; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
   fi
+  /bin/rm -rf "$d"
 }
 run_root test_admin_superuser.py
 run_root test_auth_routes.py

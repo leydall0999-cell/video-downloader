@@ -1,6 +1,6 @@
 """验证 /api/commentary/script-only/upload 的 title 兜底逻辑（用 pytest 形式）"""
-import os
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +14,13 @@ from routers.commentary import create_script_only_upload  # noqa: E402
 
 
 def _run_upload_and_capture_title(filename):
-    """mock _commentary_run，捕获传给它的 title"""
+    """mock _commentary_run，捕获传给它的 title。
+
+    🔴 2026-10-14：原先依赖 `~/.video-downloader/commentary_out/work/2a0200515e3c/`
+    下的真实 mp4（2026-08-25 产物，早已被时效清理）⇒ 第二个用例在没有该产物的
+    机器上必 500。改为自包含：临时工作目录 + 哑文件，title 派生只依赖文件名，
+    与真实产物无关（无 metadata 正是第一个用例想要的场景）。
+    """
     captured = {}
 
     def fake_run(*args, **kwargs):
@@ -25,15 +31,20 @@ def _run_upload_and_capture_title(filename):
         "file": open("/dev/null", "rb"),
     })()
 
-    real_mp4 = Path.home() / ".video-downloader/commentary_out/work/2a0200515e3c/upload.mp4"
-    with patch.object(srv, "_commentary_run", fake_run), \
-         patch.object(srv, "_commentary_lock"), \
-         patch.object(srv, "_commentary_work_dir", return_value=real_mp4.parent), \
-         patch.object(srv, "COMMENTARY_ENABLED", True), \
-         patch.object(srv, "COMMENTARY_MODE", "local"), \
-         patch.object(srv, "executor") as ex:
-        ex.submit.side_effect = lambda fn, *a, **kw: fn(*a, **kw)
-        try:
+    work = Path(tempfile.mkdtemp(prefix="vdl_upload_title_"))
+    (work / "upload.mp4").write_bytes(b"x")  # 哑文件：无 mp4 metadata
+    try:
+        with patch.object(srv, "_commentary_run", fake_run), \
+             patch.object(srv, "_commentary_lock"), \
+             patch.object(srv, "_commentary_work_dir", return_value=work), \
+             patch.object(srv, "COMMENTARY_ENABLED", True), \
+             patch.object(srv, "COMMENTARY_MODE", "local"), \
+             patch.object(srv, "executor") as ex, \
+             patch("routers.quota.assert_upload_allowed", lambda *a, **k: None):
+            # 🔴 配额闸门显式 no-op：本测试只验 title 派生。两个用例同进程共享
+            # member_store，第一个用例会消耗掉唯一免费体验，不 mock 第二个必 402
+            # （2026-10-14 实测）。commentary.py 是函数内 import，patch 模块属性即生效。
+            ex.submit.side_effect = lambda fn, *a, **kw: fn(*a, **kw)
             create_script_only_upload(
                 file=fake_file, vertical=True, voice="", trim_start=0, trim_end=0,
                 mode="highlights", commentary_type="deep_hl", highlight_source="ai",
@@ -41,16 +52,15 @@ def _run_upload_and_capture_title(filename):
                 no_narrate_intro_outro=True, retain_pct=None, web=False,
                 one_click=False, style="none", title="",
             )
-        finally:
-            fake_file.file.close()
+    finally:
+        fake_file.file.close()
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
     return captured.get("title")
 
 
 def test_upload_title_fallback_for_uploadmp4_without_metadata():
     """源文件叫 upload.mp4 且 mp4 metadata 无 title → 应自动短码兜底（绝不回退到 'upload'）"""
-    real_mp4 = Path.home() / ".video-downloader/commentary_out/work/2a0200515e3c/upload.mp4"
-    if not real_mp4.exists():
-        pytest.skip(f"真实 mp4 不存在: {real_mp4}")
     title = _run_upload_and_capture_title("upload.mp4")
     print(f"\n[fallback] filename=upload.mp4 → title={title!r}")
     assert title != "upload", f"不应回退到 'upload'，应自动短码兜底: got {title!r}"
