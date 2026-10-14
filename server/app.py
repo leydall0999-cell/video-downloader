@@ -2464,7 +2464,10 @@ def _login_gated_path(path: str) -> bool:
     if path in _LOGIN_GATE_EXEMPT_EXACT:
         return False
     for _pfx, _sufs in _LOGIN_GATE_EXEMPT_TASK_CTRL:
-        if path.startswith(_pfx) and path[len(_pfx):].rsplit("/", 1)[-1] in _sufs:
+        # 常量里的 suffix 写成 "/pause" 这种**带斜杠**形式（见上），而 rsplit 取出的是
+        # 不带斜杠的末段；此前直接比较 ⇒ 永不命中 ⇒ 豁免整段失效（2026-10-14 实测：
+        # /api/dw/video/<id>/cancel 被误拦）。这里补回斜杠再比。
+        if path.startswith(_pfx) and ("/" + path[len(_pfx):].rsplit("/", 1)[-1]) in _sufs:
             return False
     if path in _LOGIN_GATED_EXACT:
         return True

@@ -35,8 +35,10 @@ def test_dw_svg_is_absolute_positioned():
     防回滚：`.dw-svg` 不能再用 `position: static` / 不写 position。
     """
     css = _read(CSS)
-    m = re.search(r"\.dw-svg\s*\{([^}]*)\}", css, re.S)
-    assert m, "未找到 .dw-svg 规则（必须显式声明，svg 默认 static 会占流式空白）"
+    # 只取**通用** .dw-svg 规则（选择器以 .dw-svg 开头）；不要匹配
+    # "#dwVidPreviewWrap > .dw-svg" 这类作用域版本（2026-09 为视频预览新增，语义不同）。
+    m = re.search(r"(?m)^\.dw-svg\s*\{([^}]*)\}", css)
+    assert m, "未找到通用 .dw-svg 规则（必须显式声明，svg 默认 static 会占流式空白）"
     body = m.group(1)
     assert re.search(r"position\s*:\s*absolute", body), \
         f".dw-svg 必须 position: absolute（防 svg 占流式空白），当前：{body.strip()}"
@@ -48,8 +50,8 @@ def test_dw_svg_is_absolute_positioned():
 def test_dw_svg_absolute_matches_canvas_pattern():
     """.dw-svg 的定位属性集合应与 .dw-canvas 一致（左/上 0，绝对定位，pointer-events:none）。"""
     css = _read(CSS)
-    canvas_m = re.search(r"\.dw-canvas\s*\{([^}]*)\}", css, re.S)
-    svg_m = re.search(r"\.dw-svg\s*\{([^}]*)\}", css, re.S)
+    canvas_m = re.search(r"(?m)^\.dw-canvas\s*\{([^}]*)\}", css)
+    svg_m = re.search(r"(?m)^\.dw-svg\s*\{([^}]*)\}", css)
     assert canvas_m and svg_m, "需同时存在 .dw-canvas 与 .dw-svg 规则"
     canvas_body, svg_body = canvas_m.group(1), svg_m.group(1)
     # 两边都必须 position: absolute + pointer-events: none
@@ -60,24 +62,29 @@ def test_dw_svg_absolute_matches_canvas_pattern():
             f"{name} 必须 pointer-events: none"
 
 
-def test_dw_compare_img_has_fixed_height():
-    """`.dw-compare img` 必须固定高度，否则原图/处理后长宽比不同导致两个盒子高度不一致。
+def test_dw_compare_img_contained_and_bounded():
+    """`.dw-compare img` 必须 `object-fit: contain`（不拉伸）且有高度上界。
 
-    必须是具体像素/rem 高度，不是 auto，且保留 object-fit: contain 保证图片比例正确。
+    演进（据 git 史）：
+      - e0939d9（2026-08-26）为解决「原图/处理后 大小不一」用固定 `height: 260px`；
+      - f68df74 发现「强制高度 260px 影响整体显示」→ **改为 `max-height: 60vh` 自适应**。
+    等高改由网格 `1fr 1fr` + 默认 `stretch` 保证（见 test_dw_compare_grid_equal_columns），
+    故本规则只需守住**不拉伸 + 有高度上界**，不再要求固定像素高度。
     """
     css = _read(CSS)
-    m = re.search(r"\.dw-compare\s+img\s*\{([^}]*)\}", css, re.S)
+    # 规则可能与 video 合用选择器列表：.dw-compare img, .dw-compare video { … }
+    m = re.search(r"\.dw-compare\s+img\b[^{]*\{([^}]*)\}", css, re.S)
     assert m, "未找到 .dw-compare img 规则"
     body = m.group(1)
-    # 禁止 height: auto（这是导致两个盒子高度不一的真因）
-    assert not re.search(r"height\s*:\s*auto", body), \
-        f".dw-compare img 不能 height: auto（原图/处理后长宽比不同会导致盒子高度不一），当前：{body.strip()}"
-    # 必须有具体 height（px 或 rem）
-    h = re.search(r"height\s*:\s*(\d+(?:\.\d+)?)(px|rem)", body)
-    assert h, f".dw-compare img 必须有固定 height（px/rem），当前：{body.strip()}"
-    # 必须保留 object-fit: contain（否则固定 height 会拉伸图片）
+    # 必须 object-fit: contain（防图片被拉伸变形）
     assert "object-fit" in body and "contain" in body, \
-        f".dw-compare img 必须保留 object-fit: contain（防图片被拉伸），当前：{body.strip()}"
+        f".dw-compare img 必须 object-fit: contain（防图片被拉伸），当前：{body.strip()}"
+    # 必须有高度上界：固定 height（px/rem）或 max-height（px/rem/vh）
+    assert re.search(r"(?:max-)?height\s*:\s*\d+(?:\.\d+)?(?:px|rem|vh)", body), \
+        f".dw-compare img 必须有高度上界（height/max-height 的 px/rem/vh），当前：{body.strip()}"
+    # 禁止拉伸式高度
+    assert not re.search(r"height\s*:\s*100%", body), \
+        f".dw-compare img 不能 height:100%（会把图片拉伸变形），当前：{body.strip()}"
 
 
 def test_dw_compare_grid_equal_columns():

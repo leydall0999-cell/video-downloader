@@ -35,7 +35,13 @@ def _ensure_commentary_config():
     m.COMMENTARY_ENABLED = True
     m.COMMENTARY_MODE = "http"
     m.COMMENTARY_ENDPOINT = "http://fake-worker.local"
-    yield
+    # 路由层测试不验配额：把解说「前置预检」（含每日免费次数 + AI 积分扣费）旁路。
+    # 否则同一文件里多次创建会耗光免费额度（3 次/日）→ 后续用例误得 402。
+    # 路由内部是 `from routers.quota import precheck_or_raise`（运行时查模块属性），
+    # 故 patch 模块属性即可生效。
+    import routers.quota as _quota
+    with patch.object(_quota, "precheck_or_raise", lambda *a, **k: {"allowed": True}):
+        yield
 
 
 def _fake_task(status="completed", filepath=None):
@@ -66,7 +72,7 @@ def src_file(tmp_path):
 
 @pytest.fixture
 def patch_task(src_file):
-    with patch.object(m, "_require_task", return_value=_fake_task("completed", src_file)):
+    with patch.object(m, "_require_owned_task", return_value=_fake_task("completed", src_file)):
         yield
 
 
@@ -94,13 +100,13 @@ def test_local_mode_missing_pipeline_503():
 
 
 def test_task_not_found_404(patch_task):
-    with patch.object(m, "_require_task", side_effect=HTTPException(status_code=404, detail="no")):
+    with patch.object(m, "_require_owned_task", side_effect=HTTPException(status_code=404, detail="no")):
         r = client.post("/api/commentary", json={"task_id": "nope"})
     assert r.status_code == 404
 
 
 def test_task_not_completed_409():
-    with patch.object(m, "_require_task", return_value=_fake_task("downloading", None)):
+    with patch.object(m, "_require_owned_task", return_value=_fake_task("downloading", None)):
         r = client.post("/api/commentary", json={"task_id": "x"})
     assert r.status_code == 409
 
@@ -143,7 +149,7 @@ def test_file_download(tmp_path):
 
     src = tmp_path / "s.mp4"
     src.write_bytes(b"x")
-    with patch.object(m, "_require_task", return_value=_fake_task("completed", src)), \
+    with patch.object(m, "_require_owned_task", return_value=_fake_task("completed", src)), \
          patch.object(m, "executor") as ex, patch.object(m, "_commentary_run") as r2:
         ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
         r2.side_effect = _run
@@ -160,7 +166,7 @@ def test_file_not_ready_409():
 
     src = Path("/tmp/__cs.mp4")
     src.write_bytes(b"x")
-    with patch.object(m, "_require_task", return_value=_fake_task("completed", src)), \
+    with patch.object(m, "_require_owned_task", return_value=_fake_task("completed", src)), \
          patch.object(m, "executor") as ex, patch.object(m, "_commentary_run") as r2:
         ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
         r2.side_effect = _run
@@ -176,7 +182,7 @@ def test_file_missing_410(tmp_path):
 
     src = tmp_path / "s.mp4"
     src.write_bytes(b"x")
-    with patch.object(m, "_require_task", return_value=_fake_task("completed", src)), \
+    with patch.object(m, "_require_owned_task", return_value=_fake_task("completed", src)), \
          patch.object(m, "executor") as ex, patch.object(m, "_commentary_run") as r2:
         ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)
         r2.side_effect = _run
@@ -213,7 +219,7 @@ def test_local_mode_builds_and_locates_output(tmp_path):
     with patch.object(m, "COMMENTARY_ENABLED", True), \
          patch.object(m, "COMMENTARY_MODE", "local"), \
          patch.object(m, "COMMENTARY_DIR", tmp_path), \
-         patch.object(m, "_require_task", return_value=_fake_task("completed", src)), \
+         patch.object(m, "_require_owned_task", return_value=_fake_task("completed", src)), \
          patch.object(m, "executor") as ex, \
          patch.object(m, "subprocess") as sp:
         ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)

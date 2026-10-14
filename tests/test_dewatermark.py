@@ -8,6 +8,8 @@
 import os
 import sys
 import time
+from pathlib import Path
+from unittest.mock import patch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)                          # tests/  — fake_cv2 / fake_numpy / fake_fitz
@@ -144,12 +146,22 @@ def test_image_route_param_validation():
 
 
 def test_image_route_success_lifecycle():
-    r = client.post("/api/dw/image",
-                    files={"file": ("a.png", b"\x89PNG", "image/png")},
-                    data={"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.1, "method": "telea", "radius": 3})
-    assert r.status_code == 200
-    jid = r.json()["job_id"]
-    st, body = _wait(jid, "image")
+    # 真实像素修复算法已演进为「区域感知检测 + 修复」流水线（detect_watermark 需要完整
+    # numpy/opencv 切片），本文件的 fake 库只覆盖旧 API；本测试只验「上传 → job 生命周期
+    # → 下载」接线，故把核心修复函数打桩为写出占位图。像素正确性由部署环境真实库保证。
+    def _fake_inpaint_ex(src_path, dst_path, regions, method="ns", radius=3, quality="auto", **kw):
+        Path(dst_path).write_bytes(b"fake-image-bytes")
+        return (None, {"quality": quality, "action": "repaired"})
+
+    # 一并关掉 AI 回落探测（available 为 True 时会调用真实算法做残留检测，fake 库撑不住）
+    with patch("dewatermark_core.image_inpaint_ex", side_effect=_fake_inpaint_ex), \
+         patch("dewatermark_ai.available", return_value=False):
+        r = client.post("/api/dw/image",
+                        files={"file": ("a.png", b"\x89PNG", "image/png")},
+                        data={"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.1, "method": "telea", "radius": 3})
+        assert r.status_code == 200
+        jid = r.json()["job_id"]
+        st, body = _wait(jid, "image")
     assert st == "completed", body
     # 下载结果
     rf = client.get(f"/api/dw/image/{jid}/file")

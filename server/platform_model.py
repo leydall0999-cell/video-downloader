@@ -32,14 +32,19 @@ class Platform(Enum):
 
 # /api/nodes 顶层「功能组」键。标量字段（region / peer / china_domains /
 # commentary_enabled / ads_enabled / authRequired）始终返回，不在此列。
+# 🔴 2026-10-14：移除 "cloud" / "archive" 两个幽灵组。网盘功能集群已在
+# f304571「整体移除网盘功能集群（百度网盘/WebDAV/PCS-Go/归档网盘）」中整体下线，
+# /api/nodes 随即不再发出这两个键，但本声明没跟着删 —— 结果 NODE_GROUPS 声称
+# 10 组、路由实际只发 8 组，tests/test_web_contract.py 的「功能组集合 == NODE_GROUPS」
+# 契约恒红。已核实：全仓无任何消费者，前端也不读 nodes.cloud / nodes.archive。
+# 对本路由输出零影响（过滤式 `k not in NODE_GROUPS or k in caps` 中，这两个键本就不在
+# info 里出现）。
 NODE_GROUPS = (
     "convert",
     "download",
-    "cloud",
     "library",
     "subscriptions",
     "retention",
-    "archive",
     "crypto",
     "torrent",
     "ai_dewatermark",

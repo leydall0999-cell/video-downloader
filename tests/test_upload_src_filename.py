@@ -48,11 +48,13 @@ def _capture_create_commentary_upload(fake_filename: str, work_dir: Path, title:
 
     fake_file = _FakeFile(fake_filename)
 
+    # 上传入口的积分闸门（50 积分/次）非本测试关注点：旁路，避免 402 MEMBER_QUOTA
     with patch.object(srv, "_commentary_run", fake_run), \
          patch.object(srv, "_commentary_lock"), \
          patch.object(srv, "_commentary_work_dir", return_value=work_dir), \
          patch.object(srv, "COMMENTARY_ENABLED", True), \
          patch.object(srv, "COMMENTARY_MODE", "local"), \
+         patch("routers.quota.assert_upload_allowed"), \
          patch.object(srv, "executor") as ex:
         ex.submit.side_effect = lambda fn, *a, **kw: fn(*a, **kw)
         try:
@@ -79,11 +81,13 @@ def _capture_create_script_only_upload(fake_filename: str, work_dir: Path, title
 
     fake_file = _FakeFile(fake_filename)
 
+    # 上传入口的积分闸门（50 积分/次）非本测试关注点：旁路，避免 402 MEMBER_QUOTA
     with patch.object(srv, "_commentary_run", fake_run), \
          patch.object(srv, "_commentary_lock"), \
          patch.object(srv, "_commentary_work_dir", return_value=work_dir), \
          patch.object(srv, "COMMENTARY_ENABLED", True), \
          patch.object(srv, "COMMENTARY_MODE", "local"), \
+         patch("routers.quota.assert_upload_allowed"), \
          patch.object(srv, "executor") as ex:
         ex.submit.side_effect = lambda fn, *a, **kw: fn(*a, **kw)
         try:

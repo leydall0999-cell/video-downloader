@@ -840,8 +840,13 @@ def adjust_impl(state: dict[str, Any], email: str, pool: str, delta: int,
 
 def setstate_impl(state: dict[str, Any], email: str, now: float,
                   member_until_dl: float = -1.0, member_until_ai: float = -1.0,
-                  perm_credits: int = -1, ai_credits_left: int = -1) -> dict[str, Any]:
-    """管理员直接设定权威基线（迁移存量本机权益 / 纠错用）。传 -1 表示不改该项。"""
+                  perm_credits: int = -1, ai_credits_left: int = -1,
+                  risk_exempt: int = -1) -> dict[str, Any]:
+    """管理员直接设定权威基线（迁移存量本机权益 / 纠错用）。传 -1 表示不改该项。
+
+    risk_exempt（2026-10-14 反破解风控）：-1 不改 / 0 取消 / 1 豁免 ——
+    豁免账号（内部测试/管理员）永不进自动风控响应。
+    """
     user = _admin_find_user(state, email, now)
     if member_until_dl >= 0:
         user["member_until_dl"] = float(member_until_dl)
@@ -853,6 +858,8 @@ def setstate_impl(state: dict[str, Any], email: str, now: float,
         user["perm_credits"] = int(perm_credits)
     if ai_credits_left >= 0:
         user["ai_grant_total"] = int(ai_credits_left) + int(user.get("ai_spent_total") or 0)
+    if risk_exempt >= 0:
+        _get_risk(user)["exempt"] = bool(risk_exempt)
     user["authority_init"] = True
     return {"ok": True, "email": _norm_id(email), "authority": _authority_view(user, now)}
 
@@ -1051,7 +1058,12 @@ def login_impl(state: dict[str, Any], email: str, password: str, now: float,
         raise ApiError(403, "ACCOUNT_BANNED",
                        "账号已被停用，如有疑问请联系客服")
     fp = str((device or {}).get("fp") or "").strip()
+    had_device = any(str(d.get("fp") or "") == fp
+                     for d in (user.get("devices") or []))
     evicted = _attach_device(user, device, now)
+    if fp and not had_device:               # 新设备落位 → 记事件 + 指纹反查（S1/S2 数据源）
+        _log_event(state, "device_add", now, email=uid, fp=fp)
+        _touch_fp_index(state, uid, fp, now)
     user["last_login"] = now
     out = {"ok": True, "token": make_token(uid, secret, now),
            "account": _public_user(user, fp)}
@@ -1079,6 +1091,7 @@ def heartbeat_impl(state: dict[str, Any], token: str, fp: str, now: float,
         if d.get("fp") == fp:
             d["last_seen"] = now
             _merge_device_meta(d, clean_meta)   # 2026-10-13：画像随心跳刷新
+            _touch_hb_ring(user, now)           # 2026-10-14：心跳时间戳环（S3 数据源）
             return {"ok": True, "account": _public_user(user, fp)}
     return {"ok": False, "code": "DEVICE_EVICTED",
             "error": "该账号已在其他两台设备登录，如需使用请重新登录",
@@ -1155,7 +1168,9 @@ def redeem_impl(state: dict[str, Any], token: str, code: str, now: float,
             raise ApiError(403, "USED", "卡密已被使用过")
     except ApiError as e:
         # 核销失败入事件流（卡密爆破检测数据源）+ 告警扫描；任何调用路径都覆盖
-        _log_event(state, "redeem_fail", now, ip=ip, code=code[:48], err=e.code)
+        # 2026-10-14：补 email —— 风险评分 S5「同账号核销失败」需按账号归因（原只有 IP）。
+        _log_event(state, "redeem_fail", now, ip=ip, email=uid,
+                   code=code[:48], err=e.code)
         _scan_redeem_fail_anomalies(state, now, ip)
         raise
     rec.update({"status": "used", "bound_user": uid, "bound_at": now, "plan": short,
@@ -1497,6 +1512,295 @@ def alerts_ack_impl(state: dict[str, Any], ids: Any) -> dict[str, Any]:
     return {"ok": True, "acked": n}
 
 
+# ── 风险评分（反破解风控 · 第 1 批「纯观测」，2026-10-14）───────────────────── #
+# 🔴 设计红线（完整方案见 WorkBuddy/反破解风控方案_异常检测_自动降级_人工复核_2026-10-14.md）：
+#   · 判定维度只用「账号 / 设备」，IP 只用于限流，**永不进封禁路径**（大陆 CGNAT 一锁锁一片）；
+#   · 本批【只算分、记事件、交给看板复核】，不挂任何自动响应；ban 永远人工；
+#   · 客户端上报的信号是弱信号（可被伪造），必须与其他信号叠加才计分，不得单独触发；
+#   · 分数由「当前命中项」现算 ⇒ 命中项离开各自信号窗口后自动失效（等效衰减），
+#     不累加、不沉淀，故不存在「历史误判永久累计」。_get_risk 里的 peak 仅供看板展示。
+RISK_T1 = 30                    # 观测 → 限流（第 2 批启用）
+RISK_T2 = 55                    # 限流 → 挑战（第 2 批启用）
+RISK_T3 = 80                    # 挑战 → 人工复核（第 2 批启用）
+RISK_REASON_CAP = 20            # 单账号保留的命中条目上限
+RISK_DEV_CHURN_N = 4            # 7 天内新增设备 ≥N 台
+RISK_DEV_CHURN_WINDOW = 604800.0
+RISK_FP_REUSE_N = 3             # 同一设备指纹出现在 ≥N 个账号
+RISK_HB_MIN_GAP = 30.0          # 心跳间隔 < 30s 视为机器行为
+RISK_HB_BURST_N = 10            # 连续 ≥N 次过密心跳
+RISK_HB_RING_CAP = 30           # 每账号保留的心跳时间戳条数
+RISK_SPEND_BURST_N = 30         # 10 分钟内 ≥N 次扣费/用量上报
+RISK_SPEND_BURST_WINDOW = 600.0
+RISK_REDEEM_BRUTE_N = 5         # 与既有 REDEEM_BRUTE_N 同口径（同账号 10 分钟内 ≥5 次失败）
+RISK_REDEEM_BRUTE_WINDOW = 600.0
+FP_INDEX_CAP = 5000             # 指纹反查索引容量上限（超限按 last 淘汰最久未出现）
+RISK_WEIGHTS: dict[str, int] = {
+    "device_churn": 20, "fp_reuse": 25, "hb_anomaly": 15,
+    "spend_burst": 20, "redeem_brute": 15, "integrity": 8,
+}
+
+
+def _risk_exempt_fps() -> set[str]:
+    """内部测试设备白名单（env 逗号分隔）——命中即永不参与自动响应（第 2 批生效）。"""
+    raw = os.environ.get("VDL_LICENSE_RISK_EXEMPT_FPS") or ""
+    return {s.strip() for s in raw.split(",") if s.strip()}
+
+
+def _risk_defaults() -> dict[str, Any]:
+    return {"score": 0, "level": "observe", "reasons": [],
+            "updated": 0.0, "peak": 0, "exempt": False, "cleared_at": 0.0}
+
+
+def _get_risk(user: dict[str, Any]) -> dict[str, Any]:
+    """取（并按需补齐）账号的风险摘要。旧账号缺字段自动补默认值，向后兼容。"""
+    r = user.get("risk")
+    if not isinstance(r, dict):
+        r = _risk_defaults()
+        user["risk"] = r
+    else:
+        for k, v in _risk_defaults().items():
+            r.setdefault(k, v)
+    return r
+
+
+def _risk_is_exempt(user: dict[str, Any]) -> bool:
+    if isinstance(user.get("risk"), dict) and user["risk"].get("exempt"):
+        return True
+    allow = _risk_exempt_fps()
+    if not allow:
+        return False
+    return any(str(d.get("fp") or "") in allow for d in (user.get("devices") or []))
+
+
+def _reason(k: str, now: float, note: str = "") -> dict[str, Any]:
+    return {"k": k, "w": int(RISK_WEIGHTS.get(k, 0)), "at": float(now),
+            "note": note[:80]}
+
+
+def _ring_match(state: dict[str, Any], kind: str, within: float, now: float,
+                **match: Any) -> list[dict[str, Any]]:
+    """按 kind + 字段匹配扫事件环（只取近 within 秒）。纯读，不改 state。"""
+    out: list[dict[str, Any]] = []
+    for e in (state.get("ev_ring") or []):
+        if not isinstance(e, dict) or e.get("kind") != kind:
+            continue
+        if now - float(e.get("at", 0)) > within:
+            continue
+        if any(e.get(f) != v for f, v in match.items()):
+            continue
+        out.append(e)
+    return out
+
+
+def _touch_fp_index(state: dict[str, Any], uid: str, fp: str, now: float) -> None:
+    """维护「设备指纹 → 用过它的账号」反查索引（S2 指纹复用的数据源）。
+
+    只在登录/注册（新增设备）时调用，避免心跳高频写放大。
+    """
+    fp = (fp or "").strip()
+    if not fp:
+        return
+    idx = state.setdefault("fp_index", {})
+    rec = idx.get(fp)
+    if not isinstance(rec, dict):
+        rec = {"uids": [], "first": float(now), "last": float(now)}
+        idx[fp] = rec
+    uids = rec.setdefault("uids", [])
+    if uid and uid not in uids:
+        uids.append(uid)
+    rec["last"] = float(now)
+    if len(idx) > FP_INDEX_CAP:               # 超容量 → 淘汰最久未出现
+        drop = sorted(idx, key=lambda x: float((idx[x] or {}).get("last", 0))
+                      )[: len(idx) - FP_INDEX_CAP]
+        for k in drop:
+            idx.pop(k, None)
+
+
+def _touch_hb_ring(user: dict[str, Any], now: float) -> None:
+    """记一次心跳时间戳（有界环，S3 自动化脚本特征的数据源）。
+
+    🔴 刻意**不写 events.jsonl**：心跳量级远大于业务事件，落全量流水会把文件撑爆；
+       有界环随账号持久化，容量 RISK_HB_RING_CAP 条，足够判「连续过密」。
+    """
+    ring = user.get("hb_ring")
+    if not isinstance(ring, list):
+        ring = []
+    ring.append(float(now))
+    user["hb_ring"] = ring[-RISK_HB_RING_CAP:]
+
+
+def _sig_device_churn(state: dict[str, Any], uid: str, user: dict,
+                      now: float) -> list[dict[str, Any]]:
+    n = len(_ring_match(state, "device_add", RISK_DEV_CHURN_WINDOW, now, email=uid))
+    if n >= RISK_DEV_CHURN_N:
+        return [_reason("device_churn", now, f"7 天内新增设备 {n} 台")]
+    return []
+
+
+def _sig_fp_reuse(state: dict[str, Any], uid: str, user: dict,
+                  now: float) -> list[dict[str, Any]]:
+    idx = state.get("fp_index") or {}
+    worst = 0
+    for d in (user.get("devices") or []):
+        rec = idx.get(str(d.get("fp") or ""))
+        if isinstance(rec, dict):
+            worst = max(worst, len(rec.get("uids") or []))
+    if worst >= RISK_FP_REUSE_N:
+        return [_reason("fp_reuse", now, f"同一设备指纹被 {worst} 个账号使用")]
+    return []
+
+
+def _hb_overdense(hb_ring: Any) -> int:
+    """最长一段「相邻心跳间隔 < RISK_HB_MIN_GAP 秒」的连续次数（自动化脚本特征）。"""
+    ts = sorted(float(t) for t in (hb_ring or []) if isinstance(t, (int, float)))
+    best = run = 0
+    for i in range(1, len(ts)):
+        if ts[i] - ts[i - 1] < RISK_HB_MIN_GAP:
+            run += 1
+            best = max(best, run)
+        else:
+            run = 0
+    return best
+
+
+def _sig_hb_anomaly(state: dict[str, Any], uid: str, user: dict,
+                    now: float) -> list[dict[str, Any]]:
+    n = _hb_overdense(user.get("hb_ring"))
+    if n >= RISK_HB_BURST_N:
+        return [_reason("hb_anomaly", now,
+                        f"连续 {n} 次心跳过密（<{int(RISK_HB_MIN_GAP)}s）")]
+    return []
+
+
+def _sig_spend_burst(state: dict[str, Any], uid: str, user: dict,
+                     now: float) -> list[dict[str, Any]]:
+    n = len(_ring_match(state, "spend", RISK_SPEND_BURST_WINDOW, now, email=uid))
+    n += len(_ring_match(state, "daily", RISK_SPEND_BURST_WINDOW, now, email=uid))
+    if n >= RISK_SPEND_BURST_N:
+        return [_reason("spend_burst", now, f"10 分钟内 {n} 次扣费/用量上报")]
+    return []
+
+
+def _sig_redeem_brute(state: dict[str, Any], uid: str, user: dict,
+                      now: float) -> list[dict[str, Any]]:
+    n = len(_ring_match(state, "redeem_fail", RISK_REDEEM_BRUTE_WINDOW, now, email=uid))
+    if n >= RISK_REDEEM_BRUTE_N:
+        return [_reason("redeem_brute", now, f"10 分钟内核销失败 {n} 次")]
+    return []
+
+
+def _sig_integrity(state: dict[str, Any], uid: str, user: dict,
+                   now: float) -> list[dict[str, Any]]:
+    """客户端完整性自检（弱信号）。字段由**第 3 批**接入，在此之前恒不命中。"""
+    for d in (user.get("devices") or []):
+        if str(d.get("integrity") or "") == "fail":
+            return [_reason("integrity", now, "客户端完整性自检失败")]
+    return []
+
+
+RISK_SIGNALS = (_sig_device_churn, _sig_fp_reuse, _sig_hb_anomaly,
+                _sig_spend_burst, _sig_redeem_brute, _sig_integrity)
+
+
+def _level_of(score: int) -> str:
+    if score >= RISK_T3:
+        return "review"
+    if score >= RISK_T2:
+        return "challenge"
+    if score >= RISK_T1:
+        return "throttle"
+    return "observe"
+
+
+def risk_eval(state: dict[str, Any], uid: str, now: float) -> dict[str, Any]:
+    """计算账号风险分与档位；就地刷新该账号的 risk 摘要（结果只由当前 state 决定 ⇒ 幂等）。
+
+    ⚠️ 本批为**纯观测**：返回的 level 仅供看板展示与后续批次使用，调用方**不得**
+       据此拒绝任何请求。第 2 批挂响应门时，🔴 必须挂在扣费/记账**之前**（顺序约束）。
+    """
+    user = _users(state).get(uid)
+    if not isinstance(user, dict):
+        return {"score": 0, "level": "observe", "reasons": [], "exempt": False}
+    r = _get_risk(user)
+    if _risk_is_exempt(user):
+        r.update({"score": 0, "level": "observe", "reasons": [], "updated": float(now)})
+        return {"score": 0, "level": "observe", "reasons": [], "exempt": True}
+    hits: list[dict[str, Any]] = []
+    for fn in RISK_SIGNALS:
+        try:
+            hits.extend(fn(state, uid, user, now))
+        except Exception:                       # 单信号异常绝不阻断主流程
+            continue
+    dedup: dict[str, dict[str, Any]] = {}
+    for h in hits:                              # 同一信号只留最高权重那条
+        cur = dedup.get(h["k"])
+        if cur is None or h["w"] > cur["w"]:
+            dedup[h["k"]] = h
+    merged = sorted(dedup.values(), key=lambda x: -x["w"])[:RISK_REASON_CAP]
+    score = min(100, sum(h["w"] for h in merged))
+    r.update({"score": score, "level": _level_of(score), "reasons": merged,
+              "updated": float(now)})
+    r["peak"] = max(int(r.get("peak") or 0), score)
+    return {"score": score, "level": r["level"], "reasons": merged, "exempt": False}
+
+
+def risk_query_impl(state: dict[str, Any], email: str, now: float) -> dict[str, Any]:
+    """管理员查看账号风险画像（现场重算，保证与看板一致）。"""
+    uid = _norm_id(email)
+    if not _users(state).get(uid):
+        raise ApiError(404, "NO_ACCOUNT", "账号不存在")
+    user = _users(state)[uid]
+    ev = risk_eval(state, uid, now)
+    r = _get_risk(user)
+    return {"ok": True, "email": uid, "score": ev["score"], "level": ev["level"],
+            "reasons": ev["reasons"], "exempt": bool(ev["exempt"]),
+            "peak": int(r.get("peak") or 0), "updated": float(r.get("updated") or 0)}
+
+
+def risk_clear_impl(state: dict[str, Any], email: str, now: float,
+                    note: str = "") -> dict[str, Any]:
+    """人工抹平（确认误报）：清空风险摘要，保留 exempt 标记。
+
+    🔴 注意：清空**不会**让仍在窗口内的信号消失 —— risk_eval 是现算的，下一个调用
+       还会重新命中。cleared_at 就是给第 2 批用的：响应门只对 `at > cleared_at`
+       的命中项生效，从而让「确认误报」真正压制自动动作。本批（纯观测）只记不判。
+    """
+    uid = _norm_id(email)
+    user = _users(state).get(uid)
+    if not user:
+        raise ApiError(404, "NO_ACCOUNT", "账号不存在")
+    keep_exempt = bool((user.get("risk") or {}).get("exempt")) \
+        if isinstance(user.get("risk"), dict) else False
+    fresh = _risk_defaults()
+    fresh["exempt"] = keep_exempt
+    fresh["updated"] = float(now)
+    fresh["cleared_at"] = float(now)     # 🔴 第 2 批据此抑制「已确认误报」的自动响应
+    user["risk"] = fresh
+    _log_event(state, "risk_clear", now, email=uid, note=note[:80])
+    return {"ok": True, "email": uid, "score": 0, "level": "observe",
+            "reasons": [], "exempt": keep_exempt, "peak": 0, "updated": now}
+
+
+def risk_top_impl(state: dict[str, Any], now: float, limit: int = 50,
+                  min_score: int = 1) -> dict[str, Any]:
+    """风险最高的账号列表（看板「风险复核队列」的数据源）。
+
+    🔴 按需拉取、不设后台常扫线程 —— 反破解是低频运维动作，没必要让它常驻占 CPU；
+       代价是每次调用要遍历全部账号做一遍 risk_eval（无 IO，纯内存扫描，实测足够快）。
+    """
+    floor = max(1, int(min_score))
+    rows: list[dict[str, Any]] = []
+    for uid in list(_users(state).keys()):
+        ev = risk_eval(state, uid, now)
+        if ev["score"] < floor:
+            continue
+        rows.append({"email": uid, "score": ev["score"], "level": ev["level"],
+                     "reasons": ev["reasons"], "exempt": bool(ev["exempt"])})
+    rows.sort(key=lambda r: (-r["score"], r["email"]))
+    cap = max(1, min(int(limit), 200))
+    return {"ok": True, "now": now, "count": len(rows), "rows": rows[:cap]}
+
+
 # ── 每日入账与充值对账（2026-09-26 资金核对）───────────────────────────────── #
 # 口径（钱 vs 权益，两个独立数据源交叉核对）：
 #   入账     = pay_server 的 pay_orders.json 里 status ∈ {PAID, GRANT_FAILED} 的订单
@@ -1524,12 +1828,17 @@ MATCH_FALLBACK_WINDOW = 172800.0  # 老数据无 order_id 时按 (账号,套餐)
 #   自动发货 note 是 "xunhupay-auto:<order_id>" ⇒ 发货侧对账完全看不到发货，
 #   每笔真实付款都被误报「已收款未发货」critical（实测 2 条，其实均已发货）。
 #   改为识别任意 "<渠道>-auto:" 前缀：以后新增支付渠道零改动适配。
+# 🔴 2026-10-14 修：更早（2026-10-09 前）的自动发货 note 是**裸的** "alipay-auto"
+#   （无冒号、无 order_id）⇒ 原正则强制要求冒号，把这批历史发货全判成"非自动发货"，
+#   对账 pass 2 兜底配对也就无从触发 ⇒ 老订单误报 paid_no_grant（已收款未发货）critical。
+#   冒号改 `(:|$)`：既认现役 `<渠道>-auto:<order_id>`，也认历史整串 `<渠道>-auto`。
 AUTO_NOTE_PREFIX = "alipay-auto"          # 兼容旧引用（判定请用 _is_auto_grant_note）
-_AUTO_NOTE_RE = re.compile(r"^[A-Za-z0-9_]+-auto:")
+_AUTO_NOTE_RE = re.compile(r"^[A-Za-z0-9_]+-auto(:|$)")
 
 
 def _is_auto_grant_note(note: Any) -> bool:
-    """该 grant 是否由支付渠道自动发货写下（note = "<渠道>-auto:<order_id>"）。"""
+    """该 grant 是否由支付渠道自动发货写下。
+    现役 note = "<渠道>-auto:<order_id>"；历史（2026-10-09 前）为裸 "<渠道>-auto"。"""
     return bool(_AUTO_NOTE_RE.match(str(note or "")))
 
 
@@ -2011,7 +2320,9 @@ class Handler(BaseHTTPRequestHandler):
                             # 退还只允许管理端凭消费事件号一次性冲正。
                             "cloud_quota_refund",
                             # 🔴 2026-10-13 安装/插件统计（按平台）聚合查询（只读）
-                            "stat_query"):
+                            "stat_query",
+                            # 🔴 2026-10-14 反破解风控（第 1 批纯观测）：风险画像查询 / 人工抹平 / 队列
+                            "risk_query", "risk_clear", "risk_top"):
                 self._require_admin(data)
                 with _LOCK:
                     st = _load_state()
@@ -2051,7 +2362,8 @@ class Handler(BaseHTTPRequestHandler):
                                             member_until_dl=_num("member_until_dl"),
                                             member_until_ai=_num("member_until_ai"),
                                             perm_credits=int(_num("perm_credits", -1, int)),
-                                            ai_credits_left=int(_num("ai_credits_left", -1, int)))
+                                            ai_credits_left=int(_num("ai_credits_left", -1, int)),
+                                            risk_exempt=int(_num("risk_exempt", -1, int)))
                         _save_state(st)
                     elif action == "usage":
                         out = usage_impl(st, str(data.get("email") or ""), now)
@@ -2134,6 +2446,22 @@ class Handler(BaseHTTPRequestHandler):
                         #   不写 state。设备画像（platform/ext/first_seen）随心跳与
                         #   登录落入设备记录，这里聚合给管理面板。
                         out = {"ok": True, "stats": stat_aggregate(st, now)}
+                    elif action == "risk_query":
+                        # 现场重算会刷新 risk 摘要（peak/updated），须落盘
+                        out = risk_query_impl(st, str(data.get("email") or ""), now)
+                        _save_state(st)
+                    elif action == "risk_clear":
+                        out = risk_clear_impl(st, str(data.get("email") or ""), now,
+                                              str(data.get("note") or ""))
+                        _save_state(st)
+                    elif action == "risk_top":
+                        try:
+                            _lim = int(data.get("limit") or 50)
+                            _floor = int(data.get("min_score") or 1)
+                        except (TypeError, ValueError):
+                            _lim, _floor = 50, 1
+                        out = risk_top_impl(st, now, limit=_lim, min_score=_floor)
+                        _save_state(st)     # 遍历时会刷新各账号 risk 摘要，须落盘
                     else:
                         out = users_impl(st)
                 return self._json(200, out)

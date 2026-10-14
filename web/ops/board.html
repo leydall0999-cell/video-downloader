@@ -94,6 +94,15 @@
   </section>
 
   <section class="panel" style="grid-column:1/-1">
+    <h2><span class="dot" style="background:var(--red)"></span>风险复核队列 · 反破解
+      <span class="sub" style="color:var(--muted);font-size:12px;font-weight:400">按「账号」风险分排序（设备换机 / 指纹复用 / 心跳过密 / 扣费连刷 / 卡密爆破）—— 第 1 批为纯观测：只打分不拦人，封禁仍须人工</span>
+      <span class="spacer"></span>
+      <button id="riskBtn">立即重算</button></h2>
+    <div id="riskStats" class="stat-row"></div>
+    <div id="riskTable"></div>
+  </section>
+
+  <section class="panel" style="grid-column:1/-1">
     <h2><span class="dot" style="background:var(--green)"></span>每日对账 · 入账 vs 充值发货
       <span class="sub" style="color:var(--muted);font-size:12px;font-weight:400">支付宝实付订单 vs 自动发货逐笔核对；差异自动告警（授权中心每 10 分钟自扫，此处按需拉报告）</span>
       <span class="spacer"></span>
@@ -235,6 +244,61 @@ async function ackAlerts(ids){
   }catch(e){}
 }
 
+// 风险档位 / 命中信号中文名（与 deploy/license_server.py 的 RISK_WEIGHTS / _level_of 同源）
+const RISK_LEVELS={
+  observe:['观测','var(--muted)'],
+  throttle:['限流','var(--amber)'],
+  challenge:['需重登','var(--amber)'],
+  review:['人工复核','var(--red)'],
+};
+const RISK_KINDS={
+  device_churn:'设备换机',
+  fp_reuse:'指纹复用',
+  hb_anomaly:'心跳过密',
+  spend_burst:'扣费连刷',
+  redeem_brute:'卡密爆破',
+  integrity:'完整性异常',
+};
+async function loadRisk(){
+  const el=$('#riskStats'); el.innerHTML='<div class="empty">加载中…</div>';
+  try{
+    const r=await fetch('/api/app/license-risk/top?limit=50&min_score=1',{headers:authHeaders()});
+    const d=await r.json();
+    if(!r.ok){throw new Error(d.detail||('HTTP '+r.status));}
+    const rows=d.rows||[];
+    const rev=rows.filter(x=>x.level==='review').length;
+    el.innerHTML=
+      `<div class="stat"><div class="n" style="color:${rev?'var(--red)':'var(--green)'}">${rev}</div><div class="l">待人工复核</div></div>`+
+      `<div class="stat"><div class="n">${rows.length}</div><div class="l">有命中项</div></div>`+
+      `<div class="stat"><div class="n">${d.count||0}</div><div class="l">命中总数</div></div>`;
+    $('#riskTable').innerHTML=rows.length?
+      ('<table><tr><th>账号</th><th>风险分</th><th>档位</th><th>命中信号</th><th></th></tr>'+
+      rows.map(x=>{const lv=RISK_LEVELS[x.level]||[x.level,'var(--muted)'];
+        const sig=(x.reasons||[]).map(k=>`<span class="chip">${esc(RISK_KINDS[k.k]||k.k)} +${k.w}</span>`).join(' ');
+        return `<tr><td>${x.exempt?'🔒 ':''}${esc(x.email)}</td>`+
+          `<td style="color:${lv[1]};font-weight:700">${x.score}</td>`+
+          `<td style="color:${lv[1]}">${esc(lv[0])}</td>`+
+          `<td>${sig||'—'}</td>`+
+          `<td><button data-risk-clear="${esc(x.email)}" style="padding:2px 8px;font-size:11px">确认误报</button></td></tr>`;}).join('')+
+      '</table>')
+      :'<div class="empty">暂无风险命中 —— 一切正常</div>';
+    $('#riskTable').querySelectorAll('button[data-risk-clear]').forEach(b=>{
+      b.addEventListener('click',()=>clearRisk(b.dataset.riskClear));
+    });
+  }catch(e){
+    el.innerHTML='';
+    $('#riskTable').innerHTML=`<div class="err">${isAdminErr(e)?esc(adminNeededMsg()):(isKeyErr(e)?esc(keyNeededMsg()):('风险队列加载失败：'+esc(e.message)))}</div>`;
+  }
+}
+async function clearRisk(email){
+  try{
+    await fetch('/api/app/license-risk/clear',{method:'POST',
+      headers:Object.assign({'Content-Type':'application/json'},authHeaders()),
+      body:JSON.stringify({email:email,note:'看板确认误报'})});
+    loadRisk();
+  }catch(e){}
+}
+
 const MISMATCH_KINDS={
   paid_no_grant:['🚨 收款未发货','var(--red)'],
   grant_no_pay:['🚨 发货未收款','var(--red)'],
@@ -303,9 +367,11 @@ async function loadRecon(){
 
 async function loadAll(){
   $('#foot').textContent='刷新于 '+new Date().toLocaleString('zh-CN',{hour12:false})+' · 范围：'+curRangeLabel;
-  await Promise.all([loadVisits(),loadEvents(),loadAlerts(),loadRecon()]);
+  await Promise.all([loadVisits(),loadEvents(),loadAlerts(),loadRisk(),loadRecon()]);
 }
 setInterval(loadAlerts,30*1000);   // 告警 30s 自动刷新（不受时间范围切换影响）
+setInterval(loadRisk,60*1000);     // 风险队列 60s 刷新（要遍历全部账号，比告警略慢一档）
+$('#riskBtn').addEventListener('click',loadRisk);
 $('#reconBtn').addEventListener('click',loadRecon);
 // 查账区间切换：改状态 + 高亮 + 立即重拉（与主界面「每日对账」tab 同行为）
 document.querySelectorAll('#reconRangeTabs button[data-recon-days]').forEach(b=>{

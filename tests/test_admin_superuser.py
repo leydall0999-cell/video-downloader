@@ -34,6 +34,15 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.delenv("VDL_ADMIN_IDENTIFIER", raising=False)
     # ensure_superusers 带 60s 缓存，每个用例前清空避免串扰
     auth_store._SUPERUSER_CACHE["ts"] = 0.0
+    # 🔴 2026-10-14：本文件测的是「超管 bootstrap / 提权」语义，其前置条件是
+    # 「客户端来自本机回环」——安全审计 2026-10-11（P1-2）后
+    # `ensure_superusers(allow_bootstrap=_is_loopback(request))`，公网来源不再 bootstrap
+    # （否则全新实例被抢注即失守）。而 TestClient 的 client.host 是 "testclient"，
+    # 不是回环 ⇒ 不打桩的话首用户永远拿不到超管，本文件会整片假红。
+    # 这里只补「判定结果」这层接缝（app._is_local_direct），仍走真实的
+    # routers.auth._is_loopback 包装；回环判定本身的正确性由
+    # tests/test_local_trust_p3_1.py 单独守卫（含 X-Forwarded-For 伪造必须失败）。
+    monkeypatch.setattr(m, "_is_local_direct", lambda request: True)
     yield
     auth_store._SUPERUSER_CACHE["ts"] = 0.0
 

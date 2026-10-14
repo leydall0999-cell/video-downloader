@@ -1547,6 +1547,67 @@ def app_license_alerts_notify(payload: dict, request: app.Request):
         return {"ok": False, "err": str(e)[:200]}
 
 
+# ── 反破解风控（2026-10-14 第 1 批纯观测）──────────────────────────────────── #
+# 链路：看板(admin 登录) → 本机 /api/app/license-risk/*（is_admin 门禁）
+#       → ECS worker /api/license-risk/*（X-Admin-Key）→ 本机 8902 license risk_*。
+# 🔴 本批【只读+人工抹平】，不含任何自动响应；封禁仍走管理端 ban（永远人工）。
+
+@router.get("/api/app/license-risk/top")
+def app_license_risk_top(request: app.Request, limit: int = 50, min_score: int = 1):
+    """风险最高的账号列表（看板「风险复核队列」数据源）。"""
+    _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+    try:
+        resp = app.requests.get(
+            f"{_OPS_ECS_BASE}/api/license-risk/top",
+            params={"limit": max(1, min(int(limit), 200)),
+                    "min_score": max(1, int(min_score))},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=20,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"拉取风险队列失败：{e}")
+
+
+@router.post("/api/app/license-risk/query")
+def app_license_risk_query(payload: dict, request: app.Request):
+    """单账号风险画像（命中信号明细）。"""
+    _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+    try:
+        resp = app.requests.post(
+            f"{_OPS_ECS_BASE}/api/license-risk/query",
+            json={"email": str(payload.get("email") or "")},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"查询风险画像失败：{e}")
+
+
+@router.post("/api/app/license-risk/clear")
+def app_license_risk_clear(payload: dict, request: app.Request):
+    """人工抹平（确认误报）：清空该账号风险摘要，并写 risk_clear 审计事件。"""
+    _require_local(request)
+    if not _ops_requester_is_admin(request):
+        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+    try:
+        resp = app.requests.post(
+            f"{_OPS_ECS_BASE}/api/license-risk/clear",
+            json={"email": str(payload.get("email") or ""),
+                  "note": str(payload.get("note") or "")},
+            headers={"X-Admin-Key": _ops_admin_key()},
+            timeout=15,
+        )
+        return app.JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        raise app.HTTPException(status_code=502, detail=f"清除风险失败：{e}")
+
+
 # 查账区间（2026-10-09 用户要求「入账可查 1 天/3 天/7 天/1 个月/半年/1 年」）：
 # 默认 7 天（与授权中心自扫窗口一致），上限 400 天（前端最大 365 = 近 1 年）。
 # 🔴 与 ECS worker `server/routers/core.py`、授权中心 `deploy/license_server.py`

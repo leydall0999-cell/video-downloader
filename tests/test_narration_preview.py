@@ -78,9 +78,11 @@ def test_endpoint_passes_loudness_to_runner(tmp_path, monkeypatch):
     fake_mp3 = tmp_path / "preview.mp3"
     fake_mp3.write_bytes(b"\x00\x00" + b"\xff\xfb" * 50)  # 假 mp3 帧头
 
-    def fake_run(text, voice, output_mp3, timeout=60, loudness=None, boost=None):
+    def fake_run(text, voice, output_mp3, timeout=60, loudness=None, boost=None,
+                 provider=""):
         captured["loudness"] = loudness
         captured["boost"] = boost
+        captured["provider"] = provider
         # 把假 mp3 拷到目标路径，模拟 TTS 产物
         import shutil
         shutil.copy(fake_mp3, output_mp3)
@@ -100,15 +102,19 @@ def test_endpoint_passes_loudness_to_runner(tmp_path, monkeypatch):
     assert resp.headers.get("content-type", "").startswith("audio/")
     assert captured.get("loudness") == "-12"
     assert captured.get("boost") == "1.3"
+    # 非克隆引擎 → provider 透传为空串（2026-09-18 新增参数）
+    assert captured.get("provider") == ""
 
 
 def test_endpoint_pure_tts_no_loudness(tmp_path, monkeypatch):
     """不传 loudness/boost（音色试听场景）应透传 None，保持纯 TTS 行为。"""
     captured = {}
 
-    def fake_run(text, voice, output_mp3, timeout=60, loudness=None, boost=None):
+    def fake_run(text, voice, output_mp3, timeout=60, loudness=None, boost=None,
+                 provider=""):
         captured["loudness"] = loudness
         captured["boost"] = boost
+        captured["provider"] = provider
         output_mp3.write_bytes(b"\xff\xfb" * 50)
 
     monkeypatch.setattr(srv, "_run_voice_preview", fake_run)
@@ -124,3 +130,4 @@ def test_endpoint_pure_tts_no_loudness(tmp_path, monkeypatch):
     assert resp.status_code == 200
     assert captured.get("loudness") is None
     assert captured.get("boost") is None
+    assert captured.get("provider") == ""

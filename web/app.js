@@ -21201,7 +21201,9 @@ el.dwVidPlayer.hidden = true;
     ]},
     compress: { label: '压缩', kinds: ['video'], params: [
       { key: 'scale_h', label: '目标高度', type: 'select', options: ['480', '720', '1080'], def: '720' },
-      { key: 'crf', label: '质量(数值越大越压)', type: 'select', options: ['23', '28', '32'], def: '28' },
+      // 2026-10-14：LGPL 编码器只暴露 3 档（high/balanced/fast ≈ crf18/23/28），
+      // 原 options 23/28/32 中 28 与 32 会塌到同一档 ⇒ 改为 18/23/28 使三档各自生效。
+      { key: 'crf', label: '质量(数值越大越压)', type: 'select', options: ['18', '23', '28'], def: '28' },
     ]},
     upscale:  { label: '放大 / 轻量超分', kinds: ['video'], params: [
       { key: 'factor', label: '放大倍率', type: 'select', options: ['1.5', '2', '4'], def: '2' },

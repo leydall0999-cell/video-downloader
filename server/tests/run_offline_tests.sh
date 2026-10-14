@@ -24,6 +24,29 @@
 # 注：7~9 含调用真实 ffmpeg 的端到端用例（合成素材，无需网络）；
 #     若构建机没有 ffmpeg，这些用例会打印「⚠️ 跳过」而非失败。
 #
+# ✅ 2026-10-14 已清零：曾因「当脚本跑 ⇒ 断言静默跳过」而长期假绿的 10 个 pytest 用例，
+#    已逐个分诊修好并全部切到 run_pytest_root（下面按成因归类，改动都有 git 史可查）：
+#      ① 用例过期（代码是有意演进，断言没跟）——更新断言到新语义：
+#          test_dewatermark_layout.py (.dw-compare 改 max-height:60vh 自适应)
+#          test_ffmpeg_tools_unit.py (压缩弃 libx264/-crf；去水印 delogo→LGPL 模糊链)
+#          test_narration_preview.py (TTS 桩缺 2026-09-18 新增的 provider 参数)
+#          test_sidebar_widen.py (.wrap 800→1400；侧栏改版后 tab 清单/缩进变化)
+#          test_commentary_routes.py (_require_task → _require_owned_task + 旁路日配额)
+#      ② 未 mock 新上的闸门——补打桩：
+#          test_dewatermark.py (AI 回落探测 + 真实像素算法，fake 库撑不住)
+#          test_upload_src_filename.py (上传积分闸门 → 402 MEMBER_QUOTA)
+#      ③ 真问题/环境假象——分别处理：
+#          test_login_gate.py   → **代码 bug 已修**：门禁豁免 suffix 写 "/cancel"（带斜杠）
+#                                  却用 rsplit("/",1)[-1]（不带斜杠）比 ⇒ 豁免整段死代码
+#          test_web_contract.py → **声明 bug 已修**：f304571 移除网盘功能集群后，
+#                                  platform_model.NODE_GROUPS 仍留 cloud/archive 两个幽灵组
+#          test_admin_superuser.py → **测试环境假象**：TestClient 的 client.host 是
+#                                  "testclient"（非回环），而 P1-2 安全审计后公网不 bootstrap
+#                                  ⇒ 首用户拿不到超管。已在 fixture 里模拟本机回环
+#                                  （回环判定本身由 server/tests/test_local_trust_p3_1.py 守卫）
+#    ⚠️ 教训：pytest 用例被 run_one/run_root 当脚本跑时，断言从不执行、恒"通过"。
+#       新增 pytest 用例必须走 run_pytest_root，登记后要验证断言真的跑了。
+#
 # 退出码非 0 表示有测试失败（可在 build_mac.sh 末尾调用以阻断坏构建）。
 set -u
 
@@ -228,8 +251,8 @@ run_one test_quota_refund.py
 # 构建自验证，等于这批财务守卫只在手动单跑时生效。
 run_one test_quota_cross_end.py
 # 以下三个此前也漏登记（写完从未进过构建自验证），单跑均通过
-run_one test_license_base.py
-run_one test_membership_device.py
+run_pytest_root test_license_base.py
+run_pytest_root test_membership_device.py
 run_one test_pagetool.py
 run_one test_commentary_output_naming.py
 run_one test_commentary_precheck.py
@@ -695,6 +718,15 @@ run_one test_admin_recon_tab.py
 # 9 处变异全红。
 run_one test_recon_grant_aggregate.py
 
+# 反破解风控「风险评分」守卫（2026-10-14 第 1 批「纯观测」）：完整方案见
+#   WorkBuddy/反破解风控方案_异常检测_自动降级_人工复核_2026-10-14.md。
+#   本批只算分、记事件、交看板复核，**不挂任何自动响应**。钉住六信号 + 分数/档位边界 +
+#   自清性（不累加不沉淀）+ 弱信号不可单独跨档 + 豁免 + risk_top/risk_clear，以及三条红线：
+#   ① IP 永不进风险路径（六信号签名不含 ip ⇒ 杜绝 CGNAT 一锁一片）；② 档位集合不含 ban
+#   （自动永久封禁永远不做）；③ 纯观测——risk_eval 返回值无任何自动动作字段。
+#   配套变异测试 server/tests/mutation_risk_eval.py：10 项注入缺陷必须变红。
+run_one test_risk_eval.py
+
 # 46. test_profile_site_row.py —— 「关于」页「官方网站」入口（2026-10-09 用户要求）。
 #      两个必须钉死的坑：① 桌面壳是 WKWebView，**会静默拦截 `window.open`** —— 若
 #      有人把点击改回 window.open，网页版正常、桌面端点下去毫无反应且不报错，故
@@ -943,64 +975,76 @@ run_root() {
 }
 
 run_pytest_root() {
-  local f="$1"
+  local f="$1" path=""
   echo ""
   echo "=== (root pytest) $f ==="
+  # 🔴 2026-10-14：用例同时存在于 $REPO/tests/ 与 $SERVER/tests/ 两处，
+  #    原实现写死 "$REPO/tests/$f" ⇒ server/tests/ 的用例会「文件不存在」被误判 FAIL。
+  for cand in "$REPO/tests/$f" "$SERVER/tests/$f"; do
+    if [ -f "$cand" ]; then path="$cand"; break; fi
+  done
+  if [ -z "$path" ]; then
+    echo "❌ 找不到用例文件：$f"
+    FAIL=$((FAIL+1)); return
+  fi
   local d
   d=$(mktemp -d "/tmp/vdl_approot_XXXXXX")
   if PYTHONPATH="$SERVER:$REPO/tests" VDL_LOGIN_GATE=0 VDL_PLANS_CLOUD=0 \
-        VDL_DATA_DIR="$d" env -u HTTP_PROXY -u HTTPS_PROXY "$PY" -m pytest "$REPO/tests/$f" -q 2>&1; then
+        VDL_DATA_DIR="$d" env -u HTTP_PROXY -u HTTPS_PROXY "$PY" -m pytest "$path" -q 2>&1; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
   fi
   /bin/rm -rf "$d"
 }
-run_root test_admin_superuser.py
-run_root test_auth_routes.py
+run_pytest_root test_admin_superuser.py
+run_pytest_root test_auth_routes.py
 run_root test_bilibili_cookie_fix.py
 run_root test_bilibili_url_normalize.py
-run_root test_cdp_sniffer.py
-run_root test_chrqj_extractor.py
-run_root test_commentary_config.py
-run_root test_commentary_routes.py
-run_root test_commentary_stash.py
-run_root test_commentary_work_purge.py
-run_root test_cookie_cache.py
+run_pytest_root test_cdp_sniffer.py
+run_pytest_root test_chrqj_extractor.py
+run_pytest_root test_commentary_config.py
+run_pytest_root test_commentary_routes.py
+run_pytest_root test_commentary_stash.py
+run_pytest_root test_commentary_work_purge.py
+run_pytest_root test_cookie_cache.py
 run_root test_cookie_pool_bilibili.py
-run_root test_cookie_sync_ratelimit.py
+run_pytest_root test_cookie_sync_ratelimit.py
 run_root test_crypto_unit.py
-run_root test_device_id.py
-run_root test_dewatermark.py
-run_root test_dewatermark_layout.py
-run_root test_dewatermark_selection.py
+run_pytest_root test_device_id.py
+run_pytest_root test_dewatermark.py
+run_pytest_root test_dewatermark_layout.py
+run_pytest_root test_dewatermark_selection.py
 run_root test_download_file_cjk.py
-run_root test_download_phases.py
-run_root test_enginebadge_visibility.py
-run_root test_extract_text_unit.py
-run_root test_ffmpeg_tools_unit.py
+run_pytest_root test_download_phases.py
+run_pytest_root test_enginebadge_visibility.py
+run_pytest_root test_extract_text_unit.py
+run_pytest_root test_ffmpeg_tools_unit.py
 run_root test_friendly_error_403.py
-run_root test_intro_outro_mode.py
-run_root test_kuaishou_extractor.py
-run_root test_license_recon.py
-run_root test_license_server.py
-run_root test_login_gate.py
-run_root test_merged_modules_verify.py
-run_root test_narration_preview.py
-run_root test_process_queue.py
-run_root test_proxy_cn_routing.py
-run_root test_router_isolation.py
+run_pytest_root test_intro_outro_mode.py
+run_pytest_root test_kuaishou_extractor.py
+# 🔴 2026-10-14 修：这两个是 pytest 用例（无 __main__），run_root 当普通脚本跑
+#    ⇒ 断言从不执行、恒"通过"（test_fallback_match_legacy_note 曾因此在 HEAD 上
+#    红了很久却从未暴露）。改走 run_pytest_root 后断言才真正运行。
+run_pytest_root test_license_recon.py
+run_pytest_root test_license_server.py
+run_pytest_root test_login_gate.py
+run_pytest_root test_merged_modules_verify.py
+run_pytest_root test_narration_preview.py
+run_pytest_root test_process_queue.py
+run_pytest_root test_proxy_cn_routing.py
+run_pytest_root test_router_isolation.py
 run_root test_share_url_normalize.py
-run_root test_sidebar_widen.py
-run_root test_tasks.py
+run_pytest_root test_sidebar_widen.py
+run_pytest_root test_tasks.py
 run_root test_torrent_routes.py
-run_root test_torrent_unit.py
-run_root test_upload_convert.py
-run_root test_upload_src_filename.py
-run_root test_web_contract.py
+run_pytest_root test_torrent_unit.py
+run_pytest_root test_upload_convert.py
+run_pytest_root test_upload_src_filename.py
+run_pytest_root test_web_contract.py
 run_root test_ydlp_update.py
-run_root test_youku_card_removed.py
-run_root test_youtube_player_skip.py
+run_pytest_root test_youku_card_removed.py
+run_pytest_root test_youtube_player_skip.py
 run_pytest_root test_title_propagation.py
 run_pytest_root test_upload_title_fallback.py
 

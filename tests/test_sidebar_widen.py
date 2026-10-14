@@ -43,25 +43,21 @@ def test_main_margin_left_200():
     assert m, "main#main 应该给侧栏让出 200px"
 
 
-def test_wrap_max_width_800_centered():
-    """用户 2026-08-26 01:24 继续反馈「还是有点挤」→ wrap 从 880 再收到 800px 居中。
+def test_wrap_max_width_1400_centered():
+    """2026-09-17 用户反馈「排版不错但整体偏挤」→ 全站 .wrap 由 800 放宽到 1400。
 
-    主区净宽（视口 - 侧栏 200）：
-      1280 视口 → 主区 1080，panel 800 居中 → 两侧各 140px 留白（之前 880 只有 100）
-      1440 视口 → 主区 1240，panel 800 居中 → 两侧各 220px 留白
+    这是 2026-08-26「收紧到 800」的后续**反转**：用户最终要的是更宽而非更窄
+    （见 styles.css:45 注释）。桌面端 .wrap 上界=1400px 且水平居中。
     """
     css = _read(CSS)
     m = re.search(r"\.wrap\s*\{\s*width:\s*min\(\s*(\d+)px", css)
-    assert m, ".wrap 必须定义 max-width"
+    assert m, ".wrap 必须定义上界"
     v = int(m.group(1))
-    assert v == 800, f".wrap max-width 应=800px（用户二次纠正后定值），当前 {v}px"
-    # 显式禁止 ≥ 850 的 wrap 残留（防止再拉大贴右变挤）
-    for hit in re.finditer(r"\.wrap[^}]*width:\s*min\(\s*(\d+)px", css):
-        assert int(hit.group(1)) < 850, \
-            f".wrap max-width 任何一处 ≥ 850px 都会显得挤（实际 {hit.group(1)}px）"
-    # 显式禁止 880 / 1040 旧值
-    assert "min(880px" not in css, ".wrap 不能再用 880px（用户已嫌挤）"
-    assert "min(1040px" not in css, ".wrap 不能再用 1040px（之前贴右被截）"
+    assert v == 1400, f"桌面端 .wrap 上界应=1400px（2026-09-17 定值），当前 {v}px"
+    assert re.search(r"\.wrap\s*\{[^}]*margin-inline:\s*auto", css), ".wrap 必须水平居中（margin-inline:auto）"
+    # 历史废弃值不得复活
+    assert "min(880px" not in css, ".wrap 不能再用 880px（历史废弃值）"
+    assert "min(1040px" not in css, ".wrap 不能再用 1040px（历史废弃值）"
 
 
 def test_wrap_max_width_800_mobile_fallback():
@@ -80,18 +76,24 @@ def test_sidebar_item_icon_size_24():
 
 
 def test_sidebar_item_padding_compact():
-    """侧栏 item 的 padding 是紧致模式（≤ .5rem 横向）。"""
+    """侧栏子项 padding：**右侧紧致** + **左侧为对齐分组标题 emoji 列的缩进**。
+
+    2026-09-08 侧栏改版后，子项改为
+    `padding: .4rem .5rem .4rem calc(.6rem + 26px + .5rem)`——左缘 = 组标题 emoji 之后，
+    使「分组标题文字 / 子项文字」同列（见 styles.css:2010 注释）。右侧仍需紧致。
+    """
     css = _read(CSS)
     block = re.search(r"\.sidebar-item\s*\{[^}]*padding:\s*([^;]+);", css, re.S)
     assert block, "未找到 .sidebar-item 的 padding 声明"
     pad = block.group(1).strip()
-    # 收紧后形如 ".45rem .5rem .45rem .65rem"
-    nums = re.findall(r"[\d.]+rem", pad)
-    assert len(nums) == 4, f"padding 必须是 4 个值（top right bottom left），实际 {pad!r}"
-    # 横向最大值 ≤ .65rem
-    horizontal_max = max(_rem_to_float(nums[1]), _rem_to_float(nums[3]))
-    assert horizontal_max <= 0.66, \
-        f"侧栏 item 横向 padding 最大值应 ≤ .65rem（现状 {nums[1]} / {nums[3]}）"
+    # 第 4 值可能是 calc(...)，用「整段 calc 或单个非空白串」切分
+    parts = re.findall(r"calc\([^)]*\)|\S+", pad)
+    assert len(parts) == 4, f"padding 必须是 4 个值（top right bottom left），实际 {pad!r}"
+    # 右侧（第 2 值）紧致
+    assert _rem_to_float(parts[1]) <= 0.7, f"侧栏子项右侧 padding 应 ≤ .7rem（现状 {parts[1]}）"
+    # 左侧（第 4 值）为对齐分组标题的缩进：含 26px emoji 列
+    assert "calc(" in parts[3] and "26px" in parts[3], \
+        f"侧栏子项左侧 padding 应为对齐分组标题的缩进（含 26px emoji 列），现状 {parts[3]!r}"
 
 
 def test_sidebar_padding_compact():
@@ -108,11 +110,16 @@ def test_sidebar_padding_compact():
 
 
 def test_index_html_has_nine_tab_ids():
-    """保守闸门：index.html 必须包含 9 个 sTab*（侧栏版侧栏 tab）。"""
+    """保守闸门：index.html 必须包含 9 个**核心功能入口** sTab*（侧栏导航）。
+
+    2026-09-08 侧栏改版后原「9 tab」清单已变（sTabBaidu / sTabPcs 功能下架）；
+    改为守 9 个长期存在的主功能入口，防止误删。
+    """
     html = _read(HTML)
-    for tab_id in ("sTabDownload", "sTabLibrary", "sTabCommentary",
-                   "sTabUploadConvert", "sTabDw", "sTabSubscribe",
-                   "sTabTorrent", "sTabBaidu", "sTabPcs"):
+    core = ("sTabHome", "sTabDownload", "sTabSubscribe", "sTabCommentary",
+            "sTabSubtitle", "sTabUploadConvert", "sTabDw", "sTabMatting",
+            "sTabLibrary")
+    for tab_id in core:
         assert f'id="{tab_id}"' in html, f"缺失侧栏 item #{tab_id}"
 
 
@@ -183,7 +190,7 @@ def test_main_and_wrap_are_separate_elements():
     assert 'class="wrap"' not in main_tag, \
         f"main 不能带 class='wrap'（会和 main#main margin-left 打架把内容挤到左边）: {main_tag}"
     # 2) main 内部必须有 <div class="wrap">（真正的居中容器）
-    assert re.search(r'<main\b[^>]*>\s*<div\s+class="wrap">', html), \
+    assert re.search(r'<main\b[^>]*>\s*<div\s+class="wrap"[\s>]', html), \
         "main 内部必须包一个 <div class=\"wrap\"> 居中容器（main/wrap 必须拆开）"
     # 3) 反向断言：HTML 里 class="wrap" 只能出现在 <div> 上，不能在 <main> 上
     for hit in re.finditer(r'class="wrap"', html):

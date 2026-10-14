@@ -207,11 +207,20 @@ def crop_video(video: Path, out_dir: Path | None = None, crop_expr: str = "",
 # --------------------------------------------------------------------------- #
 def compress_video(video: Path, out_dir: Path | None = None, scale_h: int = 720,
                    crf: int = 28, ffmpeg_bin: str = "ffmpeg") -> Path | None:
-    """压缩：分辨率降到 scale_h 高度 + CRF（数值越大压得越狠）。"""
+    """压缩：分辨率降到 scale_h 高度 + 质量档（crf 数值越大压得越狠）。
+
+    🔴 2026-10-14 修复：LGPL 迁移（弃用 libx264）后 `-crf` 不再进入命令行，而本函数
+    曾把 quality 写死成 "fast" ⇒ **用户选的质量档完全无效**（前端 23/28/32 无论选哪个，
+    产物都一模一样）。`h264_args` 的文档已给出对应关系：
+    ``fast`` / ``balanced`` / ``high`` ≈ 原 libx264 的 crf28 / crf23 / crf18，据此换算。
+    默认 crf=28 → fast，与修复前写死的值一致 ⇒ **默认产物不变**，只是控件真正生效。
+    """
     out_dir = out_dir or video.parent
     out = _unique_out(video, f"压缩{int(scale_h)}p", "mp4")
+    _crf = int(crf or 28)
+    quality = "high" if _crf <= 18 else ("balanced" if _crf <= 23 else "fast")
     cmd = [ffmpeg_bin, "-y", "-i", str(video), "-vf", f"scale=-2:{int(scale_h)}",
-           *h264_args(ffmpeg_bin, "fast"),
+           *h264_args(ffmpeg_bin, quality),
            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out)]
     try:
         _run(cmd)
