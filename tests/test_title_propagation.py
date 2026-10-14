@@ -67,6 +67,7 @@ class TitlePropagationTest(unittest.TestCase):
             payload = MagicMock()
             payload.task_id = "t1"
             payload.file_id = ""
+            payload.title = ""  # ① 显式 title 优先（2026-09-15 重排）：须显式置空，MagicMock 自动属性会顶掉 ③
             got = m._commentary_title(payload, str(src))
         self.assertEqual(got, "甄嬛传 第3集")
 
@@ -79,6 +80,7 @@ class TitlePropagationTest(unittest.TestCase):
             payload = MagicMock()
             payload.task_id = "t2"
             payload.file_id = ""
+            payload.title = ""  # 同上：显式置空才落到 ③ 任务标题/步骤反解
             got = m._commentary_title(payload, str(src))
         self.assertEqual(got, "伪装者 第12集")
 
@@ -96,7 +98,7 @@ class TitlePropagationTest(unittest.TestCase):
             with m._commentary_lock:
                 m.commentary_jobs[job_id].update(status="completed", output_path="/tmp/ok.mp4")
 
-        with patch.object(m, "_require_task", return_value=t), \
+        with patch.object(m, "_require_owned_task", return_value=t), \
              patch.object(m, "executor") as ex, \
              patch.object(m, "_commentary_run") as run:
             ex.submit.side_effect = lambda fn, *a, **k: fn(*a, **k)

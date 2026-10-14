@@ -899,6 +899,12 @@ run_one test_extension_browser_precision.py
 #     只认 App 的 VDL-Update/ UA、HEAD 预检不计数、路径穿越/缺文件 404、by_day 90 天上限。
 run_one test_update_server_counting.py
 
+# 63.9 test_nmw_extractor.py —— 金牌影院（nmwchxx.com）解析器守卫（2026-10-14）。
+#     平台条目 + CHINA_DOMAINS、probe/任务段两处分发、签名公式
+#     sign=SHA1(MD5("排序参数&key=<key>&t=<毫秒>")) 逐位锁定、标题/清晰度/best 装配
+#     （AST 抽函数 + sys.modules 注入假 requests/uuid，离线跑，不发真实请求）。
+run_one test_nmw_extractor.py
+
 # 63. test_release_audit.py —— 发布包「机密数据」核查工具的离线守卫（2026-10-13 用户要求
 #     「发布的安装包绝对不含机密数据」，并要求写入档案）。七类：明文凭据 / 私钥 / 服务端
 #     凭据文件 / 用户数据 / 内部信息 / 打包垃圾 / 我方明文源码；另含三个**真实误报**的回归钉子
@@ -907,6 +913,87 @@ run_one test_update_server_counting.py
 #     配套变异测试 tests/mutation_release_audit.py：6 项注入缺陷必须变红。
 run_one test_release_audit.py
 run_one test_retention_library_minimal.py   # I7：app 时效清理/媒体库路径护栏最小回归（零覆盖补盲）
+
+
+# ---------------------------------------------------------------------------
+#  根 tests/ 大收编（2026-10-14，F-13/I2 app 侧终章）：49 个未登记根测试盲测
+#  （90s/个，镜像门禁环境）后 48 个纳入门禁：45 个直过 + 2 个修复
+#  （test_title_propagation 适配 _commentary_title ①显式title优先/端点改
+#  _require_owned_task；test_download_file_cjk 适配「匿名请求不 touch 任务」）
+#  + test_upload_title_fallback（pytest 模块级 skip 设计，缺真实产物即跳）。
+#  test_kuaishou_e2e.py 设计内自跳过（需 VDL_RUN_KS_E2E=1 真网络）不纳入。
+#  每个 run_root 用独立 VDL_DATA_DIR，防 credential_store/账号表串扰。
+# ---------------------------------------------------------------------------
+run_root() {
+  local f="$1"
+  echo ""
+  echo "=== (root) $f ==="
+  if PYTHONPATH="$SERVER:$REPO/tests" VDL_LOGIN_GATE=0 VDL_PLANS_CLOUD=0 \
+        VDL_DATA_DIR="/tmp/vdl_approot_$f" "$PY" "$REPO/tests/$f" 2>&1; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+}
+
+run_pytest_root() {
+  local f="$1"
+  echo ""
+  echo "=== (root pytest) $f ==="
+  if PYTHONPATH="$SERVER:$REPO/tests" VDL_LOGIN_GATE=0 VDL_PLANS_CLOUD=0 \
+        VDL_DATA_DIR="/tmp/vdl_approot_$f" env -u HTTP_PROXY -u HTTPS_PROXY "$PY" -m pytest "$REPO/tests/$f" -q 2>&1; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+}
+run_root test_admin_superuser.py
+run_root test_auth_routes.py
+run_root test_bilibili_cookie_fix.py
+run_root test_bilibili_url_normalize.py
+run_root test_cdp_sniffer.py
+run_root test_chrqj_extractor.py
+run_root test_commentary_config.py
+run_root test_commentary_routes.py
+run_root test_commentary_stash.py
+run_root test_commentary_work_purge.py
+run_root test_cookie_cache.py
+run_root test_cookie_pool_bilibili.py
+run_root test_cookie_sync_ratelimit.py
+run_root test_crypto_unit.py
+run_root test_device_id.py
+run_root test_dewatermark.py
+run_root test_dewatermark_layout.py
+run_root test_dewatermark_selection.py
+run_root test_download_file_cjk.py
+run_root test_download_phases.py
+run_root test_enginebadge_visibility.py
+run_root test_extract_text_unit.py
+run_root test_ffmpeg_tools_unit.py
+run_root test_friendly_error_403.py
+run_root test_intro_outro_mode.py
+run_root test_kuaishou_extractor.py
+run_root test_license_recon.py
+run_root test_license_server.py
+run_root test_login_gate.py
+run_root test_merged_modules_verify.py
+run_root test_narration_preview.py
+run_root test_process_queue.py
+run_root test_proxy_cn_routing.py
+run_root test_router_isolation.py
+run_root test_share_url_normalize.py
+run_root test_sidebar_widen.py
+run_root test_tasks.py
+run_root test_torrent_routes.py
+run_root test_torrent_unit.py
+run_root test_upload_convert.py
+run_root test_upload_src_filename.py
+run_root test_web_contract.py
+run_root test_ydlp_update.py
+run_root test_youku_card_removed.py
+run_root test_youtube_player_skip.py
+run_pytest_root test_title_propagation.py
+run_pytest_root test_upload_title_fallback.py
 
 echo ""
 echo "========================================="
