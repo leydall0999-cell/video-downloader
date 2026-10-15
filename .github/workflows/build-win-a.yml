@@ -1,0 +1,10 @@
+name: build-win-a
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - run: echo "variant-a ok"
