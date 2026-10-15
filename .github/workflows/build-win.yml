@@ -41,6 +41,11 @@ jobs:
     name: pyinstaller + innosetup
     runs-on: windows-latest
     timeout-minutes: 60
+    # contents:write 仅用于「失败时把构建日志回推 ci-logs 分支」
+    # （本机无 gh token、匿名 API 下载 artifact/logs 均 401/403，
+    #  这是唯一完全自主的 CI 排障通道）
+    permissions:
+      contents: write
     defaults:
       run:
         shell: bash
@@ -113,6 +118,29 @@ jobs:
           path: build_win.log
           retention-days: 7
           if-no-files-found: warn
+
+      # 失败时把日志推回仓库 ci-logs 分支——本机 git fetch 即可读，
+      # 不依赖任何 token 配置（GITHUB_TOKEN 由 Actions 自动提供）
+      - name: 失败回推构建日志到 ci-logs 分支
+        if: failure()
+        run: |
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git checkout -B ci-logs
+          mkdir -p ci-logs
+          cp build_win.log "ci-logs/build_win_$(date +%Y%m%d_%H%M%S).log" 2>/dev/null || true
+          # 把 smoke/zip/summary 等后续步骤没跑到时的环境信息也带上
+          {
+            echo "=== run: ${{ github.run_id }} sha: ${{ github.sha }} ==="
+            echo "=== python ==="; python --version 2>&1
+            echo "=== ffmpeg ==="; ffmpeg -version 2>&1 | head -1
+            echo "=== iscc ==="; command -v iscc || echo "(iscc 不在 PATH)"
+            echo "=== commentary-pipeline 目录 ==="; ls commentary-pipeline/ 2>&1 | head -5 || echo "(不存在)"
+          } > "ci-logs/env_$(date +%Y%m%d_%H%M%S).txt"
+          git add ci-logs/
+          git commit -m "ci: build log $(date +%Y%m%d_%H%M%S)" || echo "无变更可提交"
+          git push -f origin ci-logs
 
       # ── Smoke test：exe 起后轮询后端端口 ──
       # 无头 runner 上 pywebview(winforms) 可能起不来窗口，但 server_thread 独立，
