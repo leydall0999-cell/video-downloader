@@ -120,14 +120,25 @@ def extension_package(request: Request = None) -> Response:
     )
 
 
-# ── 桌面安装包下载（2026-10-13）────────────────────────────────────────────
+# ── 桌面安装包下载（2026-10-13，2026-10-15 默认改 DMG）────────────────────
 # 用户要求「安装包下载次数并统计不同平台」。安装包本体在更新通道
-# /opt/vdl-update/VideoDownloader.app.zip（与网页服务同机）——这里计数后
-# 原样流式回给浏览器（FileResponse，不走 8765 直链：https 页面直跳 http
-# 下载会被 Chrome 拦）。?p=macos 预留 windows 等后续包位。
+# /opt/vdl-update/（与网页服务同机）——这里计数后原样流式回给浏览器
+# （FileResponse，不走 8765 直链：https 页面直跳 http 下载会被 Chrome 拦）。
+#
+# 2026-10-15：默认格式从 ZIP 改为 DMG（macOS 标准安装形态：双击挂载→拖拽），
+# 保留 ZIP 兜底 ?p=macos-zip —— DMG 挂载异常的环境（老系统/部分第三方磁盘工具）
+# 以及历史链接都能用。?p= 仍预留 windows 等后续包位。
 _INSTALLER_FILES: dict[str, Path] = {
     "macos": Path(os.environ.get("VDL_INSTALLER_MACOS")
-                  or "/opt/vdl-update/VideoDownloader.app.zip"),
+                  or "/opt/vdl-update/VideoDownloader.dmg"),
+    "macos-zip": Path(os.environ.get("VDL_INSTALLER_MACOS_ZIP")
+                      or "/opt/vdl-update/VideoDownloader.app.zip"),
+}
+
+# 安装包媒体类型按扩展名取（DMG≠ZIP，写死 zip 会让浏览器把 dmg 也当 zip 处理）。
+_INSTALLER_MEDIA_TYPES: dict[str, str] = {
+    ".dmg": "application/x-apple-diskimage",
+    ".zip": "application/zip",
 }
 
 
@@ -141,9 +152,12 @@ def download_installer(p: str = "macos", request: Request = None) -> Response:
     try:
         import dl_stats
         if _is_real_download(request):
-            dl_stats.record("installer", plat)
+            # 统计按平台归并：macos-zip 并入 macos，不按包装格式拆行。
+            dl_stats.record("installer", plat.split("-")[0])
     except Exception:  # noqa: BLE001
         pass
-    return FileResponse(path, media_type="application/zip",
+    media_type = _INSTALLER_MEDIA_TYPES.get(
+        path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type,
                         filename=path.name,
                         headers={"Cache-Control": "no-store"})
