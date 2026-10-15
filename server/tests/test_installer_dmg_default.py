@@ -6,15 +6,16 @@
 端点保留（下载计数 + 历史链接兼容），GET/HEAD 一律 302 跳 R2；R2 探测
 不达时回退本机 /opt/vdl-update/ 文件（安全网）。
 
-本测试钉住六件事：
+本测试钉住七件事：
   1. `?p=macos` → 302：Location 指向 R2 上的 DMG、Cache-Control no-store；
   2. `?p=macos-zip` → 302：Location 指向 R2 上的 ZIP；
-  3. 统计口径按平台归且只计 GET：macos-zip 也记 "installer/macos"，
-     HEAD（下载管理器预检）不计；
-  4. R2 探测不达 → 回退本机：200 + dmg 媒体类型 + 真实文件字节；
-  5. 默认映射源码级回归：R2 地址、/opt/vdl-update 兜底路径、
+  3. `?p=windows` → 302：Location 指向 R2 上的 Inno Setup 安装程序（2026-10-16）；
+  4. 统计口径按平台归且只计 GET：macos-zip 也记 "installer/macos"，
+     windows 记 "installer/windows"，HEAD（下载管理器预检）不计；
+  5. R2 探测不达 → 回退本机：200 + dmg 媒体类型 + 真实文件字节；
+  6. 默认映射源码级回归：R2 地址、/opt/vdl-update 兜底路径、
      媒体类型映射都在（防手滑改回单一通道）；
-  6. 未知平台仍 404。
+  7. 未知平台（如 linux）仍 404。
 
 不联网（_r2_reachable 打桩）、不写真实统计文件（record 替换为内存记录）、
 退出还原。
@@ -38,6 +39,7 @@ from routers import extension as ext  # noqa: E402
 
 _R2_DMG = "https://download.hanyuxz.top/VideoDownloader.dmg"
 _R2_ZIP = "https://download.hanyuxz.top/VideoDownloader.app.zip"
+_R2_EXE = "https://download.hanyuxz.top/VideoDownloader-Setup-1.0.68.exe"
 
 
 def _client() -> TestClient:
@@ -120,8 +122,25 @@ def test_macos_zip_fallback_redirects():
         ext._r2_reachable = orig
 
 
+def test_windows_setup_redirects_to_r2():
+    """p=windows → 302：Location 指向 R2 上的 Inno Setup 安装程序。"""
+    orig = _patch_reachable(True)
+    try:
+        c = _client()
+        for method in ("head", "get"):
+            r = getattr(c, method)("/download/installer?p=windows",
+                                   follow_redirects=False)
+            assert r.status_code == 302, \
+                f"{method.upper()} 应 302，实际 {r.status_code}"
+            assert r.headers.get("location") == _R2_EXE, \
+                f"Location 应指向 R2 exe: {r.headers.get('location')}"
+            assert r.headers.get("cache-control") == "no-store"
+    finally:
+        ext._r2_reachable = orig
+
+
 def test_stats_merged_by_platform():
-    """计数口径：macos-zip 并入 macos；HEAD 不计、GET 计。"""
+    """计数口径：macos-zip 并入 macos；windows 独立计；HEAD 不计、GET 计。"""
     orig = _patch_reachable(True)
     try:
         def body(rec):
@@ -130,8 +149,10 @@ def test_stats_merged_by_platform():
             assert rec.calls == [], f"HEAD 不应计数，实际 {rec.calls}"
             c.get("/download/installer?p=macos", follow_redirects=False)
             c.get("/download/installer?p=macos-zip", follow_redirects=False)
-            assert rec.calls == [("installer", "macos"), ("installer", "macos")], \
-                f"两种格式都应归并到 installer/macos，实际 {rec.calls}"
+            c.get("/download/installer?p=windows", follow_redirects=False)
+            assert rec.calls == [("installer", "macos"), ("installer", "macos"),
+                                 ("installer", "windows")], \
+                f"macos-zip 归并 macos、windows 独立计，实际 {rec.calls}"
         _with_recorder(body)
     finally:
         ext._r2_reachable = orig
@@ -166,24 +187,30 @@ def test_default_mapping_source_guard():
         "macos 默认应 302 到 R2 DMG"
     assert "https://download.hanyuxz.top/VideoDownloader.app.zip" in src, \
         "macos-zip 兜底应 302 到 R2 ZIP"
+    assert "https://download.hanyuxz.top/VideoDownloader-Setup-" in src, \
+        "windows 默认应 302 到 R2 Inno Setup 安装程序"
     assert '"macos-zip"' in src, "映射必须有 macos-zip 兜底键"
+    assert '"windows"' in src, "映射必须有 windows 键（2026-10-16 上线）"
     assert "/opt/vdl-update/VideoDownloader.dmg" in src, \
         "R2 不可达时的本机兜底路径缺失"
     assert "/opt/vdl-update/VideoDownloader.app.zip" in src, \
         "R2 不可达时的本机兜底 ZIP 路径缺失"
     assert '".dmg": "application/x-apple-diskimage"' in src, \
         "DMG 媒体类型映射缺失"
+    assert '".exe": "application/x-msdownload"' in src, \
+        "EXE 媒体类型映射缺失（Windows 安装程序）"
     assert "RedirectResponse(url, status_code=302" in src, \
         "端点应 302 跳 R2（改回直连会让下载又慢回去）"
 
 
 def test_unknown_platform_still_404():
-    """未知平台仍 404（不因新增 key 放行）。"""
+    """未知平台（如 linux）仍 404（不因新增 key 放行）。"""
     orig = _patch_reachable(True)
     try:
         c = _client()
-        r = c.get("/download/installer?p=windows", follow_redirects=False)
-        assert r.status_code == 404, r.status_code
+        for p in ("linux", "android", ""):
+            r = c.get(f"/download/installer?p={p}", follow_redirects=False)
+            assert r.status_code == 404, f"p={p!r} 应 404，实际 {r.status_code}"
     finally:
         ext._r2_reachable = orig
 

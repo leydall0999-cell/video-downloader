@@ -131,7 +131,8 @@ def extension_package(request: Request = None) -> Response:
 # /opt/vdl-update/ 文件（安全网——CF 侧异常时用户至少有慢路可下）。
 #
 # 默认格式仍是 DMG（macOS 标准安装形态：双击挂载→拖拽），?p=macos-zip
-# 为 ZIP 兜底（DMG 挂载异常环境 / 历史链接）。?p= 仍预留 windows 等后续位。
+# 为 ZIP 兜底（DMG 挂载异常环境 / 历史链接）；?p=windows 为 Inno Setup
+# 安装程序（2026-10-16 上线）。
 _INSTALLER_FILES: dict[str, Path] = {
     "macos": Path(os.environ.get("VDL_INSTALLER_MACOS")
                   or "/opt/vdl-update/VideoDownloader.dmg"),
@@ -140,17 +141,25 @@ _INSTALLER_FILES: dict[str, Path] = {
 }
 
 # R2 公共地址（自定义域 download.hanyuxz.top → 桶 vdl-download 根）。
+# 2026-10-16：?p=windows 上线（Windows 版首发，Inno Setup 安装程序）。
+# ⚠️ 版本号 1.0.68 硬编码在 R2 对象名里（与 mac 两个对象同形态）：每次重打包
+#    Windows 版都要同步改这里 + web/download/index.html 的大小文案，别漏。
 _R2_INSTALLER_URLS: dict[str, str] = {
     "macos": os.environ.get("VDL_R2_INSTALLER_MACOS")
              or "https://download.hanyuxz.top/VideoDownloader.dmg",
     "macos-zip": os.environ.get("VDL_R2_INSTALLER_MACOS_ZIP")
                  or "https://download.hanyuxz.top/VideoDownloader.app.zip",
+    "windows": os.environ.get("VDL_R2_INSTALLER_WINDOWS")
+               or "https://download.hanyuxz.top/VideoDownloader-Setup-1.0.68.exe",
 }
 
-# 安装包媒体类型按扩展名取（DMG≠ZIP，写死 zip 会让浏览器把 dmg 也当 zip 处理）。
+# 安装包媒体类型按扩展名取（DMG≠ZIP≠EXE，写死 zip 会让浏览器把 dmg 也当 zip 处理）。
+# .exe 用 x-msdownload：IE/Edge  legacy 行为；现代浏览器对 octet-stream 与
+# x-msdownload 都直接下载不内嵌，此处取语义更精确的一个。
 _INSTALLER_MEDIA_TYPES: dict[str, str] = {
     ".dmg": "application/x-apple-diskimage",
     ".zip": "application/zip",
+    ".exe": "application/x-msdownload",
 }
 
 _R2_HEALTH_TIMEOUT = 3.0
