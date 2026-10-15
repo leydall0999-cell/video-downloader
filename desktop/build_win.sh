@@ -9,6 +9,14 @@
 #   3. 若 pip 慢，可设置 PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 set -euo pipefail
 
+# 🔴 Windows Python 默认标准流编码是 cp1252（GitHub runner 为 en-US 区域）：
+#    图标生成 heredoc / bundle_aria2.py 里的中文 print 会直接
+#    UnicodeEncodeError 崩进程（2026-10-16 CI 实测崩于此，定位花 6 轮）。
+#    Python 3.7+ 支持 UTF-8 模式，强制标准流走 UTF-8；本脚本启动的所有
+#    python 子进程（venv/pip/pyinstaller/heredoc/bundle_aria2）均继承。
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
@@ -19,7 +27,11 @@ echo "▶ 准备构建环境（独立 venv）"
 if [[ ! -x "$VENV/Scripts/python.exe" ]]; then
   python -m venv "$VENV"
 fi
-"$VENV/Scripts/pip.exe" install --quiet --index-url "$PIP_INDEX" -r requirements.txt pyinstaller Pillow pywebview
+# pythonnet：pywebview 的 winforms 后端依赖它（import clr；缺了它 Windows 端
+# 只能回退浏览器打开，没有原生窗口）。其自带 PyInstaller hook（pyinstaller40
+# entry point）会自动收 Python.Runtime.dll；clr_loader 的 ClrLoader.dll 不在
+# hook 覆盖范围，下面显式 --add-data 补收。
+"$VENV/Scripts/pip.exe" install --quiet --index-url "$PIP_INDEX" -r requirements.txt pyinstaller Pillow pywebview pythonnet
 
 echo "▶ 生成应用图标"
 "$VENV/Scripts/python.exe" - "$REPO" <<'PY'
@@ -155,6 +167,18 @@ else
   echo "⚠️  未找到 $VENV/Scripts/deno.exe —— 包内将没有 JS runtime，YouTube 可能解不了 nsig 挑战" >&2
 fi
 
+# clr_loader 的原生 ClrLoader.dll：pythonnet 自带的 PyInstaller hook 只收
+# pythonnet 包内的文件，不含 clr_loader；而 clr_loader 的 load_netfx() 用
+# 「相对模块文件的显式路径」ffi.dlopen 它 —— PyInstaller 静态分析看不见，
+# 不显式收进去，冻结后 import clr 必失败（Windows 端退化成浏览器打开）。
+_CLRLOADER_DLLS="$VENV/Lib/site-packages/clr_loader/ffi/dlls"
+_CLRLOADER_ARGS=()
+if [ -d "$_CLRLOADER_DLLS" ]; then
+  _CLRLOADER_ARGS=(--add-data "$_CLRLOADER_DLLS;clr_loader/ffi/dlls")
+else
+  echo "⚠️  未找到 clr_loader/ffi/dlls（$_CLRLOADER_DLLS）——pythonnet 可能无法初始化" >&2
+fi
+
 # ⚠️ 不要再加 --collect-all onnx：它会把 onnx 官方的测试数据集（约 2.4 万个文件）
 #    整个打进包，属纯死重（server/ 代码零 import onnx），拖慢构建并撑大安装包。
 #    与 build_mac.sh 保持一致；真需要时 PyInstaller 的常规依赖分析会自动收进来。
@@ -184,8 +208,10 @@ fi
   --collect-all fitz \
   --collect-submodules yt_dlp \
   --collect-all Cryptodome \
+  --hidden-import clr \
   "${COMMENTARY_DATA[@]}" \
   ${_DENO_BINARY_ARGS[@]+"${_DENO_BINARY_ARGS[@]}"} \
+  ${_CLRLOADER_ARGS[@]+"${_CLRLOADER_ARGS[@]}"} \
   "$REPO/desktop/desktop_launcher.py"
 
 # 清理 staging 临时目录（Windows 无 ~/.Trash：mv 失败则就地删除，CI 上无副作用）
@@ -262,13 +288,21 @@ if [ -z "$_ISCC" ]; then
   echo "⚠️  GitHub Actions 构建机请确保镜像含 Inno Setup 6（或 choco install innosetup）"
 else
   echo "   iscc: $_ISCC"
-  "$_ISCC" \
+  # 🔴 MSYS/Git Bash 对 `/Dxxx=/posix/path` 形式参数的路径转换行为不确定
+  #    （可能原样把 POSIX 路径透传给 Windows 程序，iscc 不认）——统一显式转
+  #    Windows 路径并关掉自动转换，Git Bash / WSL 两头都稳。
+  _win() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"
+    elif command -v wslpath >/dev/null 2>&1; then wslpath -w "$1"
+    else printf '%s' "$1"; fi
+  }
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$_ISCC" \
     "/DAppVersion=${APP_VERSION}" \
-    "/DOutputDir=$REPO/dist" \
+    "/DOutputDir=$(_win "$REPO/dist")" \
     "/DOutputBaseFilename=VideoDownloader-Setup-${APP_VERSION}" \
-    "/DSourceDir=$DIST_APP" \
-    "/DIconFile=$ICON_ICO" \
-    "$REPO/desktop/installer.iss"
+    "/DSourceDir=$(_win "$DIST_APP")" \
+    "/DIconFile=$(_win "$ICON_ICO")" \
+    "$(_win "$REPO/desktop/installer.iss")"
   SETUP_EXE="$REPO/dist/VideoDownloader-Setup-${APP_VERSION}.exe"
   if [ -f "$SETUP_EXE" ]; then
     SETUP_SIZE="$(stat -c '%s' "$SETUP_EXE" 2>/dev/null || wc -c < "$SETUP_EXE" | tr -d ' ')"
