@@ -98,10 +98,21 @@ jobs:
       # deno.exe 由 pip 的 deno 包提供（build_win.sh --add-binary 进包）
 
       - name: Build (pyinstaller onedir + innosetup)
-        # 不加 | tail：GitHub bash 默认 -eo pipefail 能拿到真实退出码，
-        # 截断日志会让失败时看不到根因（项目踩过 pipe 吞退出码的坑）
-        run: bash desktop/build_win.sh
+        # tee 落一份日志 + PIPESTATUS 显式取 build_win.sh 真实退出码
+        # （不依赖 pipefail；失败时下一步把日志传成 artifact，匿名 API 可下载）
+        run: |
+          bash desktop/build_win.sh 2>&1 | tee build_win.log
+          exit "${PIPESTATUS[0]}"
         working-directory: ${{ github.workspace }}
+
+      - name: 上传构建日志（成败都传，用于排障）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build_win.log
+          retention-days: 7
+          if-no-files-found: warn
 
       # ── Smoke test：exe 起后轮询后端端口 ──
       # 无头 runner 上 pywebview(winforms) 可能起不来窗口，但 server_thread 独立，
