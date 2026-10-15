@@ -19962,7 +19962,20 @@ el.dwVidPlayer.hidden = true;
 
   async function _checkForUpdate() {
     if (!el.profUpdateBanner) return;
-    if (!_aboutUpdatable) { el.profUpdateBanner.hidden = true; return; }
+    if (!_aboutUpdatable) {
+      // Windows / Linux 版没有应用内更新链路（UPDATABLE = IS_BUNDLED，仅 macOS .app 成立）。
+      // 2026-10-16：从「静默隐藏」改为显示指引横幅 —— 否则用户完全不知道去哪里拿新版本。
+      // 复用同一块横幅 DOM（改标题/正文、隐藏「立即更新」按钮），不新增结构。
+      // _doUpdate 只可能被 profUpdateNowBtn 的 click 触发，按钮隐藏即无副作用。
+      el.profUpdateBanner.hidden = false;
+      if (el.profUpdateVer) el.profUpdateVer.textContent = 'v' + ((el.profAboutVersion && el.profAboutVersion.textContent) || '—');
+      if (el.profUpdateNotes) el.profUpdateNotes.textContent = '当前平台暂不支持应用内更新。请到官网下载最新安装包覆盖安装即可，配置与任务数据不会丢失。';
+      if (el.profUpdateSize) el.profUpdateSize.textContent = 'hanyuxz.top/download';
+      if (el.profUpdateNowBtn) el.profUpdateNowBtn.hidden = true;
+      return;
+    }
+    // 回到可更新路径时恢复按钮（关于页可能被多次打开）
+    if (el.profUpdateNowBtn) el.profUpdateNowBtn.hidden = false;
     let data = null;
     try { data = await request('/api/system/latest'); } catch (_) { data = null; }
     if (!data || !data.ok) {
