@@ -20,6 +20,19 @@ export PYTHONIOENCODING=utf-8
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
+# 🔴 MSYS/Git Bash 参数路径转换的坑（2026-10-16 CI 实测）：
+#    纯 POSIX 路径参数（argv[0]、--icon、--paths）MSYS 会正确转成 Windows 路径；
+#    但带 `;` 分隔符的参数（--add-data "SRC;DEST" / --add-binary）MSYS 不当成
+#    纯路径、原样透传，Windows 程序（pyinstaller/iscc）就把 `/d/a/...` 按当前盘
+#    根目录解析成 `D:\d\a\...` ⇒ "Unable to find" 直接构建失败。
+#    解法：所有要传给原生 exe 的路径一律先用本函数显式转 Windows 风格，
+#    MSYS 对已是 Windows 风格的参数不做转换，两头确定。
+_win() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"
+  elif command -v wslpath >/dev/null 2>&1; then wslpath -w "$1"
+  else printf '%s' "$1"; fi
+}
+
 PIP_INDEX="${PIP_INDEX:-https://mirrors.aliyun.com/pypi/simple/}"
 VENV="$REPO/.build_venv"
 
@@ -140,7 +153,7 @@ if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
   printf '%s\n' "$_pl_sha" > "$COMMENTARY_STAGING/_pipeline_sha.txt"
   echo "   ✔ 管线指纹: ${_pl_sha}"
   COMMENTARY_DATA=(
-    --add-data "$COMMENTARY_STAGING;commentary"
+    --add-data "$(_win "$COMMENTARY_STAGING");commentary"
     --collect-all faster_whisper
     --collect-all edge_tts
     --collect-all ctranslate2
@@ -162,7 +175,7 @@ fi
 # 注：Windows 下 --add-binary 用 `;` 分隔（macOS/Linux 用 `:`）。
 _DENO_BINARY_ARGS=()
 if [ -f "$VENV/Scripts/deno.exe" ]; then
-  _DENO_BINARY_ARGS=(--add-binary "$VENV/Scripts/deno.exe;bin")
+  _DENO_BINARY_ARGS=(--add-binary "$(_win "$VENV/Scripts/deno.exe");bin")
 else
   echo "⚠️  未找到 $VENV/Scripts/deno.exe —— 包内将没有 JS runtime，YouTube 可能解不了 nsig 挑战" >&2
 fi
@@ -174,7 +187,7 @@ fi
 _CLRLOADER_DLLS="$VENV/Lib/site-packages/clr_loader/ffi/dlls"
 _CLRLOADER_ARGS=()
 if [ -d "$_CLRLOADER_DLLS" ]; then
-  _CLRLOADER_ARGS=(--add-data "$_CLRLOADER_DLLS;clr_loader/ffi/dlls")
+  _CLRLOADER_ARGS=(--add-data "$(_win "$_CLRLOADER_DLLS");clr_loader/ffi/dlls")
 else
   echo "⚠️  未找到 clr_loader/ffi/dlls（$_CLRLOADER_DLLS）——pythonnet 可能无法初始化" >&2
 fi
@@ -187,11 +200,11 @@ fi
   --windowed \
   --noconfirm \
   --clean \
-  --icon "$ICON_ICO" \
-  --paths "$REPO/server" \
-  --paths "$REPO" \
-  --add-data "$REPO/web;web" \
-  --add-data "$REPO/yt_dlp_plugins;yt_dlp_plugins" \
+  --icon "$(_win "$ICON_ICO")" \
+  --paths "$(_win "$REPO/server")" \
+  --paths "$(_win "$REPO")" \
+  --add-data "$(_win "$REPO/web");web" \
+  --add-data "$(_win "$REPO/yt_dlp_plugins");yt_dlp_plugins" \
   --hidden-import app \
   --hidden-import downloader \
   --hidden-import platforms \
@@ -209,10 +222,12 @@ fi
   --collect-submodules yt_dlp \
   --collect-all Cryptodome \
   --hidden-import clr \
+  --collect-all pythonnet \
+  --collect-all webview \
   "${COMMENTARY_DATA[@]}" \
   ${_DENO_BINARY_ARGS[@]+"${_DENO_BINARY_ARGS[@]}"} \
   ${_CLRLOADER_ARGS[@]+"${_CLRLOADER_ARGS[@]}"} \
-  "$REPO/desktop/desktop_launcher.py"
+  "$(_win "$REPO/desktop/desktop_launcher.py")"
 
 # 清理 staging 临时目录（Windows 无 ~/.Trash：mv 失败则就地删除，CI 上无副作用）
 if [ -n "${COMMENTARY_STAGING:-}" ] && [ -d "$COMMENTARY_STAGING" ]; then
@@ -288,15 +303,9 @@ if [ -z "$_ISCC" ]; then
   echo "⚠️  GitHub Actions 构建机请确保镜像含 Inno Setup 6（或 choco install innosetup）"
 else
   echo "   iscc: $_ISCC"
-  # 🔴 MSYS/Git Bash 对 `/Dxxx=/posix/path` 形式参数的路径转换行为不确定
-  #    （可能原样把 POSIX 路径透传给 Windows 程序，iscc 不认）——统一显式转
-  #    Windows 路径并关掉自动转换，Git Bash / WSL 两头都稳。
-  _win() {
-    if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"
-    elif command -v wslpath >/dev/null 2>&1; then wslpath -w "$1"
-    else printf '%s' "$1"; fi
-  }
-  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$_ISCC" \
+  # 关掉 MSYS 参数转换后，可执行文件自身也得转成 Windows 路径（execve 的路径
+  # 映射与参数转换是两套机制，不指望它；转了一劳永逸）。
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$(_win "$_ISCC")" \
     "/DAppVersion=${APP_VERSION}" \
     "/DOutputDir=$(_win "$REPO/dist")" \
     "/DOutputBaseFilename=VideoDownloader-Setup-${APP_VERSION}" \
