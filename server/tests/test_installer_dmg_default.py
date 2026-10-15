@@ -1,18 +1,23 @@
-"""安装包端点「默认 DMG + ZIP 兜底」契约回归（2026-10-15）。
+"""安装包端点「302 跳 R2 + 本机兜底」契约回归（2026-10-15）。
 
-背景：`/download/installer?p=macos` 原默认返回 ZIP（2026-10-13 上线时只有
-ZIP 一种包）。DMG 上传到更新通道后改为默认 DMG（macOS 标准安装形态），
-保留 `?p=macos-zip` 兜底（DMG 挂载异常环境 / 历史链接）。
+背景：`/download/installer?p=macos` 原在本机流式回给用户（FileResponse）。
+2026-10-15 安装包本体改托管 CF R2（download.hanyuxz.top）：ECS 出口仅
+~3.2Mbps，461MB DMG 直连也要 ~20 分钟；R2 走 CF 全球边缘、egress 免费。
+端点保留（下载计数 + 历史链接兼容），GET/HEAD 一律 302 跳 R2；R2 探测
+不达时回退本机 /opt/vdl-update/ 文件（安全网）。
 
-本测试钉住五件事：
-  1. `?p=macos` → DMG：Content-Type 为 x-apple-diskimage（不是 zip）、
-     Content-Disposition 文件名是 .dmg；
-  2. `?p=macos-zip` → ZIP：Content-Type application/zip、文件名 .zip；
-  3. 统计口径按平台归并：macos-zip 也记 "installer/macos"，不拆行；
-  4. 默认映射源码级回归：macos 指向 .dmg、存在 macos-zip 键（防手滑改回）；
-  5. 未知平台仍 404。
+本测试钉住六件事：
+  1. `?p=macos` → 302：Location 指向 R2 上的 DMG、Cache-Control no-store；
+  2. `?p=macos-zip` → 302：Location 指向 R2 上的 ZIP；
+  3. 统计口径按平台归且只计 GET：macos-zip 也记 "installer/macos"，
+     HEAD（下载管理器预检）不计；
+  4. R2 探测不达 → 回退本机：200 + dmg 媒体类型 + 真实文件字节；
+  5. 默认映射源码级回归：R2 地址、/opt/vdl-update 兜底路径、
+     媒体类型映射都在（防手滑改回单一通道）；
+  6. 未知平台仍 404。
 
-不联网、不写真实统计文件（record 替换为内存记录）、退出还原。
+不联网（_r2_reachable 打桩）、不写真实统计文件（record 替换为内存记录）、
+退出还原。
 """
 import inspect
 import os
@@ -23,13 +28,16 @@ from pathlib import Path
 _SERVER = Path(__file__).resolve().parents[1]
 if str(_SERVER) not in sys.path:
     sys.path.insert(0, str(_SERVER))
-os.environ.setdefault("VDL_DATA_DIR", tempfile.mkdtemp(prefix="vdl_dmg_"))
+os.environ.setdefault("VDL_DATA_DIR", tempfile.mkdtemp(prefix="vdl_r2_"))
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import dl_stats  # noqa: E402
 from routers import extension as ext  # noqa: E402
+
+_R2_DMG = "https://download.hanyuxz.top/VideoDownloader.dmg"
+_R2_ZIP = "https://download.hanyuxz.top/VideoDownloader.app.zip"
 
 
 def _client() -> TestClient:
@@ -57,6 +65,12 @@ def _with_recorder(fn):
         dl_stats.record = orig
 
 
+def _patch_reachable(value: bool):
+    orig = ext._r2_reachable
+    ext._r2_reachable = lambda url: value
+    return orig
+
+
 def _fake_packages():
     """造一个假 DMG + 假 ZIP，返回 (dmg_path, zip_path, 清理函数)。"""
     dmg = tempfile.NamedTemporaryFile(suffix=".dmg", delete=False)
@@ -76,85 +90,102 @@ def _fake_packages():
     return Path(dmg.name), Path(zp.name), cleanup
 
 
-def test_macos_default_returns_dmg():
-    """p=macos → DMG：类型/文件名/体积都按 dmg 来。"""
+def test_macos_default_redirects_to_r2():
+    """p=macos → 302：Location 指向 R2 上的 DMG，no-store。"""
+    orig = _patch_reachable(True)
+    try:
+        c = _client()
+        for method in ("head", "get"):
+            r = getattr(c, method)("/download/installer?p=macos",
+                                   follow_redirects=False)
+            assert r.status_code == 302, \
+                f"{method.upper()} 应 302，实际 {r.status_code}"
+            assert r.headers.get("location") == _R2_DMG, \
+                f"Location 应指向 R2 DMG: {r.headers.get('location')}"
+            assert r.headers.get("cache-control") == "no-store"
+    finally:
+        ext._r2_reachable = orig
+
+
+def test_macos_zip_fallback_redirects():
+    """p=macos-zip → 302：Location 指向 R2 上的 ZIP。"""
+    orig = _patch_reachable(True)
+    try:
+        c = _client()
+        r = c.head("/download/installer?p=macos-zip", follow_redirects=False)
+        assert r.status_code == 302, r.status_code
+        assert r.headers.get("location") == _R2_ZIP, \
+            f"Location 应指向 R2 ZIP: {r.headers.get('location')}"
+    finally:
+        ext._r2_reachable = orig
+
+
+def test_stats_merged_by_platform():
+    """计数口径：macos-zip 并入 macos；HEAD 不计、GET 计。"""
+    orig = _patch_reachable(True)
+    try:
+        def body(rec):
+            c = _client()
+            c.head("/download/installer?p=macos-zip", follow_redirects=False)
+            assert rec.calls == [], f"HEAD 不应计数，实际 {rec.calls}"
+            c.get("/download/installer?p=macos", follow_redirects=False)
+            c.get("/download/installer?p=macos-zip", follow_redirects=False)
+            assert rec.calls == [("installer", "macos"), ("installer", "macos")], \
+                f"两种格式都应归并到 installer/macos，实际 {rec.calls}"
+        _with_recorder(body)
+    finally:
+        ext._r2_reachable = orig
+
+
+def test_fallback_to_local_when_r2_unreachable():
+    """R2 探测不达 → 回退本机文件：200 + dmg 类型 + 真实字节。"""
     dmg, zp, cleanup = _fake_packages()
-    orig = ext._INSTALLER_FILES
+    orig_files = ext._INSTALLER_FILES
+    orig_reach = _patch_reachable(False)
     ext._INSTALLER_FILES = {"macos": dmg, "macos-zip": zp}
     try:
         c = _client()
         r = c.head("/download/installer?p=macos")
-        assert r.status_code == 200, f"HEAD 应 200，实际 {r.status_code}"
+        assert r.status_code == 200, f"回退应 200，实际 {r.status_code}"
         ct = r.headers.get("content-type", "")
         assert ct.startswith("application/x-apple-diskimage"), \
-            f"DMG 的 Content-Type 错（写死 zip 会让浏览器把 dmg 当 zip）: {ct}"
-        disp = r.headers.get("content-disposition", "")
-        assert disp.endswith('.dmg"'), f"文件名应是 .dmg: {disp}"
+            f"回退的 DMG Content-Type 错: {ct}"
         assert r.headers.get("content-length") == "2048"
-        # GET 的 body 也必须是真的 dmg 字节
         r2 = c.get("/download/installer?p=macos")
-        assert r2.content == b"\x00" * 2048, "GET body 应为 DMG 内容"
+        assert r2.content == b"\x00" * 2048, "回退 GET body 应为本机 DMG 内容"
     finally:
-        ext._INSTALLER_FILES = orig
-        cleanup()
-
-
-def test_macos_zip_fallback():
-    """p=macos-zip → ZIP：类型/文件名按 zip 来。"""
-    dmg, zp, cleanup = _fake_packages()
-    orig = ext._INSTALLER_FILES
-    ext._INSTALLER_FILES = {"macos": dmg, "macos-zip": zp}
-    try:
-        c = _client()
-        r = c.head("/download/installer?p=macos-zip")
-        assert r.status_code == 200, r.status_code
-        ct = r.headers.get("content-type", "")
-        assert ct.startswith("application/zip"), f"ZIP 类型错: {ct}"
-        disp = r.headers.get("content-disposition", "")
-        assert disp.endswith('.zip"'), f"文件名应是 .zip: {disp}"
-    finally:
-        ext._INSTALLER_FILES = orig
-        cleanup()
-
-
-def test_stats_merged_by_platform():
-    """计数口径：macos-zip 并入 macos，不按包装格式拆行。"""
-    dmg, zp, cleanup = _fake_packages()
-    orig = ext._INSTALLER_FILES
-    ext._INSTALLER_FILES = {"macos": dmg, "macos-zip": zp}
-
-    def body(rec):
-        c = _client()
-        c.head("/download/installer?p=macos-zip")
-        assert rec.calls == [], f"HEAD 不应计数，实际 {rec.calls}"
-        c.get("/download/installer?p=macos")
-        c.get("/download/installer?p=macos-zip")
-        assert rec.calls == [("installer", "macos"), ("installer", "macos")], \
-            f"两种格式都应归并到 installer/macos，实际 {rec.calls}"
-    try:
-        _with_recorder(body)
-    finally:
-        ext._INSTALLER_FILES = orig
+        ext._r2_reachable = orig_reach
+        ext._INSTALLER_FILES = orig_files
         cleanup()
 
 
 def test_default_mapping_source_guard():
-    """源码级回归：默认 macos→dmg、存在 macos-zip 键（防手滑改回 zip）。"""
+    """源码级回归：R2 地址 + 本机兜底路径 + 媒体类型映射都在。"""
     src = inspect.getsource(ext)
-    assert '"macos-zip"' in src, "默认映射必须有 macos-zip 兜底键"
+    assert "https://download.hanyuxz.top/VideoDownloader.dmg" in src, \
+        "macos 默认应 302 到 R2 DMG"
+    assert "https://download.hanyuxz.top/VideoDownloader.app.zip" in src, \
+        "macos-zip 兜底应 302 到 R2 ZIP"
+    assert '"macos-zip"' in src, "映射必须有 macos-zip 兜底键"
     assert "/opt/vdl-update/VideoDownloader.dmg" in src, \
-        "macos 默认应指向 DMG（改回 ZIP 会让官网又发 zip）"
+        "R2 不可达时的本机兜底路径缺失"
     assert "/opt/vdl-update/VideoDownloader.app.zip" in src, \
-        "macos-zip 兜底应指向 app.zip"
+        "R2 不可达时的本机兜底 ZIP 路径缺失"
     assert '".dmg": "application/x-apple-diskimage"' in src, \
         "DMG 媒体类型映射缺失"
+    assert "RedirectResponse(url, status_code=302" in src, \
+        "端点应 302 跳 R2（改回直连会让下载又慢回去）"
 
 
 def test_unknown_platform_still_404():
     """未知平台仍 404（不因新增 key 放行）。"""
-    c = _client()
-    r = c.get("/download/installer?p=windows")
-    assert r.status_code == 404, r.status_code
+    orig = _patch_reachable(True)
+    try:
+        c = _client()
+        r = c.get("/download/installer?p=windows", follow_redirects=False)
+        assert r.status_code == 404, r.status_code
+    finally:
+        ext._r2_reachable = orig
 
 
 if __name__ == "__main__":  # pragma: no cover

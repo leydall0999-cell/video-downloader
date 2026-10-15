@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
 router = APIRouter()
 
@@ -120,19 +120,31 @@ def extension_package(request: Request = None) -> Response:
     )
 
 
-# ── 桌面安装包下载（2026-10-13，2026-10-15 默认改 DMG）────────────────────
-# 用户要求「安装包下载次数并统计不同平台」。安装包本体在更新通道
-# /opt/vdl-update/（与网页服务同机）——这里计数后原样流式回给浏览器
-# （FileResponse，不走 8765 直链：https 页面直跳 http 下载会被 Chrome 拦）。
+# ── 桌面安装包下载（2026-10-13，2026-10-15 默认改 DMG + 托管 R2）──────────────
+# 用户要求「安装包下载次数并统计不同平台」。
 #
-# 2026-10-15：默认格式从 ZIP 改为 DMG（macOS 标准安装形态：双击挂载→拖拽），
-# 保留 ZIP 兜底 ?p=macos-zip —— DMG 挂载异常的环境（老系统/部分第三方磁盘工具）
-# 以及历史链接都能用。?p= 仍预留 windows 等后续包位。
+# 2026-10-15：安装包本体改托管 CF R2（download.hanyuxz.top，对象即
+# VideoDownloader.dmg / VideoDownloader.app.zip）。原因：ECS 出口只有
+# ~3.2Mbps（ecs.e-c1m1.large 固定带宽，实测聚合无增益），461MB DMG 直连
+# 也要 ~20 分钟；R2 走 CF 全球边缘且 egress 免费。端点保留（下载计数 +
+# 历史链接兼容）：GET/HEAD 一律 302 跳 R2；R2 探测不达时回退本机
+# /opt/vdl-update/ 文件（安全网——CF 侧异常时用户至少有慢路可下）。
+#
+# 默认格式仍是 DMG（macOS 标准安装形态：双击挂载→拖拽），?p=macos-zip
+# 为 ZIP 兜底（DMG 挂载异常环境 / 历史链接）。?p= 仍预留 windows 等后续位。
 _INSTALLER_FILES: dict[str, Path] = {
     "macos": Path(os.environ.get("VDL_INSTALLER_MACOS")
                   or "/opt/vdl-update/VideoDownloader.dmg"),
     "macos-zip": Path(os.environ.get("VDL_INSTALLER_MACOS_ZIP")
                       or "/opt/vdl-update/VideoDownloader.app.zip"),
+}
+
+# R2 公共地址（自定义域 download.hanyuxz.top → 桶 vdl-download 根）。
+_R2_INSTALLER_URLS: dict[str, str] = {
+    "macos": os.environ.get("VDL_R2_INSTALLER_MACOS")
+             or "https://download.hanyuxz.top/VideoDownloader.dmg",
+    "macos-zip": os.environ.get("VDL_R2_INSTALLER_MACOS_ZIP")
+                 or "https://download.hanyuxz.top/VideoDownloader.app.zip",
 }
 
 # 安装包媒体类型按扩展名取（DMG≠ZIP，写死 zip 会让浏览器把 dmg 也当 zip 处理）。
@@ -141,12 +153,31 @@ _INSTALLER_MEDIA_TYPES: dict[str, str] = {
     ".zip": "application/zip",
 }
 
+_R2_HEALTH_TIMEOUT = 3.0
+
+
+def _r2_reachable(url: str) -> bool:
+    """HEAD 探测 R2 公共地址是否可用（决定 302 还是回退本机）。
+
+    任何异常（超时/DNS/非 2xx-3xx）都按不可达处理——下载慢没关系，
+    但不能让用户面对错误页。
+    """
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            url, method="HEAD",
+            headers={"User-Agent": "vdl-installer-health/1.0"})
+        with urllib.request.urlopen(req, timeout=_R2_HEALTH_TIMEOUT) as resp:
+            return 200 <= resp.status < 400
+    except Exception:  # noqa: BLE001
+        return False
+
 
 @router.api_route("/download/installer", methods=["GET", "HEAD"])
 def download_installer(p: str = "macos", request: Request = None) -> Response:
     plat = str(p or "").strip().lower()
-    path = _INSTALLER_FILES.get(plat)
-    if path is None or not path.is_file():
+    url = _R2_INSTALLER_URLS.get(plat)
+    if url is None:
         raise HTTPException(status_code=404, detail="该平台的安装包尚未提供")
     # 仅计 GET：HEAD 是预检，不计入下载次数（口径同扩展包）。
     try:
@@ -156,8 +187,15 @@ def download_installer(p: str = "macos", request: Request = None) -> Response:
             dl_stats.record("installer", plat.split("-")[0])
     except Exception:  # noqa: BLE001
         pass
-    media_type = _INSTALLER_MEDIA_TYPES.get(
-        path.suffix.lower(), "application/octet-stream")
-    return FileResponse(path, media_type=media_type,
-                        filename=path.name,
-                        headers={"Cache-Control": "no-store"})
+    # R2 可达 → 302 到 CF 边缘（用户直连全速）；不可达 → 回退本机文件。
+    if _r2_reachable(url):
+        return RedirectResponse(url, status_code=302,
+                                headers={"Cache-Control": "no-store"})
+    path = _INSTALLER_FILES.get(plat)
+    if path is not None and path.is_file():
+        media_type = _INSTALLER_MEDIA_TYPES.get(
+            path.suffix.lower(), "application/octet-stream")
+        return FileResponse(path, media_type=media_type,
+                            filename=path.name,
+                            headers={"Cache-Control": "no-store"})
+    raise HTTPException(status_code=502, detail="安装包下载通道暂时不可用，请稍后重试")
