@@ -1,0 +1,41 @@
+name: build-win-d
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "构建分支（默认 app-dev）"
+        required: false
+        default: "app-dev"
+      commentary:
+        description: "解说管线：auto=有 PAT 就捆 / force-skip=明确不捆"
+        type: choice
+        options: [auto, force-skip]
+        default: auto
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: pyinstaller + innosetup
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      PIP_INDEX: "https://pypi.org/simple/"
+    steps:
+      - name: Checkout 主仓
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Build
+        run: echo "variant-d ok (steps sans expressions)"
