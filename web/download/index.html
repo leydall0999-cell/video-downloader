@@ -26,6 +26,15 @@
     .dl-top-bar .btn-ghost { font-size: .85rem; padding: .45rem .7rem; }
     .dl-back { text-align: center; margin-top: 2rem; }
     .dl-note { text-align:center; color: var(--text-mute); font-size: .82rem; margin-top: 1.4rem; }
+    .dl-slow { margin-top: .7rem; text-align: left; }
+    .dl-slow summary { cursor: pointer; color: var(--text-mute); font-size: .82rem; list-style: none; }
+    .dl-slow summary::-webkit-details-marker { display: none; }
+    .dl-slow summary::before { content: "▸ "; }
+    .dl-slow[open] summary::before { content: "▾ "; }
+    .dl-slow summary:hover { color: #4f46e5; }
+    .dl-slow .dl-slow-body { margin-top: .5rem; padding: .7rem .8rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius, .55rem); color: var(--text-mute); font-size: .8rem; line-height: 1.65; }
+    .dl-slow .dl-slow-body code { display: block; margin: .35rem 0; padding: .45rem .55rem; background: #f3f4f6; border-radius: .35rem; font-size: .74rem; word-break: break-all; user-select: all; }
+    .dl-slow .dl-slow-body b { color: var(--text, #1f2937); }
     @media (max-width: 640px){ .dl-grid{ grid-template-columns:1fr; } }
   </style>
 </head>
@@ -47,6 +56,15 @@
         <a class="btn btn-block btn-primary" href="/download/installer?p=macos" download>下载 macOS 安装包（DMG · 461 MB）</a>
         <p class="dl-note" style="margin-top:.6rem">安装：打开下载的 DMG，把「视频工坊」拖进「应用程序」文件夹。首次打开若提示无法验证，请右键点按图标再选「打开」（仅需一次）。</p>
         <p class="dl-note" style="margin-top:.4rem">打不开 DMG？<a href="/download/installer?p=macos-zip">下载 ZIP 版</a>（解压后同样拖进「应用程序」）</p>
+        <details class="dl-slow">
+          <summary>下载太慢？点这里提速</summary>
+          <div class="dl-slow-body">
+            安装包由 Cloudflare 全球边缘分发，支持断点续传。网络不佳时用<b>多线程下载工具</b>通常能快 2–4 倍：
+            <p style="margin:.4rem 0 0">· <b>aria2</b>（命令行）：先 <code style="display:inline;padding:0 .25rem">brew install aria2</code>，再运行
+              <code>aria2c -x16 -s16 "https://hanyuxz.top/download/installer?p=macos"</code></p>
+            <p style="margin:.4rem 0 0">· <b>FDM / Motrix</b>（免费图形工具）：新建任务，粘贴本页「下载」按钮的链接即可</p>
+          </div>
+        </details>
       </div>
       <div class="dl-card dl-card-soon">
         <div class="dl-ico">🪟</div>
@@ -75,7 +93,7 @@
       </div>
     </div>
 
-    <p class="dl-note">安装包由官网直链分发，下载即最新版；后续版本可在客户端内一键更新。</p>
+    <p class="dl-note">安装包由 Cloudflare 全球边缘网络分发，下载即最新版；后续版本可在客户端内一键更新（增量补丁，通常只有几 MB）。</p>
 
   </main>
 </body>
