@@ -1,9 +1,0 @@
-name: win-ping
-on:
-  push:
-    tags: ["v*"]
-jobs:
-  ping:
-    runs-on: windows-latest
-    steps:
-      - run: echo "hello from windows runner"

@@ -57,8 +57,16 @@ jobs:
       # ── 解说管线（私有仓，需 COMMENTARY_PAT；缺省跳过）──
       # checkout 到 <workspace>/commentary-pipeline，正好是 build_win.sh 的
       # 默认候选路径 COMMENTARY_PIPELINE_DIR=$REPO/../commentary-pipeline
+      #
+      # 🔴 2026-10-16 实测教训（两个变体跑一轮才定位到）：step 级 if 里
+      # **绝对不能引用 secrets**——未配置的 secret 在 workflow 编译期就让整个
+      # workflow 无法实例化 job（现象：run 秒败、jobs 数 0、无任何日志）。
+      # 现在 if 只判断 inputs；secrets 放 with.token 里（运行时求值），
+      # 没有 PAT 时 checkout 私有仓会失败 → continue-on-error 吞掉 →
+      # build_win.sh 找不到管线 → 构建无解说版（Summary 有明确标注）。
       - name: Checkout 解说管线（可选）
-        if: ${{ github.event.inputs.commentary != 'force-skip' && secrets.COMMENTARY_PAT != '' }}
+        if: ${{ github.event.inputs.commentary != 'force-skip' }}
+        continue-on-error: true
         uses: actions/checkout@v4
         with:
           repository: leydall0999-cell/commentary-pipeline
@@ -70,7 +78,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-          cache: pip
+          # 不配 cache: pip —— 实测 Post step 会偶发失败（无 lock 文件时 cache
+          # 保存报错），且本 workflow 每次全量 pip install，缓存收益有限
 
       # 镜像通常自带 ffmpeg；探测不到再装（choco 幂等）
       - name: Ensure ffmpeg/ffprobe in PATH
@@ -133,13 +142,15 @@ jobs:
 
       - name: Summary
         run: |
+          # 解说管线是否真捆进包：以产物目录为准（比 secret 存在性更准确的事实判断）
+          if [ -d "dist/VideoDownloader/_internal/commentary" ] || [ -d "dist/VideoDownloader/commentary" ]; then
+            PL="✅ 已捆绑"; else PL="❌ 未捆绑（无 COMMENTARY_PAT、被强制跳过或 checkout 失败）"; fi
           {
             echo "## Windows 构建结果"
             echo ""
-            echo "- 版本: \`${{ env.VER }}\` (仓库 VERSION: $(cat VERSION | tr -d '[:space:]'))"
-            echo "- 提交: \`${{ github.sha }}\`"
+            echo "- 版本: \`$(cat VERSION | tr -d '[:space:]')\` (commit \`${{ github.sha }}\`)"
             echo "- Smoke test: ${{ steps.smoke.outcome == 'success' && '✅ 8321 响应 200' || '⚠️ 未通过（可能是无头环境限制，见日志）' }}"
-            echo "- 解说管线: ${{ secrets.COMMENTARY_PAT != '' && github.event.inputs.commentary != 'force-skip' && '✅ 已捆绑' || '❌ 未捆绑（无 COMMENTARY_PAT 或被强制跳过）' }}"
+            echo "- 解说管线: ${PL}"
             echo ""
             echo "| 产物 | 大小 |"
             echo "|---|---|"
