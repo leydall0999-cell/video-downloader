@@ -15,13 +15,16 @@ job 机制独立于 CONVERT_JOBS：SUBTITLE_JOBS + app.executor，设备隔离�
 （X-Device-Id 头查状态 / device= query 下载）。
 """
 import app
+import hashlib
 import json
 import os
 import re
+import tarfile
 import time
 import shutil
 import subprocess
 import threading
+import urllib.request
 from pathlib import Path as _Path
 
 from fastapi import APIRouter
@@ -100,6 +103,98 @@ def _sensevoice_dir():
         if (p / "model.int8.onnx").exists() and (p / "tokens.txt").exists():
             return p
     return None
+
+
+# ── SenseVoice 模型懒加载（2026-10-15，安装包瘦身 228MB）──────────────────
+# 背景：model.int8.onnx 单文件 228MB，占安装包 49.5%，而 SenseVoice 只是字幕的
+# 「提示引导」增强（initial_prompt，见文件头注记）——拿不到就静默降级纯 Whisper。
+# 因此安装包不再内置模型，首次使用本地字幕时从 R2 下载 xz 归档（239MB→146MB，
+# CF 边缘全速）→ 验 sha256 → 解压落 ~/.cache/vdl-sensevoice/。
+# 设计约束：① 下载失败**不阻断字幕任务**（返回 False，纯 Whisper 照常出片），
+# 下次任务自动重试；② 进度写进 job["stage"]/["progress"]，前端轮询直接可见；
+# ③ 旧安装包（包内自带模型）走 _sensevoice_dir() 直接命中，零下载。
+_SV_MODEL_URL = (os.environ.get("VDL_SENSEVOICE_MODEL_URL")
+                 or "https://download.hanyuxz.top/models/sensevoice-v1.tar.xz")
+_SV_MODEL_SHA = "fd6155aaad769393df6b7fec37170eafba21787b06be05ff00e9961887bd38c7"
+_SV_MODEL_BYTES = 153039456          # 归档大小；进度百分比优先用 Content-Length
+_SV_MODEL_LOCK = threading.Lock()    # 多字幕任务并发时只允许一个下载
+
+
+def _ensure_sensevoice_model(job=None) -> bool:
+    """确保 SenseVoice 模型就位；不可用时返回 False（调用方降级纯 Whisper）。"""
+    if _sensevoice_dir() is not None:
+        return True                    # 包内自带（旧安装包）或缓存已有
+    with _SV_MODEL_LOCK:
+        if _sensevoice_dir() is not None:   # 等锁期间别的任务可能已下好
+            return True
+        cache = _Path.home() / ".cache" / "vdl-sensevoice"
+        marker = cache / ".model-ok"
+        try:
+            if marker.exists() and marker.read_text().strip() == _SV_MODEL_SHA:
+                return True
+        except Exception:              # noqa: BLE001  标记损坏就当没有，重下
+            pass
+        tmp = cache / "sensevoice-v1.tar.xz.part"
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+            last_err = None
+            for _attempt in (1, 2, 3):  # 网络抖动重试；断流/换 IP 都能救
+                try:
+                    _sv_download_model(tmp, job)
+                    break
+                except Exception as _exc:   # noqa: BLE001
+                    last_err = _exc
+                    app.logger.warning("[subtitle] 模型下载第 %d 次失败：%s",
+                                       _attempt, _exc)
+                    try:
+                        tmp.unlink()
+                    except Exception:  # noqa: BLE001
+                        pass
+            else:
+                raise RuntimeError(f"模型下载多次失败：{last_err}")
+            # sha256 校验通过才解压；.part 后缀保证半途文件永被当成模型用
+            _h = hashlib.sha256()
+            with open(tmp, "rb") as _fh:
+                for _blk in iter(lambda: _fh.read(1 << 20), b""):
+                    _h.update(_blk)
+            if _h.hexdigest() != _SV_MODEL_SHA:
+                raise RuntimeError("模型包 sha256 校验失败")
+            with tarfile.open(tmp, "r:xz") as _tf:
+                _tf.extractall(cache)   # 归档仅两个平级文件，无路径穿越面
+            marker.write_text(_SV_MODEL_SHA)
+            tmp.unlink(missing_ok=True)
+            app.logger.info("[subtitle] SenseVoice 模型已就绪：%s", cache)
+            return True
+        except Exception as _exc:      # noqa: BLE001  任何失败都降级，不阻断字幕任务
+            app.logger.warning("[subtitle] SenseVoice 模型不可用，降级纯 Whisper：%s", _exc)
+            try:
+                tmp.unlink()
+            except Exception:          # noqa: BLE001
+                pass
+            return False
+
+
+def _sv_download_model(tmp: _Path, job=None) -> None:
+    """流式下载模型包到 tmp（urllib，无第三方依赖），带进度回调。"""
+    _req = urllib.request.Request(_SV_MODEL_URL,
+                                  headers={"User-Agent": "VideoDownloader/1.0"})
+    with urllib.request.urlopen(_req, timeout=60) as _resp, open(tmp, "wb") as _fh:
+        _total = int(_resp.headers.get("Content-Length") or _SV_MODEL_BYTES)
+        _done = 0
+        _pct = -1
+        while True:
+            _blk = _resp.read(1 << 20)
+            if not _blk:
+                break
+            _fh.write(_blk)
+            _done += len(_blk)
+            if job is not None and _total > 0:
+                _p = int(_done * 100 / _total)
+                if _p != _pct:         # 只在百分比变化时刷 UI，避免每 MB 都写
+                    _pct = _p
+                    job["stage"] = f"下载语音识别模型（首次，{_p}%）"
+                    # 5-15 区间：不盖住「提取音频」的 5，也不越过「加载模型」的 15
+                    job["progress"] = 5 + _p // 10
 
 
 def _sensevoice_recognizer():
@@ -656,6 +751,11 @@ def _run_subtitle(job_id: str, src: str, model_size: str, language: str, to_libr
                 job["source"] = "lyrics"
                 job["lyrics_from"] = lyric_desc
                 return
+
+        # 1.8) SenseVoice 模型懒加载（2026-10-15）：安装包不再内置 228MB 模型，
+        #     首次使用本地字幕时从 R2 下载（进度写入 stage，前端轮询可见）。
+        #     失败不阻断——返回 False 后下面纯 Whisper 链路照常产出字幕。
+        _ensure_sensevoice_model(job)
 
         # 2) 加载模型（首次含下载，可能数分钟）；线程数按会员状态（免费 4 / 会员满核）
         job["stage"] = f"加载模型（{model_size} · {cpu_threads} 线程，首次需下载）"

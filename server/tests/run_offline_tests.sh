@@ -141,6 +141,7 @@ run_one test_subtitle_preview.py
 run_one test_subtitle_audio.py
 run_one test_subtitle_music_fallback.py
 run_one test_subtitle_lyrics.py
+run_one test_sensevoice_lazy_model.py    # SenseVoice 模型懒加载：下载/验签/解压/降级/接线（2026-10-15 安装包瘦身 228MB）
 run_one test_quality_options.py
 run_one test_quality_member_gate.py          # 清晰度会员门槛：免费档 2K/4K → 402 引导开会员（2026-10-02 用户「免费用户 1080 以上要弹会员」）
 run_one test_quality_member_ui_wiring.py     # 清晰度门槛三端接线：后端两入口都挂门 + 前端弹会员中心（不弹＝用户不知道怎么解锁）

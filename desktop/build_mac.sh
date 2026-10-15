@@ -699,18 +699,28 @@ echo "   版本：$APP_VERSION"
 echo "▶ 打包 aria2c（种子后端随安装包自包含，脱离本机 Homebrew）"
 python3 "$REPO/desktop/bundle_aria2.py" "$REPO/dist/VideoDownloader.app/Contents/Resources" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用）"
 
-# SenseVoice 模型（字幕「粤语 / 现场噪声」增强，2026-09-23）：随包自包含，离线可用。
-# 构建机上没有模型时**不失败**——运行时找不到就静默降级为纯 Whisper 链路。
-echo "▶ 打包 SenseVoice 模型（粤语 / 现场噪声增强）"
+# SenseVoice 模型（字幕「粤语 / 现场噪声」增强）：
+# ⚠️ 2026-10-15 起默认**不再随包分发**：model.int8.onnx 单文件 228MB，占安装包
+# 49.5%，而它只是 initial_prompt 增强（拿不到就静默降级纯 Whisper）。改为首次
+# 使用本地字幕时按需下载（server/routers/subtitle.py::_ensure_sensevoice_model，
+# R2 上的 xz 归档 146MB + sha256 校验），安装包 461MB → ~233MB。
+# 需要包内自带（离线装机 / 内网分发）时：VDL_BUNDLE_SENSEVOICE=1 bash desktop/build_mac.sh
+echo "▶ SenseVoice 模型（默认按需下载，不随包分发）"
 SV_SRC="${VDL_SENSEVOICE_DIR:-$HOME/.cache/vdl-sensevoice}"
 SV_DST="$REPO/dist/VideoDownloader.app/Contents/Resources/sensevoice"
-if [ -f "$SV_SRC/model.int8.onnx" ] && [ -f "$SV_SRC/tokens.txt" ]; then
+if [ "${VDL_BUNDLE_SENSEVOICE:-0}" = "1" ] && [ -f "$SV_SRC/model.int8.onnx" ] && [ -f "$SV_SRC/tokens.txt" ]; then
   mkdir -p "$SV_DST"
   cp "$SV_SRC/model.int8.onnx" "$SV_DST/"
   cp "$SV_SRC/tokens.txt" "$SV_DST/"
-  echo "   已注入：Contents/Resources/sensevoice（$(du -sh "$SV_DST" | cut -f1)）"
+  echo "   已按 VDL_BUNDLE_SENSEVOICE=1 注入：Contents/Resources/sensevoice（$(du -sh "$SV_DST" | cut -f1)）"
 else
-  echo "   ⚠️ 未找到模型（${SV_SRC}），跳过——字幕将仅用 Whisper（粤语支持不可用）"
+  # 防御：若上轮注入的目录因故残留（正常构建已在 PyInstaller 前移走旧 app），
+  # 用 mv 进 _old_*（cleanup_family 的既有模式）移走，保证新包确无模型。
+  if [ -e "$SV_DST" ]; then
+    mv "$SV_DST" "$REPO/dist/_old_sensevoice_$$" 2>/dev/null || true
+    echo "   ⚠️ 清理了残留的 $SV_DST"
+  fi
+  echo "   跳过：首次使用时从 download.hanyuxz.top/models/sensevoice-v1.tar.xz 下载（146MB）"
 fi
 
 echo "▶ 签名（ad-hoc）"
