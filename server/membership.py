@@ -34,10 +34,11 @@ from typing import Any, Callable, Optional
 # --------------------------------------------------------------------------- #
 
 # download member: 时长（天）、折算锚点
-# 🔴 2026-10-16 用户定档：下载会员统一改名「VIP会员·X」，3 天档下架（云端覆盖层
-#    同步删除 download_3day；两端默认值一并改，避免云端不可达时回退旧名/旧档）。
+# 🔴 2026-10-16 用户定档：下载会员统一改名「VIP会员·X」（6 档全在；3 天档当天
+#    一度下架、当天即按用户要求重新上架，云端覆盖层与默认值保持一致）。
 DOWNLOAD_PLANS: dict[str, dict[str, Any]] = {
     "download_1day":       {"price_cny": 1.90,   "days": 1,    "label": "VIP会员·1天",   "saving": 0.0},
+    "download_3day":       {"price_cny": 4.90,   "days": 3,    "label": "VIP会员·3天",   "saving": 0.0},
     "download_7day":       {"price_cny": 9.90,   "days": 7,    "label": "VIP会员·7天",   "saving": 0.0},
     "download_month":      {"price_cny": 29.80,  "days": 30,   "label": "VIP会员·30天",  "saving": 0.0},
     "download_half_year":  {"price_cny": 99.90,  "days": 180,  "label": "VIP会员·半年",  "saving": 0.44},
