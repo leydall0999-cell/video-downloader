@@ -24,6 +24,13 @@
 #define SourceDir "..\dist\VideoDownloader"
 #define IconFile "..\desktop\icon.ico"
 
+; Inno Setup 官方发行版【不含】简体中文语言包（Languages 目录里没有 ChineseSimplified.isl）
+; → 由 build_win.sh / CI 下载后放到 desktop/langs/ChineseSimplified.isl，再由 /DMessagesFile 传进来
+; 找不到就退化为官方英文向导（compiler:Default.isl）——保证构建一定出包，不硬失败
+#ifndef MessagesFile
+#define MessagesFile "compiler:Default.isl"
+#endif
+
 #define AppName "视频工坊"
 #define AppExeName "VideoDownloader.exe"
 #define AppPublisher "hanyuxz.top"
@@ -62,8 +69,8 @@ CloseApplications=yes
 RestartApplications=no
 
 [Languages]
-; Inno 6 内置简体中文语言文件
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; 简体中文；MessagesFile 由 /DMessagesFile 覆盖（缺省 compiler:Default.isl = 英文）
+Name: "chinesesimplified"; MessagesFile: "{#MessagesFile}"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标:"; Flags: checkedonce

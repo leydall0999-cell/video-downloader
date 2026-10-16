@@ -303,6 +303,19 @@ if [ -z "$_ISCC" ]; then
   echo "⚠️  GitHub Actions 构建机请确保镜像含 Inno Setup 6（或 choco install innosetup）"
 else
   echo "   iscc: $_ISCC"
+  # 简体中文语言包：Inno Setup 官方发行版不带（Languages 里没有 ChineseSimplified.isl），
+  # 由 CI 预下载到 desktop/langs/。找不到就退化为英文向导，不阻断出包。
+  _MESSAGES_FILE="compiler:Default.isl"
+  for _isl in "$REPO/desktop/langs/ChineseSimplified.isl" \
+              "/c/Program Files (x86)/Inno Setup 6/Languages/ChineseSimplified.isl" \
+              "/c/Program Files/Inno Setup 6/Languages/ChineseSimplified.isl"; do
+    if [ -f "$_isl" ]; then _MESSAGES_FILE="$(_win "$_isl")"; break; fi
+  done
+  if [ "$_MESSAGES_FILE" = "compiler:Default.isl" ]; then
+    echo "   lang: 未找到简体中文语言包 → 英文安装向导（不影响功能）"
+  else
+    echo "   lang: $_MESSAGES_FILE"
+  fi
   # 关掉 MSYS 参数转换后，可执行文件自身也得转成 Windows 路径（execve 的路径
   # 映射与参数转换是两套机制，不指望它；转了一劳永逸）。
   MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$(_win "$_ISCC")" \
@@ -311,6 +324,7 @@ else
     "/DOutputBaseFilename=VideoDownloader-Setup-${APP_VERSION}" \
     "/DSourceDir=$(_win "$DIST_APP")" \
     "/DIconFile=$(_win "$ICON_ICO")" \
+    "/DMessagesFile=${_MESSAGES_FILE}" \
     "$(_win "$REPO/desktop/installer.iss")"
   SETUP_EXE="$REPO/dist/VideoDownloader-Setup-${APP_VERSION}.exe"
   if [ -f "$SETUP_EXE" ]; then

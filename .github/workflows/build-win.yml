@@ -102,6 +102,47 @@ jobs:
       # aria2c 由 desktop/bundle_aria2.py 从 GitHub release 自动下载 Windows 版；
       # deno.exe 由 pip 的 deno 包提供（build_win.sh --add-binary 进包）
 
+      # ── Inno Setup 简体中文语言包 ──
+      # 🔴 官方发行版【不含】中文（实测 iscc 6.7.1 报 Couldn't open
+      #    "compiler:Languages\ChineseSimplified.isl"）→ 必须自己提供。
+      # 下载到 desktop/langs/，build_win.sh 探测到就用 /DMessagesFile 传给 iscc；
+      # 下载失败不阻断——退化成英文向导，安装包照样出（功能不受影响）。
+      # iscc 要求 .isl 是 UTF-8 with BOM（或系统 ANSI），无 BOM 会乱码 → 补 BOM。
+      - name: 拉取 Inno Setup 简体中文语言包
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:GITHUB_WORKSPACE "desktop\langs"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $target = Join-Path $dest "ChineseSimplified.isl"
+          $urls = @(
+            "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl",
+            "https://raw.githubusercontent.com/jrsoftware/issrc/master/Files/Languages/ChineseSimplified.isl",
+            "https://raw.githubusercontent.com/kira-96/Inno-Setup-Chinese-Simplified-Translation/master/ChineseSimplified.isl"
+          )
+          foreach ($u in $urls) {
+            try {
+              Invoke-WebRequest -Uri $u -OutFile $target -UseBasicParsing -TimeoutSec 60
+              if ((Test-Path $target) -and ((Get-Item $target).Length -gt 5000)) {
+                Write-Host "lang ok: $u -> $((Get-Item $target).Length) bytes"
+                break
+              }
+              Write-Host "lang too small / missing: $u"
+            } catch {
+              Write-Host "lang fetch failed: $u -> $($_.Exception.Message)"
+            }
+          }
+          if ((Test-Path $target) -and ((Get-Item $target).Length -gt 5000)) {
+            $bytes = [System.IO.File]::ReadAllBytes($target)
+            if (-not ($bytes.Length -gt 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)) {
+              [System.IO.File]::WriteAllBytes($target, [byte[]](0xEF,0xBB,0xBF) + $bytes)
+              Write-Host "added UTF-8 BOM to ChineseSimplified.isl"
+            }
+          } else {
+            Remove-Item $target -ErrorAction SilentlyContinue
+            Write-Host "lang unavailable -> installer will use English (compiler:Default.isl)"
+          }
+
       - name: Build (pyinstaller onedir + innosetup)
         # tee 落一份日志 + PIPESTATUS 显式取 build_win.sh 真实退出码
         # （不依赖 pipefail；失败时下一步把日志传成 artifact，匿名 API 可下载）
