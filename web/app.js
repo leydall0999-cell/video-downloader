@@ -7889,8 +7889,10 @@
       ? (Array.isArray(t.benefits) ? t.benefits.map((b) => escHtml(b.text || b)) : [])
       : (Array.isArray(t.features) ? t.features.map((f) => escHtml(f)) : []);
     if (featList.length) head = `<ul class="mem-benefits">${featList.map((x) => `<li>${x}</li>`).join('')}</ul>`;
+    // 2026-10-16 用户定档：下载轨卡片不再渲染「X 天全速提取」描述行——档位名
+    // （VIP会员·1天/7天/30天/半年/1年）已自带时长，描述行属冗余信息。
     const meta = key === 'download'
-      ? (pl) => (pl.days ? `${pl.days} 天全速提取` : '')
+      ? () => ''
       : key === 'ai'
         ? (pl) => `月赠 ${pl.credits} 积分 · 30 天有效`
         : (pl) => `一次性到账 ${pl.credits} 积分 · 永不过期`;
