@@ -90,6 +90,23 @@ jobs:
           path: commentary-pipeline
           fetch-depth: 0
 
+      - name: 解说凭据来源诊断
+        # 🔴 密钥内容绝不打印，只打印「长度」——用来区分：
+        #    deploy_key_len>0 且 pipeline_present=yes ⇒ 是 Deploy Key 在起作用（永久有效）
+        #    deploy_key_len=0 且 pipeline_present=yes ⇒ 还在靠会过期的 PAT 顶着
+        #    deploy_key_len=0 且 pipeline_present=no  ⇒ 凭据全失效，本次为无解说版
+        run: |
+          _k='${{ secrets.COMMENTARY_DEPLOY_KEY }}'
+          _p='${{ secrets.COMMENTARY_PAT }}'
+          echo "deploy_key_len=${#_k}"
+          echo "pat_len=${#_p}"
+          if [ -f commentary-pipeline/process.py ]; then
+            echo "pipeline_present=yes"
+            echo "pipeline_head=$(git -C commentary-pipeline rev-parse --short HEAD 2>/dev/null)"
+          else
+            echo "pipeline_present=no"
+          fi
+
       - name: Setup Python 3.13
         uses: actions/setup-python@v5
         with:
