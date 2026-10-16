@@ -18,11 +18,25 @@
 ; ============================================================================
 
 ; ---- 默认值（可被 build_win.sh 的 /D 覆盖；单独编译时用相对本文件路径）----
+; 🔴 必须逐个用 #ifndef 包起来：ISPP 里脚本内的 #define 会【覆盖】命令行 /D 传的值。
+;    win12 实证：/DOutputBaseFilename=VideoDownloader-Setup-1.0.68 被下面的默认值
+;    吃掉 → 产物成了 VideoDownloader-Setup.exe，脚本判定「未找到」而失败
+;    （同理 AppVersion 也会变成默认的 0.0.0，写进 Setup 的 VersionInfo）。
+#ifndef AppVersion
 #define AppVersion "0.0.0"
+#endif
+#ifndef OutputDir
 #define OutputDir "..\dist"
+#endif
+#ifndef OutputBaseFilename
 #define OutputBaseFilename "VideoDownloader-Setup"
+#endif
+#ifndef SourceDir
 #define SourceDir "..\dist\VideoDownloader"
+#endif
+#ifndef IconFile
 #define IconFile "..\desktop\icon.ico"
+#endif
 
 ; Inno Setup 官方发行版【不含】简体中文语言包（Languages 目录里没有 ChineseSimplified.isl）
 ; → 由 build_win.sh / CI 下载后放到 desktop/langs/ChineseSimplified.isl，再由 /DMessagesFile 传进来
