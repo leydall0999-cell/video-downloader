@@ -4089,6 +4089,8 @@ from routers import share as _share_rtr
 app.include_router(_share_rtr.router)   # 扫码分享：配置下发 + 二维码生成（2026-09-20）
 from routers import pagetool as _pagetool_rtr
 app.include_router(_pagetool_rtr.router)   # 文件变网页：本机文件 → 自包含 HTML 页面（2026-09-30）
+from routers import userdata as _userdata_rtr
+app.include_router(_userdata_rtr.router)   # 用户信息类数据云备份：设置/收藏/历史 + Cookie 密文（2026-10-16）
 # 账号 / per-user 会员解析（A1+B2）：供各路由经 request 取当前用户态 store。
 # 必须在模块顶层定义（与 member_store 同级），否则 routers 里 `import app` 取不到。
 from user_membership import get_current_user_id, current_member_store

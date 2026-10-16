@@ -1347,6 +1347,9 @@ def _usage_cloud_only(ident: str) -> dict[str, Any]:
         "account_bound_at": 0.0,
         "support": {"threads": [], "total_threads": 0},
         "cloud": cloud,
+        # 云端资料备份的元数据（分区清单 / Cookie 平台清单 / 条数 / 更新与设备），
+        # 不含密文与内容 —— 面板按这个渲染「云端资料」区块。
+        "cloud_data": data.get("data_meta"),
         "cloud_only": True,
     }
 
@@ -1383,6 +1386,10 @@ def admin_user_usage(user_id: str, request: Request = None) -> dict[str, Any]:
     )
     bundle["support"] = _usage_support(uid)
     bundle["cloud"] = _usage_cloud(user.get("identifier") or "")
+    # 2026-10-16：云端资料（用户信息类数据备份）的**元数据**——只给「有哪些分区、
+    # Cookie 平台清单/条数/更新时间」，不含密文也不含内容，与云端账号口径统一。
+    bundle["cloud_data"] = ((bundle["cloud"].get("data") or {}).get("data_meta")
+                            if bundle["cloud"].get("ok") else None)
     return {"ok": True, "usage": bundle}
 
 

@@ -689,6 +689,16 @@ _ALLOWED_SHARED_CONFIG = {
     "vault.json", "cloud_matting.json", "cloud_matting_managed.json",
     "credentials.json", "proxy.json", "gateway.json", "gateway_managed.json",
     "llm_managed.json", "stats.json", "tasks_state.json", "vision_managed.json",
+    # (e) 用户信息类数据云备份（server/user_data_cloud.py，2026-10-16）是**同步层**，
+    #     不是第二个功能配置：它按用户口径把这些**功能模块自己的**配置文件随账号
+    #     备份到云端，必须整段读写原始文件才能保真（各模块的 save_* 会做规范化 /
+    #     默认值展开，用它们会丢掉同步层要保留的本机独有键）。
+    #     写入只发生在**用户显式触发的同步**（登录 / 手动同步；见 sync()）里，
+    #     策略是「逐键覆盖、保留本机独有键」，没有后台任务或请求路径的写 ⇒
+    #     与功能模块各自的写不并发，不会出现「两处各写一份、互相覆盖字段」。
+    #     功能模块仍是各自文件的唯一写入者（正常运行时）。
+    "commentary_config.json", "llm_config.json",
+    "vision_config.json", "voice_studio_config.json",
 }
 
 

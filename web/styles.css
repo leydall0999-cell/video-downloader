@@ -4898,6 +4898,13 @@ html.theme-dark .pf-pool-note.is-warn { color: #fbbf24; }
 }
 .member-cloud-devhint { margin: .2rem 0 0; font-size: .72rem; color: var(--text-mute, #8a90a2); }
 .member-cloud-hint { margin: .4rem 0 0; color: #c0392b; font-size: .76rem; }
+/* 云端资料行（用户信息类数据备份）：复用设备行的外观，与设备列表拉开一点间距。
+   行内按钮必须显式压掉 .btn 的 min-height: var(--tap)=44px（`.btn-xs` 是死类，无效）。 */
+.member-cloud-data { margin-top: .5rem; }
+.member-cloud-data .cloud-data-sync {
+  flex: none; min-height: 0; height: 24px; padding: 0 .55rem;
+  font-size: .72rem; border-radius: var(--radius-sm, 8px);
+}
 .member-cloud-login { display: flex; flex-direction: column; gap: .5rem; }
 
 /* 字幕提取：右上角「?」帮助按钮 + 展开说明 */
@@ -6940,7 +6947,8 @@ html.theme-dark .member-plan:hover { box-shadow: 0 4px 14px rgba(0, 0, 0, .45); 
 html.theme-dark .member-badge-saving { background: #3a2a17; color: #fdba74; border-color: #7c4a1e; }
 html.theme-dark .member-benefits-top,
 html.theme-dark .member-cloud-dev { background: var(--bg-soft); border-color: var(--line); }
-html.theme-dark .member-cloud-dev .cloud-unbind { background: #2b2e37; color: var(--text-mute); border-color: var(--line); }
+html.theme-dark .member-cloud-dev .cloud-unbind,
+html.theme-dark .member-cloud-dev .cloud-data-sync { background: #2b2e37; color: var(--text-mute); border-color: var(--line); }
 /* 状态条 / tab 条：浅色下分别是「淡底 + 白胶囊」，深色下照搬会出现浅底浅字（读不出来） */
 html.theme-dark .member-status-inner { background: var(--bg-soft); border-color: var(--line); }
 html.theme-dark .member-status-empty { background: var(--bg-soft); }

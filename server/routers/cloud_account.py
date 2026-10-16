@@ -22,13 +22,16 @@
 """
 from __future__ import annotations
 
+import logging
 import platform
 import socket
+import threading
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Request
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _SYNC_MIN_INTERVAL = 1800.0   # 自动同步最小间隔（秒），避免每次请求都打云端
 
@@ -36,6 +39,36 @@ _SYNC_MIN_INTERVAL = 1800.0   # 自动同步最小间隔（秒），避免每次
 def _store():
     import app
     return app.member_store
+
+
+def _sync_userdata(store, password: str) -> None:
+    """登录 / 注册成功后，把「用户信息类数据」与云端对齐一次。
+
+    换机场景就靠这一步：新机登录 → 拉云端资料 → 设置与登录态落地，用户无感。
+    走**后台线程**，不阻塞登录响应；失败只记日志（同步是增强，不是登录前置）。
+
+    Cookie 是端到端加密的（服务端只存密文），所以这里必须带上登录密码才能派生
+    密钥 —— 密码只在本调用栈内存里用，不落盘、不进日志。
+    """
+    getter = getattr(store, "_cloud_token", None)
+    token = ""
+    try:
+        token = str(getter() or "").strip() if callable(getter) else ""
+    except Exception:
+        token = ""
+    if not token:
+        return
+
+    def _run() -> None:
+        try:
+            import user_data_cloud as udc
+            rep = udc.sync(token, password or None)
+            logger.info("[cloud] 用户资料同步: action=%s ok=%s",
+                        rep.get("action"), rep.get("ok"))
+        except Exception as e:                      # 同步失败绝不影响已完成的登录
+            logger.info("[cloud] 用户资料同步跳过: %s", e)
+
+    threading.Thread(target=_run, name="vdl-userdata-sync", daemon=True).start()
 
 
 # --------------------------------------------------------------------------- #
@@ -599,6 +632,7 @@ def cloud_register(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 "code": r.get("code") or "REJECTED"}
     store = _store()
     _after_login(store, email, r, fp, name)
+    _sync_userdata(store, password)        # 用户信息类数据：与云端对齐（后台）
     try:
         local_token = _local_token_for(email, password)
     except Exception:
@@ -650,6 +684,7 @@ def cloud_login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 "code": r.get("code") or "REJECTED"}
     store = _store()
     _after_login(store, email, r, fp, name)
+    _sync_userdata(store, password)        # 用户信息类数据：与云端对齐（后台）
     extra = {}
     try:
         extra["local_token"] = _local_token_for(email, password)

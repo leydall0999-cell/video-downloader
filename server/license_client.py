@@ -158,6 +158,25 @@ def heartbeat_remote(token: str, fp: str, base_url: Optional[str] = None,
     return _post("/api/license/heartbeat", payload, base_url, timeout, opener)
 
 
+# ---- 用户信息类数据云备份（2026-10-16）----
+# 与公共 Cookie 池（cookie_pool）严格区分：池是共享给全体访客复用的运营资源；
+# 这里走的是**按账号隔离的私有备份**，只有本人 token 能取回自己的资料包。
+# 敏感分区（Cookie header 等）由调用方在**本机**加密后放进 payload，服务端只存密文。
+def userdata_pull_remote(token: str, base_url: Optional[str] = None,
+                         timeout: float = 15.0,
+                         opener: Optional[Callable] = None) -> dict[str, Any]:
+    """取回本人云端资料包。返回 {ok, payload(可为 None), meta(可为 None)}。"""
+    return _post("/api/license/data-pull", {"token": token}, base_url, timeout, opener)
+
+
+def userdata_push_remote(token: str, payload: dict[str, Any],
+                         base_url: Optional[str] = None, timeout: float = 40.0,
+                         opener: Optional[Callable] = None) -> dict[str, Any]:
+    """上传/覆盖本人云端资料包（幂等）。返回 {ok, updated_at, meta}。"""
+    return _post("/api/license/data-push",
+                 {"token": token, "payload": payload}, base_url, timeout, opener)
+
+
 def stat_query_remote(admin_token: str, base_url: Optional[str] = None,
                       timeout: float = 10.0) -> dict[str, Any]:
     """管理员查询「安装 / 插件次数统计（按平台）」聚合（2026-10-13 新增）。

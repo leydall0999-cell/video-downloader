@@ -55,6 +55,14 @@ def _save(host: str, header: str) -> None:
         # 原子写（唯一临时名，权限 0600）：直接 write_text 先截断再写，杀进程 / 并发读会拿到
         # 半截 JSON，上层按「缓存未命中」处理 → 白跑一次浏览器凭证解密。
         atomic_io.atomic_write_json(f, {"header": header, "ts": int(time.time())}, indent=None)
+        # 2026-10-16：本机新增/更新了某个站的登录态 → 调度一次「用户信息类数据」
+        # 云端备份（防抖，后台线程）。懒导入 + 全异常吞掉：备份是增强功能，绝不能
+        # 因为同步出问题影响下载主链路。
+        try:
+            import user_data_cloud
+            user_data_cloud.schedule_autosync()
+        except Exception:
+            pass
     except Exception:
         pass
 

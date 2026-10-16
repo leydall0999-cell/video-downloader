@@ -3886,6 +3886,15 @@
               <button type="button" class="btn btn-ghost btn-sm" id="cloudLogoutBtn" data-page-node-id="cloudLogoutBtn">退出账号</button>
             </div>
             <div class="member-cloud-devices" id="cloudDevices"></div>
+            <!-- 云端资料（用户信息类数据备份）：只给「状态 + 手动补一次同步」入口。
+                 ⚠️ 硬边界：界面绝不展示任何 Cookie 内容 —— 平台登录态由用户本机
+                 端到端加密后才上传，云端与本机界面都只可见「有哪些平台、几条」。 -->
+            <div class="member-cloud-dev member-cloud-data" id="cloudDataRow" hidden>
+              <span class="member-cloud-name" id="cloudDataText">云端资料</span>
+              <span class="member-cloud-when" id="cloudDataWhen"></span>
+              <button type="button" class="btn btn-ghost cloud-data-sync" id="cloudDataSyncBtn">同步</button>
+            </div>
+            <p class="member-cloud-devhint" id="cloudDataHint" hidden></p>
             <p class="member-cloud-hint" id="cloudNotice"></p>
           </div>
           <!-- 未登录：引导登录/注册 -->

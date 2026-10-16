@@ -18045,10 +18045,13 @@ el.dwVidPlayer.hidden = true;
         el.cloudNotice.hidden = !acc.evicted;
         el.cloudNotice.textContent = acc.evicted ? '本机已被其他设备挤出，请重新登录以继续使用会员权益。' : '';
       }
+      await renderCloudData();          // 云端资料（用户信息类数据备份）状态行
     } else {
       el.cloudAccountBox.hidden = true;
       el.cloudLoginBox.hidden = false;
       if (el.cloudNotice) { el.cloudNotice.hidden = true; el.cloudNotice.textContent = ''; }
+      const _cdRow = $('cloudDataRow'); if (_cdRow) _cdRow.hidden = true;
+      const _cdHint = $('cloudDataHint'); if (_cdHint) _cdHint.hidden = true;
     }
   }
   async function cloudSyncAccount() {
@@ -18070,6 +18073,55 @@ el.dwVidPlayer.hidden = true;
     try { await request('/api/cloud/logout', { method: 'POST' }); } catch (_) {}
     logoutAccount();
     await renderCloudAccount();
+  }
+  // ── 云端资料（用户信息类数据备份）──────────────────────────────────────────
+  // 换机闭环靠「登录时后台同步一次」自动完成（见 server/routers/cloud_account.py），
+  // 这里只补两件事：**给用户看到状态**、**允许手动补一次同步**。
+  // ⚠️ 硬边界：界面绝不展示任何 Cookie 内容 —— 平台登录态由用户本机端到端加密后
+  //    上传，云端与超管都只拿得到「有哪些平台、几条」。功能产物（成片/图片）不上云。
+  async function renderCloudData() {
+    const row = $('cloudDataRow');
+    if (!row) return;
+    if (!el.cloudAccountBox || el.cloudAccountBox.hidden) { row.hidden = true; return; }
+    let st = null;
+    try { st = await request('/api/userdata/status'); } catch (_) { row.hidden = true; return; }
+    if (!st || !st.ok) { row.hidden = true; return; }
+    const parts = (st.settings_local || []).length;
+    const cks = Number(st.cookies_local || 0);
+    const when = Number(st.last_push || 0) || Number(st.last_pull || 0) || 0;
+    row.hidden = false;
+    const txt = $('cloudDataText');
+    if (txt) txt.textContent = '云端资料 · 已备份 ' + parts + ' 份设置 / ' + cks + ' 个平台登录态';
+    const w = $('cloudDataWhen');
+    if (w) w.textContent = when ? ('最后同步 ' + _fmtAgo(when)) : '尚未同步';
+    const hint = $('cloudDataHint');
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = (cks > 0 && !st.key_cached)
+        ? '⚠️ 本机缺少登录态解密密钥：在这台重新登录一次账号即可解锁云端登录态。'
+        : '设置与偏好、平台登录态随账号走 —— 换台电脑登录会自动落回来；'
+          + '下载成片与解说成片属本机内容，不上云。';
+    }
+  }
+  async function cloudSyncData() {
+    const btn = $('cloudDataSyncBtn');
+    const old = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '同步中…'; }
+    try {
+      const r = await request('/api/userdata/sync', {
+        method: 'POST', body: JSON.stringify({}),
+      });
+      if (r && r.ok) {
+        const a = r.action === 'pulled' ? '已从云端拉回更新'
+          : r.action === 'pushed' ? '已把本机资料备份到云端'
+            : '本机与云端已一致';
+        _memberMsg('✅ ' + a);
+      } else {
+        _memberMsg('❌ ' + ((r && r.error) || '同步失败'), true);
+      }
+    } catch (e) { _memberMsg('❌ 同步失败，请检查网络', true); }
+    if (btn) { btn.disabled = false; btn.textContent = old || '同步'; }
+    await renderCloudData();
   }
   // ---- 账号区（A1 本地账号：登录 / 注册 / 登出） ----
   let authMode = 'login';
@@ -20543,6 +20595,8 @@ el.dwVidPlayer.hidden = true;
   // 卡密输入/充值事件绑定已随卡密通道下线移除（2026-09-26）
   if (el.cloudLoginBtn) el.cloudLoginBtn.addEventListener('click', () => { try { el.memberModal.close(); } catch (_) {} openAuthModal(); });
   if (el.cloudLogoutBtn) el.cloudLogoutBtn.addEventListener('click', () => { cloudLogoutAccount(); });
+  const _cdSyncBtn = $('cloudDataSyncBtn');
+  if (_cdSyncBtn) _cdSyncBtn.addEventListener('click', () => { cloudSyncData(); });
   // ============ /会员中心 ============
   el.libDelete.addEventListener('click', deleteLibItem);
   el.libSubtitle.addEventListener('click', toggleSubPanel);
@@ -22906,6 +22960,38 @@ el.dwVidPlayer.hidden = true;
       d.removeAttribute('open');
     };
 
+    // 云端资料（用户信息类数据备份）区块：刻意只给**元数据** —— 有哪些分区、
+    // Cookie 平台清单 / 条数 / 更新时间、来源设备。不给 Cookie 内容：那是用户第三方
+    // 平台账号的钥匙，由用户本机端到端加密后上传，云端与超管都拿不到明文。
+    const _usageCloudDataSec = (u) => {
+      const cd = u.cloud_data || ((u.cloud || {}).data || {}).data_meta || null;
+      if (!cd) return '';
+      const LBL = { settings: '设置与偏好', favorites: '收藏',
+                    history: '历史 / 最近记录', cookies: '平台登录态 Cookie' };
+      const parts = (cd.parts || []).map((k) => LBL[k] || k).join('、') || '—';
+      const sz = cd.size
+        ? (cd.size < 1024 ? cd.size + ' B' : (cd.size / 1024).toFixed(1) + ' KB') : '—';
+      const ck = cd.cookies || null;
+      return '<section class="aud-sec"><h4>云端资料（用户信息类数据备份）</h4>'
+        + '<table class="admin-table"><tbody>' + _usageRows([
+            ['已同步内容', parts],
+            ['资料体积', sz],
+            ['最后同步', cd.updated_at ? _usageFmtDate(cd.updated_at) : '—'],
+            ['来源设备', cd.device || '—'],
+            ['登录态 Cookie', ck
+              ? (Number(ck.count || 0) + ' 个平台 · '
+                 + (ck.encrypted ? '端到端加密存储' : '未加密')
+                 + '（更新于 ' + (ck.updated_at ? _usageFmtDate(ck.updated_at) : '—') + '）')
+              : '无'],
+          ]) + '</tbody></table>'
+        + (ck && (ck.platforms || []).length
+          ? '<div class="aud-items">平台：' + esc((ck.platforms || []).join('、')) + '</div>' : '')
+        + '<div class="admin-empty">说明：登录态 Cookie 由用户本机端到端加密后上传，'
+        + '云端与超管都看不到内容，这里只能看到「有哪些平台、几条、何时更新」。'
+        + '功能产物（下载成片 / 图片 / 解说成片）属用户内容，不在此列、不上云。</div>'
+        + '</section>';
+    };
+
     const openUserUsage = async (uid) => {
       if (!_usageDlg) {
         _usageDlg = document.createElement('dialog');
@@ -22955,7 +23041,8 @@ el.dwVidPlayer.hidden = true;
               ['积分', String(m.credits_total != null ? m.credits_total : 0)],
               ['设备指纹', u.device_fp || '—（从未在本机登录）'],
               ['云端授权', (u.cloud || {}).ok ? '云端有记录' : ((u.cloud || {}).reason || '未拉到')],
-            ]) + '</tbody></table></section>';
+            ]) + '</tbody></table></section>'
+            + _usageCloudDataSec(u);   // 没有使用记录，也可能已有云端资料
           return;
         }
         dlg.querySelector('.aud-user').innerHTML =
@@ -23011,6 +23098,8 @@ el.dwVidPlayer.hidden = true;
               + '</tbody></table>'
             : '<div class="admin-empty">暂无激活记录</div>')
           + '</section>';
+
+        h += _usageCloudDataSec(u);   // 云端资料（用户信息类数据备份）
 
         // 客服会话原文（排障关键）
         const sp = u.support || {};

@@ -47,6 +47,11 @@ secret 只存在环境变量 VDL_LICENSE_SECRET，**永不下发** ⇒ 卡密不
   POST /api/license/setstate  {email, member_until_dl?, member_until_ai?, perm_credits?, ai_credits_left?, token}
                                                                    管理员设定权威基线（迁移/纠错）
   POST /api/license/usage     {email, token}                       管理员查权益与流水
+  POST /api/license/data-pull {token}                              取回本人云端资料包（账号隔离）
+  POST /api/license/data-push {token, payload}                     上传/覆盖本人云端资料包
+                                                                   （用户信息类数据云备份：
+                                                                    设置/收藏/历史明文 + Cookie 端到端
+                                                                    加密密文；与公共 Cookie 池分离）
   POST /api/license/recon     {days?, token}                       管理员每日入账/充值对账报告
                                                                    days 1~400（前端给 1/3/7/30/180/365）
                                                                    （后台另有 10 分钟自扫线程，差异自动告警）
@@ -893,7 +898,135 @@ def usage_impl(state: dict[str, Any], email: str, now: float) -> dict[str, Any]:
              "last_seen": float(d.get("last_seen", 0))}
             for d in (user.get("devices") or [])
         ],
+        # 2026-10-16：后台「使用详情」再加一栏「云端资料」——只给元数据
+        # （有哪些分区、Cookie 平台清单/条数/更新时间），不含任何内容／密文。
+        "data_meta": userdata_meta(userdata_load(_norm_id(email))),
     }
+
+
+# ── 用户信息类数据云备份（2026-10-16）──────────────────────────────────────── #
+# 定位：把「用户信息类」数据（设置与偏好 / 收藏 / 历史 / 平台登录态 Cookie）随
+# 账号存在云端，做到「换台电脑登录即可见、本机损坏也不丢」。
+# 与公共 Cookie 池（cookie_pool.py）**严格区分**：池是「共享给全体访客复用」的
+# 运营资源；本通道是**按账号隔离的私有备份**，只有本人凭登录 token 可取回。
+#
+# 隐私边界（硬约束，改这里前先想清楚）：
+#  · 敏感分区（Cookie header、保险箱等）由**客户端**端到端加密后再上传；服务端
+#    只存密文、不持有密钥 ⇒ 服务端及其运维者也读不出内容。
+#  · 面板只暴露**元数据**（分区键清单、Cookie 平台清单/条数/更新时间），
+#    绝不下发密文本身。
+#  · 不含功能产物（成片 / 图片 / 解说），那些仍留在用户本机。
+USERDATA_DIRNAME = "userdata"
+USERDATA_MAX_BYTES = int(os.environ.get("VDL_LICENSE_USERDATA_MAX")
+                         or str(4 * 1024 * 1024))
+
+
+def _userdata_path(uid: str) -> Path:
+    """账号 → 独立数据文件（以主键 sha256 前 24 位命名，避免邮箱字符进文件名）。"""
+    h = hashlib.sha256(_norm_id(uid).encode("utf-8")).hexdigest()[:24]
+    return DATA_PATH.parent / USERDATA_DIRNAME / f"{h}.json"
+
+
+def userdata_load(uid: str) -> dict[str, Any]:
+    p = _userdata_path(uid)
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        d = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _userdata_write(uid: str, blob: dict[str, Any]) -> None:
+    p = _userdata_path(uid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + f".tmp{os.getpid()}")
+    tmp.write_text(json.dumps(blob, ensure_ascii=False, separators=(",", ":")),
+                   encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def _userdata_clean(payload: Any) -> dict[str, Any]:
+    """校验并规整客户端上传的资料包（只认结构，不看内容）。"""
+    if not isinstance(payload, dict):
+        raise ApiError(400, "BAD_PAYLOAD", "payload 必须是对象")
+    parts = payload.get("parts")
+    if not isinstance(parts, dict) or not parts:
+        raise ApiError(400, "BAD_PAYLOAD", "payload.parts 必须是非空对象")
+    try:
+        version = int(payload.get("version") or 1)
+    except (TypeError, ValueError):
+        version = 1
+    try:
+        updated_at = float(payload.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        updated_at = 0.0
+    clean: dict[str, Any] = {
+        "version": version,
+        "updated_at": updated_at,
+        "device": str(payload.get("device") or "")[:64],
+        "parts": parts,
+    }
+    size = len(json.dumps(clean, ensure_ascii=False,
+                          separators=(",", ":")).encode("utf-8"))
+    if size > USERDATA_MAX_BYTES:
+        raise ApiError(413, "PAYLOAD_TOO_LARGE",
+                       f"资料体积超上限（{USERDATA_MAX_BYTES // 1024} KB）")
+    return clean
+
+
+def userdata_meta(blob: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """面板可见的元数据：只描述「有哪些东西」，不含任何内容。空包返回 None。"""
+    if not blob:
+        return None
+    parts = blob.get("parts") if isinstance(blob.get("parts"), dict) else {}
+    ck = parts.get("cookies") if isinstance(parts.get("cookies"), dict) else None
+    ck_meta = ck.get("meta") if (ck and isinstance(ck.get("meta"), dict)) else {}
+    try:
+        size = len(json.dumps(blob, ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        size = 0
+    return {
+        "updated_at": float(blob.get("updated_at") or 0),
+        "device": str(blob.get("device") or ""),
+        "size": size,
+        "parts": sorted(str(k) for k in parts.keys()),
+        "cookies": ({
+            "count": int(ck_meta.get("count") or 0),
+            "platforms": [str(x) for x in (ck_meta.get("platforms") or [])][:80],
+            "updated_at": float(ck_meta.get("updated_at") or 0),
+            "encrypted": bool(ck.get("ct")),
+        } if ck else None),
+    }
+
+
+def userdata_pull_impl(state: dict[str, Any], token: str, now: float,
+                       secret: str) -> dict[str, Any]:
+    """取回本人云端资料包（本人 token 才可取，账号隔离）。"""
+    uid = parse_token(token, secret, now)
+    if uid not in _users(state):
+        raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
+    blob = userdata_load(uid)
+    if not blob:
+        return {"ok": True, "payload": None, "meta": None}
+    return {"ok": True, "payload": blob, "meta": userdata_meta(blob)}
+
+
+def userdata_push_impl(state: dict[str, Any], token: str, payload: Any, now: float,
+                       secret: str) -> dict[str, Any]:
+    """上传/覆盖本人云端资料包（幂等，后写覆盖）。"""
+    uid = parse_token(token, secret, now)
+    if uid not in _users(state):
+        raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
+    clean = _userdata_clean(payload)
+    if not clean["updated_at"]:
+        clean["updated_at"] = now
+    _userdata_write(uid, clean)
+    return {"ok": True, "updated_at": clean["updated_at"],
+            "meta": userdata_meta(clean)}
 
 
 # ── 账号 & 设备配额（纯函数，便于单测）───────────────────────────────────────── #
@@ -2690,6 +2823,14 @@ class Handler(BaseHTTPRequestHandler):
                                            resource=str(data.get("resource") or ""),
                                            ip=ip)
                     _save_state(st)
+                elif action == "data-pull":
+                    # 2026-10-16 用户信息类数据云备份：取回本人云端资料包。
+                    # 只读，不写 license_data.json（资料另存 userdata/ 独立文件）。
+                    out = userdata_pull_impl(st, str(data.get("token") or ""),
+                                             now, SECRET)
+                elif action == "data-push":
+                    out = userdata_push_impl(st, str(data.get("token") or ""),
+                                             data.get("payload"), now, SECRET)
                 else:
                     return self._json(404, {"ok": False, "error": "unknown action"})
             return self._json(200, out)
