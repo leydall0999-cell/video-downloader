@@ -92,9 +92,10 @@ PRICE_MAP: dict[str, dict[str, Any]] = {
     # 🔴 2026-10-10：商品名「下载会员」→「VIP会员」，与 App 内 membership.DOWNLOAD_PLANS
     #    的 label 对齐（7fe74c4 改名时漏了本文件，导致付款账单与 App 内展示不一致）。
     #    顾客在微信账单里看到的商品名必须 = 他点下单时看到的那一项，否则会以为买错。
-    # 🔴 2026-10-16：3 天档随云端覆盖层下架（用户定档 5 档阵容），条目一并移除——
-    #    留着等于给一个前端买不到的档位留收款后门。
+    # 🔴 2026-10-16：3 天档当天一度下架又按用户要求重新上架，条目恢复（与云端
+    #    on_sale 状态联动；真下架时两端都必须删，别给买不到的档位留收款入口）。
     "download_1day":      {"price": "1.90",   "subject": "视频工坊·VIP会员1天卡"},
+    "download_3day":      {"price": "4.90",   "subject": "视频工坊·VIP会员3天卡"},
     "download_7day":      {"price": "9.90",   "subject": "视频工坊·VIP会员7天卡"},
     "download_month":     {"price": "29.80",  "subject": "视频工坊·VIP会员月卡"},
     "download_half_year": {"price": "99.90",  "subject": "视频工坊·VIP会员半年卡"},

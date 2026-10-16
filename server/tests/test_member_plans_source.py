@@ -45,9 +45,9 @@ def check(name: str, cond: bool) -> None:
         FAILS.append(name)
 
 
-# 2026-10-16：3 天档下架（用户定档 5 档阵容），样本换 7 天档
-SHORT_DAYS = {"download_1day": 1, "download_7day": 7}
-ORDER = ["download_1day", "download_7day",
+# 2026-10-16：3 天档重新上架（当天下架又恢复），ORDER 恢复 6 档
+SHORT_DAYS = {"download_1day": 1, "download_3day": 3, "download_7day": 7}
+ORDER = ["download_1day", "download_3day", "download_7day",
          "download_month", "download_half_year", "download_year"]
 
 

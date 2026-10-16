@@ -33,12 +33,13 @@ def test_plans_structure():
     st = _mkstore(tempfile.mkdtemp(), [T0])
     p = st.plans()
     assert p["currency"] == "CNY"
-    # VIP会员 5 档（1/7/30 天 + 半年/年），年档带 best 标记
-    # 2026-10-16 用户定档：3 天档下架，档位名统一「VIP会员·X」
+    # VIP会员 6 档（1/3/7/30 天 + 半年/年），年档带 best 标记
+    # 2026-10-16 用户定档：档位名统一「VIP会员·X」；3 天档当天下架后当天重新上架
     assert set(DOWNLOAD_PLANS) == {
-        "download_1day", "download_7day",
+        "download_1day", "download_3day", "download_7day",
         "download_month", "download_half_year", "download_year"}
     assert DOWNLOAD_PLANS["download_1day"]["days"] == 1
+    assert DOWNLOAD_PLANS["download_3day"]["days"] == 3
     assert DOWNLOAD_PLANS["download_7day"]["days"] == 7
     assert DOWNLOAD_PLANS["download_month"]["days"] == 30
     assert DOWNLOAD_PLANS["download_year"]["days"] == 365
@@ -47,6 +48,7 @@ def test_plans_structure():
     assert DOWNLOAD_PLANS["download_month"]["label"] == "VIP会员·30天"
     assert DOWNLOAD_PLANS["download_half_year"]["label"] == "VIP会员·半年"
     assert DOWNLOAD_PLANS["download_year"]["label"] == "VIP会员·1年"
+    assert DOWNLOAD_PLANS["download_3day"]["label"] == "VIP会员·3天"
     # AI 会员 2 档，捆绑提示
     assert set(AI_PLANS) == {"ai_5500", "ai_15000"}
     assert "包含VIP会员全部权益" in p["ai_member"]["bundle_note"]
