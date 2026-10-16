@@ -45,8 +45,9 @@ def check(name: str, cond: bool) -> None:
         FAILS.append(name)
 
 
-SHORT_DAYS = {"download_1day": 1, "download_3day": 3, "download_7day": 7}
-ORDER = ["download_1day", "download_3day", "download_7day",
+# 2026-10-16：3 天档下架（用户定档 5 档阵容），样本换 7 天档
+SHORT_DAYS = {"download_1day": 1, "download_7day": 7}
+ORDER = ["download_1day", "download_7day",
          "download_month", "download_half_year", "download_year"]
 
 
@@ -130,10 +131,10 @@ def test_override_only_extra_plan_works() -> None:
 def test_override_iterative_merge() -> None:
     print("\n[E] 覆盖层逐条合并：改一个价不会把别的档从覆盖层抹掉")
     M.save_plan_overrides({"download_plans": {"download_1day": {"price_cny": 2.00}}})
-    M.save_plan_overrides({"download_plans": {"download_3day": {"price_cny": 5.00}}})
+    M.save_plan_overrides({"download_plans": {"download_7day": {"price_cny": 5.00}}})
     ov = M.load_plan_overrides().get("download_plans") or {}
     check("第一次改的 1 天档仍在覆盖层里", "download_1day" in ov)
-    check("第二次改的 3 天档也进了覆盖层", "download_3day" in ov)
+    check("第二次改的 7 天档也进了覆盖层", "download_7day" in ov)
 
 
 def test_plans_honors_cloud_override() -> None:

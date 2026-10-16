@@ -94,18 +94,19 @@ def test_ensure_buyable() -> None:
 def test_activate_enforces_and_counts() -> None:
     print("\n[E] 激活：售罄拒发 + 成功后已售 +1")
     st = M.MembershipStore()
-    M.save_plan_overrides({"download_plans": {"download_3day": {
-        "price_cny": 4.9, "days": 3, "stock": 5, "sold": 0,
+    # 2026-10-16：样本档位换 7 天（3 天档已下架）
+    M.save_plan_overrides({"download_plans": {"download_7day": {
+        "price_cny": 9.9, "days": 7, "stock": 5, "sold": 0,
     }}})
     # 售罄 → 拒发
-    M.save_plan_overrides({"download_plans": {"download_3day": {"sold": 5}}})
-    r = st.activate("download_3day", via="test")
+    M.save_plan_overrides({"download_plans": {"download_7day": {"sold": 5}}})
+    r = st.activate("download_7day", via="test")
     check("[激活] 售罄档激活被拒", r.get("ok") is False and "售罄" in str(r.get("error")))
     # 恢复库存 → 成功且已售 +1
-    M.save_plan_overrides({"download_plans": {"download_3day": {"sold": 2}}})
-    r2 = st.activate("download_3day", via="test")
+    M.save_plan_overrides({"download_plans": {"download_7day": {"sold": 2}}})
+    r2 = st.activate("download_7day", via="test")
     check("[激活] 有货时激活成功", r2.get("ok") is True)
-    ov = M.load_plan_overrides().get("download_plans", {}).get("download_3day", {})
+    ov = M.load_plan_overrides().get("download_plans", {}).get("download_7day", {})
     check("[计数] 激活后 sold 自动 +1", int(ov.get("sold") or 0) == 3)
 
 

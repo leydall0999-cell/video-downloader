@@ -127,7 +127,7 @@ class _Resp:
 def test_plan_quote_cloud_and_fallback() -> None:
     print("[3] plan_quote：云端可达取有效价；不可达回落本地 PRICE_MAP")
     payload = {"ok": True, "plans": {"download_plans": {
-        "download_3day": {"price_cny": 2.99, "mode": "flash_sale",
+        "download_month": {"price_cny": 2.99, "mode": "flash_sale",
                           "flash_price": 1.50,
                           "flash_start": "0", "flash_end": "0"},
         "download_7day": {"price_cny": 5.99, "on_sale": False},
@@ -140,8 +140,8 @@ def test_plan_quote_cloud_and_fallback() -> None:
     urllib.request.urlopen = _fake
     PS._PLAN_CACHE["at"] = 0.0
     try:
-        q = PS.plan_price("download_3day")
-        check("云端 3 天档取 price_cny=2.99", q == "2.99", q)
+        q = PS.plan_price("download_month")
+        check("云端 30 天档取 price_cny=2.99", q == "2.99", q)
         off = PS.plan_quote("download_7day")
         check("云端 7 天档已下架 → buyable=False", off["buyable"] is False, str(off))
         check("下架原因带出", off["reason"] == "已下架", str(off))
@@ -160,7 +160,7 @@ def test_plan_quote_cloud_and_fallback() -> None:
             raise OSError("network down")
         urllib.request.urlopen = _boom
         PS._PLAN_CACHE["at"] = 0.0
-        check("云端不可达 → 保留缓存不误改价", PS.plan_price("download_3day") == "2.99")
+        check("云端不可达 → 保留缓存不误改价", PS.plan_price("download_month") == "2.99")
     finally:
         urllib.request.urlopen = _real_urlopen
         PS._PLAN_CACHE["at"] = 0.0
@@ -290,7 +290,7 @@ def test_order_price_is_never_stale() -> None:
 
     def _fake(req, timeout=6):   # noqa: ARG001
         return _Resp(json.dumps({"ok": True, "plans": {"download_plans": {
-            "download_3day": {"price_cny": box["price"]}}}}).encode("utf-8"))
+            "download_month": {"price_cny": box["price"]}}}}).encode("utf-8"))
 
     _real = urllib.request.urlopen
     urllib.request.urlopen = _fake
@@ -298,7 +298,7 @@ def test_order_price_is_never_stale() -> None:
     PS._PLAN_CACHE["map"] = {}
     try:
         # ① 首次取价（管理员当时的价 2.99），缓存随之建立
-        first = PS.plan_quote("download_3day")
+        first = PS.plan_quote("download_month")
         check("首次取价 = 云端 2.99（source=cloud）",
               first["price"] == "2.99" and first["source"] == "cloud", str(first))
 
@@ -306,11 +306,11 @@ def test_order_price_is_never_stale() -> None:
         box["price"] = 1.50
 
         # ③ 非 force：TTL 内仍吃缓存（设计内行为，此处显式记录）
-        cached = PS.plan_quote("download_3day")
+        cached = PS.plan_quote("download_month")
         check("非 force 在 TTL 内吃缓存 → 仍 2.99", cached["price"] == "2.99", str(cached))
 
         # ④ force（下单路径）：必须拿到新鲜价 1.50
-        fresh = PS.plan_quote("download_3day", force=True)
+        fresh = PS.plan_quote("download_month", force=True)
         check("force=True（下单路径）→ 取新鲜价 1.50", fresh["price"] == "1.50", str(fresh))
 
         # ⑤ 源码口径：下单 handler 必须带 force=True（防回归改回去）
@@ -324,7 +324,7 @@ def test_order_price_is_never_stale() -> None:
 
         urllib.request.urlopen = _boom
         PS._PLAN_CACHE["at"] = 0.0
-        PS._PLAN_CACHE["map"] = {"download_3day": {"price_cny": 2.99}}
+        PS._PLAN_CACHE["map"] = {"download_month": {"price_cny": 2.99}}
         t0 = time.time()
         PS._cloud_plans()
         age = t0 - float(PS._PLAN_CACHE.get("at") or 0.0)

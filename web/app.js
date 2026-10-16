@@ -17810,9 +17810,11 @@ el.dwVidPlayer.hidden = true;
       const aiPlans = (p.ai_member && p.ai_member.plans) || {};
       const packs = (p.credit_packs) || {};
       const dlBenefits = (p.download_member && p.download_member.benefits) || [];
-      // VIP会员（6 档：1/3/7 天体验 + 月/半年/年）+ 共享权益清单
+      // VIP会员（5 档：1/7/30 天 + 半年/年）+ 共享权益清单
+      // 2026-10-16 用户定档：卡片不再挂「/ N 天」后缀——档位名（VIP会员·1天 等）
+      // 已自带时长；3 天档随云端覆盖层一并下架。
       const dlCards = Object.entries(dlPlans).map(([code, plan]) =>
-        _memberCard(plan, code, { unit: plan.days ? ` / ${plan.days} 天` : '' })).join('');
+        _memberCard(plan, code, {})).join('');
       const dlList = dlBenefits.map(b => `<li>${escHtml(b.text)}</li>`).join('');
       el.memberPaneDl.innerHTML = `
         ${dlList ? `<div class="member-benefits member-benefits-top"><ul class="member-benefits-list">${dlList}</ul></div>` : ''}
