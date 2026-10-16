@@ -35,6 +35,13 @@
     .dl-slow .dl-slow-body { margin-top: .5rem; padding: .7rem .8rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius, .55rem); color: var(--text-mute); font-size: .8rem; line-height: 1.65; }
     .dl-slow .dl-slow-body code { display: block; margin: .35rem 0; padding: .45rem .55rem; background: #f3f4f6; border-radius: .35rem; font-size: .74rem; word-break: break-all; user-select: all; }
     .dl-slow .dl-slow-body b { color: var(--text, #1f2937); }
+    .dl-news { margin-top: 2.2rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 1.3rem 1.4rem; box-shadow: var(--shadow); }
+    .dl-news h2 { margin: 0 0 .25rem; font-size: 1.15rem; }
+    .dl-news .dl-news-sub { color: var(--text-mute); font-size: .82rem; margin: 0 0 .9rem; }
+    .dl-news h4 { margin: 1rem 0 .35rem; font-size: .92rem; }
+    .dl-news ul { margin: 0; padding-left: 1.15rem; }
+    .dl-news li { color: var(--text-mute); font-size: .86rem; line-height: 1.75; }
+    .dl-news .dl-news-tip { margin: 1rem 0 0; padding: .7rem .8rem; background: #f3f4f6; border-radius: var(--radius, .55rem); color: var(--text-mute); font-size: .82rem; line-height: 1.7; }
     @media (max-width: 640px){ .dl-grid{ grid-template-columns:1fr; } }
   </style>
 </head>
@@ -94,6 +101,31 @@
         <p class="dl-note" style="margin-top:.6rem">安装：下载解压 → 打开 chrome://extensions → 开启「开发者模式」→ 点「加载已解压的扩展程序」选解压后的文件夹</p>
       </div>
     </div>
+
+    <section class="dl-news">
+      <h2>Windows 版正式上线（v1.0.68）</h2>
+      <p class="dl-news-sub">视频工坊现已提供 Windows 安装包，功能与 Mac 版一致；双击安装，一路「下一步」即可，无需另装 Python、无需配置环境。</p>
+
+      <h4>Windows 版能做什么</h4>
+      <ul>
+        <li><b>视频下载</b>：粘贴链接即可解析，支持多档清晰度、批量下载与断点续传</li>
+        <li><b>一键解说</b>：导入视频自动生成解说文案 + 配音 + 字幕，直接出成片（已内置在安装包里）</li>
+        <li><b>AI 去水印 / 智能抠图</b>：图片去水印、一键抠图换背景</li>
+        <li><b>字幕提取</b>：本地视频 / 音频转字幕</li>
+        <li><b>视频压缩、格式转换</b>等常用工具</li>
+      </ul>
+
+      <h4>本版（1.0.68）更新内容</h4>
+      <ul>
+        <li>新增解析平台「金牌影院」（nmwchxx.com）：粘贴播放页链接即可解析，自动识别片名与集数，支持蓝光 / 高清 / 标清三档清晰度</li>
+        <li>修复：视频压缩的「质量」选项此前不起作用——选哪一档压出来的大小和画质都一样。现已接上，并把档位改成「更清晰 / 均衡 / 更小」三档，各自对应不同画质与体积；默认档与原来一致</li>
+        <li>修复：少数任务操作（取消、暂停等）在已登录状态下会被误判为「需要登录」而拦下</li>
+        <li>修复：对账时部分历史订单被误报成「已付款未发放」，实际早已发放，不会再误报</li>
+        <li>后台新增「风险复核队列」：自动标记异常账号行为（频繁换设备、一台设备登录多个账号、卡密连续试错等）并按风险分排序，供人工复核；只提示、不会自动限制任何账号</li>
+      </ul>
+
+      <p class="dl-news-tip">安装提示：首次运行安装包，Windows SmartScreen 可能弹出「Windows 已保护你的电脑」（因尚未办理代码签名证书）。点「更多信息 → 仍要运行」即可继续安装，不影响使用。</p>
+    </section>
 
     <p class="dl-note">安装包由 Cloudflare 全球边缘网络分发，下载即最新版；后续版本可在客户端内一键更新（增量补丁，通常只有几 MB）。安装包已不含语音识别模型——首次使用本地字幕/识别功能时会自动下载该模型（146 MB，同样走全速边缘，有进度显示，可跳过不用）。</p>
 
