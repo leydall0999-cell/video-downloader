@@ -172,7 +172,13 @@ class TestDepsAndPackaging(unittest.TestCase):
         for script, sep in (("desktop/build_mac.sh", ":"), ("desktop/build_win.sh", ";")):
             with self.subTest(script=script):
                 src = _read(os.path.join(REPO, script))
-                hit = re.search(r"--add-binary\s+\"[^\"]*deno[^\"]*\"", src)
+                # 🔴 2026-10-16：原正则 `--add-binary\s+"[^"]*deno[^"]*"` 跨不过
+                #    Windows 脚本里 `_win()` 路径转换引入的嵌套引号
+                #    （`--add-binary "$(_win "$VENV/Scripts/deno.exe");bin"`）——
+                #    deno 实际有打包，守卫误报。改为：同一行内 --add-binary 之后
+                #    120 字符内出现 deno 即算命中（两种引号写法都认；删掉打包
+                #    依旧会红——该行没有 --add-binary 前缀）。
+                hit = re.search(r'--add-binary\s+"[^\n]{0,120}?deno', src)
                 self.assertIsNotNone(
                     hit,
                     f"{script} 没把 deno 二进制用 --add-binary 打进包 —— "
