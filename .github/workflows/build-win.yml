@@ -90,22 +90,26 @@ jobs:
           path: commentary-pipeline
           fetch-depth: 0
 
-      - name: 解说凭据来源诊断
-        # 🔴 密钥内容绝不打印，只打印「长度」——用来区分：
-        #    deploy_key_len>0 且 pipeline_present=yes ⇒ 是 Deploy Key 在起作用（永久有效）
-        #    deploy_key_len=0 且 pipeline_present=yes ⇒ 还在靠会过期的 PAT 顶着
-        #    deploy_key_len=0 且 pipeline_present=no  ⇒ 凭据全失效，本次为无解说版
+      - name: 解说凭据闸门（禁止静默出无解说版）
+        if: ${{ github.event.inputs.commentary != 'force-skip' }}
+        # 🔴 背景：凭据失效时 checkout 被 continue-on-error 吞掉、脚本走 else 只 echo，
+        #    结果是一个「能装能跑但少了 50MB 解说」的包，而 CI 显示全绿 —— 没人会发现。
+        #    这里改成硬失败：要么证明凭据在，要么红给你看。
+        #    密钥内容绝不打印，只打长度（长度是数字，不会被 GitHub mask，也不泄露密钥）。
         run: |
           _k='${{ secrets.COMMENTARY_DEPLOY_KEY }}'
-          _p='${{ secrets.COMMENTARY_PAT }}'
           echo "deploy_key_len=${#_k}"
-          echo "pat_len=${#_p}"
-          if [ -f commentary-pipeline/process.py ]; then
-            echo "pipeline_present=yes"
-            echo "pipeline_head=$(git -C commentary-pipeline rev-parse --short HEAD 2>/dev/null)"
-          else
-            echo "pipeline_present=no"
+          if [ "${#_k}" -eq 0 ]; then
+            echo "❌ COMMENTARY_DEPLOY_KEY 未配置 —— 无法取解说管线，且不允许静默降级"
+            echo "   确需出无解说版：手动 dispatch 时 commentary 选 force-skip"
+            exit 1
           fi
+          if [ ! -f commentary-pipeline/process.py ]; then
+            echo "❌ 解说管线未取到（凭据失效？）—— 不允许静默降级出无解说版"
+            ls -la commentary-pipeline 2>&1 | head -8
+            exit 1
+          fi
+          echo "✔ 解说管线就位，HEAD=$(git -C commentary-pipeline rev-parse --short HEAD 2>/dev/null)"
 
       - name: Setup Python 3.13
         uses: actions/setup-python@v5
