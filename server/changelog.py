@@ -18,6 +18,14 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.69",
+        "date": "2026-10-16",
+        "items": [
+            "新增：Windows 版支持应用内更新——在「关于本应用 → 检查更新」即可自动下载并静默升级，"
+            "不用再回官网重新下载覆盖安装（Mac 版原有能力，本次 Windows 补齐；安装包与任务数据不受影响）。",
+        ],
+    },
+    {
         "version": "1.0.68",
         "date": "2026-10-14",
         "items": [
