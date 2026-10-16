@@ -80,7 +80,10 @@ PrivilegesRequired=admin
 ; 安装前自动关闭正在运行的实例（Inno 6.1+：检测占用 {app} 文件的进程并关闭，
 ; 否则 onedir 覆盖安装会因 exe 被占用而失败）
 CloseApplications=yes
-RestartApplications=no
+; 装完把被关闭的应用重新拉起（2026-10-16：应用内更新依赖它）。
+; ⚠️ 与 /RESTARTAPPLICATIONS 配套：这里保持 no 的话，静默更新装完不会自动重启
+;    应用，用户会觉得「更新完就没动静了」。普通手动安装下该行为同样无害。
+RestartApplications=yes
 
 [Languages]
 ; 简体中文；MessagesFile 由 /DMessagesFile 覆盖（缺省 compiler:Default.isl = 英文）

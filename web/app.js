@@ -19965,7 +19965,9 @@ el.dwVidPlayer.hidden = true;
   async function _checkForUpdate() {
     if (!el.profUpdateBanner) return;
     if (!_aboutUpdatable) {
-      // Windows / Linux 版没有应用内更新链路（UPDATABLE = IS_BUNDLED，仅 macOS .app 成立）。
+      // 非可更新环境（开发模式 / Linux 等）没有应用内更新链路。
+      // ⚠️ 2026-10-16：Windows 打包版已支持应用内更新（UPDATABLE 含 IS_WIN_BUNDLED），
+      //    不再落进这个分支；这里只兜底「真没有链路」的平台与开发模式。
       // 2026-10-16：从「静默隐藏」改为显示指引横幅 —— 否则用户完全不知道去哪里拿新版本。
       // 复用同一块横幅 DOM（改标题/正文、隐藏「立即更新」按钮），不新增结构。
       // _doUpdate 只可能被 profUpdateNowBtn 的 click 触发，按钮隐藏即无副作用。

@@ -135,8 +135,20 @@ IS_FROZEN = bool(getattr(sys, "frozen", False))
 # macOS .app bundle：只有它具备完整的自更新链路（ditto 解压 / codesign 重签 /
 # 脱离父进程的更新助手 / open 重启），其余平台暂不支持应用内更新。
 IS_BUNDLED = IS_FROZEN and ".app" in str(getattr(sys, "executable", ""))
+# Windows 打包态：PyInstaller onedir（{app}\VideoDownloader.exe + _internal\），
+# 没有 .app 结构，但自更新由 Inno Setup 安装包完成（2026-10-16 支持）。
+IS_WIN_BUNDLED = IS_FROZEN and sys.platform.startswith("win")
 
-UPDATABLE = IS_BUNDLED
+# 可更新：macOS 需要完整 .app（ditto 替换 + 重签）；Windows 需要打包态的 exe。
+UPDATABLE = bool(IS_BUNDLED or IS_WIN_BUNDLED)
+
+# Windows 静默安装参数（Inno Setup）：
+#   /VERYSILENT        全程无界面、无提示（/SILENT 仍会显示进度窗）
+#   /NORESTART         装完不重启系统
+#   /CLOSEAPPLICATIONS 关闭占用 {app} 文件的进程（即正在运行的本应用）
+#   /RESTARTAPPLICATIONS 装完把被关闭的应用重新拉起（需 installer.iss 里
+#                      RestartApplications=yes，否则该参数无效）
+_WIN_SETUP_ARGS = ["/VERYSILENT", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"]
 
 
 def _update_unsupported_reason() -> str:
@@ -148,6 +160,10 @@ def _update_unsupported_reason() -> str:
     """
     if not IS_FROZEN:
         return "当前为未打包的运行环境（开发模式），请下载安装包"
+    if PLATFORM == "windows":
+        # 2026-10-16：Windows 应用内更新已支持（下载新 Setup.exe → sha256 校验 →
+        # Inno Setup 静默覆盖安装）。此前这里一刀切地禁掉全部非 macOS 平台。
+        return ""
     if PLATFORM != "macos":
         return "当前平台（%s）暂不支持应用内更新，请下载最新安装包覆盖安装" % PLATFORM
     return ""
@@ -207,18 +223,31 @@ def _verify_manifest_signature(raw: bytes, sig_b64: str, pubkey_b64: str) -> boo
         return False
 
 
-def _fetch_manifest(timeout: int = 15) -> dict:
+def _manifest_name() -> str:
+    """按平台返回更新清单文件名。
+
+    🔴 为什么 Windows 用**独立**的 `latest-win.json`，而不是往 latest.json 里加字段：
+    latest.json 的 url / size / sha256 指向的是 **macOS 的 VideoDownloader.app.zip**
+    （430MB），老版本 Mac 客户端正是读这几个顶层字段。Windows 复用同一份清单，
+    就会下载一个装不上的 mac 包 —— 这正是 2026-10-16 之前必须一刀切禁用
+    Windows 更新的根因。独立清单 = 两端彻底解耦、零回归风险。
+    """
+    return "latest-win.json" if PLATFORM == "windows" else "latest.json"
+
+
+def _fetch_manifest(timeout: int = 15, name: Optional[str] = None) -> dict:
     """拉取并**验签**更新清单；验签不通过一律抛 ManifestError（fail-closed）。
 
-    签名覆盖 latest.json 的原始字节，因此清单里的 url / sha256 / patch_sha256
+    签名覆盖清单的原始字节，因此清单里的 url / sha256 / patch_sha256
     一旦被篡改，验签必然失败——sha256 与签名由此绑定，MITM 无法同时替换两者。
     """
     base = UPDATE_BASE_URL.rstrip("/")
-    raw = _http_get_bytes(base + "/latest.json", timeout=timeout)
+    name = name or _manifest_name()
+    raw = _http_get_bytes(base + "/" + name, timeout=timeout)
     pubkey = (os.environ.get("VDL_UPDATE_PUBKEY") or UPDATE_MANIFEST_PUBKEY_B64 or "").strip()
     if pubkey:
         try:
-            sig_raw = _http_get_bytes(base + "/latest.json" + UPDATE_SIG_SUFFIX, timeout=timeout)
+            sig_raw = _http_get_bytes(base + "/" + name + UPDATE_SIG_SUFFIX, timeout=timeout)
         except Exception as e:  # noqa: BLE001
             raise ManifestError("更新清单缺少签名文件（%s），已拒绝更新" % e) from None
         sig_b64 = sig_raw.decode("utf-8", "ignore").strip()
@@ -711,11 +740,12 @@ def system_update(request: Request, payload: dict[str, Any] = Body(...)) -> dict
         return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
     if not IS_FROZEN:
         return {"ok": False, "error": "当前为未打包的运行环境（开发模式），不支持一键更新，请下载安装包", "code": "NOT_BUNDLED"}
-    # ⚠️ 更新链路（ditto 解压 / codesign 重签 / bash 更新助手 / open 重启）目前**仅
-    #    macOS 实现**。此处必须显式拦停并返回真原因 —— 否则 Windows 用户会一路走到
-    #   下载 `VideoDownloader.app.zip`（latest.json 的 url 是单一的 macOS 资产），
-    #   下载几百 MB 后才在一个看不懂的环节失败。
-    if PLATFORM != "macos":
+    # 更新链路按平台分流（2026-10-16）：
+    #   macOS   → 下载 .app.zip（增量优先）→ ditto 覆盖 /Applications + 重签 + open 重启
+    #   Windows → 下载 Setup.exe → sha256 校验 → Inno Setup 静默覆盖安装
+    # ⚠️ 其余平台（Linux 等）必须显式拦停并返回真原因 —— 否则会一路走到下载
+    #    latest.json 里那份 macOS 资产，下几百 MB 后才在一个看不懂的环节失败。
+    if PLATFORM not in ("macos", "windows"):
         return {
             "ok": False,
             "error": _update_unsupported_reason(),
@@ -736,13 +766,12 @@ def system_update(request: Request, payload: dict[str, Any] = Body(...)) -> dict
     if str(data.get("version")) != target_ver:
         return {"ok": False, "error": "目标版本与服务器不一致，请重试"}
 
-    bundle = _bundle_path()
-    if not bundle:
+    # macOS：就地替换「当前正在运行的 bundle」本身，绝不硬编码 "VideoDownloader.app"：
+    # .app 目录名可被改名（如「视频工坊.app」），硬编码会在 /Applications 里额外造出
+    # 第二个 app，旧的那份则永远留在原地（2026-09-12 统一改名时踩过）。
+    bundle = None if PLATFORM == "windows" else _bundle_path()
+    if PLATFORM == "macos" and not bundle:
         return {"ok": False, "error": "无法确定当前 App 路径"}
-    # ⚠️ 就地替换「当前正在运行的 bundle」本身，绝不硬编码 "VideoDownloader.app"：
-    #    .app 目录名可被改名（如「视频工坊.app」），硬编码会在 /Applications 里额外造出
-    #    第二个 app，旧的那份则永远留在原地（2026-09-12 统一改名时踩过）。
-    target_app = bundle
 
     # 改为异步：立即创建 job 并启动后台线程执行「下载/套用/派生助手」，
     # 前端（pywebview 原生 bridge）轮询 /api/system/update/status 获取进度。
@@ -758,11 +787,18 @@ def system_update(request: Request, payload: dict[str, Any] = Body(...)) -> dict
             "status": "queued", "progress": 0, "error": "",
             "target_ver": target_ver, "created_at": time.time(),
         }
-    t = threading.Thread(
-        target=_run_update,
-        args=(job_id, data, work, bundle, target_app, target_ver),
-        daemon=True,
-    )
+    if PLATFORM == "windows":
+        t = threading.Thread(
+            target=_run_update_win,
+            args=(job_id, data, work, target_ver),
+            daemon=True,
+        )
+    else:
+        t = threading.Thread(
+            target=_run_update,
+            args=(job_id, data, work, bundle, bundle, target_ver),
+            daemon=True,
+        )
     t.start()
     return {"ok": True, "job_id": job_id, "async": True,
             "message": "更新任务已启动，正在后台下载并准备安装"}
@@ -811,6 +847,78 @@ def _run_update(job_id: str, data: dict, work: Path, bundle: Path,
         )
         _set("ready", 100)
     except Exception as e:
+        _set("error", 0, "更新失败：%s" % e)
+
+
+def _run_update_win(job_id: str, data: dict, work: Path, target_ver: str) -> None:
+    """后台线程（Windows）：下载 Setup.exe → sha256 校验 → 派生静默安装程序。
+
+    与 macOS 的三点本质差异：
+      1) 不需要 staging / ditto 替换：Inno Setup 安装包自己完成覆盖安装；
+      2) 不需要更新助手脚本：安装器带 /CLOSEAPPLICATIONS，会关掉占用 {app}
+         文件的本进程；装完 /RESTARTAPPLICATIONS 再把应用拉起来；
+      3) 校验失败必须**删掉下载物且绝不启动**——启动一个来源不明的 exe 是最
+         坏的结果，宁可让用户手动下载。
+
+    状态机与 macOS 保持一致：downloading → verifying → applying → ready，
+    前端在 ready 后可提示「安装程序已启动」。
+    """
+    def _set(status: str, progress: int = 0, error: str = "") -> None:
+        with _JOBS_LOCK:
+            j = _UPDATE_JOBS.get(job_id)
+            if j:
+                j["status"] = status
+                j["progress"] = progress
+                if error:
+                    j["error"] = error
+
+    try:
+        url = str(data.get("url") or "").strip()
+        expect_sha = str(data.get("sha256") or "").strip().lower()
+        if not url:
+            _set("error", 0, "更新清单缺少下载地址，已取消")
+            return
+        if not expect_sha:
+            _set("error", 0, "更新清单缺少 sha256 校验值，已取消（不校验不安装）")
+            return
+
+        _set("downloading", 5)
+        dest = work / ("VideoDownloader-Setup-%s.exe" % target_ver)
+
+        def _on_prog(done: int, total: int) -> None:
+            if total:
+                _set("downloading", max(5, min(95, int(done * 100 / total))))
+
+        _http_download(url, dest, on_progress=_on_prog)
+
+        _set("verifying", 96)
+        actual = _sha256_of(dest).lower()
+        if actual != expect_sha:
+            try:
+                dest.unlink()
+            except Exception:
+                pass
+            _set("error", 0, "安装包校验失败（sha256 与清单不符），已删除，未做任何改动")
+            return
+
+        _set("applying", 98)
+        # 脱离父进程启动：本进程随后会被安装器关闭（/CLOSEAPPLICATIONS），
+        # 安装器不能是子进程树里的成员，否则一并被杀。
+        kwargs: dict[str, Any] = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(
+            [str(dest), *_WIN_SETUP_ARGS],
+            cwd=str(work),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **kwargs,
+        )
+        _set("ready", 100)
+    except Exception as e:  # noqa: BLE001
         _set("error", 0, "更新失败：%s" % e)
 
 

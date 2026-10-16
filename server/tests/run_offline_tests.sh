@@ -209,6 +209,14 @@ run_one test_home_entries.py
 run_one test_update_notes_version.py
 run_one test_sr.py
 run_one test_selfupdate.py
+#  11f. test_win_inapp_update.py —— Windows 应用内更新链路（2026-10-16）：
+#                               此前一刀切禁用 Windows 更新（PLATFORM != macos 即拦），
+#                               根因是清单 url 指向 macOS 的 .app.zip。现 Windows 走独立
+#                               清单 latest-win.json + Inno 静默安装。守卫钉住：清单按平台
+#                               分流（防拿到 mac 包）、验签同一条 fail-closed 通道、安装链路
+#                               fail-closed（sha 不符/缺字段绝不启动且删下载物）、
+#                               静默安装参数齐全且脱离父进程、三条源码棘轮。
+run_one test_win_inapp_update.py
 run_one test_llm_local_priority.py
 run_one test_quota.py
 #  任务落盘持久化（2026-10-02 B2）：重启后未完成任务恢复为可续传、completed 只在
