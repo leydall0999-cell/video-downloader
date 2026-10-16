@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""守卫：1/3/7 天VIP会员档 + 套餐价格单一真源（展示 / 下单 / 发放同源）。
+"""守卫：短期VIP会员档（2026-10-14 起为 1/7 天）+ 套餐价格单一真源（展示 / 下单 / 发放同源）。
 
 背景（2026-09-30 用户需求）：充值新增 1/3/7 天会员档，价格由超管在后台写。
+2026-10-14（v1.0.67）：下载会员统一改名「VIP会员」，档位调整为
+1 天 / 7 天 / 30 天 / 半年 / 1 年 五档，**原 3 天档下架**。
 
 本守卫钉住三件事：
-  1) 三档存在、days 正确，且默认顺序由短到长（决定前端卡片顺序）；
+  1) 短期档存在、days 正确，且默认顺序由短到长（决定前端卡片顺序）；
   2) 超管写 plans.json 覆盖层后，**展示 / 下单金额 / 发放天数**三处同步跟随。
      此前下单读硬编码 payment_core.PAY_PLANS、发货读硬编码 membership.DOWNLOAD_PLANS
      —— 后台改了价格和天数，实际扣款与到账时长都不变（改了等于没改）。
@@ -43,8 +45,11 @@ def check(name: str, cond: bool) -> None:
         FAILS.append(name)
 
 
-SHORT_DAYS = {"download_1day": 1, "download_3day": 3, "download_7day": 7}
-ORDER = ["download_1day", "download_3day", "download_7day",
+# ⚠️ 3 天档已于 2026-10-14（v1.0.67）下架：现行为 1 / 7 / 30 / 180 / 365 五档。
+# 曾经这里钉「1/3/7 三档」，档位下架后本用例整段变红（KeyError: download_3day）——
+# 属于用例过期，不是功能缺陷：档位表才是真源，测试跟着真源走。
+SHORT_DAYS = {"download_1day": 1, "download_7day": 7}
+ORDER = ["download_1day", "download_7day",
          "download_month", "download_half_year", "download_year"]
 
 
@@ -53,14 +58,15 @@ def _store(name: str, now: float) -> MembershipStore:
 
 
 def test_short_term_plans_exist() -> None:
-    print("\n[A] 1/3/7 天档存在且顺序由短到长")
+    print("\n[A] 1/7 天档存在且顺序由短到长")
     dl = effective_plans()["download_plans"]
-    check("download_plans 按 1/3/7/30/180/365 天排列", list(dl) == ORDER)
+    check("download_plans 按 1/7/30/180/365 天排列", list(dl) == ORDER)
     for code, days in SHORT_DAYS.items():
         check(f"{code} 在表内且 days={days}", code in dl and int(dl[code].get("days") or 0) == days)
-    check("三档均有价格与中文标签",
+    check("短期档均有价格与中文标签",
           all(float(dl[c].get("price_cny") or 0) > 0 and dl[c].get("label") for c in SHORT_DAYS))
-    check("下单兜底表 PAY_PLANS 同步含三档", all(c in PC.PAY_PLANS for c in SHORT_DAYS))
+    check("下单兜底表 PAY_PLANS 同步含短期档", all(c in PC.PAY_PLANS for c in SHORT_DAYS))
+    check("已下架的 3 天档不在默认表内（1.0.67 起）", "download_3day" not in dl)
 
 
 def test_override_price_and_days_take_effect() -> None:
@@ -97,7 +103,7 @@ def test_override_price_and_days_take_effect() -> None:
     check("[/api/member/plans 真身] store.plans() 的 7 天档 = 5 天 / 12.34",
           int(api["download_7day"]["days"]) == 5
           and abs(float(api["download_7day"]["price_cny"]) - 12.34) < 1e-9)
-    check("[/api/member/plans 真身] store.plans() 仍含 1/3/7 三档",
+    check("[/api/member/plans 真身] store.plans() 仍含 1/7 短期档",
           all(c in api for c in SHORT_DAYS))
 
 
