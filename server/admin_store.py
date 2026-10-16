@@ -239,12 +239,91 @@ def reset_user_password(user_id: str, new_password: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # 会员管理
 # --------------------------------------------------------------------------- #
+# 下载档「天数 → 档位名」（与 license_server.PLAN_EFFECT 一致）。
+# 云端只存到期时间戳、不存档位名，故会员列表的档位名按剩余时长反推 ——
+# 这样「有效至 X 日」与「档位」互相自洽（显示 download_1day 却到三个月后
+# 会让管理员以为数据错了）。
+_DL_TIER_DAYS = (("download_1day", 1), ("download_3day", 3),
+                 ("download_7day", 7), ("download_month", 30),
+                 ("download_half_year", 180), ("download_year", 365))
+
+
+def _plan_name_by_remaining(until: float, now: float) -> Optional[str]:
+    """按剩余时长反推下载档位名；明显对不上任何档位（叠加购买/手工改期）返回 None。"""
+    if until <= now:
+        return None
+    days = (until - now) / 86400.0
+    code, td = min(_DL_TIER_DAYS, key=lambda x: abs(x[1] - days))
+    # 允许 25% + 1 天误差（下单当天起算、时区取整都会差一两天）
+    return code if abs(td - days) <= max(1.0, td * 0.25) else None
+
+
+def _cloud_membership_row(u: dict[str, Any], now: float) -> dict[str, Any]:
+    """云端账号 → 会员行（2026-10-16：会员管理同样以云端总库为准）。
+
+    权益取云端 authority；套餐名优先按剩余时长反推，推不出时退回「最近一笔
+    同类购买」的 plan_code（下载档以 download_ 开头、AI 档以 ai_ 开头）。
+    """
+    auth = u.get("authority") or {}
+    dl_until = float(auth.get("member_until_dl") or 0)
+    ai_until = float(auth.get("member_until_ai") or 0)
+    ai_left = int(auth.get("ai_credits_left") or 0)
+    perm = int(auth.get("perm_credits") or 0)
+    plan_dl: Optional[str] = None
+    plan_ai: Optional[str] = None
+    for p in reversed(list(u.get("purchases") or [])):
+        code = str(p.get("plan_code") or "")
+        if not code:
+            continue
+        if plan_dl is None and code.startswith("download_"):
+            plan_dl = code
+        if plan_ai is None and code.startswith("ai_"):
+            plan_ai = code
+        if plan_dl and plan_ai:
+            break
+    dl_active = dl_until > now
+    ai_active = ai_until > now
+    return {
+        "user_id": u.get("user_id") or u.get("email"),
+        "identifier": u.get("email"),
+        "download_active": dl_active,
+        "download_plan": (_plan_name_by_remaining(dl_until, now) or plan_dl) if dl_active else None,
+        "download_expire_at": dl_until,
+        "ai_active": ai_active,
+        "ai_plan": plan_ai if ai_active else None,
+        "ai_credits_left": ai_left,
+        "permanent_credits": perm,
+        "credits_total": ai_left + perm,
+        "disabled": bool(u.get("banned")),
+        "source": "cloud",
+    }
+
+
 def list_memberships() -> list[dict[str, Any]]:
-    """遍历所有 per-user 会员状态文件。"""
+    """会员列表（2026-10-16：云端授权中心是唯一真源，与本机行合并）。
+
+    与 list_users 同一策略：云端账号为主（含各端全部账号的权益），本机表里
+    云端没有的账号以 source=local 附列；云端不可达时整体退化本机列表。
+    """
     from user_membership import get_user_store
+    now = time.time()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    cloud = _cloud_users()
+    if cloud is not None:
+        for u in cloud:
+            email = str(u.get("email") or "").strip().lower()
+            if not email:
+                continue
+            seen.add(email)
+            out.append(_cloud_membership_row(u, now))
     data = _load_users()
-    out = []
     for u in data.get("users", []):
+        if u.get("deleted_at"):
+            continue
+        ident = str(u.get("identifier") or "").strip().lower()
+        if ident and ident in seen:
+            continue          # 云端已有该账号，以云端权益为准
         uid = u.get("user_id")
         try:
             st = get_user_store(uid).status()
@@ -262,6 +341,7 @@ def list_memberships() -> list[dict[str, Any]]:
             "permanent_credits": st["permanent_credits"],
             "credits_total": st["credits_total"],
             "disabled": bool(u.get("disabled", False)),
+            "source": "local",
         })
     out.sort(key=lambda r: (r.get("download_active") or r.get("ai_active") or False), reverse=True)
     return out

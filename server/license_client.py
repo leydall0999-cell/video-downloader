@@ -336,6 +336,33 @@ def usage_remote(email: str, admin_token: str, base_url: Optional[str] = None,
                  base_url, timeout)
 
 
+def grant_remote(email: str, plan: str, admin_token: str, note: str = "",
+                 base_url: Optional[str] = None,
+                 timeout: float = 10.0) -> dict[str, Any]:
+    """管理员在云端直接给账号开套餐（2026-10-16：后台「赠送」对云端账号生效）。
+
+    plan 传套餐 code（如 download_month / ai_5500 / credits_5000）。仅用于本机
+    没有镜像的账号（云端行）。
+    """
+    return _post("/api/license/grant",
+                 {"token": admin_token, "email": email,
+                  "plan": str(plan or "").strip(), "note": str(note or "")[:120]},
+                 base_url, timeout)
+
+
+def adjust_remote(admin_token: str, email: str, pool: str, delta: int, note: str = "",
+                  base_url: Optional[str] = None, timeout: float = 8.0) -> dict[str, Any]:
+    """管理员调整云端账号积分（可负=强扣）：pool ∈ permanent|ai。
+
+    与 app-dev 版同签名（token 在前）：云端 ai 池改 ai_grant_total、permanent 改
+    perm_credits；账号不存在时云端返回 NOT_FOUND。
+    """
+    return _post("/api/license/adjust",
+                 {"token": admin_token, "email": email, "pool": pool,
+                  "delta": int(delta), "note": note[:120]},
+                 base_url, timeout)
+
+
 # ---- 支付（支付宝，内地 ECS pay.hanyuxz.top /api/pay/*）----
 PAY_BASE = "https://pay.hanyuxz.top"
 
