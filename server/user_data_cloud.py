@@ -14,6 +14,8 @@
     服务端及其运维者只拿到密文，读不出内容（面板也只暴露平台清单 / 条数）。
   · 设置与偏好属低敏感结构化数据 ⇒ 明文同步，便于面板显示「有哪些配置」。
   · 本机路径 / 运行态字段不进包（换机无意义，且泄露本机目录结构）。
+  · 凭据类字段（api_key / key / token / secret / password…）**一律不进包** ——
+    与 Cookie 同级，宁可漏备份也不明文外带（见 `_is_secret_key`）。
   · cryptography 不可用时**直接跳过 Cookie 同步**，绝不明文上传。
 
 加密：AES-256-GCM。密钥 = PBKDF2-HMAC-SHA256(用户密码, salt, 20 万轮)；salt 随包
@@ -62,6 +64,24 @@ PLAIN_FILES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("voice_studio_config.json", ()),
     ("proxy.json", ()),
 )
+
+# 🔴 凭据类键名**一律不进明文快照**（2026-10-16 发布前补的兜底）。
+# 理由：`llm_config.json` / `vision_config.json` 里合法存在用户**自填**的 `api_key`；
+# 那份 Key 属于用户第三方账号的钥匙，与 Cookie 同级，不该**明文**存云端。
+# 正常口径下这些 Key 由后台受管层下发、用户文件里根本没有（见 llm_managed/vision_managed），
+# 但历史版本允许用户自填 ⇒ 这里按「键名」兜底剔除，宁可漏备份也不明文外带。
+# 判据用**分词后的整词相等**，不是子串 —— 免得误伤 `max_tokens` / `mlx_max_tokens`
+# 这类正常设置（它们的词是 `tokens`，不是 `token`）。
+_SECRET_WORDS = frozenset({
+    "key", "keys", "token", "secret", "secrets",
+    "password", "passwd", "pwd", "credential", "credentials", "apikey",
+})
+
+
+def _is_secret_key(name: str) -> bool:
+    """键名是否像凭据（按非字母数字切词后整词匹配，避免误伤 max_tokens）。"""
+    words = "".join(ch if ch.isalnum() else " " for ch in str(name).lower()).split()
+    return any(w in _SECRET_WORDS for w in words)
 
 
 # ── 路径 ───────────────────────────────────────────────────────────────────── #
@@ -135,14 +155,15 @@ def crypto_available() -> bool:
 
 # ── 明文分区（设置与偏好）───────────────────────────────────────────────────── #
 def collect_plain() -> dict[str, Any]:
-    """收集白名单里的用户级设置（剔除本机路径 / 运行态键）。"""
+    """收集白名单里的用户级设置（剔除本机路径 / 运行态键 / 任何凭据类键）。"""
     d = data_dir()
     out: dict[str, Any] = {}
     for name, drop in PLAIN_FILES:
         obj = _read_json(d / name)
         if not isinstance(obj, dict):
             continue
-        item = {k: v for k, v in obj.items() if k not in drop}
+        item = {k: v for k, v in obj.items()
+                if k not in drop and not _is_secret_key(k)}
         if item:
             out[name] = item
     return out

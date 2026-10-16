@@ -99,7 +99,9 @@ def test_user_data_cloud() -> None:
     (d1 / "commentary_config.json").write_text(
         json.dumps({"narration_boost": 1.2}), encoding="utf-8")
     (d1 / "llm_config.json").write_text(
-        json.dumps({"temperature": 0.7, "mlx_model_path": "/Users/someone/secret/path",
+        json.dumps({"temperature": 0.7, "max_tokens": 4096,
+                    "api_key": "sk-USER-SECRET-KEY",
+                    "mlx_model_path": "/Users/someone/secret/path",
                     "mlx_python": "/Users/someone/.venv/bin/python"}), encoding="utf-8")
 
     if not U.crypto_available():
@@ -113,6 +115,9 @@ def test_user_data_cloud() -> None:
     raw = json.dumps(blob, ensure_ascii=False)
     ck("资料包不含登录态明文", _HDR_BILI not in raw and _HDR_DY not in raw)
     ck("本机路径字段不进包", "mlx_model_path" not in raw and "mlx_python" not in raw)
+    ck("用户自填凭据不进包（api_key）", "sk-USER-SECRET-KEY" not in raw)
+    ck("不误伤正常设置（max_tokens 仍在包里）",
+       (blob["parts"]["settings"].get("llm_config.json") or {}).get("max_tokens") == 4096)
     ck("Cookie 分区是密文", bool(blob["parts"]["cookies"]["ct"]))
     ck("平台清单正确",
        blob["parts"]["cookies"]["meta"]["platforms"] == ["bilibili.com", "douyin.com"])
