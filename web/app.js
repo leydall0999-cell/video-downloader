@@ -22966,8 +22966,7 @@ el.dwVidPlayer.hidden = true;
     const _usageCloudDataSec = (u) => {
       const cd = u.cloud_data || ((u.cloud || {}).data || {}).data_meta || null;
       if (!cd) return '';
-      const LBL = { settings: '设置与偏好', favorites: '收藏',
-                    history: '历史 / 最近记录', cookies: '平台登录态 Cookie' };
+      const LBL = { settings: '设置与偏好', cookies: '平台登录态 Cookie' };
       const parts = (cd.parts || []).map((k) => LBL[k] || k).join('、') || '—';
       const sz = cd.size
         ? (cd.size < 1024 ? cd.size + ' B' : (cd.size / 1024).toFixed(1) + ' KB') : '—';
