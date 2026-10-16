@@ -57,6 +57,43 @@ from user_membership import get_current_user_id
 from auth_store import user_is_admin, set_user_admin
 
 
+def _resolve_identifier(user_id: str) -> str:
+    """user_id → 账号标识（邮箱/手机号，云端主键）。
+
+    云端行的 user_id 就是规范化邮箱；本机行是 u_xxx，需查本机账号表。
+    """
+    uid = (user_id or "").strip()
+    if "@" in uid:
+        return uid.lower()
+    try:
+        from auth_store import user_identifier
+        return str(user_identifier(uid) or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _cloud_sync(ident: str, op) -> str:
+    """把超管写操作同步到云端授权中心（2026-10-16「每端数据统一」：全端生效）。
+
+    op(admin_token) -> dict。未配令牌 / 云端不可达时返回提示文案（附在响应
+    notice 里），**不阻断本机操作** —— 本机是离线兜底，云端是真源。
+    """
+    if not ident:
+        return "（未找到对应账号标识，本次仅本机生效）"
+    import admin_store
+    import license_client
+    token = admin_store._license_admin_token()  # noqa: SLF001 — 同文件家族的内部约定
+    if not token:
+        return "（未配置授权中心管理令牌，本次仅本机生效）"
+    try:
+        r = op(token)
+    except Exception as e:  # noqa: BLE001 — 云端异常只提示不阻断
+        return f"（云端同步失败：{e}）"
+    if isinstance(r, dict) and not r.get("ok"):
+        return f"（云端同步失败：{r.get('error') or r.get('detail') or '未知'}）"
+    return ""
+
+
 def require_admin(request: Request) -> None:
     from fastapi import HTTPException
     uid = get_current_user_id(request)
@@ -309,26 +346,50 @@ def admin_list_users(request: Request = None) -> dict[str, Any]:
 def admin_set_admin(user_id: str, payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     require_admin(request)
     flag = bool(payload.get("is_admin", False))
-    return set_user_admin(user_id, flag)
+    out = set_user_admin(user_id, flag)
+    if isinstance(out, dict):
+        import license_client
+        ident = _resolve_identifier(user_id)
+        out["notice"] = _cloud_sync(
+            ident, lambda tok: license_client.set_admin_remote(ident, flag, tok))
+    return out
 
 
 @router.post("/api/admin/users/{user_id}/disable")
 def admin_disable_user(user_id: str, request: Request = None) -> dict[str, Any]:
     require_admin(request)
-    return set_user_disabled(user_id, True)
+    out = set_user_disabled(user_id, True)
+    if isinstance(out, dict):
+        import license_client
+        ident = _resolve_identifier(user_id)
+        out["notice"] = _cloud_sync(
+            ident, lambda tok: license_client.ban_remote(ident, True, tok, note="admin disable"))
+    return out
 
 
 @router.post("/api/admin/users/{user_id}/enable")
 def admin_enable_user(user_id: str, request: Request = None) -> dict[str, Any]:
     require_admin(request)
-    return set_user_disabled(user_id, False)
+    out = set_user_disabled(user_id, False)
+    if isinstance(out, dict):
+        import license_client
+        ident = _resolve_identifier(user_id)
+        out["notice"] = _cloud_sync(
+            ident, lambda tok: license_client.ban_remote(ident, False, tok, note="admin enable"))
+    return out
 
 
 @router.post("/api/admin/users/{user_id}/reset-password")
 def admin_reset_password(user_id: str, payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     require_admin(request)
     new_pw = str(payload.get("new_password") or "")
-    return reset_user_password(user_id, new_pw)
+    out = reset_user_password(user_id, new_pw)
+    if isinstance(out, dict):
+        import license_client
+        ident = _resolve_identifier(user_id)
+        out["notice"] = _cloud_sync(
+            ident, lambda tok: license_client.set_password_remote(ident, new_pw, admin_token=tok))
+    return out
 
 
 @router.post("/api/admin/users/{user_id}/delete")

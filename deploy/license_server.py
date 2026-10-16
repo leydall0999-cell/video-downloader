@@ -38,6 +38,10 @@ secret 只存在环境变量 VDL_LICENSE_SECRET，**永不下发** ⇒ 卡密不
   POST /api/license/spend     {token, items:[{pool,cost,op,id}]}   客户端积分扣减上报（幂等）
   POST /api/license/daily     {token, items:[{res,n,id}]}          客户端每日用量上报（幂等，两端共用配额）
   POST /api/license/ban       {email, banned, note?, token}        管理员封禁/解封账号
+  POST /api/license/set-admin {email, is_admin, token}             管理员设置/取消超管（2026-10-16 is_admin 上云）
+  POST /api/license/import-account {email, salt, pw_hash, created_at?, is_admin?,
+                                    authority?, devices?, token}  存量账号全量搬迁（含权益/设备）
+                                                                   存量账号搬迁：本机账号表记录原样搬入（密码无感）
   POST /api/license/adjust    {email, pool, delta, note?, token}   管理员调整积分（可负）
   POST /api/license/setstate  {email, member_until_dl?, member_until_ai?, perm_credits?, ai_credits_left?, token}
                                                                    管理员设定权威基线（迁移/纠错）
@@ -263,6 +267,9 @@ def _public_user(user: dict[str, Any], fp: str = "") -> dict[str, Any]:
         "devices": devs,
         "max_devices": MAX_DEVICES,
         "banned": bool(user.get("banned")),
+        # 超管标记（2026-10-16 上云）：登录/心跳快照带出，各端以云端为权威，
+        # 本机 auth_store 的 is_admin 退化为离线兜底（断网时门禁仍可用）。
+        "is_admin": bool(user.get("is_admin")),
         # 权威权益快照（v1）：客户端 presence 检测后用它覆盖本地 memberships
         "authority": _authority_view(user, time.time()),
         "purchases": [
@@ -917,7 +924,9 @@ def _clean_device_meta(meta: Any) -> dict[str, Any]:
         return {}
     out: dict[str, Any] = {}
     p = str(meta.get("platform") or "").strip().lower()
-    if p in ("macos", "windows", "linux"):
+    # 2026-10-16：加 "web" —— 网页版（cn/hk）登录也占设备位，画像里能看出是浏览器端，
+    # 安装/设备统计按端分开（macos/windows/linux/web）。
+    if p in ("macos", "windows", "linux", "web"):
         out["platform"] = p
     av = str(meta.get("app_version") or "").strip()
     if av:
@@ -1099,7 +1108,8 @@ def heartbeat_impl(state: dict[str, Any], token: str, fp: str, now: float,
 
 
 def password_impl(state: dict[str, Any], email: str, new_password: str, now: float,
-                  secret: str, old_password: str = "", token: str = "") -> dict[str, Any]:
+                  secret: str, old_password: str = "", token: str = "",
+                  admin_token: str = "") -> dict[str, Any]:
     """把 App 本机账号的新密码同步到云端（「一套账号」的关键一环）。
 
     🔴 为什么必须有：账号其实是**两套库**——本机 `auth_store`（账号是否存在/密码对不对
@@ -1107,9 +1117,11 @@ def password_impl(state: dict[str, Any], email: str, new_password: str, now: flo
       任何一侧改密而另一侧不同步 → 用户「在这台能登、换台说密码错」。
       本机侧改动（个人中心改密 / 忘记密码重置）通过本接口推过来。
 
-    鉴权二选一，都必须能证明对该账号的持有：
+    鉴权三选一，都必须能证明对该账号的持有（或管理权）：
       · old_password：知道原密码（个人中心「修改密码」）
       · token       ：云端签发的登录 token（忘记密码只走验证码，本机已无原密码）
+      · admin_token ：授权中心 ADMIN_TOKEN（2026-10-16 超管后台重置密码——
+        管理员不知道用户原密码，但持管理令牌；重置后两端同密码，不分叉）
 
     云端没有该账号 → `{ok: True, synced: False}`（这是「只在本机注册过」的老账号，
     下次登录时 App 会把它自愈补建到云端），**不算失败**，别让用户看到报错。
@@ -1129,6 +1141,8 @@ def password_impl(state: dict[str, Any], email: str, new_password: str, now: flo
             ok = parse_token(token, secret, now) == uid
         except ApiError:
             ok = False
+    if not ok and admin_token and ADMIN_TOKEN:
+        ok = hmac.compare_digest(admin_token, ADMIN_TOKEN)
     if not ok:
         raise ApiError(401, "BAD_CREDENTIALS", "云端校验未通过，密码未同步")
     salt, pw_hash = hash_password(new_password)
@@ -1355,6 +1369,7 @@ def users_impl(state: dict[str, Any]) -> dict[str, Any]:
     for uid, u in users.items():
         item = _public_user(u)
         item["last_login"] = float(u.get("last_login", 0))
+        item["created_at"] = float(u.get("created_at", 0))
         item["purchases"] = [
             {"id": p.get("id"), "plan_code": p.get("plan_code"), "at": p.get("at")}
             for p in (u.get("purchases") or [])
@@ -1362,6 +1377,90 @@ def users_impl(state: dict[str, Any]) -> dict[str, Any]:
         out.append(item)
     out.sort(key=lambda x: x["last_login"], reverse=True)
     return {"ok": True, "users": out, "count": len(out)}
+
+
+def set_admin_impl(state: dict[str, Any], email: str, flag: bool,
+                   now: float) -> dict[str, Any]:
+    """管理员设置/取消超管（2026-10-16：is_admin 上云，唯一真源）。
+
+    桌面 App 与网页版各节点的本机 is_admin 退为离线兜底；联网登录时以本服务为准。
+    """
+    user = _admin_find_user(state, email, now)
+    user["is_admin"] = bool(flag)
+    return {"ok": True, "email": _norm_id(email), "is_admin": bool(flag),
+            "authority": _authority_view(user, now)}
+
+
+# 权益字段零值表（import_account_impl 搬迁时按字段类型清洗用）
+_AUTH_ZERO = {"member_until_dl": 0.0, "member_until_ai": 0.0,
+              "ai_grant_total": 0, "ai_spent_total": 0, "perm_credits": 0}
+
+
+def import_account_impl(state: dict[str, Any], email: str, salt: str, pw_hash: str,
+                        now: float, created_at: float = 0.0,
+                        is_admin: bool = False,
+                        authority: Optional[dict[str, Any]] = None,
+                        devices: Optional[list] = None) -> dict[str, Any]:
+    """存量账号搬迁（2026-10-16「所有端用户上云端」）：把本机账号记录原样搬入。
+
+    本机 auth_store 与本服务的密码哈希格式一致（PBKDF2-HMAC-SHA256 20 万轮，
+    hex 盐 / hex 摘要）⇒ 直接搬盐与哈希即可，**用户密码无感、无需重置**。
+
+    authority（2026-10-16 用户「真实账号的所有数据也得导入」）：本机 memberships
+    的权益态一并搬来——member_until_dl / member_until_ai / ai_grant_total /
+    ai_spent_total / perm_credits / daily{date,counts}。devices：本机账号镜像里的
+    设备画像（fp/name/last_seen/platform）。**只在新账号创建时整体写入**；已存在
+    账号一律不覆盖（云端是权威——云端 purchases 重放出来的权益可能强于本机，
+    覆盖等于给用户降级），仅按需补 is_admin。
+    """
+    uid = _norm_id(email)
+    if not _valid_account_id(uid):
+        raise ApiError(400, "BAD_ACCOUNT", "请输入有效的邮箱或手机号")
+    if not salt or not pw_hash:
+        raise ApiError(400, "BAD_CREDENTIAL", "salt/pw_hash 不能为空")
+    users = _users(state)
+    if uid in users:
+        user = users[uid]
+        if is_admin and not user.get("is_admin"):
+            user["is_admin"] = True
+        return {"ok": True, "email": uid, "created": False,
+                "is_admin": bool(user.get("is_admin"))}
+    rec: dict[str, Any] = {
+        "user_id": uid, "email": uid, "salt": salt, "pw_hash": pw_hash,
+        "created_at": created_at or now, "devices": [], "purchases": [],
+        "is_admin": bool(is_admin), "imported": True,
+    }
+    auth = authority if isinstance(authority, dict) else {}
+    for key in ("member_until_dl", "member_until_ai", "ai_grant_total",
+                "ai_spent_total", "perm_credits"):
+        try:
+            rec[key] = type(_AUTH_ZERO[key])(auth.get(key) or 0)
+        except (TypeError, ValueError):
+            rec[key] = _AUTH_ZERO[key]
+    daily = auth.get("daily")
+    if isinstance(daily, dict) and str(daily.get("date") or ""):
+        rec["daily"] = {"date": str(daily.get("date"))[:16],
+                        "counts": {str(k)[:32]: int(v)
+                                   for k, v in (daily.get("counts") or {}).items()
+                                   if isinstance(v, (int, float))}}
+    if isinstance(devices, list):
+        clean = []
+        for d in devices[:MAX_DEVICES]:
+            if not isinstance(d, dict):
+                continue
+            fp = str(d.get("fp") or "").strip()[:64]
+            if not fp:
+                continue
+            clean.append({
+                "fp": fp,
+                "name": str(d.get("name") or "")[:64],
+                "first_seen": float(d.get("first_seen") or d.get("last_seen") or now),
+                "last_seen": float(d.get("last_seen") or now),
+            })
+        rec["devices"] = clean
+    users[uid] = rec
+    _log_event(state, "account_import", now, email=uid)
+    return {"ok": True, "email": uid, "created": True, "is_admin": bool(is_admin)}
 
 
 # ── 卡密（沿用 P2 的签名机制，只是不再写 bound_fp）──────────────────────────── #
@@ -2311,6 +2410,7 @@ class Handler(BaseHTTPRequestHandler):
             # --- 管理员接口（不做 IP 限流，走 token）---
             if action in ("gen", "revoke", "grant", "users",
                           "ban", "adjust", "setstate", "usage",
+                          "set-admin", "import-account",
                           "alerts", "alerts_ack", "recon", "plans_set",
                             # 🔴 2026-10-06 免费额度覆盖下发（终身免费次数）
                             "free_quota_set",
@@ -2341,6 +2441,23 @@ class Handler(BaseHTTPRequestHandler):
                         out = ban_impl(st, str(data.get("email") or ""),
                                        bool(data.get("banned", data.get("flag", True))),
                                        now, str(data.get("note") or ""))
+                        _save_state(st)
+                    elif action == "set-admin":
+                        # 2026-10-16：超管标记上云（各端登录时以云端快照为准）
+                        out = set_admin_impl(st, str(data.get("email") or ""),
+                                             bool(data.get("is_admin", True)), now)
+                        _save_state(st)
+                    elif action == "import-account":
+                        # 2026-10-16：存量账号搬迁（本机 users.json + memberships
+                        # → 云端，盐+哈希+权益原样；用户「真实账号的所有数据也得导入」）
+                        out = import_account_impl(
+                            st, str(data.get("email") or ""),
+                            str(data.get("salt") or ""),
+                            str(data.get("pw_hash") or ""), now,
+                            float(data.get("created_at") or 0),
+                            bool(data.get("is_admin", False)),
+                            data.get("authority"),
+                            data.get("devices"))
                         _save_state(st)
                     elif action == "adjust":
                         try:
@@ -2490,11 +2607,13 @@ class Handler(BaseHTTPRequestHandler):
                     if out.get("ok"):
                         _save_state(st)
                 elif action == "password":
-                    # App 本机改密 / 忘记密码重置后同步过来（两端密码不分叉）
+                    # App 本机改密 / 忘记密码重置后同步过来（两端密码不分叉）；
+                    # 2026-10-16 起也承接超管后台重置（admin_token 通道）。
                     out = password_impl(st, str(data.get("email") or ""),
                                         str(data.get("new_password") or ""), now, SECRET,
                                         old_password=str(data.get("old_password") or ""),
-                                        token=str(data.get("token") or ""))
+                                        token=str(data.get("token") or ""),
+                                        admin_token=str(data.get("admin_token") or ""))
                     _save_state(st)
                 elif action == "redeem":
                     try:

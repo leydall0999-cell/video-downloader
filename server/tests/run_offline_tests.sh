@@ -329,7 +329,17 @@ run_one test_cloud_account.py
 #                                      ②云端本无此账号不算失败 ③下次登录时自愈（须本机密码对
 #                                      **且**持该账号的云端 token，防越权改他人密码）
 run_one test_password_sync.py
-#  22. test_system_changelog.py     —— 「关于本应用」的内置更新日志（2026-09-26 新增）：
+#  22a. test_cloud_account_unified.py —— 全端账号统一（2026-10-16 用户「每个端数据要都
+#                                      统一到一起」：Mac/Windows 桌面 + 网页版 cn/hk 四端
+#                                      账号/权益/设备/is_admin 收敛到云端授权中心，超管后台
+#                                      可见全部端）。钉住：①is_admin 上云（快照/列表带出、
+#                                      set-admin 写了就生效）②存量搬迁 import-account 哈希
+#                                      可移植（原密码直接能登）且不覆盖云端已有账号 ③超管
+#                                      admin_token 改密通道（持令可改/错令拒/原密码通道回归）
+#                                      ④list_users 云端为主+本机兜底+重叠去重+云端故障退化
+#                                      ⑤路由双写 helper（标识解析/失败只出 notice/空标识不调云端）
+run_one test_cloud_account_unified.py
+#  22b. test_system_changelog.py     —— 「关于本应用」的内置更新日志（2026-09-26 新增）：
 #                                      不再依赖线上更新源（线上长期停在旧版会让面板只显示
 #                                      旧版说明）：结构与版本降序、仓库 VERSION 必须在日志里
 #                                      命中（漏写则退回兜底文案）、未命中时优雅降级、

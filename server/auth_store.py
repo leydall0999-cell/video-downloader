@@ -540,6 +540,16 @@ def user_identifier(user_id: str) -> Optional[str]:
     return user["identifier"] if user else None
 
 
+def user_id_of(identifier: str) -> Optional[str]:
+    """标识（邮箱/手机号）→ user_id；本机没有该账号返回 None。
+
+    2026-10-16 新增：云端 is_admin 同步需要「邮箱 → 本机 user_id」的反查
+    （只同步本机已存在的镜像，不代建账号）。
+    """
+    data = _load_users()
+    return (data.get("by_identifier") or {}).get(_normalize(identifier or ""))
+
+
 def user_avatar_url(user_id: str) -> Optional[str]:
     """返回用户头像相对/绝对 URL；未设置返回 None。"""
     p = _avatar_path(user_id)

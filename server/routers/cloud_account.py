@@ -261,6 +261,32 @@ def _apply_account_state(store, acct: dict[str, Any], mirror: bool = True) -> No
         store.apply_cloud_purchases(acct.get("purchases") or [])
     if mirror:
         _mirror_to_user_store(store, acct)
+    # 2026-10-16：is_admin 上云 —— 云端快照是权威，落到本机账号表镜像，
+    # 超管提权/降级因此全端生效；断网时本机标记仍可兜底门禁。
+    _sync_cloud_is_admin(acct)
+
+
+def _sync_cloud_is_admin(acct: dict[str, Any]) -> None:
+    """把云端账号快照里的 is_admin 同步到本机账号表（仅本机已存在的镜像）。
+
+    fail-open：任何异常都不影响登录与门禁（本机标记本就是离线兜底）。
+    """
+    try:
+        acct = acct or {}
+        if "is_admin" not in acct:
+            return
+        email = str(acct.get("email") or "").strip().lower()
+        if not email:
+            return
+        from auth_store import set_user_admin, user_id_of, user_is_admin
+        uid = user_id_of(email)
+        if not uid:
+            return  # 本机没有这个账号的镜像（该端没登录过）—— 不代建
+        flag = bool(acct.get("is_admin"))
+        if flag != bool(user_is_admin(uid)):
+            set_user_admin(uid, flag)
+    except Exception:  # noqa: BLE001 — 同步失败不影响登录主链路
+        pass
 
 
 def _mirror_to_user_store(store, acct: dict[str, Any]) -> None:

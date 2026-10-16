@@ -62,14 +62,81 @@ def _save_users(data: dict[str, Any]) -> None:
     auth_store._save_users(data)
 
 
+def _cloud_users() -> Optional[list[dict[str, Any]]]:
+    """拉云端全量账号（2026-10-16「每端数据统一」：后台用户列表的真源）。
+
+    授权中心汇集各端账号：桌面 App（Mac/Windows）+ 网页版 cn/hk。
+    不可达 / 未配令牌返回 None（调用方走本机兜底）。
+    """
+    token = _license_admin_token()
+    if not token:
+        return None
+    try:
+        import license_client
+        r = license_client.users_remote(token)
+    except Exception:
+        return None
+    if not isinstance(r, dict) or not r.get("ok"):
+        return None
+    users = r.get("users")
+    return users if isinstance(users, list) else None
+
+
+def _cloud_user_row(u: dict[str, Any]) -> dict[str, Any]:
+    """云端账号 → 后台行（保持既有字段键名不变，前端无感；新增端维度字段）。"""
+    now = time.time()
+    auth = u.get("authority") or {}
+    devs = u.get("devices") or []
+    return {
+        "user_id": u.get("user_id") or u.get("email"),
+        "identifier": u.get("email"),
+        "created_at": u.get("created_at"),
+        "last_login": u.get("last_login"),
+        "disabled": bool(u.get("banned")),
+        "is_admin": bool(u.get("is_admin")),
+        "source": "cloud",
+        "device_count": len(devs),
+        "devices": [
+            {"name": d.get("name"), "platform": d.get("platform"),
+             "app_version": d.get("app_version"),
+             "last_seen": d.get("last_seen")}
+            for d in devs
+        ],
+        "membership": {
+            "download_active": float(auth.get("member_until_dl") or 0) > now,
+            "ai_active": float(auth.get("member_until_ai") or 0) > now,
+            "credits_total": int(auth.get("perm_credits") or 0)
+            + int(auth.get("ai_credits_left") or 0),
+        },
+    }
+
+
 def list_users() -> list[dict[str, Any]]:
-    """返回用户列表，含会员态与禁用标记；已删除（deleted_at）账号不出现。"""
+    """全端用户列表（2026-10-16：云端授权中心是唯一真源）。
+
+    合并策略：云端账号为主（桌面 App + 网页版 cn/hk 全部在此）；本机表中
+    云端没有的账号（离线兜底分叉）以 source=local 附列，不丢人。云端不可达时
+    整体退化为本机列表，后台仍可用。
+    """
     from user_membership import get_user_store
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    cloud = _cloud_users()
+    if cloud is not None:
+        for u in cloud:
+            email = str(u.get("email") or "").strip().lower()
+            if not email:
+                continue
+            seen.add(email)
+            out.append(_cloud_user_row(u))
+    # 本机兜底 / 补充：已删除（deleted_at）账号不出现
     data = _load_users()
-    out = []
     for u in data.get("users", []):
         if u.get("deleted_at"):
-            continue  # 已删除（含用户自助注销）不再出现在后台列表
+            continue
+        ident = str(u.get("identifier") or "").strip().lower()
+        if ident in seen:
+            continue
         uid = u.get("user_id")
         rec: dict[str, Any] = {
             "user_id": uid,
@@ -77,6 +144,7 @@ def list_users() -> list[dict[str, Any]]:
             "created_at": u.get("created_at"),
             "disabled": bool(u.get("disabled", False)),
             "is_admin": bool(u.get("is_admin", False)),
+            "source": "local",
         }
         try:
             st = get_user_store(uid).status()
