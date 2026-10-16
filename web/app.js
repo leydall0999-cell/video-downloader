@@ -22809,7 +22809,9 @@ el.dwVidPlayer.hidden = true;
         const cred = (m.credits_total != null) ? m.credits_total : '—';
         const disabled = !!u.disabled;
         const isAdmin = !!u.is_admin;
-        const self = u.user_id === _currentUid;
+        // 「当前账号」：列表行改为云端总库后 user_id 是邮箱，本机 uid 比不出来
+        // ⇒ 后端按账号标识回填 u.self（旧字段兜底保留，兼容未升级的后端）
+        const self = u.self === true || u.user_id === _currentUid;
         // 头像：对齐设计稿的人像圆片——按 uid 哈希交替男/女人像，底色随性别（蓝/粉）
         const h = String(u.user_id || 'x').split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 100, 7);
         const isFe = h % 2 === 1;

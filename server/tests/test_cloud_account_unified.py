@@ -313,6 +313,195 @@ def test_router_dual_write_helpers() -> None:
         admin_router._resolve_identifier = orig_identifier
 
 
+def test_panel_ops_on_cloud_rows() -> None:
+    """E 组：列表改云端总库后，面板各按钮对「云端行」（user_id = 邮箱）必须能用。
+
+    真实事故（2026-10-16 用户截图）：点「使用详情」报「用户不存在」；「会员管理」
+    只有本机 3 条而不是 8 条。根因是各操作端点一律按本机 user_id 查本机表。
+    """
+    print("\n[E] 面板操作对云端行（user_id = 邮箱）")
+    import admin_store
+    import license_client
+    import auth_store
+    import user_membership
+    from routers import admin as admin_router
+
+    now = time.time()
+    local_users = [
+        {"user_id": "u_1", "identifier": "a@qq.com", "created_at": 1000, "is_admin": False},
+        {"user_id": "u_2", "identifier": "me@qq.com", "created_at": 1000, "is_admin": True},
+        {"user_id": "u_3", "identifier": "local-only@qq.com", "created_at": 900,
+         "is_admin": False},
+    ]
+    cloud_users = [
+        {"user_id": "a@qq.com", "email": "a@qq.com", "created_at": 1900, "banned": False,
+         "is_admin": False, "devices": [], "purchases": [],
+         "authority": {"member_until_dl": 0, "member_until_ai": 0,
+                       "perm_credits": 0, "ai_credits_left": 0}},
+        {"user_id": "cloudonly@qq.com", "email": "cloudonly@qq.com", "created_at": 800,
+         "banned": False, "is_admin": False, "devices": [],
+         "purchases": [{"plan_code": "download_1day", "at": 700}],
+         "authority": {"member_until_dl": now + 30 * 86400, "member_until_ai": 0,
+                       "perm_credits": 190, "ai_credits_left": 0}},
+    ]
+
+    class _Store:
+        def status(self):
+            return {"download_member": {"active": False, "plan": None, "expire_at": 0,
+                                        "source": None},
+                    "ai_member": {"active": False, "plan": None, "expire_at": 0,
+                                  "credits_left": 0},
+                    "permanent_credits": 7, "credits_total": 7, "daily_usage": {}}
+
+    orig = {
+        "load": admin_store._load_users,
+        "cloud": admin_store._cloud_users,
+        "auth_load": auth_store._load_users,
+        "token": admin_store._license_admin_token,
+        "store": user_membership.get_user_store,
+        "usage_cloud": getattr(admin_router, "_usage_cloud", None),
+        "require": admin_router.require_admin,
+        "cur": admin_router.get_current_user_id,
+    }
+    table = {"users": local_users, "by_identifier": {"a@qq.com": "u_1", "me@qq.com": "u_2",
+                                                     "local-only@qq.com": "u_3"}}
+    admin_store._load_users = lambda: table
+    auth_store._load_users = lambda: table
+    admin_store._cloud_users = lambda: cloud_users
+    user_membership.get_user_store = lambda uid: _Store()
+    admin_store._license_admin_token = lambda: "tok"
+    admin_router.require_admin = lambda request=None: None
+    admin_router.get_current_user_id = lambda request=None: "u_2"
+
+    try:
+        # --- 标识解析：本机 uid / 本机邮箱 / 纯云端邮箱 ---
+        check("_local_uid 认本机 uid", admin_router._local_uid("u_1") == "u_1")
+        check("_local_uid 认本机邮箱（反查）", admin_router._local_uid("A@QQ.com") == "u_1")
+        check("_local_uid 对纯云端账号返回空",
+              admin_router._local_uid("cloudonly@qq.com") == "")
+
+        # --- 纯云端行：只写云端，云端成功才算成功 ---
+        called = {"local": 0, "cloud": []}
+
+        def _local_should_not_run(uid):
+            called["local"] += 1
+            return {"ok": True}
+
+        def _cloud_ok(ident, tok):
+            called["cloud"].append(ident)
+            return {"ok": True}
+
+        out = admin_router._admin_mutate("cloudonly@qq.com", _local_should_not_run, _cloud_ok)
+        check("云端行不碰本机表", called["local"] == 0)
+        check("云端行写到了云端（用账号标识）", called["cloud"] == ["cloudonly@qq.com"])
+        check("云端行成功 → ok + cloud_only", out.get("ok") is True
+              and out.get("cloud_only") is True)
+
+        def _cloud_fail(ident, tok):
+            return {"ok": False, "error": "BAD_PLAN"}
+
+        out = admin_router._admin_mutate("cloudonly@qq.com", _local_should_not_run, _cloud_fail)
+        check("云端行云端失败 → 不能假装成功",
+              out.get("ok") is False and "BAD_PLAN" in str(out.get("error")))
+
+        admin_store._license_admin_token = lambda: ""
+        out = admin_router._admin_mutate("cloudonly@qq.com", _local_should_not_run, _cloud_ok)
+        check("云端行未配令牌 → 失败并说明",
+              out.get("ok") is False and "令牌" in str(out.get("error")))
+        admin_store._license_admin_token = lambda: "tok"
+
+        # --- 本机行：先本机，失败即返回；成功再推云 ---
+        called2 = {"local": [], "cloud": []}
+        out = admin_router._admin_mutate(
+            "a@qq.com",
+            lambda uid: (called2["local"].append(uid), {"ok": True})[1],
+            lambda ident, tok: (called2["cloud"].append(ident), {"ok": True})[1])
+        check("本机行先落本机（uid 正确）", called2["local"] == ["u_1"])
+        check("本机行也推云（用邮箱）", called2["cloud"] == ["a@qq.com"])
+
+        called3 = {"local": [], "cloud": []}
+        out = admin_router._admin_mutate(
+            "a@qq.com",
+            lambda uid: {"ok": False, "error": "本机拒绝"},
+            lambda ident, tok: (called3["cloud"].append(ident), {"ok": True})[1])
+        check("本机失败即返回、不推云",
+              out.get("ok") is False and called3["cloud"] == [])
+
+        # 本机操作内部已推云（赠送/调分）→ 不得二次推云
+        called4 = {"local": [], "cloud": []}
+        out = admin_router._admin_mutate(
+            "a@qq.com",
+            lambda uid: (called4["local"].append(uid), {"ok": True})[1],
+            lambda ident, tok: (called4["cloud"].append(ident), {"ok": True})[1],
+            cloud_when_local=False)
+        check("本机路径下不重复推云", called4["cloud"] == [] and out.get("ok") is True)
+
+        # --- 使用详情：云端行不再报「用户不存在」 ---
+        # （网页版没有使用详情面板，本树无 admin_user_usage / _usage_cloud）
+        if not hasattr(admin_router, "admin_user_usage"):
+            print("  ⏭ 本树无使用详情端点（网页版无该面板），跳过")
+        else:
+            admin_router._usage_cloud = lambda ident: {
+                "ok": True,
+                "data": {"email": ident, "banned": False, "is_admin": False,
+                         "created_at": 800,
+                         "authority": {"member_until_dl": now + 86400 * 3,
+                                       "member_until_ai": 0, "perm_credits": 12,
+                                       "ai_credits_left": 0},
+                         "purchases": [{"plan_code": "download_3day", "at": 700}],
+                         "devices": [{"fp": "fp-1", "name": "Mac", "last_seen": 700}]},
+            }
+            res = admin_router.admin_user_usage("cloudonly@qq.com", request=None)
+            u = res.get("usage") or {}
+            check("云端行使用详情返回 ok", res.get("ok") is True
+                  and not res.get("error"))
+            check("云端行使用详情标 cloud_only", u.get("cloud_only") is True)
+            check("云端行使用详情带云端权益（积分 12）",
+                  (u.get("membership") or {}).get("permanent_credits") == 12)
+            check("云端行使用详情带设备指纹", u.get("device_fp") == "fp-1")
+            res2 = admin_router.admin_user_usage("u_1", request=None)
+            check("本机行使用详情仍走本机视图",
+                  (res2.get("usage") or {}).get("cloud_only") is None
+                  and (res2.get("usage") or {}).get("permanent_credits") is None
+                  and (res2.get("usage") or {}).get("membership", {})
+                  .get("permanent_credits") == 7)
+
+        # --- 会员管理：云端为主 + 本机兜底（原事故：只有本机 3 条） ---
+        mrows = admin_store.list_memberships()
+        mby = {r["identifier"]: r for r in mrows}
+        check("会员列表含云端账号", "cloudonly@qq.com" in mby)
+        check("会员列表含本机独有账号", "local-only@qq.com" in mby)
+        check("会员列表重叠账号不双现",
+              sum(1 for r in mrows if r["identifier"] == "a@qq.com") == 1)
+        check("重叠账号取云端权益（本机 perm=7 不得露头）",
+              (mby.get("a@qq.com") or {}).get("permanent_credits") == 0)
+        co = mby.get("cloudonly@qq.com") or {}
+        check("云端会员态映射（active/积分 190）",
+              co.get("download_active") is True and co.get("permanent_credits") == 190)
+        check("云端档位名与到期日自洽（30 天 → download_month）",
+              co.get("download_plan") == "download_month")
+        check("本机行档位名照旧（不反推）",
+              (mby.get("local-only@qq.com") or {}).get("download_plan") is None)
+
+        # --- 档位反推边界 ---
+        f = admin_store._plan_name_by_remaining
+        check("反推 1 天档", f(now + 86400, now) == "download_1day")
+        check("反推 365 天档", f(now + 365 * 86400, now) == "download_year")
+        check("反推对不上任何档位 → None（不瞎猜）",
+              f(now + 1000 * 86400, now) is None)
+        check("已过期 → None", f(now - 10, now) is None)
+    finally:
+        admin_store._load_users = orig["load"]
+        auth_store._load_users = orig["auth_load"]
+        admin_store._cloud_users = orig["cloud"]
+        user_membership.get_user_store = orig["store"]
+        admin_store._license_admin_token = orig["token"]
+        if orig["usage_cloud"] is not None:
+            admin_router._usage_cloud = orig["usage_cloud"]
+        admin_router.require_admin = orig["require"]
+        admin_router.get_current_user_id = orig["cur"]
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="vdl_cloudacct_") as td:
         tmp = Path(td)
@@ -320,6 +509,7 @@ def main() -> int:
         test_admin_password_channel(tmp)
         test_list_users_merge()
         test_router_dual_write_helpers()
+        test_panel_ops_on_cloud_rows()
     print(f"\n{'=' * 46}")
     print(f"通过 {PASS} / 失败 {FAIL}")
     return 1 if FAIL else 0

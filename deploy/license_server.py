@@ -884,6 +884,10 @@ def usage_impl(state: dict[str, Any], email: str, now: float) -> dict[str, Any]:
         "adjusts": user.get("adjusts") or [],
         "banned": bool(user.get("banned")),
         "ban_note": user.get("ban_note", ""),
+        # 2026-10-16：后台「使用详情」对无本机镜像的云端账号直接渲染本响应，
+        # 故补上账号档案字段（前端要显示「超管」标记与注册时间）。
+        "is_admin": bool(user.get("is_admin")),
+        "created_at": float(user.get("created_at") or 0),
         "devices": [
             {"fp": d.get("fp", ""), "name": d.get("name", ""),
              "last_seen": float(d.get("last_seen", 0))}

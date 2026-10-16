@@ -90,7 +90,10 @@ def test_route_wired() -> None:
     i = txt.find('"/api/admin/users/{user_id}/usage"')
     seg = txt[i:txt.find("\n@router", i + 10)]
     check("路由带 require_admin 门禁", "require_admin(request)" in seg)
-    check("聚合客服会话", "_usage_support(user_id)" in seg)
+    # 只钉「有没有聚合客服会话/云端授权」，不钉传参变量名 —— 2026-10-16 起本机有
+    # 镜像的账号传本机 uid（uid）、纯云端账号走 _usage_cloud_only，写死
+    # `_usage_support(user_id)` 会让正常重构误报（当初就是这么红的）。
+    check("聚合客服会话", "_usage_support(" in seg and 'bundle["support"]' in seg)
     check("聚合云端授权（失败降级）", "_usage_cloud(" in seg)
 
 

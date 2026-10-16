@@ -240,6 +240,21 @@ def usage_remote(email: str, admin_token: str, base_url: Optional[str] = None,
                  base_url, timeout)
 
 
+def grant_remote(email: str, plan: str, admin_token: str, note: str = "",
+                 base_url: Optional[str] = None,
+                 timeout: float = 10.0) -> dict[str, Any]:
+    """管理员在云端直接给账号开套餐（2026-10-16：后台「赠送」对云端账号生效）。
+
+    plan 传套餐 code（如 download_month / download_3day / ai_month / credit_100）。
+    仅用于本机没有镜像的账号（云端行）—— 本机有的账号由本地 activate 落盘后
+    经 setstate 推云，不走这里（否则会多记一笔购买）。
+    """
+    return _post("/api/license/grant",
+                 {"token": admin_token, "email": email,
+                  "plan": str(plan or "").strip(), "note": str(note or "")[:120]},
+                 base_url, timeout)
+
+
 def redeem_remote(token: str, code: str, base_url: Optional[str] = None,
                   timeout: float = 12.0,
                   opener: Optional[Callable] = None) -> dict[str, Any]:

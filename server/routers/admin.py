@@ -55,6 +55,7 @@ from admin_store import (
 )
 from user_membership import get_current_user_id
 from auth_store import user_is_admin, set_user_admin
+import license_client  # 纯 stdlib 叶子模块：面板对云端账号的操作直接走它
 
 
 def _resolve_identifier(user_id: str) -> str:
@@ -92,6 +93,63 @@ def _cloud_sync(ident: str, op) -> str:
     if isinstance(r, dict) and not r.get("ok"):
         return f"（云端同步失败：{r.get('error') or r.get('detail') or '未知'}）"
     return ""
+
+
+def _local_uid(user_id: str) -> str:
+    """入参是本机 user_id（u_xxx）或账号标识（邮箱/手机号）→ 本机 user_id。
+
+    云端行的 user_id 就是账号标识（云端 uid = 规范化邮箱），本机没有该账号
+    镜像时返回 "" —— 调用方据此走「纯云端」分支。
+    """
+    raw = (user_id or "").strip()
+    if not raw:
+        return ""
+    try:
+        import auth_store
+        data = auth_store._load_users()
+    except Exception:  # noqa: BLE001 — 账号表读失败不该让面板 500
+        return ""
+    for u in data.get("users", []):
+        if u.get("user_id") == raw and not u.get("deleted_at"):
+            return raw
+    uid = (data.get("by_identifier") or {}).get(raw.strip().lower())
+    return str(uid or "")
+
+
+def _admin_mutate(user_id: str, local_op, cloud_op, *,
+                  cloud_when_local: bool = True) -> dict[str, Any]:
+    """超管写操作统一入口：本机（存在时）+ 云端授权中心（唯一真源）。
+
+    🔴 2026-10-16 修「面板按钮点了没反应 / 报用户不存在」：用户与会员列表改为
+    云端总库后，行上的 user_id 是**账号标识**（云端 uid = 邮箱），而各操作端点
+    一律按本机 user_id 去本机账号表里查 ⇒ 云端账号全部「用户不存在」。
+    这里统一解析标识：
+      · 本机有该账号 → 先本机（沿用原语义，失败即返回），再同步云端；
+      · 本机没有（纯云端账号）→ 只写云端，云端成功才算成功。
+    cloud_when_local=False 用于「本机操作内部已自行推云」的场景（赠送 / 调分），
+    避免同一笔发放向云端推两次。
+    """
+    ident = _resolve_identifier(user_id)
+    lu = _local_uid(user_id)
+    if lu:
+        out = local_op(lu)
+        if not (isinstance(out, dict) and out.get("ok")):
+            return out if isinstance(out, dict) else {"ok": False, "error": "本机操作失败"}
+    else:
+        out = {"ok": True, "user_id": ident or user_id, "cloud_only": True}
+    if lu and not cloud_when_local:
+        import admin_store
+        out["notice"] = ("" if admin_store._license_admin_token()
+                         else "（未配置授权中心管理令牌，本次未同步云端）")
+        return out
+    out["notice"] = _cloud_sync(ident, lambda tok: cloud_op(ident, tok))
+    if not lu:
+        # 本机没有这个账号：云端是唯一落点，云端没成就是整单失败
+        if not ident:
+            return {**out, "ok": False, "error": "未找到对应账号标识，无法定位云端账号"}
+        if out["notice"]:
+            return {**out, "ok": False, "error": str(out["notice"]).strip("（）")}
+    return out
 
 
 def require_admin(request: Request) -> None:
@@ -339,66 +397,78 @@ def _daily_feature_rows() -> list[dict[str, Any]]:
 @router.get("/api/admin/users")
 def admin_list_users(request: Request = None) -> dict[str, Any]:
     require_admin(request)
-    return {"ok": True, "users": list_users(), "total": len(list_users())}
+    rows = list_users()
+    # 「当前账号」标记：云端行的 user_id 是邮箱，前端拿本机 uid 比不出来（会把
+    # 自己那行也渲染成「取消管理员 / 禁用」）⇒ 由后端按标识判定后回填。
+    me = _resolve_identifier(get_current_user_id(request))
+    for r in rows:
+        r["self"] = bool(me) and str(r.get("identifier") or "").strip().lower() == me
+    return {"ok": True, "users": rows, "total": len(rows)}
 
 
 @router.post("/api/admin/users/{user_id}/set-admin")
 def admin_set_admin(user_id: str, payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     require_admin(request)
     flag = bool(payload.get("is_admin", False))
-    out = set_user_admin(user_id, flag)
-    if isinstance(out, dict):
-        import license_client
-        ident = _resolve_identifier(user_id)
-        out["notice"] = _cloud_sync(
-            ident, lambda tok: license_client.set_admin_remote(ident, flag, tok))
-    return out
+    # 自己不能被降权（云端行 user_id 是邮箱，前端 self 判断已由后端 self 字段兜住，
+    # 这里再做一次硬拦：误点「取消管理员」会把唯一超管锁在门外）。
+    if not flag and _resolve_identifier(user_id) == _resolve_identifier(get_current_user_id(request)):
+        return {"ok": False, "error": "不能取消当前登录账号的管理员权限"}
+    return _admin_mutate(
+        user_id,
+        lambda uid: set_user_admin(uid, flag),
+        lambda ident, tok: license_client.set_admin_remote(ident, flag, tok))
 
 
 @router.post("/api/admin/users/{user_id}/disable")
 def admin_disable_user(user_id: str, request: Request = None) -> dict[str, Any]:
     require_admin(request)
-    out = set_user_disabled(user_id, True)
-    if isinstance(out, dict):
-        import license_client
-        ident = _resolve_identifier(user_id)
-        out["notice"] = _cloud_sync(
-            ident, lambda tok: license_client.ban_remote(ident, True, tok, note="admin disable"))
-    return out
+    if _resolve_identifier(user_id) == _resolve_identifier(get_current_user_id(request)):
+        return {"ok": False, "error": "不能禁用当前登录的账号"}
+    return _admin_mutate(
+        user_id,
+        lambda uid: set_user_disabled(uid, True),
+        lambda ident, tok: license_client.ban_remote(ident, True, tok, note="admin disable"))
 
 
 @router.post("/api/admin/users/{user_id}/enable")
 def admin_enable_user(user_id: str, request: Request = None) -> dict[str, Any]:
     require_admin(request)
-    out = set_user_disabled(user_id, False)
-    if isinstance(out, dict):
-        import license_client
-        ident = _resolve_identifier(user_id)
-        out["notice"] = _cloud_sync(
-            ident, lambda tok: license_client.ban_remote(ident, False, tok, note="admin enable"))
-    return out
+    return _admin_mutate(
+        user_id,
+        lambda uid: set_user_disabled(uid, False),
+        lambda ident, tok: license_client.ban_remote(ident, False, tok, note="admin enable"))
 
 
 @router.post("/api/admin/users/{user_id}/reset-password")
 def admin_reset_password(user_id: str, payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     require_admin(request)
     new_pw = str(payload.get("new_password") or "")
-    out = reset_user_password(user_id, new_pw)
-    if isinstance(out, dict):
-        import license_client
-        ident = _resolve_identifier(user_id)
-        out["notice"] = _cloud_sync(
-            ident, lambda tok: license_client.set_password_remote(ident, new_pw, admin_token=tok))
-    return out
+    if not new_pw or len(new_pw) < 6:
+        return {"ok": False, "error": "新密码至少 6 位"}
+    return _admin_mutate(
+        user_id,
+        lambda uid: reset_user_password(uid, new_pw),
+        lambda ident, tok: license_client.set_password_remote(ident, new_pw, admin_token=tok))
 
 
 @router.post("/api/admin/users/{user_id}/delete")
 def admin_delete_user(user_id: str, request: Request = None) -> dict[str, Any]:
-    """删除账号（软删除）：不可删自己；超管账号在 admin_store.delete_user 里拦。"""
+    """删除账号（本机软删除 + 云端销号）：不可删自己；超管不可删。"""
     require_admin(request)
-    if user_id == get_current_user_id(request):
+    me = _resolve_identifier(get_current_user_id(request))
+    ident = _resolve_identifier(user_id)
+    if user_id == get_current_user_id(request) or (ident and ident == me):
         return {"ok": False, "error": "不能删除当前登录的账号"}
-    return delete_user(user_id)
+    row = next((r for r in list_users()
+                if r.get("user_id") == user_id
+                or str(r.get("identifier") or "").strip().lower() == ident), None)
+    if row and row.get("is_admin"):
+        return {"ok": False, "error": "超级用户不可删除，请先取消其管理员"}
+    return _admin_mutate(
+        user_id,
+        lambda uid: delete_user(uid),
+        lambda i, tok: license_client.delete_user_remote(i, tok))
 
 
 @router.get("/api/admin/memberships")
@@ -408,6 +478,33 @@ def admin_list_memberships(request: Request = None) -> dict[str, Any]:
     return {"ok": True, "memberships": items, "total": len(items)}
 
 
+def _cloud_credit_ops(ident: str, tok: str, delta: int, pool: str) -> list:
+    """云端调分序列：把本地 pool 语义映射成云端 adjust(pool, delta) 调用列表。
+
+    - ai / permanent：原样一条；
+    - auto：正=充永久；负=先扣 AI 订阅余量再扣永久（与 membership.add_credits 一致）。
+      云端账号没有本地 store，AI 余量改从云端 authority 取（多一次只读调用）。
+    """
+    if pool in ("ai", "permanent"):
+        return [(pool, delta)]
+    if delta >= 0:
+        return [("permanent", delta)]
+    amount = -delta
+    ai_left = 0
+    try:
+        u = license_client.usage_remote(ident, tok)
+        ai_left = int(((u or {}).get("authority") or {}).get("ai_credits_left") or 0)
+    except Exception:  # noqa: BLE001 — 取不到就保守按「全扣永久」
+        ai_left = 0
+    ai_d = min(max(ai_left, 0), amount)
+    ops: list = []
+    if ai_d > 0:
+        ops.append(("ai", -ai_d))
+    if amount - ai_d > 0:
+        ops.append(("permanent", -(amount - ai_d)))
+    return ops
+
+
 @router.post("/api/admin/memberships/grant")
 def admin_grant(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     require_admin(request)
@@ -415,7 +512,13 @@ def admin_grant(payload: dict[str, Any] = Body(...), request: Request = None) ->
     code = str(payload.get("code") or "").strip()
     if not user_id or not code:
         return {"ok": False, "error": "user_id 与 code 必填"}
-    return grant_membership(user_id, code)
+    # 本机账号：grant_membership 落本机账本后**内部已 setstate 推云** ⇒ 不再重复推
+    # 云端账号（本机没有镜像）：云端 grant 直接开套餐
+    return _admin_mutate(
+        user_id,
+        lambda uid: grant_membership(uid, code),
+        lambda ident, tok: license_client.grant_remote(ident, code, tok, note="admin grant"),
+        cloud_when_local=False)
 
 
 @router.post("/api/admin/memberships/credits")
@@ -428,7 +531,25 @@ def admin_credits(payload: dict[str, Any] = Body(...), request: Request = None) 
         return {"ok": False, "error": "delta 必须为整数"}
     # pool: "ai"=AI 订阅积分 / "permanent"=永久积分；缺省 auto=旧语义（正充永久，负先 AI 后永久）
     pool = str(payload.get("pool") or "auto").strip() or "auto"
-    return adjust_credits(user_id, delta, pool)
+    if pool not in ("auto", "ai", "permanent"):
+        return {"ok": False, "error": f"未知积分池：{pool}"}
+
+    def _cloud_adjust(ident: str, tok: str) -> dict[str, Any]:
+        last: dict[str, Any] = {"ok": True}
+        for cpool, cdelta in _cloud_credit_ops(ident, tok, delta, pool):
+            if cdelta == 0:
+                continue
+            last = license_client.adjust_remote(tok, ident, cpool, cdelta, note="admin credits")
+            if isinstance(last, dict) and not last.get("ok"):
+                return last
+        return last
+
+    # 本机账号：adjust_credits 落本机账本后内部已推云 ⇒ 不再重复推
+    return _admin_mutate(
+        user_id,
+        lambda uid: adjust_credits(uid, delta, pool),
+        _cloud_adjust,
+        cloud_when_local=False)
 
 
 @router.get("/api/admin/stats")
@@ -1172,31 +1293,95 @@ def _usage_support(uid: str) -> dict[str, Any]:
     return {"threads": out, "total_threads": len(threads)}
 
 
+def _usage_cloud_only(ident: str) -> dict[str, Any]:
+    """云端账号（本机无镜像）的排障视图：只呈现云端档案，不谎报本机用量为 0。
+
+    2026-10-16：用户列表改为云端总库后，本机没有镜像的账号（在别的端注册）
+    点「使用详情」原先直接报「用户不存在」—— 现在改为给云端视角：
+    权益（会员到期 / 积分）取云端 authority，购买流水取云端 purchases，
+    设备取云端 devices；本机用量与客服记录如实标注为空。
+    """
+    now = time.time()
+    cloud = _usage_cloud(ident)
+    data = (cloud.get("data") or {}) if cloud.get("ok") else {}
+    auth = data.get("authority") or {}
+    dl_until = float(auth.get("member_until_dl") or 0)
+    ai_until = float(auth.get("member_until_ai") or 0)
+    ai_left = int(auth.get("ai_credits_left") or 0)
+    perm = int(auth.get("perm_credits") or 0)
+    dl_active = dl_until > now
+    ai_active = ai_until > now
+    devs = [d for d in (data.get("devices") or []) if isinstance(d, dict)]
+    acts = []
+    for p in reversed(list(data.get("purchases") or [])[-50:]):
+        if not isinstance(p, dict):
+            continue
+        acts.append({"code": str(p.get("plan_code") or p.get("code") or ""),
+                     "type": "purchase", "via": "pay",
+                     "at": float(p.get("at") or 0)})
+    return {
+        "user_id": ident,
+        "identifier": ident,
+        "source": "cloud",
+        "disabled": bool(data.get("banned")),
+        "is_admin": bool(data.get("is_admin")),
+        "created_at": data.get("created_at"),
+        "membership": {
+            "download_member": {"active": dl_active, "plan": None,
+                                "expire_at": dl_until,
+                                "source": "cloud" if dl_active else None},
+            "ai_member": {"active": ai_active, "plan": None,
+                          "expire_at": ai_until,
+                          "credits_left": ai_left if ai_active else 0,
+                          "grant_credits": 0},
+            "permanent_credits": perm,
+            "credits_total": ai_left + perm,
+            "daily_usage": {},
+        },
+        "today": {"date": time.strftime("%Y-%m-%d"), "items": {}, "total": 0},
+        "usage_days": [],
+        "usage_summary": {"days": 0, "active_days": 0, "total": 0},
+        "activations": acts,
+        "device_fp": str(devs[0].get("fp") or "") if devs else "",
+        "activated_at": 0.0,
+        "account_bound_at": 0.0,
+        "support": {"threads": [], "total_threads": 0},
+        "cloud": cloud,
+        "cloud_only": True,
+    }
+
+
 @router.get("/api/admin/users/{user_id}/usage")
 def admin_user_usage(user_id: str, request: Request = None) -> dict[str, Any]:
     """超级管理员：查看单个用户的完整使用情况（排障用）。
 
     含：账号档案 / 会员与积分 / 今日与近 14 天配额消耗 / 激活购买历史 /
     客服会话原文 / 云端授权状态（可拉时）。
+
+    🔴 2026-10-16：列表改为云端总库后 user_id 可能是**账号标识**（本机没有
+    镜像的账号，如在别的端注册）—— 这类账号改为返回云端档案，不再报
+    「用户不存在」。
     """
     require_admin(request)
     import auth_store
     from user_membership import get_user_store
 
+    uid = _local_uid(user_id)
+    ident = _resolve_identifier(user_id)
     user = next((u for u in auth_store._load_users().get("users", [])
-                 if u.get("user_id") == user_id and not u.get("deleted_at")), None)
+                 if u.get("user_id") == uid and not u.get("deleted_at")), None) if uid else None
     if not user:
-        return {"ok": False, "error": "用户不存在"}
-    store = get_user_store(user_id)
+        return {"ok": True, "usage": _usage_cloud_only(ident)}
+    store = get_user_store(uid)
     bundle = _usage_bundle(
-        user_id,
-        str(user.get("identifier") or user_id),
+        uid,
+        str(user.get("identifier") or uid),
         bool(user.get("disabled")),
         bool(user.get("is_admin")),
         user.get("created_at"),
         store,
     )
-    bundle["support"] = _usage_support(user_id)
+    bundle["support"] = _usage_support(uid)
     bundle["cloud"] = _usage_cloud(user.get("identifier") or "")
     return {"ok": True, "usage": bundle}
 
