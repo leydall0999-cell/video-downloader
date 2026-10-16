@@ -130,7 +130,20 @@ _stage_commentary() {
   echo "$staging"
 }
 
-COMMENTARY_DIR="${COMMENTARY_PIPELINE_DIR:-$REPO/../commentary-pipeline}"
+# 解说管线候选目录（按优先级；找不到 process.py 的候选一律跳过）
+#   ① 显式指定 COMMENTARY_PIPELINE_DIR（CI / 本机都推荐）
+#   ② 仓库同级  $REPO/../commentary-pipeline  —— 本机 app-dev 的 git worktree 布局
+#   ③ 仓库内部  $REPO/commentary-pipeline      —— CI 里 actions/checkout(path: …) 的落点
+# 🔴 曾经只认 ②，导致 CI 上 checkout 明明成功、脚本却看不见管线 → 静默出「无解说版」。
+if [ -n "${COMMENTARY_PIPELINE_DIR:-}" ]; then
+  COMMENTARY_DIR="$COMMENTARY_PIPELINE_DIR"
+elif [ -f "$REPO/../commentary-pipeline/process.py" ]; then
+  COMMENTARY_DIR="$REPO/../commentary-pipeline"
+elif [ -f "$REPO/commentary-pipeline/process.py" ]; then
+  COMMENTARY_DIR="$REPO/commentary-pipeline"
+else
+  COMMENTARY_DIR="$REPO/../commentary-pipeline"
+fi
 COMMENTARY_DATA=()
 if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
   echo "▶ 捆绑解说管线(随包自包含): $COMMENTARY_DIR"

@@ -60,8 +60,11 @@ jobs:
           fetch-depth: 0 # build_version.txt 要取 git short-sha
 
       # ── 解说管线（私有仓，需 COMMENTARY_PAT；缺省跳过）──
-      # checkout 到 <workspace>/commentary-pipeline，正好是 build_win.sh 的
-      # 默认候选路径 COMMENTARY_PIPELINE_DIR=$REPO/../commentary-pipeline
+      # checkout 到 <workspace>/commentary-pipeline，即 $REPO/commentary-pipeline
+      # —— 🔴 注意 **不是** $REPO/../commentary-pipeline（build_win.sh 的历史默认）。
+      # 两者差一层目录，光靠默认值会「checkout 成功却静默出无解说版」。
+      # 兜底：Build 步骤显式 export COMMENTARY_PIPELINE_DIR 指过来；
+      #       build_win.sh 内也已把 $REPO/commentary-pipeline 列为候选。
       #
       # 🔴 2026-10-16 实测教训（两个变体跑一轮才定位到）：step 级 if 里
       # **绝对不能引用 secrets**——未配置的 secret 在 workflow 编译期就让整个
@@ -146,7 +149,21 @@ jobs:
       - name: Build (pyinstaller onedir + innosetup)
         # tee 落一份日志 + PIPESTATUS 显式取 build_win.sh 真实退出码
         # （不依赖 pipefail；失败时下一步把日志传成 artifact，匿名 API 可下载）
+        #
+        # 🔴 COMMENTARY_PIPELINE_DIR 必须显式传：checkout(path: commentary-pipeline)
+        #    落在 $GITHUB_WORKSPACE/commentary-pipeline，而 build_win.sh 的历史默认
+        #    是 $REPO/../commentary-pipeline（本机 worktree 布局）——差一层目录。
+        #    不显式传的话 checkout 成功但脚本看不见管线 → 静默出「无解说版」还不报错。
+        #    用 $(pwd) 拼 POSIX 路径（MSYS bash 原生），别用 ${{ github.workspace }}
+        #    的 Windows 反斜杠形式。
         run: |
+          export COMMENTARY_PIPELINE_DIR="$(pwd)/commentary-pipeline"
+          if [ -d "$COMMENTARY_PIPELINE_DIR" ]; then
+            echo "✅ 解说管线目录就位: $COMMENTARY_PIPELINE_DIR"
+            ls "$COMMENTARY_PIPELINE_DIR" | head -8 | tr '\n' ' '; echo
+          else
+            echo "⚠️ 未找到解说管线目录（$COMMENTARY_PIPELINE_DIR）—— 本次构建无解说版"
+          fi
           bash desktop/build_win.sh 2>&1 | tee build_win.log
           exit "${PIPESTATUS[0]}"
         working-directory: ${{ github.workspace }}
