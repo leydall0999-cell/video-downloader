@@ -248,3 +248,20 @@ jobs:
             dist/VideoDownloader-onedir-*.zip
           retention-days: 14
           if-no-files-found: error
+
+      # ── 发布为 GitHub Release asset ──
+      # 🔴 为什么必须有这一步：Actions 的 artifact **匿名下载会 401**（本机没有
+      #    gh token，且不想为取包额外配 PAT）。而公共仓库的 Release asset 可以
+      #    匿名直下 —— 这是把 exe 从 CI 搬出来的唯一零凭据通道。
+      #    （凭据铁律：R2 密钥只存在 ECS /root/.r2_env，绝不写进 GitHub secrets）
+      - name: 发布到 GitHub Release（供取包）
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" --notes "Windows 安装包（CI 自动构建）"
+          gh release upload "$TAG" dist/VideoDownloader-Setup-*.exe --clobber
+          gh release view "$TAG" --json assets -q '.assets[].name, .assets[].size'
