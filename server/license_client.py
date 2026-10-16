@@ -220,6 +220,18 @@ def import_account_remote(email: str, salt: str, pw_hash: str, admin_token: str,
                  base_url, timeout)
 
 
+def delete_user_remote(email: str, admin_token: str,
+                       base_url: Optional[str] = None,
+                       timeout: float = 10.0) -> dict[str, Any]:
+    """删除云端账号（幂等）。
+
+    2026-10-16 历史测试号清理：管理端持令牌调用；账号不存在时服务端亦返回 ok。
+    """
+    return _post("/api/license/delete-user",
+                 {"token": admin_token, "email": email},
+                 base_url, timeout)
+
+
 def usage_remote(email: str, admin_token: str, base_url: Optional[str] = None,
                  timeout: float = 10.0) -> dict[str, Any]:
     """管理员查某账号的权益与流水（面板用量视图改云端后的数据源）。"""

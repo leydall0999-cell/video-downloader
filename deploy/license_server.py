@@ -42,6 +42,7 @@ secret 只存在环境变量 VDL_LICENSE_SECRET，**永不下发** ⇒ 卡密不
   POST /api/license/import-account {email, salt, pw_hash, created_at?, is_admin?,
                                     authority?, devices?, token}  存量账号全量搬迁（含权益/设备）
                                                                    存量账号搬迁：本机账号表记录原样搬入（密码无感）
+  POST /api/license/delete-user {email, token}                    管理员删除账号（幂等，2026-10-16 测试号清理）
   POST /api/license/adjust    {email, pool, delta, note?, token}   管理员调整积分（可负）
   POST /api/license/setstate  {email, member_until_dl?, member_until_ai?, perm_credits?, ai_credits_left?, token}
                                                                    管理员设定权威基线（迁移/纠错）
@@ -1391,6 +1392,24 @@ def set_admin_impl(state: dict[str, Any], email: str, flag: bool,
             "authority": _authority_view(user, now)}
 
 
+def delete_user_impl(state: dict[str, Any], email: str,
+                     now: float) -> dict[str, Any]:
+    """删除账号（2026-10-16：历史测试号清理）。
+
+    幂等：账号不存在时同样返回 ok（便于批量清理脚本可重复执行）。
+    仅管理端持令牌调用；真实用户数据只在其明确要求下删除。
+    """
+    uid = _norm_id(email)
+    if not _valid_account_id(uid):
+        raise ApiError(400, "BAD_ACCOUNT", "请输入有效的邮箱或手机号")
+    users = _users(state)
+    if uid not in users:
+        return {"ok": True, "email": uid, "deleted": False}
+    del users[uid]
+    _log_event(state, "account_delete", now, email=uid)
+    return {"ok": True, "email": uid, "deleted": True}
+
+
 # 权益字段零值表（import_account_impl 搬迁时按字段类型清洗用）
 _AUTH_ZERO = {"member_until_dl": 0.0, "member_until_ai": 0.0,
               "ai_grant_total": 0, "ai_spent_total": 0, "perm_credits": 0}
@@ -2410,7 +2429,7 @@ class Handler(BaseHTTPRequestHandler):
             # --- 管理员接口（不做 IP 限流，走 token）---
             if action in ("gen", "revoke", "grant", "users",
                           "ban", "adjust", "setstate", "usage",
-                          "set-admin", "import-account",
+                          "set-admin", "import-account", "delete-user",
                           "alerts", "alerts_ack", "recon", "plans_set",
                             # 🔴 2026-10-06 免费额度覆盖下发（终身免费次数）
                             "free_quota_set",
@@ -2458,6 +2477,10 @@ class Handler(BaseHTTPRequestHandler):
                             bool(data.get("is_admin", False)),
                             data.get("authority"),
                             data.get("devices"))
+                        _save_state(st)
+                    elif action == "delete-user":
+                        # 2026-10-16：历史测试号清理（幂等；管理端持令牌调用）
+                        out = delete_user_impl(st, str(data.get("email") or ""), now)
                         _save_state(st)
                     elif action == "adjust":
                         try:

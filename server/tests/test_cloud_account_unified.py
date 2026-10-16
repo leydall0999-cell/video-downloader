@@ -146,6 +146,20 @@ def test_cloud_is_admin_and_import(tmp: Path) -> None:
           abs(float(snap.get("member_until_dl") or 0) - (now + 86400 * 30)) < 2
           and int(snap.get("perm_credits") or 0) == 7)
 
+    # 删除账号（2026-10-16 历史测试号清理）：真删 + 幂等 + 删后不可登录
+    check("删除已存在账号返回 deleted=True",
+          m.delete_user_impl(st, "full@139.com", now).get("deleted") is True)
+    check("删除后账号不在库中", "full@139.com" not in st["users"])
+    check("删除不存在的账号幂等（deleted=False 且不报错）",
+          m.delete_user_impl(st, "nobody@139.com", now).get("deleted") is False)
+    try:
+        _del_login = m.login_impl(st, "full@139.com", "fullpw123", now, m.SECRET,
+                                  {"fp": "web-abc", "name": "网页版 · Chrome"})
+        _del_login_ok = bool(_del_login.get("ok"))
+    except Exception:
+        _del_login_ok = False
+    check("删除后原密码无法登录（账号已不存在）", _del_login_ok is False)
+
 
 def test_admin_password_channel(tmp: Path) -> None:
     print("\n[B] 超管改密通道（admin_token）")
