@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""守卫：短期VIP会员档（2026-10-14 起为 1/7 天）+ 套餐价格单一真源（展示 / 下单 / 发放同源）。
+"""守卫：短期VIP会员档（2026-10-16 起为 1/3/7 天）+ 套餐价格单一真源（展示 / 下单 / 发放同源）。
 
 背景（2026-09-30 用户需求）：充值新增 1/3/7 天会员档，价格由超管在后台写。
-2026-10-14（v1.0.67）：下载会员统一改名「VIP会员」，档位调整为
-1 天 / 7 天 / 30 天 / 半年 / 1 年 五档，**原 3 天档下架**。
+2026-10-14（v1.0.67）：下载会员统一改名「VIP会员」，3 天档一度下架。
+2026-10-16 当天：应用户要求 3 天档重新上架（¥4.90），现行为
+1 / 3 / 7 / 30 / 180 / 365 六档（云端覆盖层与代码默认值一致）。
 
 本守卫钉住三件事：
   1) 短期档存在、days 正确，且默认顺序由短到长（决定前端卡片顺序）；
@@ -45,11 +46,10 @@ def check(name: str, cond: bool) -> None:
         FAILS.append(name)
 
 
-# ⚠️ 3 天档已于 2026-10-14（v1.0.67）下架：现行为 1 / 7 / 30 / 180 / 365 五档。
-# 曾经这里钉「1/3/7 三档」，档位下架后本用例整段变红（KeyError: download_3day）——
-# 属于用例过期，不是功能缺陷：档位表才是真源，测试跟着真源走。
-SHORT_DAYS = {"download_1day": 1, "download_7day": 7}
-ORDER = ["download_1day", "download_7day",
+# 2026-10-16：3 天档当天一度下架、当天即按用户要求恢复上架（¥4.90）——
+# 档位表（membership.DOWNLOAD_PLANS）才是真源，本用例跟真源走：六档全在。
+SHORT_DAYS = {"download_1day": 1, "download_3day": 3, "download_7day": 7}
+ORDER = ["download_1day", "download_3day", "download_7day",
          "download_month", "download_half_year", "download_year"]
 
 
@@ -58,15 +58,17 @@ def _store(name: str, now: float) -> MembershipStore:
 
 
 def test_short_term_plans_exist() -> None:
-    print("\n[A] 1/7 天档存在且顺序由短到长")
+    print("\n[A] 1/3/7 天档存在且顺序由短到长")
     dl = effective_plans()["download_plans"]
-    check("download_plans 按 1/7/30/180/365 天排列", list(dl) == ORDER)
+    check("download_plans 按 1/3/7/30/180/365 天排列", list(dl) == ORDER)
     for code, days in SHORT_DAYS.items():
         check(f"{code} 在表内且 days={days}", code in dl and int(dl[code].get("days") or 0) == days)
     check("短期档均有价格与中文标签",
           all(float(dl[c].get("price_cny") or 0) > 0 and dl[c].get("label") for c in SHORT_DAYS))
     check("下单兜底表 PAY_PLANS 同步含短期档", all(c in PC.PAY_PLANS for c in SHORT_DAYS))
-    check("已下架的 3 天档不在默认表内（1.0.67 起）", "download_3day" not in dl)
+    check("3 天档已恢复上架（2026-10-16 用户要求，¥4.90）",
+          "download_3day" in dl
+          and abs(float(dl["download_3day"].get("price_cny") or 0) - 4.90) < 1e-9)
 
 
 def test_override_price_and_days_take_effect() -> None:
