@@ -1,0 +1,8 @@
+▶ 准备构建环境（独立 venv）
+▶ 生成应用图标
+icon source: desktop/icon.png
+icon.ico generated
+▶ 打包 VideoDownloader.exe（单文件夹 / 无控制台）
+▶ 捆绑解说管线(随包自包含): /d/a/video-downloader/video-downloader/commentary-pipeline
+❌ 解说管线版本校验失败：staging 内未检测到 1.1.0 新 CLI(--one-click)，疑似误捆绑旧版！
+   当前 COMMENTARY_DIR=/d/a/video-downloader/video-downloader/commentary-pipeline
