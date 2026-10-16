@@ -123,10 +123,16 @@ _stage_commentary() {
   mkdir -p "$_fonts"
   if ! ls "$_fonts"/*.tt[cf] >/dev/null 2>&1; then
     for _sys in "/c/Windows/Fonts/msyh.ttc" "/c/Windows/Fonts/simhei.ttf" "/c/Windows/Fonts/msyh.ttf"; do
-      [ -f "$_sys" ] && cp "$_sys" "$_fonts/" 2>/dev/null && echo "   ✔ 复制系统中文字体进包: $(basename "$_sys")" && break
+      # 🔴 本函数内的日志一律 `>&2`（与 build_mac.sh 同约定）：调用方是
+      #    `COMMENTARY_STAGING=$(_stage_commentary ...)`，凡是走到 stdout 的东西
+      #    都会被整体捕获进变量 ⇒ 变量变成多行 ⇒ 后续 grep/--add-data 静默失败。
+      #    2026-10-16 CI 实证：本行漏了 `>&2`，Windows runner 上 msyh.ttc 必然存在
+      #    必然触发，把 $COMMENTARY_STAGING 污染成两行，报「疑似误捆绑旧版」。
+      [ -f "$_sys" ] && cp "$_sys" "$_fonts/" 2>/dev/null && echo "   ✔ 复制系统中文字体进包: $(basename "$_sys")" >&2 && break
     done
     ls "$_fonts"/*.tt[cf] >/dev/null 2>&1 || echo "   ⚠️ 包内无中文字体，字幕中文将依赖用户系统字体" >&2
   fi
+  # 唯一允许走 stdout 的一行：函数用它把 staging 路径交回给调用方
   echo "$staging"
 }
 
@@ -149,6 +155,20 @@ if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
   echo "▶ 捆绑解说管线(随包自包含): $COMMENTARY_DIR"
   "$VENV/Scripts/pip.exe" install --quiet --no-cache-dir --index-url "$PIP_INDEX" -r "$COMMENTARY_DIR/requirements.txt"
   COMMENTARY_STAGING=$(_stage_commentary "$COMMENTARY_DIR")
+  # 🔴 诊断闸门（每次必打，一次就能定位这一类故障）：命令替换 `$(...)` 会把函数内
+  #    所有 stdout 一并吞进来。staging 变量一旦变成多行（或 process.py 不在位），
+  #    后面 grep / --add-data 就拿着不存在的路径静默失败，报错信息还会指向
+  #    「疑似误捆绑旧版」这种南辕北辙的方向。2026-10-16 为此多花了两轮 CI。
+  if [ -f "$COMMENTARY_STAGING/process.py" ] \
+     && [ "$(printf '%s' "$COMMENTARY_STAGING" | wc -l | tr -d ' ')" = "0" ]; then
+    echo "   ✔ staging 就位: $COMMENTARY_STAGING（process.py $(wc -c < "$COMMENTARY_STAGING/process.py" | tr -d ' ') 字节）"
+  else
+    echo "❌ staging 异常：_stage_commentary 的返回值不是干净的单个路径"
+    echo "   捕获到的内容（换行以 | 表示）：$(printf '%s' "$COMMENTARY_STAGING" | tr '\n' '|')"
+    echo "   该路径下的内容："
+    ls -la "$COMMENTARY_STAGING" 2>&1 | head -10 || true
+    exit 1
+  fi
   # ── 铁律校验 1：随包的必须是 1.1.0+ 新 CLI（含 --one-click）──
   # 防止误捆绑旧版管线（历史上 COMMENTARY_PIPELINE_DIR 未传入时静默打进旧版 1.0.0）。
   if ! grep -q -- "--one-click" "$COMMENTARY_STAGING/process.py" 2>/dev/null; then
