@@ -39,7 +39,7 @@ from routers import extension as ext  # noqa: E402
 
 _R2_DMG = "https://download.hanyuxz.top/VideoDownloader.dmg"
 _R2_ZIP = "https://download.hanyuxz.top/VideoDownloader.app.zip"
-_R2_EXE = "https://download.hanyuxz.top/VideoDownloader-Setup-1.0.71.exe"
+_R2_EXE = "https://download.hanyuxz.top/VideoDownloader-Setup-1.0.72.exe"
 
 
 def _client() -> TestClient:
