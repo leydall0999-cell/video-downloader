@@ -101,21 +101,34 @@ def _post(path: str, payload: dict[str, Any], base_url: Optional[str],
 # ---- 账号 ----
 def register_remote(email: str, password: str, fp: str, name: str = "",
                     base_url: Optional[str] = None, timeout: float = 12.0,
-                    opener: Optional[Callable] = None) -> dict[str, Any]:
-    """注册并自动登录。返回 {ok, token, account, evicted?}。"""
+                    opener: Optional[Callable] = None,
+                    meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """注册并自动登录。返回 {ok, token, account, evicted?}。
+
+    meta：设备画像（platform/app_version/ext）——授权中心据此按端统计
+    （2026-10-16 起网页版传 platform=web，桌面端心跳本就上报）。
+    """
+    device = {"fp": fp, "name": name or "未命名设备"}
+    if meta:
+        device["meta"] = meta
     return _post("/api/license/register",
-                 {"email": email, "password": password,
-                  "device": {"fp": fp, "name": name or "未命名设备"}},
+                 {"email": email, "password": password, "device": device},
                  base_url, timeout, opener)
 
 
 def login_remote(email: str, password: str, fp: str, name: str = "",
                  base_url: Optional[str] = None, timeout: float = 12.0,
-                 opener: Optional[Callable] = None) -> dict[str, Any]:
-    """登录。返回 {ok, token, account:{email, devices, purchases, max_devices}, evicted?}。"""
+                 opener: Optional[Callable] = None,
+                 meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """登录。返回 {ok, token, account:{email, devices, purchases, max_devices}, evicted?}。
+
+    meta：同 register_remote（设备画像，按端统计用）。
+    """
+    device = {"fp": fp, "name": name or "未命名设备"}
+    if meta:
+        device["meta"] = meta
     return _post("/api/license/login",
-                 {"email": email, "password": password,
-                  "device": {"fp": fp, "name": name or "未命名设备"}},
+                 {"email": email, "password": password, "device": device},
                  base_url, timeout, opener)
 
 
@@ -209,17 +222,21 @@ def cloud_quota_remote(token: str, lifetime: int = 0, daily: int = 0,
 def set_password_remote(email: str, new_password: str, old_password: str = "",
                         token: str = "", base_url: Optional[str] = None,
                         timeout: float = 12.0,
-                        opener: Optional[Callable] = None) -> dict[str, Any]:
+                        opener: Optional[Callable] = None,
+                        admin_token: str = "") -> dict[str, Any]:
     """把本机账号的新密码同步到云端（两端一套密码，见 license_server.password_impl）。
 
-    鉴权二选一：知道原密码（改密）或持有云端 token（忘记密码重置）。
+    鉴权三选一：知道原密码（改密）/ 持有云端 token（忘记密码重置）/
+    持授权中心 ADMIN_TOKEN（2026-10-16 超管后台重置，admin_token 通道）。
     云端没有该账号时返回 {"ok": True, "synced": False}（老的本机专属账号），不是失败。
     网络故障抛 LicenseCloudError —— 调用方 **fail-open**：本机改密已生效，不能因为
     云端连不上就把本机也回滚。
     """
-    return _post("/api/license/password",
-                 {"email": email, "new_password": new_password,
-                  "old_password": old_password, "token": token},
+    payload: dict[str, Any] = {"email": email, "new_password": new_password,
+                               "old_password": old_password, "token": token}
+    if admin_token:
+        payload["admin_token"] = admin_token
+    return _post("/api/license/password", payload,
                  base_url, timeout, opener)
 
 
@@ -245,6 +262,66 @@ def check_remote(code: str, fingerprint: str = "", base_url: Optional[str] = Non
     """卡密状态查询（兼容保留）。网络故障抛 LicenseCloudError（调用方 fail-open）。"""
     return _post("/api/license/check", {"code": code, "fingerprint": fingerprint},
                  base_url, timeout, opener)
+
+
+# ---- 管理员：全端账号（2026-10-16「所有端用户上云端」）----
+def users_remote(admin_token: str, base_url: Optional[str] = None,
+                 timeout: float = 12.0) -> dict[str, Any]:
+    """管理员查全量账号列表（网页后台用户管理的唯一数据源）。
+
+    授权中心是各端（桌面 App / 网页版 cn + hk）账号的唯一真源；返回全部账号 +
+    设备画像（platform / app_version）+ 权益快照 + is_admin + 封禁态。
+    """
+    return _post("/api/license/users", {"token": admin_token},
+                 base_url, timeout)
+
+
+def set_admin_remote(email: str, is_admin: bool, admin_token: str,
+                     base_url: Optional[str] = None,
+                     timeout: float = 10.0) -> dict[str, Any]:
+    """管理员设置 / 取消超管（is_admin 上云后的写入口）。"""
+    return _post("/api/license/set-admin",
+                 {"token": admin_token, "email": email, "is_admin": bool(is_admin)},
+                 base_url, timeout)
+
+
+def ban_remote(email: str, banned: bool, admin_token: str, note: str = "",
+               base_url: Optional[str] = None,
+               timeout: float = 10.0) -> dict[str, Any]:
+    """管理员封禁 / 解封账号（全端生效：登录被拒、心跳回 ACCOUNT_BANNED）。"""
+    return _post("/api/license/ban",
+                 {"token": admin_token, "email": email,
+                  "banned": bool(banned), "note": note},
+                 base_url, timeout)
+
+
+def import_account_remote(email: str, salt: str, pw_hash: str, admin_token: str,
+                          created_at: float = 0.0, is_admin: bool = False,
+                          authority: Optional[dict[str, Any]] = None,
+                          devices: Optional[list] = None,
+                          base_url: Optional[str] = None,
+                          timeout: float = 10.0) -> dict[str, Any]:
+    """存量账号全量搬迁（本机账号表 + memberships → 授权中心）。
+
+    salt/pw_hash 格式与服务端一致（PBKDF2-HMAC-SHA256 20 万轮，hex 盐 / hex 摘要）
+    ⇒ 用户密码无感、无需重置。authority/devices：本机权益态与设备画像一并搬来
+    （2026-10-16 用户「真实账号的所有数据也得导入」）。已存在账号不覆盖（云端权威）。
+    """
+    return _post("/api/license/import-account",
+                 {"token": admin_token, "email": email, "salt": salt,
+                  "pw_hash": pw_hash, "created_at": float(created_at or 0),
+                  "is_admin": bool(is_admin),
+                  "authority": authority if isinstance(authority, dict) else None,
+                  "devices": devices if isinstance(devices, list) else None},
+                 base_url, timeout)
+
+
+def usage_remote(email: str, admin_token: str, base_url: Optional[str] = None,
+                 timeout: float = 10.0) -> dict[str, Any]:
+    """管理员查某账号的权益与流水（面板用量视图改云端后的数据源）。"""
+    return _post("/api/license/usage",
+                 {"token": admin_token, "email": email},
+                 base_url, timeout)
 
 
 # ---- 支付（支付宝，内地 ECS pay.hanyuxz.top /api/pay/*）----

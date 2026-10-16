@@ -162,6 +162,11 @@ run_one e2e_ai_trial_check.py
 #    quota.py 常量、取 token 走 store.cloud_session()、会员判定用网页版**实际
 #    存在**的接口（它没有桌面端的 is_download_active / _cloud_token）。
 run_one test_cloud_quota_unified.py
+#  全端账号统一（2026-10-16 用户「每个端数据要都统一到一起」）：超管后台用户列表
+#  以云端授权中心为唯一真源（Mac/Windows 桌面 + 网页版 cn/hk 四端账号全部可见），
+#  本机表仅兜底附列；写操作双写云端、失败只出 notice 不阻断。本树无
+#  deploy/license_server.py，授权中心侧断言自动跳过，只跑列表合并 + 路由双写。
+run_one test_cloud_account_unified.py
 
 #  操作引导「怎么用」守卫（2026-10-09 自 app-dev 移植适配）：9 个功能入口
 #  每个有且仅有一条引导、落点不串台、文案引用真实控件、首次展开/已读收起/

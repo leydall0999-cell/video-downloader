@@ -108,7 +108,9 @@ def _unreachable(e: Exception) -> dict[str, Any]:
 
 def try_register(email: str, password: str, fp: str, name: str) -> dict[str, Any]:
     try:
-        return license_client.register_remote(email, password, fp, name)
+        # 2026-10-16：设备画像带 platform=web —— 授权中心按端统计（macos/windows/linux/web）
+        return license_client.register_remote(email, password, fp, name,
+                                              meta={"platform": "web"})
     except license_client.LicenseCloudError as e:
         return _unreachable(e)
     except Exception as e:  # noqa: BLE001 — 兜底：任何异常都不能让登录 500
@@ -117,7 +119,8 @@ def try_register(email: str, password: str, fp: str, name: str) -> dict[str, Any
 
 def try_login(email: str, password: str, fp: str, name: str) -> dict[str, Any]:
     try:
-        return license_client.login_remote(email, password, fp, name)
+        return license_client.login_remote(email, password, fp, name,
+                                           meta={"platform": "web"})
     except license_client.LicenseCloudError as e:
         return _unreachable(e)
     except Exception as e:  # noqa: BLE001

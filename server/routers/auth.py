@@ -123,13 +123,15 @@ def _cloud_login_or_register(request: Request, response: Response, ident: str,
 def _finish_login(request: Request, uid: str, ident: str, cloud: Optional[dict],
                   fp: str, name: str, *, registered: bool = False) -> dict[str, Any]:
     """登录收尾：签发本机 bearer + 落地云端登录态与权益快照。"""
-    from auth_store import issue_token, ensure_superusers, user_is_admin
+    from auth_store import (issue_token, ensure_superusers, user_is_admin,
+                            set_user_admin)
     # 安全审计 2026-10-13（F-03）：仅在「本机直连」登录时才允许无名单兜底提权，
     # 公网首注册不得自动成为超管（见 auth_store.ensure_superusers）。
     ensure_superusers(_is_loopback(request))
     token = issue_token(uid)
     notice = ""
     synced = False
+    cloud_is_admin: Optional[bool] = None
     if cloud and cloud.get("ok"):
         synced = True
         try:
@@ -138,6 +140,11 @@ def _finish_login(request: Request, uid: str, ident: str, cloud: Optional[dict],
             cloud_link.apply_login(store, cloud.get("email") or ident,
                                    cloud.get("token") or "",
                                    cloud.get("account") or {}, fp, name)
+            # 2026-10-16：is_admin 上云 —— 云端快照是权威，落到本机镜像，
+            # 超管提权/降级因此全端生效；断网时本机标记仍可兜底门禁。
+            cloud_is_admin = bool((cloud.get("account") or {}).get("is_admin"))
+            if cloud_is_admin != bool(user_is_admin(uid)):
+                set_user_admin(uid, cloud_is_admin)
         except Exception as e:  # noqa: BLE001 — 权益落地失败不影响登录本身
             logging.getLogger("vdl.auth").warning("云端权益落地失败: %s", e)
             notice = "已登录，但会员权益同步失败，可稍后在个人中心刷新"
@@ -148,8 +155,9 @@ def _finish_login(request: Request, uid: str, ident: str, cloud: Optional[dict],
     elif cloud is not None:
         notice = "授权中心暂时不可达，本次按本机账号登录；会员权益可能不是最新"
     record_event("register" if registered else "login", {"identifier": ident})
+    is_admin = cloud_is_admin if cloud_is_admin is not None else bool(user_is_admin(uid))
     return {"ok": True, "token": token, "user_id": uid, "identifier": ident,
-            "is_admin": bool(user_is_admin(uid)),
+            "is_admin": bool(is_admin),
             "registered": bool(registered),
             "cloud_synced": synced,
             "cloud_notice": notice}
