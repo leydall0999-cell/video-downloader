@@ -66,7 +66,7 @@ if [[ "$APPLY" == "apply" ]]; then
     for D in ${DIRS[*]}; do
       echo \"  rsync \$D/\"
       rsync -a --backup --backup-dir=\"\$BK/\$D\" ${EXCL[*]} -e 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no' \
-        '$CN_DIR/\$D/' '$HK_HOST:$HK_DIR/\$D/'
+        \"$CN_DIR/\$D/\" \"$HK_HOST:$HK_DIR/\$D/\"
     done"
 else
   # dry-run：只列一跳的变更（从本机直连 hk 估算，便于预览）
@@ -79,12 +79,22 @@ fi
 
 # ---------- ③ 验证（仅 apply）----------
 if [[ "$APPLY" == "apply" ]]; then
-  echo "==> [3/3] 验证 hk"
+  # 🔴 2026-10-18 补：以前只重启 hk，**cn 不重启** ⇒ Python 进程仍跑旧代码。
+  #    症状极具迷惑性：rsync 全部成功、hk 也起来了，但 cn 的
+  #    /download/installer?p=windows 仍 302 到旧版本号（整树同步了却像没生效）。
+  echo "==> [3/4] 重启 cn 并验证（回源 18890）"
+  ssh $SSH_COMMON "$CN_HOST" "set -e
+    find $CN_DIR/server -name '*.py' -print0 | xargs -0 python3 -m py_compile || { echo 'PY_COMPILE_FAIL_CN'; exit 1; }
+    systemctl restart vdl-web
+    for i in \$(seq 1 18); do sleep 5; code=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:18890/api/version || echo 000); echo \"  cn probe \$i: \$code\"; [ \"\$code\" = '200' ] && break; done"
+  echo "==> [4/4] 验证 hk"
   ssh $SSH_COMMON "$HK_HOST" "set -e
     echo '--- py_compile server ---'
     find $HK_DIR/server -name '*.py' -print0 | xargs -0 python3 -m py_compile || { echo 'PY_COMPILE_FAIL'; exit 1; }
     systemctl restart vdl-web
-    for i in \$(seq 1 6); do sleep 2; code=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:18080/api/version || echo 000); echo \"  probe \$i: \$code\"; [ \"\$code\" = '200' ] && break; done
+    # 🔴 探测窗口必须 ≥3 分钟：hk 冷启动实测 **2 分 16 秒**（卡在 cookie_pool 自检），
+    #    原来 6×2s=12s 必然全 000 ⇒ 误报「hk 502 挂了」，其实进程正健康启动中。
+    for i in \$(seq 1 40); do sleep 5; code=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:18080/api/version || echo 000); echo \"  probe \$i: \$code\"; [ \"\$code\" = '200' ] && break; done
     echo '--- journalctl 最近异常 ---'
     journalctl -u vdl-web -n 30 --no-pager | grep -iE 'Traceback|ImportError|ModuleNotFound' || echo '  无 Traceback'"
   echo "--- 公网 hk 版本 ---"
