@@ -142,7 +142,7 @@ _INSTALLER_FILES: dict[str, Path] = {
 
 # R2 公共地址（自定义域 download.hanyuxz.top → 桶 vdl-download 根）。
 # 2026-10-16：?p=windows 上线（Windows 版首发，Inno Setup 安装程序）。
-# ⚠️ 版本号 1.0.68 硬编码在 R2 对象名里（与 mac 两个对象同形态）：每次重打包
+# ⚠️ Windows 安装包版本号硬编码在 R2 对象名里（与 mac 两个对象同形态）：每次升版
 #    Windows 版都要同步改这里 + web/download/index.html 的大小文案，别漏。
 _R2_INSTALLER_URLS: dict[str, str] = {
     "macos": os.environ.get("VDL_R2_INSTALLER_MACOS")
@@ -150,7 +150,7 @@ _R2_INSTALLER_URLS: dict[str, str] = {
     "macos-zip": os.environ.get("VDL_R2_INSTALLER_MACOS_ZIP")
                  or "https://download.hanyuxz.top/VideoDownloader.app.zip",
     "windows": os.environ.get("VDL_R2_INSTALLER_WINDOWS")
-               or "https://download.hanyuxz.top/VideoDownloader-Setup-1.0.72.exe",
+               or "https://download.hanyuxz.top/VideoDownloader-Setup-1.0.73.exe",
 }
 
 # 安装包媒体类型按扩展名取（DMG≠ZIP≠EXE，写死 zip 会让浏览器把 dmg 也当 zip 处理）。
