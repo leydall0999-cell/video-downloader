@@ -3738,9 +3738,18 @@
     const proxy = el.proxyInput.value.trim();
     // 记忆本次粘贴的 Cookie（用户主动输入才覆盖，保证「清了输入框=不用了」语义）
     if (cookie) {
-      try { localStorage.setItem('vdl_cookie', cookie); } catch (e) {}
+      try {
+        const _prevCookie = localStorage.getItem('vdl_cookie');
+        localStorage.setItem('vdl_cookie', cookie);
+        // 只有**真的换了**才记时间戳：输入框是回填的，每次解析都算「换过」会让本机
+        // 这份永远显得比云端新，云端备份就再也落不回来了（云端资料同步的冲突守卫用）。
+        if (_prevCookie !== cookie) {
+          localStorage.setItem('vdl_cookie_ts', String(Date.now() / 1000));
+        }
+      } catch (e) {}
     } else {
       try { localStorage.removeItem('vdl_cookie'); } catch (e) {}
+      try { localStorage.removeItem('vdl_cookie_ts'); } catch (e) {}
     }
     if (!raw) {
       showError('请输入视频链接', '把视频页面的地址粘贴到输入框即可');
@@ -8380,7 +8389,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   if (el.pgOpenBtn) el.pgOpenBtn.addEventListener('click', pgOpen);
 
   const pfLoad = async () => {
-    if (!pfToken()) { pfRender(null, null, null); return; }
+    if (!pfToken()) { pfRender(null, null, null); udRender(); return; }
     let me = null, member = null, prof = null;
     try {
       me = await request('/api/auth/me', { headers: pfAuthHeaders() });
@@ -8389,6 +8398,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
     try { member = await request('/api/member/status', { headers: pfAuthHeaders() }); } catch (_e) { /* ignore */ }
     try { prof = await request('/api/account/profile?usage_period=' + encodeURIComponent(_pfUsagePeriod || 'today'), { headers: pfAuthHeaders() }); } catch (_e) { /* ignore */ }
     pfRender(me, member, prof);
+    udRender();        // 云端资料卡片（用户信息类数据备份 · 网页版，2026-10-17）
   };
 
   const pfSetAuthStatus = (t) => { el.pfAuthStatus.textContent = t || ''; };
@@ -8410,6 +8420,9 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
         pfLoad();
         _memResumePending();    // 会员页点开通被登录拦下时，登录成功后自动续下单
         _replayGatedAction();   // 登录/注册前被门禁拦下的功能按钮，成功后自动补点一次
+        // 云端资料（用户信息类数据备份 · 网页版 2026-10-17）：此刻手上还有密码，
+        // 正好用它在本机派生密钥、把偏好与平台登录态加密上传 / 落回本机。
+        void udAfterLogin(pw);
       } else {
         pfSetAuthStatus(data.error || '操作失败');
       }
@@ -8578,6 +8591,8 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
         pfLoad();
         _memResumePending();    // 会员页点开通被登录拦下时，登录成功后自动续下单
         _replayGatedAction();   // 登录/注册前被门禁拦下的功能按钮，成功后自动补点一次
+        // 云端资料（用户信息类数据备份 · 网页版 2026-10-17）：见 pfDoAuth 同款说明
+        void udAfterLogin(pw);
       } else {
         amSetStatus(data.error || '操作失败');
       }
@@ -10492,6 +10507,343 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
     } catch (_) { /* 推广位失败绝不影响主流程 */ }
   };
   try { initSelfPromo(); } catch (_) {}
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 云端资料 · 网页版接入（2026-10-17）
+  //   把「本机（浏览器）的用户信息类数据」随账号备份 / 恢复：
+  //     · 偏好：白名单里的 localStorage 键（vdl_use / vdl_peer / vdl_region）
+  //     · 平台登录态：用户粘贴的 Cookie（vdl_cookie）
+  //   🔴 隐私硬约束：Cookie 在**浏览器本机**用登录密码派生的密钥加密（PBKDF2-SHA256
+  //      20 万轮 + AES-256-GCM，与桌面端同一套口令约定）后才上传 ⇒ 服务端与授权中心
+  //      都只拿到密文；本界面也绝不展示任何 Cookie 内容（只显示「有几条」）。
+  //   存储：服务端 scope="web" ⇒ 与桌面端那一份**分文件**，互不覆盖。
+  //   触发：登录 / 注册成功后自动同步一次（那一刻才有密码可派生密钥）
+  //         + 个人中心「云端资料」卡片上的手动「同步」。
+  //   ⚠️ password 只在本模块内用于派生密钥，**绝不落盘、绝不外发**；派生出的密钥缓存
+  //      在 localStorage（等价桌面端的 0600 密钥缓存文件；丢了也不影响，重新登录即可）。
+  // ══════════════════════════════════════════════════════════════════════════
+  const UD_PREF_KEYS = ['vdl_use', 'vdl_peer', 'vdl_region'];
+  const UD_ITERS = 200000;
+  const UD_COOKIE_KEY = 'vdl_cookie';    // 与解析/下载共用的那个「用户粘贴的 Cookie」
+  const UD_KEY_LS = 'vdl_udkey';         // 本机密钥缓存（含 salt）
+  const UD_MARK_LS = 'vdl_udmark';       // 本机同步标记（updated_at / last_push / last_pull）
+  const UD_COOKIE_TS_LS = 'vdl_cookie_ts';   // 用户最后一次粘贴 Cookie 的时间（冲突守卫用）
+  const UD_DEVICE = (() => {
+    try {
+      const m = navigator.userAgent.match(/(Edg|Chrome|Firefox|Safari|MicroMessenger)\/?[\d.]*/);
+      return ('web-' + (m ? m[0] : 'browser')).slice(0, 48);
+    } catch (_) { return 'web'; }
+  })();
+  let udBusy = false;
+
+  const udHasWebCrypto = () => {
+    try {
+      return !!(window.crypto && window.crypto.subtle && window.crypto.getRandomValues
+        && window.TextEncoder && window.TextDecoder && window.btoa && window.atob);
+    } catch (_) { return false; }
+  };
+  const udB64 = (buf) => {
+    const b = (buf instanceof Uint8Array) ? buf : new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+    return btoa(s);
+  };
+  const udUnb64 = (str) => {
+    const bin = atob(String(str || ''));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  };
+  const udDeriveBits = async (password, salt, iters) => {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(password)),
+      'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt, iterations: Number(iters) || UD_ITERS, hash: 'SHA-256' }, base, 256);
+    return new Uint8Array(bits);
+  };
+  const udAesKey = (bits) => crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false,
+    ['encrypt', 'decrypt']);
+  const udEncrypt = async (obj, bits, salt, iters) => {
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, await udAesKey(bits),
+      new TextEncoder().encode(JSON.stringify(obj)));
+    return {
+      enc: 'aesgcm256',
+      kdf: { alg: 'pbkdf2-sha256', iters: Number(iters) || UD_ITERS, salt: udB64(salt) },
+      nonce: udB64(nonce), ct: udB64(ct),
+    };
+  };
+  const udDecrypt = async (blob, bits) => {
+    try {
+      const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: udUnb64(blob.nonce) },
+        await udAesKey(bits), udUnb64(blob.ct));
+      return JSON.parse(new TextDecoder().decode(raw));
+    } catch (_) { return null; }   // 结构不对 / 密钥不对 → 绝不含糊使用
+  };
+  const udLoadKeyCache = () => {
+    try {
+      const d = JSON.parse(localStorage.getItem(UD_KEY_LS) || 'null');
+      return (d && d.key && d.salt) ? d : null;
+    } catch (_) { return null; }
+  };
+  const udSaveKeyCache = (bits, salt, iters) => {
+    try {
+      localStorage.setItem(UD_KEY_LS, JSON.stringify(
+        { v: 1, key: udB64(bits), salt: udB64(salt), iters: Number(iters) || UD_ITERS }));
+    } catch (_) { /* 存不上只影响免密自动同步，不影响本次 */ }
+  };
+  // 与桌面端 user_data_cloud._resolve_key 同语义：云端有 kdf 则以云端为准（密码在就重派生，
+  // 否则用本机缓存且必须同 salt）；云端没有 kdf 且给了密码才新建 salt（首次上传）。
+  // ⚠️ 这里**不写缓存** —— 密码可能是错的；缓存只由「确实加密/解密成功」的路径写入。
+  const udResolveKey = async (password, cloudKdf, createSalt) => {
+    const cached = udLoadKeyCache();
+    let salt = null;
+    let iters = UD_ITERS;
+    if (cloudKdf && cloudKdf.salt) {
+      try { salt = udUnb64(cloudKdf.salt); iters = Number(cloudKdf.iters) || UD_ITERS; }
+      catch (_) { salt = null; }
+    }
+    if (!salt && createSalt && password) salt = crypto.getRandomValues(new Uint8Array(16));
+    if (!salt) return null;
+    if (password) {
+      try {
+        const bits = await udDeriveBits(password, salt, iters);
+        if (bits && bits.length === 32) return { bits, salt, iters };
+      } catch (_) { /* 落到缓存分支 */ }
+    }
+    if (cached) {
+      try {
+        if (udB64(udUnb64(cached.salt)) === udB64(salt)) {
+          const bits = udUnb64(cached.key);
+          if (bits.length === 32) return { bits, salt, iters: Number(cached.iters) || iters };
+        }
+      } catch (_) { /* ignore */ }
+    }
+    return null;
+  };
+
+  const udMarker = () => {
+    try {
+      const d = JSON.parse(localStorage.getItem(UD_MARK_LS) || '{}');
+      return (d && typeof d === 'object') ? d : {};
+    } catch (_) { return {}; }
+  };
+  const udMarkerSave = (patch) => {
+    try {
+      localStorage.setItem(UD_MARK_LS, JSON.stringify(Object.assign({ v: 1 }, udMarker(), patch)));
+    } catch (_) { /* ignore */ }
+  };
+  const udLocalCookie = () => { try { return localStorage.getItem(UD_COOKIE_KEY) || ''; } catch (_) { return ''; } };
+  const udLocalCookieTs = () => {
+    try { return Number(localStorage.getItem(UD_COOKIE_TS_LS) || 0) || 0; } catch (_) { return 0; }
+  };
+  const udCollectSettings = () => {
+    const out = {};
+    UD_PREF_KEYS.forEach((k) => {
+      try {
+        const v = localStorage.getItem(k);
+        if (v != null && v !== '') out[k] = String(v);
+      } catch (_) { /* ignore */ }
+    });
+    return out;
+  };
+  const udApplySettings = (part) => {
+    let n = 0;
+    if (!part || typeof part !== 'object') return n;
+    UD_PREF_KEYS.forEach((k) => {
+      if (!Object.prototype.hasOwnProperty.call(part, k)) return;
+      try {
+        const v = String(part[k]);
+        if (localStorage.getItem(k) !== v) { localStorage.setItem(k, v); n++; }
+      } catch (_) { /* ignore */ }
+    });
+    return n;
+  };
+  const udAgo = (sec) => {
+    if (!sec) return '';
+    const d = Date.now() / 1000 - Number(sec);
+    if (d < 90) return '刚刚';
+    if (d < 3600) return Math.floor(d / 60) + ' 分钟前';
+    if (d < 86400) return Math.floor(d / 3600) + ' 小时前';
+    return Math.floor(d / 86400) + ' 天前';
+  };
+
+  // 把云端资料包落到本机（设置明文覆盖；Cookie 解密后写回输入框）
+  async function udApplyCloud(cloud, pw) {
+    const parts = (cloud && cloud.parts) || {};
+    const nSet = udApplySettings(parts.settings);
+    let nCk = 0;
+    const blob = parts.cookies;
+    if (blob && blob.ct && udHasWebCrypto()) {
+      const rk = await udResolveKey(pw, blob.kdf, false);
+      if (rk) {
+        const plain = await udDecrypt(blob, rk.bits);
+        if (plain && typeof plain.header === 'string' && plain.header) {
+          const cloudTs = Number((blob.meta || {}).updated_at || cloud.updated_at || 0);
+          // 本机有**更新**的登录态 → 保留本机（备份不是镜像，不能拿云端旧态盖掉刚粘的）
+          if (udLocalCookieTs() <= cloudTs + 0.5) {
+            try { localStorage.setItem(UD_COOKIE_KEY, plain.header); } catch (_) { /* ignore */ }
+            const ci = el && el.cookieInput;
+            if (ci) ci.value = plain.header;
+            nCk = 1;
+          }
+        }
+        if (plain) udSaveKeyCache(rk.bits, rk.salt, rk.iters);   // 解密成功 = 钥匙确凿可用
+      }
+    }
+    return { settings: nSet, cookies: nCk };
+  }
+
+  // 一次完整同步：先拉（云端更新则落到本机），再按语义判定是否推。
+  async function udSync(password, opts) {
+    const o = opts || {};
+    const pw = password ? String(password) : '';
+    let got = null;
+    try { got = await request('/api/userdata/pull', { method: 'POST', body: '{}' }); }
+    catch (e) { throw new Error('网络异常，稍后再试'); }
+    if (!got || !got.ok) throw new Error((got && got.error) || '云端资料取回失败');
+    const cloud = (got.payload && typeof got.payload === 'object') ? got.payload : null;
+    const rep = { action: 'noop', pulled: 0, pushed: false };
+
+    // ① 云端更新 → 落回本机
+    if (cloud && Number(cloud.updated_at || 0) > Number(udMarker().updated_at || 0) + 0.5) {
+      const ap = await udApplyCloud(cloud, pw);
+      rep.pulled = ap.settings + ap.cookies;
+      udMarkerSave({ updated_at: Number(cloud.updated_at || 0), last_pull: Date.now() / 1000 });
+    }
+
+    // ② 组装本机资料包（Cookie 一律加密后才出网；拿不到钥匙则保留云端既有密文）
+    const settings = udCollectSettings();
+    const header = udLocalCookie();
+    const cbb = (cloud && cloud.parts && cloud.parts.cookies) || null;
+    const cloudCipher = (cbb && cbb.ct) ? cbb : null;
+    const cloudKdf = (cbb && cbb.kdf) || null;
+    const parts = {};
+    if (Object.keys(settings).length) parts.settings = settings;
+    if (header && udHasWebCrypto()) {
+      const rk = await udResolveKey(pw, cloudKdf, true);
+      if (rk) {
+        parts.cookies = await udEncrypt({ header }, rk.bits, rk.salt, rk.iters);
+        parts.cookies.meta = { count: 1, platforms: [], updated_at: Date.now() / 1000 };
+        udSaveKeyCache(rk.bits, rk.salt, rk.iters);
+      } else if (cloudCipher) {
+        parts.cookies = cloudCipher;       // 拿不到钥匙 → 绝不明文上传，也不抹掉云端备份
+      }
+    } else if (cloudCipher) {
+      parts.cookies = cloudCipher;         // 本机暂无 Cookie → 保留云端备份，不隐式删除
+    }
+
+    // ③ 要不要推？按**语义**判定（密文每次重加密都不同，直接比序列化会每次都推）
+    let needPush = !!o.force_push || !cloud;
+    if (!needPush && cloud) {
+      let cloudHeader = '';
+      if (cloudCipher) {
+        const rk = await udResolveKey(pw, cloudCipher.kdf, false);
+        const plain = rk ? await udDecrypt(cloudCipher, rk.bits) : null;
+        cloudHeader = (plain && typeof plain.header === 'string') ? plain.header : '\u0000locked';
+      }
+      const same = JSON.stringify(parts.settings || {}) === JSON.stringify((cloud.parts || {}).settings || {})
+        && (header || '') === cloudHeader;
+      needPush = !same;
+    }
+    if (needPush && Object.keys(parts).length) {
+      const payload = { version: 1, updated_at: Date.now() / 1000, device: UD_DEVICE, parts };
+      let sent = null;
+      try {
+        sent = await request('/api/userdata/push',
+          { method: 'POST', body: JSON.stringify({ payload }) });
+      } catch (e) { throw new Error('上传失败：网络异常'); }
+      if (!sent || !sent.ok) throw new Error((sent && sent.error) || '上传失败');
+      rep.pushed = true;
+      udMarkerSave({ updated_at: Number(sent.updated_at || Date.now() / 1000), last_push: Date.now() / 1000 });
+    }
+    rep.action = (rep.pulled && rep.pushed) ? 'mixed'
+      : rep.pulled ? 'pulled' : rep.pushed ? 'pushed' : 'noop';
+    return rep;
+  }
+
+  // 登录 / 注册成功后自动同步一次（此刻密码还在手上，才有密钥可派生）
+  async function udAfterLogin(password) {
+    if (udBusy) return;
+    udBusy = true;
+    try {
+      const r = await udSync(password, {});
+      console.info('[userdata] 登录后同步:', r.action);
+    } catch (e) {
+      console.info('[userdata] 登录后同步跳过:', (e && e.message) || e);
+    } finally { udBusy = false; }
+    udRender();
+  }
+
+  // 手动「同步」：有本机缓存密钥即免密；没有且云端已有密文 → 提示重新登录
+  async function udManualSync() {
+    if (udBusy) return;
+    const btn = document.getElementById('cloudDataSyncBtn');
+    const label0 = (btn && btn.textContent) || '立即同步';   // 结束后回原样，别把按钮文案改掉
+    if (btn) { btn.disabled = true; btn.textContent = '同步中…'; }
+    udBusy = true;
+    try {
+      const r = await udSync(null, { force_push: true });
+      showToast(r.pushed && !r.pulled ? '✅ 已把本机资料备份到云端'
+        : r.pulled ? '✅ 已从云端拉回更新' : '✅ 本机与云端已一致');
+    } catch (e) {
+      showToast('❌ ' + ((e && e.message) || '同步失败'));
+    } finally {
+      udBusy = false;
+      if (btn) { btn.disabled = false; btn.textContent = label0; }
+    }
+    udRender();
+  }
+
+  async function udRender() {
+    const card = document.getElementById('cloudDataCard');
+    if (!card) return;
+    if (!pfToken()) { card.hidden = true; return; }
+    let st = null;
+    try { st = await request('/api/userdata/status'); } catch (_) { st = null; }
+    if (!st || !st.ok) { card.hidden = true; return; }
+    card.hidden = false;
+    const cloud = st.cloud || null;
+    const ckCloud = (cloud && cloud.cookies) || null;
+    const nPref = cloud ? Number((cloud.settings || {}).count || 0) : 0;
+    const nCk = ckCloud ? Number(ckCloud.count || 0) : 0;
+    const ckLocal = udLocalCookie() ? 1 : 0;
+    const when = cloud ? Number(cloud.updated_at || 0)
+      : (Number(udMarker().last_push || 0) || Number(udMarker().last_pull || 0));
+    const txt = document.getElementById('cloudDataText');
+    if (txt) {
+      txt.textContent = !st.cloud_linked ? '云端资料 · 本机账号未接入云端'
+        : (st.cloud_error && !cloud) ? '云端资料 · 云端状态暂时不可取'
+          : cloud ? ('云端资料 · 已备份 ' + nPref + ' 项偏好 / ' + nCk + ' 个平台登录态')
+            : '云端资料 · 云端暂无备份';
+    }
+    const w = document.getElementById('cloudDataWhen');
+    if (w) w.textContent = when ? ('云端更新于 ' + udAgo(when)) : '尚未同步';
+    const hint = document.getElementById('cloudDataHint');
+    if (hint) {
+      let h;
+      if (!udHasWebCrypto()) {
+        h = '当前浏览器不支持 Web 加密（需 https 或 localhost），平台登录态暂不上云（偏好仍会同步）。';
+      } else if (!st.cloud_linked) {
+        h = '本机账号未接入云端（离线注册的账号）：资料只存在这个浏览器里。';
+      } else if (ckCloud && !udLoadKeyCache()) {
+        h = '⚠️ 云端已备份 ' + nCk + ' 个平台登录态，但本机还没有解密密钥：'
+          + '在这台重新登录一次账号即可解锁（密钥由登录密码在本机派生，云端只存密文）。';
+      } else if (!ckCloud && ckLocal) {
+        h = '本机粘贴的平台登录态还没备份到云端：在这台重新登录一次账号即可上传'
+          + '（登录密码只在本机用于加密，云端只存密文，我们读不出内容）。';
+      } else {
+        h = '偏好与平台登录态随账号走 —— 换个浏览器登录会自动落回来；'
+          + '下载产物与任务记录属本机内容，不上云。';
+      }
+      if (st.cloud_error) h = '（云端状态暂时取不到：' + st.cloud_error + '）' + h;
+      hint.textContent = h;
+    }
+  }
+  try {
+    const _udBtn = document.getElementById('cloudDataSyncBtn');
+    if (_udBtn) _udBtn.addEventListener('click', udManualSync);
+  } catch (_) { /* ignore */ }
 
   // 网页访客统计：首屏加载上报一次（延后一拍，不占首屏渲染关键路径）
   setTimeout(() => { track('page_view'); }, 0);

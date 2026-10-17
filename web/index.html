@@ -994,6 +994,23 @@
 
             <div class="pf-ov-foot">注册时间：<span id="pfCreated">—</span></div>
           </div>
+
+          <!-- 云端资料（用户信息类数据备份 · 网页版 2026-10-17）：与桌面端同一账号、
+               同一通道，但独立分区（scope=web）互不覆盖 —— 桌面端那份不会被动到。
+               ⚠️ 硬边界：界面绝不展示任何 Cookie 内容 —— 平台登录态由浏览器本机
+               端到端加密后才上传，云端与后台都只可见「有几条」。 -->
+          <div class="pf-card pf-card-wide" id="cloudDataCard" hidden>
+            <div class="pf-card-h">
+              <span class="pf-card-ic" aria-hidden="true">☁</span><span class="pf-card-t">云端资料</span>
+            </div>
+            <div class="pf-card-c">
+              <div class="pf-row"><span id="cloudDataText">云端资料</span><strong id="cloudDataWhen"></strong></div>
+              <p class="pf-credit-note" id="cloudDataHint"></p>
+              <div class="pf-ov-actions">
+                <button type="button" class="pf-ov-btn ghost" id="cloudDataSyncBtn">立即同步</button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- ② 购买记录 -->

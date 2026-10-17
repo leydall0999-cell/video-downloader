@@ -102,6 +102,7 @@ run_one test_direct_url_hls.py
 run_node test_web_direct_download.js
 run_node test_web_hls_assemble.js
 run_node test_web_route_retry.js
+run_node test_web_userdata_sync.js           # 网页版云备份引擎：Cookie 端到端加密(真 WebCrypto)/无明文外带/幂等/冲突守卫/摘要取云端实际量（2026-10-17）
 run_node test_convert_poll_lifecycle.mjs   # 音乐/图片转换轮询定时器自杀停表回归（2026-09-29 线上卡 30% 事故）
 run_node test_dw_preview_zoom.mjs          # 去水印捏合缩放(只放大图片)+结果预览灯箱+重新加工（2026-09-29 用户反馈）
 run_node test_view_top_gap.mjs             # 顶层视图卡片与吸顶顶栏间距：main > .panel 3rem，防「顶栏+卡片」粘连（2026-10-04 用户反馈）
@@ -279,6 +280,10 @@ run_root test_youku_series_title.py
 run_root test_youtube_autofallback.py
 run_root test_youtube_player_skip.py
 run_root test_crypto_routes.py              # crypto 路由（web 适用节，自设开关）
+#  用户信息类数据云备份 · 网页版接入（2026-10-17）：与桌面端同一账号资料包通道但
+#  scope="web" 分文件（互不覆盖）、无登录/无云端身份必拒、parts 空必拒、scope 必须
+#  进请求体、app.py 路由已注册 + 前端两处登录成功分支都接了自动同步。
+run_one test_userdata_web.py
 
 echo ""
 echo "========================================="

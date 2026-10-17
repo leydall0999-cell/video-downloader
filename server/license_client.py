@@ -264,6 +264,48 @@ def check_remote(code: str, fingerprint: str = "", base_url: Optional[str] = Non
                  base_url, timeout, opener)
 
 
+# ---- 用户信息类数据云备份 · 网页版通道（2026-10-17 接入）-------------------- #
+# 与桌面端共用同一个「账号资料包」通道，但用 `scope="web"` **分文件**存放
+# （服务端 userdata/<账号sha>.web.json）⇒ 桌面端与网页版各存各的，互不覆盖
+# （桌面端的资料包是「整体替换」组装的，共用一份会互相抹掉）。
+#
+# ⚠️ 隐私边界（改这里前先想清楚）：网页版的平台登录态（用户粘贴的 Cookie）由
+# **浏览器**用登录密码派生的密钥（PBKDF2-SHA256 20 万轮 + AES-256-GCM）加密后
+# 才上传 ⇒ 本服务与授权中心都只拿到密文。本模块只做**转发**，绝不解析内容。
+def userdata_pull_remote(token: str, scope: str = "", base_url: Optional[str] = None,
+                         timeout: float = 15.0,
+                         opener: Optional[Callable] = None) -> dict[str, Any]:
+    """取回本人云端资料包（scope 留空 = 桌面端那份；"web" = 网页版那份）。"""
+    body: dict[str, Any] = {"token": token}
+    if scope:
+        body["scope"] = scope
+    return _post("/api/license/data-pull", body, base_url, timeout, opener)
+
+
+def userdata_push_remote(token: str, payload: dict[str, Any], scope: str = "",
+                         base_url: Optional[str] = None, timeout: float = 40.0,
+                         opener: Optional[Callable] = None) -> dict[str, Any]:
+    """上传/覆盖本人云端资料包（幂等）。返回 {ok, updated_at, meta}。"""
+    body: dict[str, Any] = {"token": token, "payload": payload}
+    if scope:
+        body["scope"] = scope
+    return _post("/api/license/data-push", body, base_url, timeout, opener)
+
+
+def userdata_meta_remote(token: str, scope: str = "", base_url: Optional[str] = None,
+                         timeout: float = 10.0,
+                         opener: Optional[Callable] = None) -> dict[str, Any]:
+    """只看「云端备份了什么」的摘要（不含内容/密文）。返回 {ok, meta(可为 None)}。
+
+    网页版只把这份摘要回给前端显示（「已备份 N 项偏好 / M 个登录态」）；
+    真正的资料包内容永远不下发给除本人浏览器外的任何一方。
+    """
+    body: dict[str, Any] = {"token": token}
+    if scope:
+        body["scope"] = scope
+    return _post("/api/license/data-meta", body, base_url, timeout, opener)
+
+
 # ---- 管理员：全端账号（2026-10-16「所有端用户上云端」）----
 def users_remote(admin_token: str, base_url: Optional[str] = None,
                  timeout: float = 12.0) -> dict[str, Any]:

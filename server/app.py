@@ -3419,6 +3419,11 @@ app.include_router(_share_token_rtr.router)
 # 网页访客统计（PV/UV/事件/来源，仅落哈希不落 IP 明文；上架/变现决策的数据依据）
 from routers import webstats as _webstats_rtr
 app.include_router(_webstats_rtr.router)
+# 用户信息类数据云备份 · 网页版通道（2026-10-17）：网页版也能把偏好 + 浏览器登录态
+# 随账号备份/恢复。分文件存（scope="web"），与桌面端那份互不覆盖；加解密全在
+# 浏览器端做（WebCrypto），本服务只转发密文。
+from routers import userdata as _userdata_rtr
+app.include_router(_userdata_rtr.router)
 # 账号 / per-user 会员解析：供各路由经 request 取当前用户态 store。
 # 必须在模块顶层定义（与 member_store 同级），否则 routers 里 `import app` 取不到。
 from user_membership import get_current_user_id, current_member_store
