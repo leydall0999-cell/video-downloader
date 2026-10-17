@@ -22057,6 +22057,8 @@ el.dwVidPlayer.hidden = true;
       else if (name === 'monitor') loadMonitor();
       // 每日对账（2026-10-09）：已从运维监控页提出，独立成 tab，按需拉报告
       else if (name === 'recon') loadMonitorRecon();
+      // 解析需求榜（2026-10-17）：解析失败自动登记的站点热度，按需拉取
+      else if (name === 'demand') loadResolveDemand();
     };
 
     const loadAll = () => {
@@ -22208,6 +22210,36 @@ el.dwVidPlayer.hidden = true;
         // 取不到报告时不留上一次的区间回显（那会显示成"这次就是这么查的"）
         const tipBox = $('adminReconRangeTip');
         if (tipBox) tipBox.textContent = _reconRangeLabel(_reconDays) + '（本次未取到报告）';
+      }
+    };
+    // ---- 解析需求榜（2026-10-17，Downie「用户报一个写一个」机制第一环）----
+    // 解析失败（白名单空白站点 / 未知域名）自动落库后的站点热度视图。
+    // 口径「站点×天」：同一站点同一天多次失败只计 1 次需求，重试免疫；
+    // 不同天重复出现照计（持续有人要的站排前面）。用途：开发排期输入。
+    const loadResolveDemand = async () => {
+      const box = $('adminDemandBody');
+      if (!box) return;
+      box.innerHTML = '<div class="admin-empty">加载中…</div>';
+      try {
+        const d = await adminRequest('/api/admin/resolve-demand?days=30');
+        const rows = (d && d.demand) || [];
+        if (!rows.length) {
+          box.innerHTML = '<div class="admin-empty">暂无需求登记——出现「暂不支持」类解析失败后自动累计</div>';
+          return;
+        }
+        const catName = (c) => (c === 'pending_extractor' ? '已收录缺提取器'
+          : c === 'unsupported_platform' ? '未收录新站' : (c || '-'));
+        box.innerHTML =
+          '<table><thead><tr><th>站点</th><th>需求天数</th><th>记录数</th><th>分类</th><th>最近一次</th><th>样例链接</th></tr></thead><tbody>' +
+          rows.slice(0, 50).map((x) => {
+            const cats = Object.entries(x.categories || {}).map(([c, n]) => `${catName(c)}×${n}`).join('，') || '-';
+            const last = x.last_ts ? new Date(x.last_ts * 1000).toLocaleDateString() : '-';
+            return `<tr><td><b>${esc(x.host)}</b></td><td>${x.days_count}</td><td>${x.total}</td>` +
+              `<td>${esc(cats)}</td><td>${last}</td>` +
+              `<td title="${esc(x.last_url || '')}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((x.last_url || '-').slice(0, 60))}</td></tr>`;
+          }).join('') + '</tbody></table>';
+      } catch (err) {
+        box.innerHTML = `<div class="admin-empty">加载失败：${esc(err && err.message || err)}</div>`;
       }
     };
     // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
@@ -22386,6 +22418,7 @@ el.dwVidPlayer.hidden = true;
     if ($('adminMonitorRefresh')) $('adminMonitorRefresh').addEventListener('click', loadMonitor);
     if ($('adminMonitorAckAll')) $('adminMonitorAckAll').addEventListener('click', () => ackMonitorAlerts([]));
     if ($('adminReconRefresh')) $('adminReconRefresh').addEventListener('click', loadMonitorRecon);
+    if ($('adminDemandRefresh')) $('adminDemandRefresh').addEventListener('click', loadResolveDemand);
     // 查账区间按钮（2026-10-09）：切换即重拉报告；高亮 + 回显由 loadMonitorRecon 统一刷新。
     document.querySelectorAll('.admin-recon-range[data-recon-days]').forEach((b) => {
       b.addEventListener('click', () => {
@@ -23875,6 +23908,32 @@ el.dwVidPlayer.hidden = true;
         const el = plansBox.querySelector(`.cost-val[data-cost="${k}"]`);
         costs[k] = el ? (parseInt(el.value, 10) || 0) : (cfg.credit_costs[k]);
       });
+      // 🔴 2026-10-17：秒杀价必须低于原价，否则没有价差——卡片不划线、没有「秒杀」观感，
+      //    窗口结束后价格回原价（而原价就是秒杀价），看起来「秒杀永远不结束」。
+      //    本次线上 1 天档正是「原价=秒杀价=0.1」导致用户误判。保存前拦一道。
+      const _flashBad = [];
+      [['下载', dl], ['AI', ai], ['积分包', cp]].forEach(function (pair) {
+        const catName = pair[0]; const group = pair[1];
+        Object.keys(group || {}).forEach(function (k) {
+          const it = group[k];
+          if (!it || it.mode !== 'flash_sale' || !(Number(it.flash_price) > 0)) return;
+          const base = Number(it.price_cny) || 0;
+          if (base <= 0) { _flashBad.push(catName + '档 ' + k + ' 原价为 0，无法判断价差'); return; }
+          if (Number(it.flash_price) >= base) {
+            _flashBad.push(catName + '档 ' + k + ' 秒杀价 ¥' + it.flash_price + ' 不低于原价 ¥' + base);
+          }
+          if (!it.flash_start || !it.flash_end) {
+            _flashBad.push(catName + '档 ' + k + ' 缺少秒杀开始/结束时间');
+          } else if (it.flash_end <= Date.now() / 1000) {
+            _flashBad.push(catName + '档 ' + k + ' 秒杀结束时间已过（价格将立即回原价）');
+          }
+        });
+      });
+      if (_flashBad.length) {
+        _plansSaving = false;   // ⚠️ 必须释放闸门，否则一次拦截后保存按钮永久失灵
+        _adminMsg(plansMsg, '未保存：' + _flashBad.join('；') + '。', true);
+        return;
+      }
       const payload = { download_plans: dl, ai_plans: ai, credit_packs: cp, credit_costs: costs };
       console.log('[plans] save payload 档位数 dl=%d ai=%d cp=%d', Object.keys(dl).length, Object.keys(ai).length, Object.keys(cp).length);
       // 诊断期：把即将提交的档位数与是否找到表单元素直接显示出来，

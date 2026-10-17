@@ -634,6 +634,15 @@ run_one test_plan_mkt_matrix.py
 #      回归钉 _memberMsg/_memberCard 函数体完整（防「整块被替换成签名行」事故）。
 run_one test_member_countdown.py
 
+#  38.5 test_plan_flash_price_guard.py —— 后台「秒杀价必须低于原价」保存前校验（2026-10-17）：
+#      真实事故：1 天档「价格¥」与「秒杀价¥」都填成 0.1 → 窗口内无价差（不划线、无秒杀观感，
+#      用户以为没生效）、窗口结束后价格回原价（而原价=秒杀价）→ 看起来「秒杀永远不结束」。
+#      前台倒计时/角标本身是对的（见 38），根因是配置，故在保存前拦一道。
+#      两层核对：静态接线（校验块位置/判定/文案/三张表/拦截分支释放闸门）+
+#      node 实跑校验块真实判定（低于原价放行；等于/高于原价、缺时间、结束已过、原价 0 均拦截；
+#      普通/限量模式不误伤）。变异 3 处全红才算守住。
+run_one test_plan_flash_price_guard.py
+
 #  39. test_plan_sale_table.py —— 档位快速上下架的表名解析（2026-10-03）：
 #      真实事故「点下架报 未知套餐类别：dl」—— 前端分段 id(dl/ai/cp) 被当服务端表名提交。
 #      三层核对：后端 _norm_plan_table 别名归一 → 前端两处模板 data-table 接线 +
@@ -925,6 +934,30 @@ run_one test_image_download.py
 #      窗口地址，不是应用自己的源就 load_url 导回。判定是纯函数，本文件离线验证。
 run_one test_launcher_window_guard.py
 
+# 61.5 test_win_version_guard.py —— Win7/8/8.1 启动拦截（2026-10-17 用户问「其他
+#       windows 能不能也支持」）：上游三处硬约束（Python 3.13 需 Win8.1+ /
+#       WebView2 Runtime 109 是最后支持版 / 原生依赖均要 Win10+）⇒ 不支持也不建议。
+#       拦住启动即弹窗引导（升级 Win10/11 或用网页版 hanyuxz.top），Win10/11 与非
+#       Windows 平台不误伤；main() 必须在起服务线程之前调用（fail-fast）。
+run_one test_win_version_guard.py
+
+# 61.6 test_launcher_boot_feedback.py —— 启动「静默失败」加固（2026-10-17 用户 Windows
+#       装机后打不开，唯一现象是 WebView2 窗口「127.0.0.1 拒绝连接」）：① _find_free_port
+#       从 connect_ex 探测改真 bind 探测（Windows Hyper-V 保留段会让 connect 误判空闲）；
+#       ② ready 轮询循环内检测 server_thread.is_alive()，后端线程已死立即 break，
+#       不再傻等 240s；③ 未就绪时弹窗指明 %USERPROFILE%\.vdl_launch.log
+#       （GUI 双击启动 stdout 不可见，只 print = 静默失败）。
+run_one test_launcher_boot_feedback.py
+
+# 61.7 test_win_console_stdio_guard.py —— Windows 双击打不开的真根因（2026-10-17
+#       用户装机实测）：PyInstaller windowed 冻结程序不分配控制台 ⇒ sys.stdout is None
+#       ⇒ uvicorn 日志格式化器 isatty() 抛 AttributeError ⇒ 后端线程秒崩。CI 冒烟从
+#       bash 起 exe（stdout 是 pipe 非 None）抓不到、Mac bootloader 重定向 stdout 也不
+#       中招，只有 Windows 双击复现。守卫：子进程真跑复现（None⇒崩）+ 修复
+#       （_ensure_stdio 补 devnull⇒Config 可构造）+ 不误伤 + 接线棘轮。
+#       ⚠️ 若 uvicorn 升级自修了 None-stdout，A 组「复现」会红——按用例过期删 A 组即可。
+run_one test_win_console_stdio_guard.py
+
 # 62. test_cloud_matting_gateway.py —— 云端抠图改走「本产品服务端」（2026-10-13 定档
 #     「钥匙不出保险柜」）：网关接入时必须走网关且出站请求不含任何火山凭据；
 #     未接入时保留本机直连；就绪判定与凭据来源（server/local/none）语义正确；
@@ -964,6 +997,12 @@ run_one test_update_server_counting.py
 #     sign=SHA1(MD5("排序参数&key=<key>&t=<毫秒>")) 逐位锁定、标题/清晰度/best 装配
 #     （AST 抽函数 + sys.modules 注入假 requests/uuid，离线跑，不发真实请求）。
 run_one test_nmw_extractor.py
+
+# 63.10 test_resolve_demand.py —— 解析需求登记守卫（2026-10-17，Downie 机制本土化
+#     第一环）：解析失败（白名单空白站点/未知域名）自动落库 → 管理端「解析需求榜」
+#     按「站点×天」聚合（重试免疫）→ 每月挑 Top 写专用提取器。钉住：字段/60s 同
+#     host 节流/聚合口径/坏行跳过/2MB 截断真生效（截断曾漏写回，守卫抓出）。
+run_one test_resolve_demand.py
 
 # 63. test_release_audit.py —— 发布包「机密数据」核查工具的离线守卫（2026-10-13 用户要求
 #     「发布的安装包绝对不含机密数据」，并要求写入档案）。七类：明文凭据 / 私钥 / 服务端

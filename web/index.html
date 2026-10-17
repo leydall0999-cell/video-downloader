@@ -4173,6 +4173,7 @@
         <button type="button" class="admin-tab" data-admin-view="aiaccounts" data-page-node-id="aiAcctTab">AI 账户</button>
         <button type="button" class="admin-tab" data-admin-view="monitor" data-page-node-id="adminMonTab">运维监控</button>
         <button type="button" class="admin-tab" data-admin-view="recon" data-page-node-id="adminReconTab">每日对账</button>
+        <button type="button" class="admin-tab" data-admin-view="demand" data-page-node-id="adminDemandTab">解析需求</button>
       </nav>
       <div class="admin-body" data-page-node-id="RYA0sEY7fsTbPcGaQp5gmC">
         <section class="admin-view" data-admin-view="users" id="adminViewUsers" data-page-node-id="p6bUVjPAOQ0OpOAa2jjHg7">
@@ -4412,6 +4413,19 @@
             </div>
             <div id="adminMonitorRecon" class="admin-table-wrap"></div>
             <div id="adminMonitorMismatches"></div>
+          </div>
+        </section>
+        <section class="admin-view" data-admin-view="demand" id="adminViewDemand" hidden data-page-node-id="adminDemandView">
+          <div class="admin-toolbar" data-page-node-id="adminDemandTb">
+            <span class="admin-count">解析失败自动登记的站点需求（按「站点×天」计数，重试不重复计）</span>
+            <button type="button" id="adminDemandRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminDemandRefresh">刷新</button>
+          </div>
+          <div class="admin-cfg-section" data-page-node-id="adminDemandSec">
+            <div class="admin-cfg-head" data-page-node-id="adminDemandHead">
+              <h3 data-page-node-id="adminDemandTitle">解析需求榜 · 用户要但下不了的站</h3>
+              <span class="admin-cfg-hint" data-page-node-id="adminDemandHint">用法：每月挑 Top 站点写成专用提取器（nmwchxx 即此类信号产出）</span>
+            </div>
+            <div id="adminDemandBody" class="admin-table-wrap"></div>
           </div>
         </section>
       </div>

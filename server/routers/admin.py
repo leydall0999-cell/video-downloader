@@ -599,6 +599,18 @@ def admin_config(request: Request = None) -> dict[str, Any]:
     return {"ok": True, **system_config()}
 
 
+# ── 解析需求榜（2026-10-17，Downie 机制本土化第一环）─────────────────────────
+# 解析失败（白名单空白站点 / 未知域名）自动落库后的聚合视图：按「站点×天」计数，
+# 重试免疫。用途：每月挑 Top 站点写成专用提取器——把 Downie「用户报一个写一个」
+# 的十年机制，变成我们可执行的开发排期输入。
+@router.get("/api/admin/resolve-demand")
+def admin_resolve_demand(days: int = 30, request: Request = None) -> dict[str, Any]:
+    require_admin(request)
+    import resolve_demand
+    rows = resolve_demand.demand_summary(days=days)
+    return {"ok": True, "days": days, "demand": rows, "total_sites": len(rows)}
+
+
 @router.post("/api/admin/config/smtp")
 def admin_config_smtp(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
     require_admin(request)
