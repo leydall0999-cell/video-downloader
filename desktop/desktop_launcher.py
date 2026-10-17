@@ -216,10 +216,22 @@ def _run_commentary_worker(argv: list[str]) -> int:
     return 0
 
 def _find_free_port(start: int = 8321, tries: int = 80) -> int:
+    """挑一个真空闲端口。
+
+    🔴 2026-10-17：connect_ex 探测 → 真 bind 探测。原因：Windows 的 Hyper-V/WSL
+    会「静默保留」整段 TCP 端口（netsh int ipv4 show excludedportrange 可见，
+    但 netstat 看不到占用者）——保留段内 connect_ex 连不上、被误判为「空闲」，
+    选中后 uvicorn bind 必失败（WSAEINUSE），白耗一轮重试。真 bind 才是权威判据。
+    bind 后立即 close，与随后 uvicorn 的 bind 之间有极小竞态，由
+    _run_server_with_retry 的顺延兜底（_update_active_port 会同步全局端口）。
+    """
     for p in range(start, start + tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", p)) != 0:
+            try:
+                s.bind(("127.0.0.1", p))
                 return p
+            except OSError:
+                continue
     return start
 
 def _update_active_port(p: int, lock_file=None) -> None:
@@ -243,9 +255,41 @@ def _update_active_port(p: int, lock_file=None) -> None:
         except Exception:
             pass
 
+def _ensure_stdio() -> None:
+    """Windows 冻结 GUI 程序（无控制台）里 sys.stdout/sys.stderr 是 None，必须补掉。
+
+    历史事故（2026-10-17，用户 Windows 装机实测）：安装后双击打不开，WebView2
+    窗口能起但页面 127.0.0.1 拒绝连接。日志根因：PyInstaller windowed 冻结程序
+    不分配控制台 ⇒ sys.stdout is None ⇒ uvicorn 日志格式化器初始化时调用
+    sys.stdout.isatty() 抛 AttributeError ⇒ 后端线程秒崩 ⇒ 白等 240s 后开一个
+    必然连不上的窗口。CI 冒烟测试从 bash 启动 exe（继承 pipe，stdout 非 None），
+    因此抓不到；Mac app bundle 的 bootloader 会把 stdout 重定向为有效对象也不中招。
+    这里把 None 换成 devnull，让 uvicorn / logging / traceback 等一切依赖
+    sys.std* 的代码恢复正常；有控制台时（Mac / 开发态 / CI）本函数直接返回。
+    """
+    if sys.stdout is not None and sys.stderr is not None and sys.stdin is not None:
+        return
+    try:
+        import io as _io
+
+        def _mk(mode: str):
+            return _io.TextIOWrapper(open(os.devnull, mode), encoding="utf-8",
+                                     errors="replace")
+
+        if sys.stdin is None:
+            sys.stdin = _mk("r")
+        if sys.stdout is None:
+            sys.stdout = _mk("w")
+        if sys.stderr is None:
+            sys.stderr = _mk("w")
+    except Exception:
+        pass
+
+
 def _run_server_with_retry(start_port: int, host: str, app_dir: str, lock_file=None) -> None:
     """启动 uvicorn；若首端口绑定失败（EADDRINUSE 等），自动顺延到下一端口重试，
     最多尝试 12 个端口，彻底消除“kill 旧实例后立刻启动新实例”的端口竞态导致的假启动。"""
+    _ensure_stdio()  # 无控制台环境先补 sys.std*，否则 uvicorn 初始化即崩（见函数注释）
     import uvicorn
     max_off = 12
     last_err = None
@@ -2086,6 +2130,72 @@ def _show_error_dialog(msg: str) -> None:
     except Exception:
         pass
 
+def _show_windows_message_box(msg: str, title: str = "视频工坊") -> bool:
+    """Windows 原生 MessageBox 弹窗（ctypes 直调 user32，不依赖 tkinter / 任何 Python 包）。
+
+    用于启动拦截等「必须让用户看到」的场景；失败静默返回 False（调用方自行兜底写日志）。
+    """
+    try:
+        import ctypes
+        MB_ICONINFORMATION = 0x00000040
+        MB_SETFOREGROUND = 0x00010000
+        MB_TOPMOST = 0x00040000
+        ctypes.windll.user32.MessageBoxW(
+            None, msg, title,
+            MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _windows_version_major():
+    """返回 Windows 主版本号；非 Windows / 取不到版本信息返回 None。
+
+    对照：Win7=6.1 / Win8=6.2 / Win8.1=6.3 / Win10=10.0 / Win11=10.0（build≥22000，
+    主版本号与 Win10 相同，一律放行）。抽成纯函数供启动检查与离线测试共用。
+    """
+    if sys.platform != "win32":
+        return None
+    getver = getattr(sys, "getwindowsversion", None)
+    if getver is None:
+        return None
+    try:
+        return int(getver().major)
+    except Exception:
+        return None
+
+
+def _check_windows_version() -> None:
+    """Win7 / Win8 / Win8.1 启动拦截（2026-10-17 上线）。
+
+    背景：用户问「目前支持 win10/11，其他 windows 能不能也支持」——结论是不能，且不是
+    改代码能绕过的，上游三处硬约束：① CPython 3.13 官方只支持 Windows 8.1+（Win7 要锁
+    Python 3.8）；② Edge WebView2 Runtime 109 是最后一个支持 Win7/8/8.1 的版本
+    （2023-01 起新 SDK 不再支持，且再无安全更新）；③ deno 2.x / onnxruntime 等原生依赖
+    均要求 Win10+。与其让用户装完打不开再来问，不如启动即弹窗引导。
+
+    行为：检测到主版本 <10 → 弹窗告知「请升级 Win10/11 或先用网页版」后退出。
+    非 Windows 平台、取不到版本信息、或设置了 VDL_ALLOW_OLD_WINDOWS=1 均放行（不误伤）。
+    """
+    if str(os.environ.get("VDL_ALLOW_OLD_WINDOWS") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return
+    major = _windows_version_major()
+    if major is None or major >= 10:
+        return
+    _launch_log(f"不受支持的 Windows 版本（major={major}），阻止启动并引导用户")
+    _show_windows_message_box(
+        "视频工坊 不支持 Windows 7 / 8。\n"
+        "\n"
+        "这些系统过于老旧（微软已停止支持），程序无法稳定运行。\n"
+        "\n"
+        "您有两个选择：\n"
+        "1. 升级到 Windows 10 或更高版本，重新安装使用；\n"
+        "2. 暂不升级也可用：浏览器打开网页版 hanyuxz.top"
+    )
+    sys.exit(0)
+
+
 def _browser_fallback(server_thread) -> None:
     """原生窗口不可用时的兜底：**不再自动打开浏览器**（用户明确：App 就是 App，不跳网页）。
 
@@ -2194,6 +2304,14 @@ def _ensure_single_instance():
     return f
 
 def main() -> None:
+    # Win7 / Win8 / Win8.1 启动拦截：上游（Python 3.13 / WebView2 / 原生依赖）已整体不
+    # 支持这些系统，安装包无法稳定运行。放在最前面 fail-fast——装完打不开再来问，
+    # 不如启动即弹窗引导（详见 _check_windows_version 注释）。
+    _check_windows_version()
+
+    # 无控制台环境（Windows 双击启动）补 sys.std*，防 uvicorn 等库踩 None 崩溃
+    _ensure_stdio()
+
     import uvicorn
 
     signal.signal(signal.SIGTERM, _handle_exit)
@@ -2241,18 +2359,40 @@ def main() -> None:
     # 而事实上后端再等 37s 就好了。放宽到 240s：就绪立即 break，热启动体感不变；
     # 冷启动多等一会儿但**打开就能用**。真慢到 240s 还没起，行为与旧版一致（不更差）。
     _READY_WAIT_SEC = 240
+    _ready = False
     for _ in range(int(_READY_WAIT_SEC / 0.2)):
+        if not server_thread.is_alive():
+            # 后端线程已退出（异常栈已由 _logged_run_server 写进启动日志）——立即失败，
+            # 不再傻等满 240s 才让用户看到错误窗口（2026-10-17 实测：Windows 用户
+            # 装机后打不开，对着「127.0.0.1 拒绝连接」干等 4 分钟，体验极差）。
+            _launch_log("后端线程已退出且服务从未就绪，提前结束等待")
+            break
         try:
             with socket.create_connection((HOST, PORT), timeout=0.5):
+                _ready = True
                 break
         except OSError:
             time.sleep(0.2)
-    else:
-        _launch_log(f"服务器启动超时（{_READY_WAIT_SEC}s 内未就绪），但 main 不退出，server 线程继续后台尝试")
+    if not _ready:
+        _launch_log(f"服务器未就绪（{_READY_WAIT_SEC}s 内未监听 {HOST}:{PORT}），弹窗告知用户")
         # 注意：不能 server_thread.join()——会让 main 阻塞直到 thread 退出，
         # 而 thread 可能因 cookie_pool 等慢 init 永远不结束，整个 app 卡死。
         # daemon=True 表明 main 退出时 thread 一起死，但用户不主动退就没人杀 main。
         # 这里只警告，不阻塞 main。
+        # 🔴 2026-10-17：GUI（双击图标）启动时 stdout 不可见，只 print 等于静默失败——
+        # 用户唯一看到的就是 WebView2 的「拒绝连接」错误页，不知道去哪找日志。
+        # 必须弹窗指明日志路径（Windows: MessageBoxW；macOS: osascript 各自生效）。
+        _show_windows_message_box(
+            "视频工坊 的本地服务启动失败。\n"
+            "\n"
+            "请把日志文件发给我们排查：\n"
+            "%USERPROFILE%\\.vdl_launch.log\n"
+            "（按 Win+R，粘贴该路径回车即可打开）"
+        )
+        _show_error_dialog(
+            "视频工坊 的本地服务启动失败。\n"
+            "请把 ~/.vdl_launch.log 内容发给开发者排查。"
+        )
         print(f"服务器启动较慢（>{_READY_WAIT_SEC}s），请稍候或手动访问 {URL}")
 
     _launch_log("后端服务就绪，准备打开界面")
