@@ -177,6 +177,22 @@ def userdata_push_remote(token: str, payload: dict[str, Any],
                  {"token": token, "payload": payload}, base_url, timeout, opener)
 
 
+def userdata_meta_remote(token: str, base_url: Optional[str] = None, scope: str = "",
+                         timeout: float = 10.0,
+                         opener: Optional[Callable] = None) -> dict[str, Any]:
+    """只看「云端备份了什么」的摘要（不含任何内容/密文）。返回 {ok, meta(可为 None)}。
+
+    2026-10-17 新增。存在理由：会员中心那行状态必须显示**云端实际**备份量
+    （之前取的是本机计数 ⇒ 云端一条 Cookie 都没有时也报「已备份 7 个平台登录态」），
+    而为了显示一行数字去 `data-pull` 整包（含密文，上限 4MB）不划算。
+    `scope` 留空 = 桌面端那一份；"web" = 网页版那一份。
+    """
+    body: dict[str, Any] = {"token": token}
+    if scope:
+        body["scope"] = scope
+    return _post("/api/license/data-meta", body, base_url, timeout, opener)
+
+
 def stat_query_remote(admin_token: str, base_url: Optional[str] = None,
                       timeout: float = 10.0) -> dict[str, Any]:
     """管理员查询「安装 / 插件次数统计（按平台）」聚合（2026-10-13 新增）。

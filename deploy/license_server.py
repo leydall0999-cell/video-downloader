@@ -921,14 +921,39 @@ USERDATA_MAX_BYTES = int(os.environ.get("VDL_LICENSE_USERDATA_MAX")
                          or str(4 * 1024 * 1024))
 
 
-def _userdata_path(uid: str) -> Path:
-    """账号 → 独立数据文件（以主键 sha256 前 24 位命名，避免邮箱字符进文件名）。"""
+def _userdata_path(uid: str, scope: str = "") -> Path:
+    """账号 → 独立数据文件（以主键 sha256 前 24 位命名，避免邮箱字符进文件名）。
+
+    `scope`（2026-10-17 新增）：同一账号下按**端**分文件，彼此互不覆盖。
+      · ""（默认）= 桌面 App 的用户信息类备份（1.0.72 起）
+      · "web"     = 网页版（hanyuxz.top）自己的偏好 + 浏览器登录态
+    为什么要分文件：桌面端的资料包是「整体替换 parts」组装的，与网页版共用一份会
+    互相抹掉；分成两个文件后，两端各读写自己那一份，谁都不会动对方的。
+    """
     h = hashlib.sha256(_norm_id(uid).encode("utf-8")).hexdigest()[:24]
-    return DATA_PATH.parent / USERDATA_DIRNAME / f"{h}.json"
+    suf = f".{scope}" if scope else ""
+    return DATA_PATH.parent / USERDATA_DIRNAME / f"{h}{suf}.json"
 
 
-def userdata_load(uid: str) -> dict[str, Any]:
-    p = _userdata_path(uid)
+_SCOPE_RE = re.compile(r"^[a-z0-9_]{1,16}$")
+
+
+def norm_scope(raw: Any) -> str:
+    """规整 scope：空 / `default` = 默认（桌面端）；非空必须 `[a-z0-9_]{1,16}`。
+
+    非法值**报错**而不是静默回落 —— 否则客户端拼错 scope 会悄悄读写到桌面端那份，
+    这种「看着成功实则串了区」的错最难查。
+    """
+    s = str(raw or "").strip().lower()
+    if not s or s == "default":
+        return ""
+    if not _SCOPE_RE.match(s):
+        raise ApiError(400, "BAD_SCOPE", "scope 只能是 1-16 位小写字母/数字/下划线")
+    return s
+
+
+def userdata_load(uid: str, scope: str = "") -> dict[str, Any]:
+    p = _userdata_path(uid, scope)
     try:
         raw = p.read_text(encoding="utf-8")
     except OSError:
@@ -940,8 +965,8 @@ def userdata_load(uid: str) -> dict[str, Any]:
     return d if isinstance(d, dict) else {}
 
 
-def _userdata_write(uid: str, blob: dict[str, Any]) -> None:
-    p = _userdata_path(uid)
+def _userdata_write(uid: str, blob: dict[str, Any], scope: str = "") -> None:
+    p = _userdata_path(uid, scope)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + f".tmp{os.getpid()}")
     tmp.write_text(json.dumps(blob, ensure_ascii=False, separators=(",", ":")),
@@ -989,11 +1014,17 @@ def userdata_meta(blob: dict[str, Any]) -> Optional[dict[str, Any]]:
         size = len(json.dumps(blob, ensure_ascii=False).encode("utf-8"))
     except (TypeError, ValueError):
         size = 0
+    st = parts.get("settings") if isinstance(parts.get("settings"), dict) else {}
     return {
         "updated_at": float(blob.get("updated_at") or 0),
         "device": str(blob.get("device") or ""),
         "size": size,
         "parts": sorted(str(k) for k in parts.keys()),
+        # 2026-10-17：补「设置分区」的条数 + 文件名清单 —— 会员中心那行
+        # 「云端资料 · 已备份 N 份设置」必须用**云端实际**条数（之前取的是本机计数，
+        # 云端一条都没有时也照样报「已备份 4 份设置」）。只暴露文件名，不含任何内容。
+        "settings": {"count": len(st),
+                     "files": sorted(str(k) for k in st.keys())[:40]},
         "cookies": ({
             "count": int(ck_meta.get("count") or 0),
             "platforms": [str(x) for x in (ck_meta.get("platforms") or [])][:80],
@@ -1003,30 +1034,46 @@ def userdata_meta(blob: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
-def userdata_pull_impl(state: dict[str, Any], token: str, now: float,
-                       secret: str) -> dict[str, Any]:
-    """取回本人云端资料包（本人 token 才可取，账号隔离）。"""
+def _userdata_uid(state: dict[str, Any], token: str, now: float, secret: str) -> str:
+    """校验 token → 返回账号主键（本人才能读写自己那一份，账号隔离）。"""
     uid = parse_token(token, secret, now)
     if uid not in _users(state):
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
-    blob = userdata_load(uid)
+    return uid
+
+
+def userdata_pull_impl(state: dict[str, Any], token: str, now: float,
+                       secret: str, scope: str = "") -> dict[str, Any]:
+    """取回本人云端资料包（本人 token 才可取，账号隔离）。"""
+    uid = _userdata_uid(state, token, now, secret)
+    blob = userdata_load(uid, scope)
     if not blob:
         return {"ok": True, "payload": None, "meta": None}
     return {"ok": True, "payload": blob, "meta": userdata_meta(blob)}
 
 
 def userdata_push_impl(state: dict[str, Any], token: str, payload: Any, now: float,
-                       secret: str) -> dict[str, Any]:
+                       secret: str, scope: str = "") -> dict[str, Any]:
     """上传/覆盖本人云端资料包（幂等，后写覆盖）。"""
-    uid = parse_token(token, secret, now)
-    if uid not in _users(state):
-        raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
+    uid = _userdata_uid(state, token, now, secret)
     clean = _userdata_clean(payload)
     if not clean["updated_at"]:
         clean["updated_at"] = now
-    _userdata_write(uid, clean)
+    _userdata_write(uid, clean, scope)
     return {"ok": True, "updated_at": clean["updated_at"],
             "meta": userdata_meta(clean)}
+
+
+def userdata_meta_impl(state: dict[str, Any], token: str, now: float,
+                       secret: str, scope: str = "") -> dict[str, Any]:
+    """只看「备份了什么」的元数据（2026-10-17 新增）。
+
+    存在理由：会员中心那行状态要显示**云端实际**备份量，而 `data-pull` 得把整包
+    （含密文，最大 4MB）拉下来才能拿到 meta —— 只为显示一行数字划不来。本接口
+    只读文件算摘要，不下发 payload，也不含任何内容/密文。
+    """
+    uid = _userdata_uid(state, token, now, secret)
+    return {"ok": True, "meta": userdata_meta(userdata_load(uid, scope))}
 
 
 # ── 账号 & 设备配额（纯函数，便于单测）───────────────────────────────────────── #
@@ -2520,12 +2567,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _body(self) -> dict[str, Any]:
+    def _body(self, max_bytes: int = 64 * 1024) -> dict[str, Any]:
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             n = 0
-        if n <= 0 or n > 64 * 1024:
+        if n <= 0 or n > max_bytes:
             raise ApiError(400, "BAD_BODY", "请求体为空或过大")
         try:
             data = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
@@ -2561,7 +2608,11 @@ class Handler(BaseHTTPRequestHandler):
                     out = {"ok": True, **plans_payload(_load_state())}
                 return self._json(200, out)
 
-            data = self._body()
+            # data-push 要收整包资料（上限 USERDATA_MAX_BYTES，默认 4MB），
+            # 而默认 body 上限只有 64KB ⇒ 老代码在 cookie 多的账号上会报 BAD_BODY。
+            # 2026-10-17 修正：只对 data-push 放宽，其它动作维持 64KB。
+            data = self._body(USERDATA_MAX_BYTES * 2 + 128 * 1024
+                              if action == "data-push" else 64 * 1024)
 
             # --- 管理员接口（不做 IP 限流，走 token）---
             if action in ("gen", "revoke", "grant", "users",
@@ -2823,14 +2874,19 @@ class Handler(BaseHTTPRequestHandler):
                                            resource=str(data.get("resource") or ""),
                                            ip=ip)
                     _save_state(st)
-                elif action == "data-pull":
-                    # 2026-10-16 用户信息类数据云备份：取回本人云端资料包。
-                    # 只读，不写 license_data.json（资料另存 userdata/ 独立文件）。
-                    out = userdata_pull_impl(st, str(data.get("token") or ""),
-                                             now, SECRET)
-                elif action == "data-push":
-                    out = userdata_push_impl(st, str(data.get("token") or ""),
-                                             data.get("payload"), now, SECRET)
+                elif action in ("data-pull", "data-push", "data-meta"):
+                    # 2026-10-16 用户信息类数据云备份；2026-10-17 加 scope / data-meta。
+                    # 资料另存 userdata/ 独立文件，不写 license_data.json。
+                    # scope："" = 桌面 App， "web" = 网页版（同一账号下分文件，互不覆盖）。
+                    _sc = norm_scope(data.get("scope"))
+                    _tok = str(data.get("token") or "")
+                    if action == "data-pull":
+                        out = userdata_pull_impl(st, _tok, now, SECRET, _sc)
+                    elif action == "data-push":
+                        out = userdata_push_impl(st, _tok, data.get("payload"),
+                                                 now, SECRET, _sc)
+                    else:
+                        out = userdata_meta_impl(st, _tok, now, SECRET, _sc)
                 else:
                     return self._json(404, {"ok": False, "error": "unknown action"})
             return self._json(200, out)

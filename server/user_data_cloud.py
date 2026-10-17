@@ -464,9 +464,18 @@ def _autosync_once() -> None:
 
 
 # ── 对外：同步 ─────────────────────────────────────────────────────────────── #
-def status() -> dict[str, Any]:
+def status(token: Optional[str] = None, base_url: Optional[str] = None
+           ) -> dict[str, Any]:
+    """本机状态；给了 token 时附带**云端实际**备份摘要（`cloud`）。
+
+    为什么要有 `cloud`：会员中心那行「已备份 N 份设置 / M 个平台登录态」原先取的是
+    本机计数 ⇒ 云端一条 Cookie 都没有时也照样显示「已备份 7 个平台登录态」
+    （2026-10-17 修）。`cloud` 直接来自授权中心的摘要接口，不含任何内容/密文。
+    取不到时（未登录 / 断网 / 授权中心旧版没有该接口）`cloud` 为 None 且给出
+    `cloud_error`，界面据此显示「云端状态未知」，而不是拿本机数字冒充。
+    """
     m = _marker_load()
-    return {
+    st: dict[str, Any] = {
         "available": crypto_available(),
         "last_push": float(m.get("last_push") or 0),
         "last_pull": float(m.get("last_pull") or 0),
@@ -474,7 +483,19 @@ def status() -> dict[str, Any]:
         "cookies_local": len(collect_cookies()),
         "settings_local": sorted(collect_plain().keys()),
         "key_cached": load_cached_key() is not None,
+        "cloud": None,
+        "cloud_error": "",
     }
+    if token:
+        try:
+            got = license_client.userdata_meta_remote(token, base_url=base_url)
+            if isinstance(got, dict) and got.get("ok"):
+                st["cloud"] = got.get("meta")
+            else:
+                st["cloud_error"] = str((got or {}).get("error") or "云端摘要获取失败")
+        except Exception as e:            # 联网失败只影响这一行显示，不影响本机状态
+            st["cloud_error"] = f"云端摘要获取失败: {e}"
+    return st
 
 
 def _signature(parts: dict[str, Any], cookies_plain: dict[str, Any]) -> dict[str, Any]:

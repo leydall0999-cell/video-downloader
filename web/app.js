@@ -18086,21 +18086,52 @@ el.dwVidPlayer.hidden = true;
     let st = null;
     try { st = await request('/api/userdata/status'); } catch (_) { row.hidden = true; return; }
     if (!st || !st.ok) { row.hidden = true; return; }
-    const parts = (st.settings_local || []).length;
-    const cks = Number(st.cookies_local || 0);
-    const when = Number(st.last_push || 0) || Number(st.last_pull || 0) || 0;
     row.hidden = false;
+    // 🔴 2026-10-17 修：N / M 一律取**云端实际**备份量（st.cloud ← 授权中心摘要，
+    //    见 /api/userdata/status），不再拿 st.settings_local / st.cookies_local
+    //    冒充「已备份」—— 否则云端一条 Cookie 都没有时也会显示「已备份 7 个平台登录态」。
+    const cloud = st.cloud || null;
+    const ckCloud = (cloud && cloud.cookies) || null;
+    const nSet = cloud ? Number((cloud.settings || {}).count || 0) : 0;
+    const nCk = ckCloud ? Number(ckCloud.count || 0) : 0;
+    const ckLocal = Number(st.cookies_local || 0);
+    const whenLocal = Number(st.last_push || 0) || Number(st.last_pull || 0) || 0;
+    const whenCloud = cloud ? Number(cloud.updated_at || 0) : 0;
+
     const txt = $('cloudDataText');
-    if (txt) txt.textContent = '云端资料 · 已备份 ' + parts + ' 份设置 / ' + cks + ' 个平台登录态';
+    if (txt) {
+      txt.textContent = !st.logged_in ? '云端资料 · 未登录'
+        : (st.cloud_error && !cloud) ? '云端资料 · 云端状态暂时不可取'
+          : cloud ? ('云端资料 · 已备份 ' + nSet + ' 份设置 / ' + nCk + ' 个平台登录态')
+            : '云端资料 · 云端暂无备份';
+    }
     const w = $('cloudDataWhen');
-    if (w) w.textContent = when ? ('最后同步 ' + _fmtAgo(when)) : '尚未同步';
+    if (w) {
+      w.textContent = (st.cloud_error && !cloud) ? ''
+        : whenCloud ? ('云端更新于 ' + _fmtAgo(whenCloud))
+          : whenLocal ? ('本机最后同步 ' + _fmtAgo(whenLocal))
+            : '尚未同步';
+    }
     const hint = $('cloudDataHint');
     if (hint) {
       hint.hidden = false;
-      hint.textContent = (cks > 0 && !st.key_cached)
-        ? '⚠️ 本机缺少登录态解密密钥：在这台重新登录一次账号即可解锁云端登录态。'
-        : '设置与偏好、平台登录态随账号走 —— 换台电脑登录会自动落回来；'
+      let h;
+      if (!st.available && ckLocal > 0) {
+        h = '本机加密组件不可用，平台登录态暂不上云（设置与偏好仍会同步）。';
+      } else if (ckCloud && !st.key_cached) {
+        // 云端**已经有**密文、本机没有钥匙 ⇒ 这才是「解锁」
+        h = '⚠️ 云端已备份 ' + nCk + ' 个平台登录态，但本机还没有解密密钥：'
+          + '在这台重新登录一次账号即可解锁（密钥由登录密码在本机派生，云端只存密文）。';
+      } else if (!ckCloud && ckLocal > 0) {
+        // 云端**还没有**密文、本机有登录态 ⇒ 这是「首次上传」，不是解锁
+        h = '本机 ' + ckLocal + ' 个平台登录态还没备份到云端：在这台重新登录一次账号即可上传'
+          + '（登录密码只在本机用于加密，云端只存密文，我们读不出内容）。';
+      } else {
+        h = '设置与偏好、平台登录态随账号走 —— 换台电脑登录会自动落回来；'
           + '下载成片与解说成片属本机内容，不上云。';
+      }
+      if (st.cloud_error) h = '（云端状态暂时取不到：' + st.cloud_error + '）' + h;
+      hint.textContent = h;
     }
   }
   async function cloudSyncData() {

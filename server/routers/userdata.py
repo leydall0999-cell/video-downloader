@@ -34,9 +34,15 @@ def _cloud_token(request: Request) -> str:
 
 @router.get("/api/userdata/status")
 def userdata_status(request: Request) -> dict[str, Any]:
-    """本机同步状态（只读本机，不联网）。"""
-    st = udc.status()
-    return {"ok": True, "logged_in": bool(_cloud_token(request)), **st}
+    """同步状态：本机状态 + （已登录时）**云端实际**备份摘要。
+
+    注意本接口现在**会联网**（打授权中心取摘要，见 license_client.userdata_meta_remote），
+    因为会员中心那行必须显示云端真备份量。取不到时 `cloud=null` + `cloud_error`，
+    界面退化为「云端状态未知」，绝不拿本机计数冒充（2026-10-17 修）。
+    """
+    token = _cloud_token(request)
+    st = udc.status(token)
+    return {"ok": True, "logged_in": bool(token), **st}
 
 
 @router.post("/api/userdata/sync")

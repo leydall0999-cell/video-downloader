@@ -276,3 +276,146 @@ def test_gen_and_revoke_admin():
     out = license_server.revoke_impl(st, codes[0], NOW)
     assert out["status"] == "revoked"
     assert license_server.verify_code(codes[1], SECRET) == "DLY"
+
+
+# ── 用户信息类数据云备份：scope 分文件 / data-meta 摘要 / 体量与体积守卫 ────────── #
+# 2026-10-17：授权中心为「同一账号按端分文件」加 scope、为会员中心加只读摘要
+# data-meta、并把 data-push 的请求体上限从 64KB 放宽。以下用例锁住这些语义，
+# 防止「看着成功、实则串写到桌面端那份」这类最难查的错悄悄回来。
+
+
+@pytest.fixture()
+def ud_env(tmp_path, monkeypatch):
+    """把授权中心的数据目录指到临时目录，避免污染真实 userdata/。"""
+    monkeypatch.setattr(license_server, "DATA_PATH", tmp_path / "license_data.json")
+    return tmp_path
+
+
+def _ud_payload(settings=None, cookies=None, device="Mac-A", updated_at=NOW):
+    parts = {}
+    if settings is not None:
+        parts["settings"] = settings
+    if cookies is not None:
+        parts["cookies"] = cookies
+    return {"version": 1, "updated_at": updated_at, "device": device, "parts": parts}
+
+
+def test_norm_scope_defaults_and_rejects_bad():
+    assert license_server.norm_scope(None) == ""
+    assert license_server.norm_scope("") == ""
+    assert license_server.norm_scope("   ") == ""
+    assert license_server.norm_scope("default") == ""
+    assert license_server.norm_scope("DEFAULT") == ""      # 大小写不敏感
+    assert license_server.norm_scope("web") == "web"
+    assert license_server.norm_scope(" Web ") == "web"     # 去空白
+    for bad in ("web-1", "a" * 17, "a b", "中文", "we.b", "web/2"):
+        with pytest.raises(license_server.ApiError) as e:
+            license_server.norm_scope(bad)
+        # 非法 scope 必须**报错**，不能静默回落默认区 —— 否则客户端拼错会串写到桌面端那份
+        assert e.value.code == "BAD_SCOPE"
+
+
+def test_userdata_path_scope_suffix(ud_env):
+    d = license_server._userdata_path("u@x.com")
+    w = license_server._userdata_path("u@x.com", "web")
+    assert d.name.endswith(".json") and not d.name.endswith(".web.json")
+    assert w.name.endswith(".web.json")
+    assert d != w          # 同账号两端 = 两个文件（「互不覆盖」的物理前提）
+
+
+def test_scope_isolation_push_pull_meta(ud_env):
+    """核心回归：同一账号，桌面端与网页版各写各的文件，谁也看不见谁。"""
+    st = {}
+    tok = _register(st)["token"]
+
+    license_server.userdata_push_impl(
+        st, tok, _ud_payload(settings={"theme.json": {"dark": True}}), NOW, SECRET)
+    license_server.userdata_push_impl(
+        st, tok, _ud_payload(settings={"a.json": 1, "b.json": 2}), NOW, SECRET, "web")
+
+    desk = license_server.userdata_pull_impl(st, tok, NOW, SECRET)
+    web = license_server.userdata_pull_impl(st, tok, NOW, SECRET, "web")
+    assert sorted(desk["payload"]["parts"]["settings"]) == ["theme.json"]
+    assert sorted(web["payload"]["parts"]["settings"]) == ["a.json", "b.json"]
+
+    assert license_server.userdata_meta_impl(
+        st, tok, NOW, SECRET)["meta"]["settings"]["count"] == 1
+    assert license_server.userdata_meta_impl(
+        st, tok, NOW, SECRET, "web")["meta"]["settings"]["count"] == 2
+
+
+def test_data_meta_counts_without_leaking_ciphertext(ud_env):
+    """会员中心那行取的是本接口：必须给出云端**实际**条数，且绝不下发密文。"""
+    st = {}
+    tok = _register(st)["token"]
+    cipher = "SUPER-SECRET-CIPHERTEXT-0123456789ABCDEF"
+    license_server.userdata_push_impl(st, tok, _ud_payload(
+        settings={"pref.json": {}, "layout.json": {}},
+        cookies={"ct": cipher,
+                 "meta": {"count": 7, "platforms": ["bilibili", "douyin"],
+                          "updated_at": NOW}}), NOW, SECRET)
+
+    # 正向对照：整包（data-pull）里确实有密文 …
+    full = license_server.userdata_pull_impl(st, tok, NOW, SECRET)["payload"]
+    assert full["parts"]["cookies"]["ct"] == cipher
+
+    # … 而摘要（data-meta）里绝不能出现密文，只给条数/平台/是否加密
+    meta = license_server.userdata_meta_impl(st, tok, NOW, SECRET)["meta"]
+    assert meta["settings"]["count"] == 2
+    assert meta["settings"]["files"] == ["layout.json", "pref.json"]
+    assert meta["cookies"]["count"] == 7
+    assert sorted(meta["cookies"]["platforms"]) == ["bilibili", "douyin"]
+    assert meta["cookies"]["encrypted"] is True
+    assert "ct" not in meta["cookies"]
+    assert cipher not in repr(meta)
+
+
+def test_other_account_token_cannot_read(ud_env):
+    """账号隔离：B 的 token 取不到 A 的资料（默认区与 web 区都不行）。"""
+    st = {}
+    tok_a = _register(st)["token"]
+    license_server.userdata_push_impl(
+        st, tok_a, _ud_payload(settings={"a.json": 1}), NOW, SECRET)
+    license_server.userdata_push_impl(
+        st, tok_a, _ud_payload(settings={"w.json": 1}), NOW, SECRET, "web")
+    tok_b = _register(st, email="b@x.com")["token"]
+
+    got = license_server.userdata_pull_impl(st, tok_b, NOW, SECRET)
+    assert got["payload"] is None and got["meta"] is None
+    assert license_server.userdata_meta_impl(st, tok_b, NOW, SECRET)["meta"] is None
+    assert license_server.userdata_meta_impl(
+        st, tok_b, NOW, SECRET, "web")["meta"] is None
+
+
+def test_data_meta_bad_token_rejected(ud_env):
+    st = {}
+    _register(st)
+    for bad in ("", "garbage", "not.a.token"):
+        with pytest.raises(license_server.ApiError) as e:
+            license_server.userdata_meta_impl(st, bad, NOW, SECRET)
+        assert e.value.code == "BAD_TOKEN"
+
+
+def test_userdata_clean_rejects_bad_and_oversize(ud_env, monkeypatch):
+    with pytest.raises(license_server.ApiError) as e1:
+        license_server._userdata_clean({"parts": {}})          # parts 空必拒
+    assert e1.value.code == "BAD_PAYLOAD"
+    with pytest.raises(license_server.ApiError) as e2:
+        license_server._userdata_clean("not-a-dict")
+    assert e2.value.code == "BAD_PAYLOAD"
+    monkeypatch.setattr(license_server, "USERDATA_MAX_BYTES", 200)
+    with pytest.raises(license_server.ApiError) as e3:
+        license_server._userdata_clean(_ud_payload(settings={"big": "x" * 500}))
+    assert e3.value.code == "PAYLOAD_TOO_LARGE"
+
+
+def test_data_push_body_limit_relaxed():
+    """回归锁：data-push 的请求体上限必须放宽到 USERDATA_MAX_BYTES 量级。
+
+    老代码统一 64KB ⇒ cookie 多的账号一上传就 BAD_BODY（资料包上限 4MB）。
+    这里做源码级守卫，防止有人把放宽改回去。
+    """
+    src = (_here.parent / "deploy" / "license_server.py").read_text(encoding="utf-8")
+    assert "USERDATA_MAX_BYTES * 2 + 128 * 1024" in src
+    assert 'action == "data-push"' in src
+    assert 'elif action in ("data-pull", "data-push", "data-meta")' in src
