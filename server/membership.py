@@ -352,7 +352,8 @@ def cloud_plan_overrides(force: bool = False) -> dict[str, Any] | None:
     try:
         import urllib.request as _rq
         req = _rq.Request(url, data=b"{}", method="POST",
-                          headers={"Content-Type": "application/json"})
+                          headers={"Content-Type": "application/json",
+                                   "User-Agent": "VDL-Web/1.0"})
         with _rq.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read().decode("utf-8") or "{}")
         plans = data.get("plans") if isinstance(data, dict) else None
@@ -363,6 +364,85 @@ def cloud_plan_overrides(force: bool = False) -> dict[str, Any] | None:
         return plans
     except Exception:  # noqa: BLE001 — 网络/协议异常一律回退本机
         return None
+
+
+# ── 每日免费/会员额度云端真源（2026-10-17）──────────────────────────────────
+# 🔴 背景：后台「免费额度」分栏改的 daily_free_limits 以前**只写桌面端本机
+#    plans.json**，网页版压根没有这套概念 ⇒ 同一个账号桌面显示「下载 3/3、各工具
+#    1/1」，网页显示「下载 10/10、云端 3/3」，用户实测反馈「免费次数对不上」。
+#    这与套餐价格同一套原则：**授权中心是唯一真源**，网页版按 TTL 拉回覆盖层。
+# 独立缓存（不复用价格那份）的原因：价格路径失败时是「立即重试」，而这里被
+#    quota_state 高频调用，云端不可达必须快速失败 + 退避，否则每次请求等 6s。
+_FREEQ_CACHE: dict[str, Any] = {"ts": 0.0, "data": {}, "fail_ts": 0.0}
+_FREEQ_TTL = 15.0
+_FREEQ_FAIL_BACKOFF = 30.0
+
+
+def cloud_free_quota_overrides(force: bool = False) -> dict[str, Any]:
+    """从授权中心拉免费额度覆盖（`free_quota`）。失败/未配置返回 {}。
+
+    `VDL_PLANS_CLOUD=0` 与价格那条通道一致关闭；`VDL_CLOUD_LINK=0`（run_offline_tests.sh
+    与单个测试文件约定的「全局不连云端」开关）同样关闭，离线测试据此保持隔离、不依赖
+    真实授权中心里的覆盖值。
+    """
+    if str(os.environ.get("VDL_PLANS_CLOUD") or "1").strip().lower() in ("0", "false", "off"):
+        return {}
+    if str(os.environ.get("VDL_CLOUD_LINK") or "1").strip().lower() in ("0", "false", "off"):
+        return {}
+    url = _license_api("/api/license/plans")
+    if not url:
+        return {}
+    now = time.time()
+    if not force:
+        if (now - float(_FREEQ_CACHE.get("ts") or 0.0)) < _FREEQ_TTL:
+            return dict(_FREEQ_CACHE.get("data") or {})
+        if (now - float(_FREEQ_CACHE.get("fail_ts") or 0.0)) < _FREEQ_FAIL_BACKOFF:
+            return dict(_FREEQ_CACHE.get("data") or {})
+    try:
+        import urllib.request as _rq
+        req = _rq.Request(url, data=b"{}", method="POST",
+                          headers={"Content-Type": "application/json",
+                                   "User-Agent": "VDL-Web/1.0"})
+        with _rq.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8") or "{}")
+        fq = data.get("free_quota") if isinstance(data, dict) else None
+        _FREEQ_CACHE["data"] = fq if isinstance(fq, dict) else {}
+        _FREEQ_CACHE["ts"] = now
+        _FREEQ_CACHE["fail_ts"] = 0.0
+        return dict(_FREEQ_CACHE["data"])
+    except Exception:  # noqa: BLE001 — 云端不可达一律回默认常量
+        _FREEQ_CACHE["fail_ts"] = now
+        return {}
+
+
+def effective_daily_limits(force: bool = False) -> tuple[dict[str, int], dict[str, int]]:
+    """返回 `(会员每日配额, 免费每日配额)`，已叠加授权中心的免费额度覆盖。
+
+    与桌面端 `membership.effective_daily_limits` **同口径**（同一份云端字段、同一套
+    白名单收敛规则）：未覆盖的键落回代码常量；未知 resource 忽略；脏值忽略。
+    `mode == "off"` ⇒ 免费档全部归 0（会员档不受影响）。
+    """
+    member = dict(DAILY_QUOTA_LIMITS)
+    free = dict(FREE_DAILY_LIMITS)
+    fq = cloud_free_quota_overrides(force=force) or {}
+    if not isinstance(fq, dict):
+        fq = {}
+    valid = set(DAILY_QUOTA_LIMITS) | set(FREE_DAILY_LIMITS)
+    for src, dst in (("daily_member_limits", member), ("daily_free_limits", free)):
+        ov = fq.get(src)
+        if not isinstance(ov, dict):
+            continue
+        for k, v in ov.items():
+            key = str(k or "").strip()
+            if not key or key not in valid:
+                continue
+            try:
+                dst[key] = int(v)
+            except (TypeError, ValueError):
+                continue
+    if str((fq or {}).get("mode") or "").strip().lower() == "off":
+        free = {k: 0 for k in free}
+    return member, free
 
 
 def effective_plans() -> dict[str, dict[str, Any]]:
@@ -1509,9 +1589,13 @@ class MembershipStore:
         if resource in UNLIMITED_QUOTA:
             return {"resource": resource, "allowed": True, "unlimited": True}
         is_member = self._is_download_active()
-        limit_map = DAILY_QUOTA_LIMITS if is_member else FREE_DAILY_LIMITS
+        # 2026-10-17：限额取**生效值**（代码常量 ← 授权中心 free_quota 覆盖），
+        # 与桌面端 effective_daily_limits 同口径。云端不可达时自动回退常量，
+        # 且有 15s 缓存 + 30s 失败退避，不会把每次配额检查拖成网络等待。
+        member_limits, free_limits = effective_daily_limits()
+        limit_map = member_limits if is_member else free_limits
         limit = limit_map.get(resource)
-        if limit is None and DAILY_QUOTA_LIMITS.get(resource) is None:
+        if limit is None and member_limits.get(resource) is None:
             # 未知资源：V1 不设卡（保守默认放行，避免误伤功能）
             return {"resource": resource, "allowed": True, "unknown": True}
         if limit is None:
@@ -1522,8 +1606,8 @@ class MembershipStore:
                 "remaining": max(0, limit - used),
                 "allowed": used < limit,
                 "tier": "member" if is_member else "free",
-                "member_limit": DAILY_QUOTA_LIMITS.get(resource),
-                "free_limit": FREE_DAILY_LIMITS.get(resource, 0)}
+                "member_limit": member_limits.get(resource),
+                "free_limit": free_limits.get(resource, 0)}
 
     def use_daily(self, resource: str, n: int = 1) -> dict[str, Any]:
         """消耗下载类配额（免费档 resolve 10/日；会员档按表）。超限返回 ok=False。"""
@@ -1636,6 +1720,9 @@ def feature_usage_status(store: MembershipStore, period: str = "today") -> list[
     daily = st.get("daily_usage", {})
     period_totals = usage_summary(store, period)
     is_member = st["download_member"].get("active", False)
+    # 2026-10-17：表格里的「体验剩余」必须与闸门用同一套生效值（授权中心覆盖），
+    # 否则会出现「表格写 3 次、实际放行 10 次」这种自相矛盾。
+    member_limits, free_limits = effective_daily_limits()
     rows: list[dict[str, Any]] = []
     for d in FEATURE_USAGE_DEFS:
         key = d["key"]
@@ -1654,7 +1741,11 @@ def feature_usage_status(store: MembershipStore, period: str = "today") -> list[
                 "credit_cost": int(d.get("credit_cost", 0)),
             })
             continue
-        limit = int(d.get("member_limit", 0)) if is_member else int(d.get("free_limit", 0))
+        res = d["resource"]
+        if is_member:
+            limit = int(member_limits.get(res, d.get("member_limit", 0)))
+        else:
+            limit = int(free_limits.get(res, d.get("free_limit", 0)))
         used = int(daily.get(d["resource"], 0)) if limit >= 0 else 0
         remaining = -1 if limit < 0 else max(0, limit - used)
         bonus = int(d.get("ai_bonus", 0))
