@@ -3745,6 +3745,8 @@
         // 这份永远显得比云端新，云端备份就再也落不回来了（云端资料同步的冲突守卫用）。
         if (_prevCookie !== cookie) {
           localStorage.setItem('vdl_cookie_ts', String(Date.now() / 1000));
+          // 粘贴/更新了平台登录态 ⇒ 防抖后自动备份到云端（需已登录账号建过密钥；否则自动跳过）
+          try { udScheduleAutoSync(5000); } catch (_) {}
         }
       } catch (e) {}
     } else {
@@ -10793,6 +10795,17 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       if (btn) { btn.disabled = false; btn.textContent = label0; }
     }
     udRender();
+  }
+
+  // 粘贴 / 更新 Cookie 后的自动备份：防抖 + 免密；没登录账号或云端无密文时自动跳过（绝不报错）
+  let _udAutoTimer = null;
+  async function udAutoSync() {
+    if (udBusy) return;
+    try { await udSync(null, {}); } catch (_) { /* 自动同步失败绝不打断解析主流程 */ }
+  }
+  function udScheduleAutoSync(delayMs) {
+    if (_udAutoTimer) { try { clearTimeout(_udAutoTimer); } catch (_) {} }
+    _udAutoTimer = setTimeout(() => { _udAutoTimer = null; void udAutoSync(); }, delayMs || 5000);
   }
 
   async function udRender() {

@@ -50,7 +50,7 @@ const ENGINE_SRC = src.slice(i0, i1);
 
 // 引擎内部符号（改名时必须同步；缺失会在 new Function 调用时抛 ReferenceError 而失败）
 const EXPORTS = [
-  'udSync', 'udAfterLogin', 'udManualSync', 'udRender',
+  'udSync', 'udAfterLogin', 'udManualSync', 'udRender', 'udAutoSync', 'udScheduleAutoSync',
   'udDeriveBits', 'udEncrypt', 'udDecrypt', 'udResolveKey',
   'udCollectSettings', 'udApplySettings', 'udApplyCloud', 'udMarker', 'udMarkerSave',
 ];
@@ -144,11 +144,13 @@ function loadEngine(opts) {
     el: {},
     showToast: (m) => toasts.push(String(m)),
     pfToken: () => (o.token === undefined ? 'tok-123' : o.token),
-    setTimeout: () => 0,
+    setTimeout: (fn) => { try { fn(); } catch (_) {} return 0; },  // 测试里立即执行防抖回调
+    clearTimeout: () => {},
   };
 
   const FACTORY_SRC = 'const { localStorage, request, document, navigator, window, crypto,'
-    + ' TextEncoder, TextDecoder, btoa, atob, console, el, showToast, pfToken, setTimeout } = ctx;\n'
+    + ' TextEncoder, TextDecoder, btoa, atob, console, el, showToast, pfToken,'
+    + ' setTimeout, clearTimeout } = ctx;\n'
     + ENGINE_SRC + '\n'
     + 'return { ' + EXPORTS.join(', ') + ', __c: { ' + CONSTS.join(', ') + ' } };';
 
@@ -380,6 +382,37 @@ function loadEngine(opts) {
       && b.els.cloudDataSyncBtn.textContent === '立即同步',
       JSON.stringify({ d: b.els.cloudDataSyncBtn.disabled,
         t: b.els.cloudDataSyncBtn.textContent }));
+  });
+
+  await group('⑦ 粘贴 Cookie 后自动同步：防抖触发 + 没登录账号时安全跳过', async () => {
+    // A. 已登录账号（有本机密钥缓存）⇒ 粘贴新 Cookie 后自动备份把最新登录态上传
+    const a = loadEngine({ seed: { vdl_use: 'mp4', vdl_cookie: 'OLD-COOKIE' } });
+    await a.eng.udAfterLogin('my-pass-123456');   // 首次上传，建立本机密钥缓存（pushes=1）
+    const pushesBefore = a.srv.pushes;
+    a.ls.setItem('vdl_cookie', 'BRAND-NEW-AUTO-COOKIE');   // 模拟用户在网页版粘贴了新登录态
+    a.ls.setItem('vdl_cookie_ts', String(nowSec()));
+    a.eng.udScheduleAutoSync(0);                  // 防抖回调立即执行（测试 setTimeout 即调，但内部是异步）
+    // 等防抖回调里的异步同步跑完（udAutoSync 内含 await 网络，需 flush 微任务）
+    await new Promise((resolve) => {
+      let n = 0;
+      const tick = () => { if (n++ > 100) return resolve(); globalThis.setTimeout(tick, 0); };
+      tick();
+    });
+    check('粘贴新 Cookie ⇒ 自动同步触发了一次上传', a.srv.pushes > pushesBefore,
+      'pushes ' + pushesBefore + '→' + a.srv.pushes);
+    const last = a.srv.lastBody && a.srv.lastBody.payload && a.srv.lastBody.payload.parts;
+    check('自动上传的 Cookie 是密文（绝不明文出网）',
+      !!last && !!last.cookies && last.cookies.enc === 'aesgcm256' && !!last.cookies.ct);
+    check('🔴 自动上传体任何位置都不含 Cookie 明文',
+      !(JSON.stringify(a.srv.lastBody)).includes('BRAND-NEW-AUTO-COOKIE'));
+
+    // B. 没登录账号（本机无密钥缓存、云端无密文）⇒ 自动同步安全跳过，绝不报错/绝不上传明文
+    const b = loadEngine({ seed: { vdl_cookie: 'LOCAL-ONLY-BUT-NO-KEY' } });
+    let threw = false;
+    try { await b.eng.udAutoSync(); } catch (e) { threw = true; }
+    check('没登录账号时自动同步不抛错（静默跳过）', threw === false);
+    check('没登录账号 ⇒ 不会把明文 Cookie 传出去（无密钥则不上传 Cookie）',
+      !(JSON.stringify(b.srv.blob || {})).includes('LOCAL-ONLY-BUT-NO-KEY'));
   });
 
   console.log('\n=========================================');
