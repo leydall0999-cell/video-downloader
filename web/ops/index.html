@@ -81,6 +81,17 @@
     <table><tbody id="wsRefsBody"></tbody></table>
     <small class="note">数据来源：服务端 web_stats.json（前端埋点）。与左侧 nginx 口径互补——这里只统计真实页面访问与站内转化，且<b>不落 IP 明文</b>；UV 为按天独立去重之和，口径＝人次。</small>
   </section>
+  <section class="panel">
+    <h2><span class="dot"></span>解析需求榜（哪些站用户要但下不了）</h2>
+    <div class="stats" id="rdStats"><div class="empty">输入密钥后加载</div></div>
+    <div class="recent">
+      <table>
+        <thead><tr><th>站点</th><th>需求天数</th><th>记录数</th><th>分类</th><th>最近一次</th><th>样例链接</th></tr></thead>
+        <tbody id="rdBody"></tbody>
+      </table>
+    </div>
+    <small class="note">数据来源：解析失败自动登记（白名单空白站点 + 未知域名，按「站点×天」计数，重试不重复计）。用途：每月挑 Top 写成专用提取器。</small>
+  </section>
 </div>
 <div id="toast"></div>
 <script>
@@ -104,6 +115,7 @@ async function load(){
     renderVisits(v);
     renderEvents(e);
     loadWebStats(key);   // 独立加载：失败只影响该面板，不牵连上面两块
+    loadResolveDemand(key);   // 解析需求榜：同样独立，失败不牵连
     toast('已刷新');
   } catch(err){
     toast('加载失败：' + err.message + '（密钥错误？）', true);
@@ -154,6 +166,28 @@ async function loadWebStats(key){
     $('wsStats').innerHTML = `<div class="err">加载失败：${esc(err.message)}（该接口需运维密钥或超管身份）</div>`;
     $('wsDaysBody').innerHTML = '<tr><td colspan="7" class="empty">无</td></tr>';
     $('wsRefsBody').innerHTML = '<tr><td colspan="2" class="empty">无</td></tr>';
+  }
+}
+// 解析需求榜：解析失败自动登记的站点热度（按「站点×天」计数，重试不重复计）
+async function loadResolveDemand(key){
+  try {
+    const r = await fetch('/api/admin/resolve-demand?days=30', {headers:{'X-Admin-Key':key}});
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const rows = d.demand || [];
+    $('rdStats').innerHTML =
+      `<div class="stat"><b>${d.total_sites||0}</b><span>候选站点</span></div>`+
+      (rows[0] ? `<div class="stat"><b>${esc(rows[0].host)}</b><span>需求最高（${rows[0].days_count} 天）</span></div>` : '');
+    const catName = (c) => (c==='pending_extractor' ? '已收录缺提取器' : c==='unsupported_platform' ? '未收录新站' : esc(c||'-'));
+    $('rdBody').innerHTML = rows.slice(0,30).map((x)=>{
+      const cats = Object.entries(x.categories||{}).map(([c,n])=>`${catName(c)}×${n}`).join('，') || '-';
+      const last = x.last_ts ? new Date(x.last_ts*1000).toLocaleDateString() : '-';
+      return `<tr><td class="path">${esc(x.host)}</td><td><b>${x.days_count}</b></td><td>${x.total}</td>`+
+        `<td>${cats}</td><td>${last}</td><td class="path" title="${esc(x.last_url||'')}">${esc((x.last_url||'-').slice(0,60))}</td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="empty">暂无需求登记（出现解析失败后自动累计）</td></tr>';
+  } catch(err){
+    $('rdStats').innerHTML = `<div class="err">加载失败：${esc(err.message)}</div>`;
+    $('rdBody').innerHTML = '<tr><td colspan="6" class="empty">无</td></tr>';
   }
 }
 $('load').onclick = load;

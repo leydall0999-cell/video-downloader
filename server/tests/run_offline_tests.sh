@@ -96,6 +96,7 @@ run_one test_upload_body_limit.py
 run_one test_reconvert_source_reuse.py      # 免重传重转：finish 留源 2h / reconvert 复用 / 设备隔离 / 410 回退 / TTL 清理（2026-09-29）
 run_one test_feature_auth_gate.py           # 功能级登录门禁（服务端）：18 个执行类端点未登录 403+引导登录、带 token 放行（2026-09-29）
 run_one test_cloud_quota.py                # 云端算力账号级配额：免费 3 次/日（转码/拼接/去水印/字幕），gate/count/relay/fail-open（2026-09-29）
+run_one test_cloud_daily_quota_unified.py   # 跨端每日免费额度统一：网页版采纳云端 daily_free_limits + 离线开关切断云端（2026-10-17 用户定档「以后台为准」）
 run_one test_cloud_link.py
 run_one test_media_proxy_range.py
 run_one test_direct_url_hls.py
@@ -122,6 +123,8 @@ run_node test_notice_modal.mjs             # 下单失败/活动限购改用弹�
 run_node test_cookie_contribute_hidden.mjs # 「贡献 Cookie 到公共池」勾选框隐藏：只 display:none 不删元素/仍默认勾选/不留悬空指引（2026-10-09 用户反馈）
 run_node test_placeholder_contrast.mjs     # 输入框 placeholder 灰度统一：全局兜底须与 #urlInput 基准 #a2acbd 同值，防个别框吃浏览器默认深灰 #757575（2026-10-09 用户反馈）
 run_one test_member_plans_source.py        # 1/3/7 天档 + 套餐价格单一真源：超管改价/改天数在展示/下单/发放三处同步（2026-09-30）
+run_one test_resolve_demand.py             # 解析需求登记（Downie 机制本土化）：落库字段/同 host 60s 节流/「站点×天」聚合口径/坏行跳过/2MB 截断（2026-10-17）
+run_one test_resolve_demand_merge.py       # 需求榜跨节点合并棘轮：hmac 常量时间/内部请求防递归/CF UA/_json 别名/合并口径/peer_ok 明示（2026-10-17）
 run_one test_pay_gateway_web.py            # 网页版支付真通道：后端带云端令牌转发 VPS 支付服务 / 无令牌必拒 / PAID 拉权益 / 离线回落 mock / 前端按通道切文案（2026-10-09）
 run_one test_purchase_history_sync.py       # 购买记录落户：apply_cloud_authoritative 幂等并入云端 purchases（按 id 去重） + 显示端 1/3/7 天档 + 到期精确到分 + 来源映射（cloud/ui_test/admin_direct）（2026-10-09）
 run_one test_flash_phase.py                # 秒杀窗口三态：窗口过了必须自动收起「限时秒杀」角标与「秒杀至…」（2026-10-03）

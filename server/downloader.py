@@ -1948,14 +1948,28 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
             for p in SUPPORTED_PLATFORMS
             for d in p.domains
         ):
+            # 需求登记（2026-10-17）：白名单内空白站点 = 明确的开发需求信号。
+            # Downie 护城河是「用户报一个写一个」的机制，这是它的第一环。
+            try:
+                import resolve_demand
+                resolve_demand.record_demand(host, ctx.get("url", ""), "pending_extractor")
+            except Exception:
+                pass
             return ResolveError(
                 f"该平台已收录（{host}），但暂未实现该站的解析器",
                 "yt-dlp 未提供该网站的解析器，VDL 正在为它开发专用提取器。\n\n"
                 "当前可尝试：\n"
                 "① 若页面里有 m3u8 / mp4 直链（右键查看源代码搜索），直接粘贴直链可下载；\n"
-                "② 等后续版本支持（常用站可反馈优先开发）。",
+                "② 等后续版本支持（该站需求已自动记录，支持热度会影响开发顺序）。",
                 category="pending_extractor",
             )
+        # 需求登记（2026-10-17）：未知域名且 yt-dlp 也不行 = 新站点候选
+        # （nmwchxx 就是从这类信号里长出来的）。旁路统计，失败静默。
+        try:
+            import resolve_demand
+            resolve_demand.record_demand(host, ctx.get("url", ""), "unsupported_platform")
+        except Exception:
+            pass
         return ResolveError(
             f"该链接暂不在 VDL 支持的 {len(SUPPORTED_PLATFORMS)} 个平台列表中",
             f"yt-dlp 也未提供 {host or '该域名'} 的解析器（可能是第三方视频聚合/解析站）。\n\n"
@@ -1963,7 +1977,8 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
             "① 在该网站播放页面右键 → 查看页面源代码，搜索 `m3u8` / `mp4` / `<video` / `<iframe src=`，"
             "把找到的直链 URL 粘贴到 VDL（m3u8 / mp4 直链可被 yt-dlp 直接下载）。\n"
             "② 跳转到原视频平台（YouTube / B站 / 抖音等）后再粘贴。\n"
-            "③ 如果是您常用的网站，告诉我该网站任意一个播放页，我可以为它写个 extractor 加进 VDL。",
+            "③ 如果是您常用的网站，告诉我该网站任意一个播放页，我可以为它写个 extractor 加进 VDL。\n\n"
+            "该站需求已自动记录，常用站会优先开发。",
             category="unsupported_platform",
         )
 

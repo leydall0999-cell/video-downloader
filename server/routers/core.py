@@ -962,6 +962,79 @@ def client_error(payload: dict, request: app.Request):
     return {"ok": True}
 
 
+# ── 解析需求榜（2026-10-17，Downie 机制本土化第一环）─────────────────────────
+# 解析失败（白名单空白站点 / 未知域名）自动落库后的聚合视图：按「站点×天」计数，
+# 重试免疫。用途：每月挑 Top 站点写成专用提取器——把 Downie「用户报一个写一个」
+# 的十年机制，变成我们可执行的开发排期输入。
+#
+# 🔴 跨节点合并：未知站解析失败**默认落在 HK**（非国内域名一律转发对端处理，
+#    见 app._peer_overseas_fallback），只读本机日志榜单近乎空白。故本机管理员
+#    视图额外向对端拉一份合并；对端不可达只出本地（peer_ok=False 明示）。
+#    防递归护栏：**带内部令牌的请求不触发合并」**——ECS→HK 的内部调用到此为止，
+#    HK 不会再回头拉 ECS（否则两边互相拉到底）。
+def _internal_token_ok(request) -> bool:
+    """节点间受权：VDL_COOKIE_SYNC_TOKEN（cn/hk 两端同值）经 X-Internal-Token 传入。"""
+    tok = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()
+    if not tok:
+        return False
+    got = (request.headers.get("X-Internal-Token") or "").strip() if request is not None else ""
+    return bool(got) and hmac.compare_digest(got, tok)
+
+
+def _merge_peer_demand(local_rows: list, days: int) -> tuple[bool, list]:
+    """向对端拉需求榜并合并（site-days 跨节点可加：同一请求只会落一个节点，
+    不会因双记虚高；对端不可达/未配 → 原样返回本地）。"""
+    peer = (os.environ.get("VDL_PEER_ENDPOINT") or "").strip().rstrip("/")
+    tok = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()
+    if not peer or not tok:
+        return False, local_rows
+    try:
+        import urllib.request as _rq
+        req = _rq.Request(
+            f"{peer}/api/admin/resolve-demand?days={days}",
+            # 🔴 必须带非默认 UA：对端挂在 CF 后，Python-urllib 默认 UA 会被 403
+            headers={"X-Internal-Token": tok, "User-Agent": "VDL-Web/1.0"},
+        )
+        with _rq.urlopen(req, timeout=8) as resp:
+            data = _json.loads(resp.read().decode("utf-8") or "{}")
+        peer_rows = data.get("demand") or []
+    except Exception:
+        return False, local_rows
+    by_host = {r["host"]: dict(r, nodes=["cn"]) for r in local_rows}
+    for r in peer_rows:
+        h = r.get("host")
+        if not h:
+            continue
+        cur = by_host.get(h)
+        if cur:
+            cur["days_count"] += int(r.get("days_count") or 0)
+            cur["total"] += int(r.get("total") or 0)
+            for c, n in (r.get("categories") or {}).items():
+                cur["categories"][c] = cur["categories"].get(c, 0) + int(n or 0)
+            if float(r.get("last_ts") or 0) >= float(cur.get("last_ts") or 0):
+                cur["last_ts"] = r.get("last_ts")
+                cur["last_url"] = r.get("last_url") or cur.get("last_url")
+            cur["nodes"] = ["cn", "hk"]
+        else:
+            by_host[h] = dict(r, nodes=["hk"])
+    out = sorted(by_host.values(), key=lambda x: (-x["days_count"], -x.get("last_ts", 0)))
+    return True, out
+
+
+@router.get('/api/admin/resolve-demand')
+def admin_resolve_demand(request: app.Request, days: int = 30):
+    is_internal = _internal_token_ok(request)
+    if not is_internal:
+        _require_admin(request)
+    import resolve_demand
+    rows = resolve_demand.demand_summary(days=days)
+    if is_internal:
+        # 内部调用（对端来拉数据）只回本地，绝不再触发合并——防递归
+        return {"ok": True, "days": days, "demand": rows, "total_sites": len(rows), "peer_ok": False}
+    peer_ok, merged = _merge_peer_demand(rows, days)
+    return {"ok": True, "days": days, "demand": merged, "total_sites": len(merged), "peer_ok": peer_ok}
+
+
 @router.get('/api/admin/events')
 def admin_events(request: app.Request, limit: int = 200, level: str = "", range: str = ""):
     """读取结构化事件日志（运维视图）。本机免密钥，远端需 X-Admin-Key。
