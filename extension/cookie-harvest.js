@@ -80,6 +80,12 @@
    * 面板就会永远停在「扫描中…」。 */
   var DEFAULT_READ_TIMEOUT_MS = 5000;
 
+  /* 自动共享的存储键与节奏（与桌面 App 的 30 分钟一致）。
+   * AUTO_KEY 缺省视为开启，只有显式 false 才停 —— 见 autoPush 的注释。 */
+  var AUTO_KEY = 'vdlCookieShare';
+  var AUTO_TS_KEY = 'vdlCookieLastPush';
+  var AUTO_MIN_GAP_MS = 30 * 60 * 1000;
+
   /* 同名 Cookie 去重：浏览器可能同时存在 path=/ 与 path=/xxx、domain 与 .domain 两条，
    * 直接全拼进请求头会出现「同名不同值」，服务端取哪条不确定。评分规则：
    * path 越短越优先（'/' 通吃），domain 越长越具体越优先。 */
@@ -240,8 +246,9 @@
 
   /**
    * 贡献到云端公共池（网页版靠它拿到登录态）。
-   * ⚠️ 语义是**共享**：进池后其他用户解析同站也可能用到这份登录态，
-   *    UI 必须先让用户显式勾选同意，这里不做任何隐式开关。
+   * ⚠️ 语义是**共享**：进池后其他用户解析同站也可能用到这份登录态。
+   *    产品策略＝默认共享（与桌面 App 每 30 分钟自动推一致）：
+   *    popup 的勾选框默认选中，取消才停；自动调度走下面的 autoPush。
    */
   function pushCloud(platform, header, cb, base) {
     var root = String(base || CLOUD_BASE).replace(/\/+$/, '');
@@ -249,6 +256,68 @@
       url: platform.url || ('https://' + platform.domain + '/'), cookie: header
     }).then(function (r) { if (cb) cb(r); }, function (e) {
       if (cb) cb({ ok: false, error: String((e && e.message) || e || 'network') });
+    });
+  }
+
+  /**
+   * 默认自动共享（产品策略，2026-10-18 定）：按 30 分钟节流，把「已登录 + 在云端
+   * 白名单内」的站推到公共池。调用方三处共用同一节流戳，不会重复推：
+   *   · background 的 vdlCookieSync alarm（每 30 分钟，浏览器挂着就一直在跑）
+   *   · background 的 onStartup / onInstalled（装完/开机立刻来一次）
+   *   · popup 展开时补推（保证用户点开面板那一刻看到的池子是新数据）
+   *
+   * 开关存 storage.local[AUTO_KEY]：**只有显式 false 才停**（undefined 视为开启），
+   * 这样老用户升级上来不会因为读不到新键就静默停止共享。
+   *
+   * cb({ok, pushed, failed, total, skipped})
+   *   skipped: 'off' 用户关了 / 'throttled' 30 分钟内推过 / 'empty' 没有可推的站
+   */
+  function autoPush(chromeApi, opts, cb) {
+    opts = opts || {};
+    var st = (chromeApi && chromeApi.storage && chromeApi.storage.local) || null;
+    if (!st || typeof st.get !== 'function') {
+      if (cb) cb({ ok: false, skipped: 'no-storage', pushed: 0 });
+      return;
+    }
+    st.get([AUTO_KEY, AUTO_TS_KEY], function (d) {
+      d = d || {};
+      if (d[AUTO_KEY] === false) {
+        if (cb) cb({ ok: true, skipped: 'off', pushed: 0 });
+        return;
+      }
+      var last = parseInt(d[AUTO_TS_KEY] || 0, 10) || 0;
+      if (!opts.force && Date.now() - last < AUTO_MIN_GAP_MS) {
+        if (cb) cb({ ok: true, skipped: 'throttled', pushed: 0 });
+        return;
+      }
+      harvest(chromeApi, function (rows) {
+        var targets = pickReady(rows, { cloud: true });
+        if (!targets.length) {
+          // 没有任何「已登录且在云端白名单」的站：不写节流戳。
+          // 写了会让用户刚登录完的 30 分钟内推不出去。
+          if (cb) cb({ ok: true, skipped: 'empty', pushed: 0, total: 0 });
+          return;
+        }
+        var okN = 0;
+        var fail = [];
+        var i = 0;
+        function step() {
+          if (i >= targets.length) {
+            var patch = {};
+            patch[AUTO_TS_KEY] = Date.now();
+            try { st.set(patch); } catch (e) { /* 存不了就退化成每次都试 */ }
+            if (cb) cb({ ok: okN > 0, pushed: okN, failed: fail.length, total: targets.length, errors: fail });
+            return;
+          }
+          var p = targets[i++];
+          pushCloud(p, p.header, function (r) {
+            if (r && r.ok) okN++;
+            else fail.push(p.id + ':' + ((r && r.error) || 'fail'));
+            step();
+          });
+        }
+        step();
+      });
     });
   }
 
@@ -278,6 +347,10 @@
     harvest: harvest,
     pickReady: pickReady,
     pushLocal: pushLocal,
-    pushCloud: pushCloud
+    pushCloud: pushCloud,
+    autoPush: autoPush,
+    AUTO_KEY: AUTO_KEY,
+    AUTO_TS_KEY: AUTO_TS_KEY,
+    AUTO_MIN_GAP_MS: AUTO_MIN_GAP_MS
   };
 });

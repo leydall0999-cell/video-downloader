@@ -570,6 +570,22 @@ else
 fi
 
 echo ""
+echo "=== extension/tests/test_cookie_autopush.js（默认自动共享：默认勾选/30 分钟节流/取消即停，node + DOM 桩） ==="
+# 产品策略＝默认自动推云端公共池（与桌面 App 每 30 分钟自动推一致）。三条要害：
+# ① popup.html 的 ckAgree 必须默认带 checked（否则「默认共享」名不副实）；
+# ② 30 分钟节流（popup 每次打开都是新实例，不节流会每次开面板都重推，撞云端每域限流）；
+# ③ 用户取消勾选后既不推、也不写「上次推送时间」（写了会白压 30 分钟，用户以为坏了）。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_cookie_autopush.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
 echo "=== extension/tests/test_page_title_lag.js（嗅探标题滞后：SPA 换页「地址先到、标题后到」必须补推，node + chrome 桩） ==="
 # 2026-10-02 用户实测「app上嗅探到的比视频慢一步，最新嗅探到的是上一个视频，
 # 想要看的当前视频的嗅探结果得打开另一个视频」。根因：SPA 换页那一刻 Chrome 只给得到

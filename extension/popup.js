@@ -788,12 +788,26 @@ function ckScan(done) {
   if (btn) { btn.disabled = true; btn.textContent = '扫描中…'; }
   ckUpdateBtns();
   VDLCookie.harvest(chrome, function (res) {
+    // 「默认共享到云端」是产品策略（与桌面 App 每 30 分钟自动推一致）：
+    // 首次扫到已登录站点就直接推一次，不需要用户再点按钮；取消勾选才不推。
+    // 30 分钟节流 —— popup 每打开都是新实例，不节流会每次开面板都重推，
+    // 撞云端每域 30 秒的限流。
+    var first = !ckScanned;
     ckItems = res || [];
     ckScanned = true;
     ckBusy = false;
     if (btn) { btn.disabled = false; btn.textContent = '重新扫描'; }
     ckRender();
     if (done) done();
+    // 勾选框是「当下这一刻」的意愿，优先于 storage：用户刚点了取消（set 还没落地）
+    // 就展开面板，也必须不推。storage 里只负责跨会话记住这个选择。
+    if (first && !($('ckAgree') && $('ckAgree').checked === false)) {
+      // 打开面板补推一次。与 background 的 alarm / startup 共用 autoPush 内部
+      // 的节流戳（storage.local），所以不会双推；用户取消勾选后 autoPush 直接跳过。
+      VDLCookie.autoPush(chrome, null, function (r) {
+        if (r && r.pushed) ckMsg('已自动共享 ' + r.pushed + ' 个平台到云端池', 'ok');
+      });
+    }
   });
 }
 
@@ -856,10 +870,27 @@ function ckPush(kind) {
     if (zone.open && !ckScanned && !ckBusy) ckScan();
   });
   if ($('ckScan')) $('ckScan').addEventListener('click', function () { ckScan(); });
+  // 勾选状态持久化到 storage.local（background 的自动推送读同一个键）。
+  // HTML 默认 checked；只有用户显式取消过才落 false —— 别把「读不到」当成关闭。
   if ($('ckAgree')) {
+    try {
+      var shareKey = VDLCookie.AUTO_KEY;
+      chrome.storage.local.get([shareKey], function (d) {
+        if (d && d[shareKey] === false) {
+          $('ckAgree').checked = false;
+          ckUpdateBtns();
+        }
+      });
+    } catch (e) { /* 读不到就按 HTML 默认（共享） */ }
     $('ckAgree').addEventListener('change', function () {
+      var on = !!$('ckAgree').checked;
+      try {
+        var patch = {};
+        patch[VDLCookie.AUTO_KEY] = on;
+        chrome.storage.local.set(patch);
+      } catch (e) { /* 存不了不影响本次会话 */ }
       ckUpdateBtns();
-      if ($('ckAgree').checked) ckMsg('', '');
+      if (on) ckMsg('', '');
     });
   }
   if ($('ckPushLocal')) {
