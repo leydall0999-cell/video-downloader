@@ -156,5 +156,21 @@ def main():
     sys.exit(0)
 
 
+def test_all():
+    """pytest 入口。
+
+    🔴 项目铁律：run_offline_tests.sh 用 `pytest` 跑用例（run_pytest_root）；
+    若文件里没有 test_ 开头的函数，pytest 会「no tests ran」并返回 5，
+    套件把它算作失败——而 `python 文件.py` 脚本模式跑又会恒绿（断言不被收集）。
+    所以这里包一层，让 pytest 真能收集并执行 main() 里的全部断言
+    （check() 抛 AssertionError，pytest 能捕获）。
+    """
+    try:
+        main()
+    except SystemExit as e:
+        # main() 成功时走 sys.exit(0)；pytest 会把裸 SystemExit 判成失败，这里吃掉。
+        assert e.code in (0, None), f"main() 以 {e.code} 退出"
+
+
 if __name__ == "__main__":
     main()

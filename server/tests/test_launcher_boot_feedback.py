@@ -116,3 +116,15 @@ if FAILED:
     for f in FAILED:
         print("  - " + f)
     sys.exit(1)
+
+
+def test_all():
+    """pytest 入口。
+
+    🔴 本文件主体是**模块级脚本**（断言在 import 时就跑完了，check() 只收集不抛，
+    结尾才 sys.exit(1)）。run_offline_tests.sh 用 pytest 跑用例：文件里没有 test_
+    开头的函数时 pytest 会「no tests ran」并返回 5，照样被套件判失败。
+    所以这里补一个汇总断言，把已经跑完的 FAILED 暴露给 pytest
+    （已验证：人为造一个失败项时本用例确实会红，不是摆设）。
+    """
+    assert not FAILED, "失败项：" + "；".join(FAILED)
