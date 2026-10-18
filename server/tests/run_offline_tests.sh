@@ -259,9 +259,11 @@ run_one test_quota_refund.py
 # 旧数据迁移 / daily_auto per-resource）—— 🔴 此前**漏登记**，17 项从未进过
 # 构建自验证，等于这批财务守卫只在手动单跑时生效。
 run_one test_quota_cross_end.py
-# 以下三个此前也漏登记（写完从未进过构建自验证），单跑均通过
-run_pytest_root test_license_base.py
-run_pytest_root test_membership_device.py
+# 🔴 2026-10-19：这两行原来写在这里，但 `run_pytest_root` 到第 1099 行才定义 ⇒ 执行到
+#    这里只会打印 "command not found"，**两个用例从未真正跑过**（等于漏登记）。
+#    它们是纯 pytest 写法（无 __main__），用 run_one 当脚本跑会「零断言恒通过」，
+#    所以只能在函数定义之后用 run_pytest_root 登记 —— 见文件末尾。
+# test_license_base.py / test_membership_device.py → 见末尾 run_pytest_root 段
 run_one test_pagetool.py
 run_one test_commentary_output_naming.py
 run_one test_commentary_precheck.py
@@ -1215,6 +1217,11 @@ run_pytest_root test_cookie_browser_push.py # 登录态推送闸门 + 根域回�
 #    ④ 注入必须先验真再入池（无效拒收）、多行粘贴逐行校验防 CRLF 头注入；
 #       云端入口只暴露脱敏信息，且必须带 VDL_COOKIE_SYNC_TOKEN。
 run_pytest_root test_admin_cookies_panel.py # 后台 Cookie 池：概览/校验/注入/删除/云端代理
+
+#  补登此前「写了 run_pytest_root 但函数尚未定义」的两个用例（2026-10-19）：它们在
+#  文件前段曾被调用，实际只打了 command not found，从未进过构建自验证。
+run_pytest_root test_license_base.py # 授权中心 base url：云同步配置/环境变量/兜底优先级
+run_pytest_root test_membership_device.py # 设备绑定：激活记账/换机不锁/弱指纹不锁/吊销
 
 echo ""
 echo "========================================="
