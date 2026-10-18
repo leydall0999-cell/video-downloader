@@ -309,6 +309,21 @@ def case_normalize() -> None:
     check("行尾分号容错", ac._normalize_header("a=1; b=2;") == "a=1; b=2")
 
 
+def case_ui_wiring() -> None:
+    print("\n[7b] 前端接线：每个按钮都必须真的绑上事件")
+    # 2026-10-19 真机发现：「注入」按钮从来没绑 click（截图看不出来、接口单测也覆盖不到），
+    # 点下去毫无反应。这里用静态断言守一道：新增按钮必须同时出现在 HTML 与绑定处。
+    repo = Path(__file__).resolve().parents[2]
+    js = (repo / "web" / "app.js").read_text(encoding="utf-8")
+    html = (repo / "web" / "index.html").read_text(encoding="utf-8")
+    for bid in ("adminCkVerify", "adminCkRefresh", "adminCkInjectBtn"):
+        check(f"{bid} 有 addEventListener 绑定", f"$('{bid}').addEventListener" in js)
+        check(f"{bid} 在 HTML 里存在", f'id="{bid}"' in html)
+    # 每行的「补注入」只负责选平台 + 聚焦，真正提交仍走上面那个按钮
+    check("平台块有 data-ck-inject 入口", "data-ck-inject=" in js)
+    check("admin tab 有 Cookie 池入口", 'data-admin-view="cookies"' in html)
+
+
 def case_cloud_proxy() -> None:
     print("\n[8] 桌面端默认代理云端池（本机池是空的，不能拿它冒充网页版的池）")
     now = int(time.time())
@@ -396,6 +411,7 @@ def test_admin_cookies_panel() -> None:
     case_inject()
     case_delete()
     case_normalize()
+    case_ui_wiring()
     case_cloud_proxy()
     case_pool_admin_token()
     print("\n" + ("✅ 全部通过" if not _FAILED else "❌ 有失败：%d 项" % len(_FAILED)))

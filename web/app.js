@@ -22505,6 +22505,10 @@ el.dwVidPlayer.hidden = true;
     }
     if ($('adminCkVerify')) $('adminCkVerify').addEventListener('click', _ckVerify);
     if ($('adminCkRefresh')) $('adminCkRefresh').addEventListener('click', () => loadCookies());
+    // 🔴 2026-10-19：漏了这一行 —— 「注入」按钮从上线起就是死的（点下去什么都不发生，
+    // 连提示都没有），每行的「补注入」也就只能帮用户选好平台、焦点到输入框。
+    // 真机点按钮 + 读 #adminCkInjectMsg 才发现（截图和接口单测都看不出来）。
+    if ($('adminCkInjectBtn')) $('adminCkInjectBtn').addEventListener('click', _ckInject);
 
     // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
     let _monRange = 'day';
