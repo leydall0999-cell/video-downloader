@@ -234,10 +234,13 @@ jobs:
       # 8321 能响应就证明冻结包的后端完整可用。失败不阻断（可能是无头限制），
       # 结果如实写进 Summary。
       - name: 断言 Windows 子进程无窗口补丁生效（真机）
-        shell: bash
-        # 🔴 必须调独立脚本文件，**不要**写成 heredoc：YAML block scalar 每行都带缩进，
-        #    而 bash heredoc 的终止符必须在行首（`<<-` 只吃 tab 不吃空格）⇒ 缩进的 PY
-        #    不被识别 ⇒ 脚本读到 EOF 语法错，表现为「步骤 0 秒失败」（2026-10-18 已踩）。
+        # 🔴 两个坑（2026-10-18 连踩，都表现为「步骤 0 秒失败」）：
+        #   1. 别写成 heredoc：YAML block scalar 每行都带缩进，而 bash heredoc 的终止符
+        #      必须在**行首**（`<<-` 只吃 tab 不吃空格）⇒ 缩进的 PY 不被识别 ⇒ 读到 EOF
+        #      语法错。改为调独立脚本文件。
+        #   2. 别指定 `shell: bash`：Windows runner 的 bash 是 Git Bash，`python` 命中的
+        #      常是 Microsoft Store 别名（直接非零退出）。用默认 shell（pwsh）+ setup-python
+        #      装好的 python 才稳。
         run: python desktop/ci_assert_win_no_window.py
 
       - name: Smoke test (backend port)
