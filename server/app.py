@@ -50,6 +50,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from urllib.parse import quote, urljoin, urlparse
 
+# Windows：让本进程启动的所有子进程（aria2c / ffmpeg / deno…）不弹控制台黑窗。
+# 桌面版是 GUI 程序（无控制台），Windows 会给它启动的控制台子程序新建一个黑框窗口；
+# 必须在**任何子进程启动之前**装上，所以放在这里（import downloader 之前）。
+import win_no_window
+win_no_window.install()
+
 # 在 import downloader（间接 import yt_dlp）之前，先把本机可能已下载的新版 yt-dlp
 # 插入 sys.path 最前，实现「解析器自动更新」无需重新打包。
 import ydlp_update

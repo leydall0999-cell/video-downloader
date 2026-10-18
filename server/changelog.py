@@ -18,6 +18,15 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.75",
+        "date": "2026-10-18",
+        "items": [
+            "修复：Windows 上一开始下载就弹出好几个黑色命令行窗口（而且越来越多、关不掉）——"
+            "那是内置的 aria2c 下载器被系统分配了控制台窗口。现在所有后台程序都不再弹窗，"
+            "下载改走内置通道，速度不受影响。",
+        ],
+    },
+    {
         "version": "1.0.74",
         "date": "2026-10-18",
         "items": [

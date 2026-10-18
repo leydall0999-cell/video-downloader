@@ -1249,6 +1249,11 @@ def _clamp_concurrency(value: int) -> int:
         return CONCURRENT_FRAGMENTS
     return max(1, min(_MAX_CONCURRENT, int(value)))
 
+def _is_windows() -> bool:
+    """当前是否 Windows。抽成函数是为了让 offline 测试能注入平台而不真跑 Windows。"""
+    return os.name == "nt"
+
+
 def _aria2c_path() -> str | None:
     """返回 aria2c 可执行路径；未安装返回 None（调用方回退原生下载器）。
 
@@ -1262,13 +1267,18 @@ def _aria2c_path() -> str | None:
     if found:
         return found
     candidates = []
+    # 🔴 Windows 的可执行文件必须带 .exe（打包内置同样是 bin/aria2c.exe）。
+    # 旧版这里写死无后缀的 "aria2c"，在 Windows 上 os.path.isfile 永远 False
+    # ⇒ 即使包里带着 aria2c 也永远当「未安装」。
+    _sfx = ".exe" if _is_windows() else ""
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        candidates.append(os.path.join(meipass, "bin", "aria2c"))
+        candidates.append(os.path.join(meipass, "bin", "aria2c" + _sfx))
     exe = sys.executable
     if exe:
         # macOS .app: Contents/MacOS/VideoDownloader -> ../Resources/bin/aria2c
-        candidates.append(os.path.join(os.path.dirname(exe), "..", "Resources", "bin", "aria2c"))
+        candidates.append(os.path.join(os.path.dirname(exe), "..", "Resources", "bin",
+                                       "aria2c" + _sfx))
     for c in candidates:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             bin_dir = os.path.dirname(os.path.abspath(c))
@@ -4841,12 +4851,21 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
     if resume:
         options["continue"] = True
     # 外部下载器：aria2c（需本机已装）。B4（2026-10-02）：
-    #   - downloader_type / VDL_DOWNLOADER = "auto"（新默认）→ 有 aria2c 就用，无则静默回退原生；
+    #   - downloader_type / VDL_DOWNLOADER = "auto"（新默认）→ 有 aria2c 就用、无则静默回退原生
+    #     （**Windows 例外**：auto 一律走原生，原因见下）；
     #   - 显式 "aria2c" → 有就用，无则警告回退；显式 "native" → 强制原生。
     _a2 = _aria2c_path()
     _dl_choice = (downloader_type or VDL_DOWNLOADER).strip().lower()
     if _dl_choice == "auto":
-        use_aria2c = _a2 is not None
+        # 🔴 Windows：auto **不启用** aria2c（2026-10-18 用户实测事故）。
+        # 桌面版是 GUI 进程，Windows 会给它 fork 的控制台程序新开一个黑窗；
+        # 一个 DASH 任务会分 video/audio 多路，于是「一开下载就弹好几个黑框」，
+        # 且实测 aria2c 在这些新控制台里起不来、窗口一直挂着不退出（一直累积）。
+        # 已用 win_no_window 全局补 CREATE_NO_WINDOW 从根上压制弹窗，但 Windows 上
+        # aria2c 的稳定性还没验证过 ⇒ auto 先一律走 yt-dlp 原生下载器（带
+        # http_chunk_size 分块提速，见下方 else 分支），保住「能用」这个底线。
+        # 需要 aria2c 时可显式 VDL_DOWNLOADER=aria2c / 请求字段 downloader="aria2c"。
+        use_aria2c = _a2 is not None and not _is_windows()
     else:
         use_aria2c = _dl_choice == "aria2c"
     if use_aria2c and _a2:

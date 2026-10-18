@@ -1115,6 +1115,11 @@ run_pytest_root test_youtube_player_skip.py
 run_pytest_root test_title_propagation.py
 run_pytest_root test_upload_title_fallback.py
 run_pytest_root test_extension_package_head.py # 扩展包下载端点 HEAD 预检：HEAD 空 body 但 Content-Length=GET 真实体积（2026-10-14 接续待办 #5）
+# ↓↓↓ Windows 桌面端三连（2026-10-18 统一补登记；此前只在本机单跑、未进套件）
+run_pytest_root test_win_no_window.py # 子进程不弹黑窗：Popen 默认补 CREATE_NO_WINDOW + Windows 上 auto 不启用 aria2c（事故：一开下载连弹好几个 aria2c 黑框）
+run_pytest_root test_win_version_guard.py # Win7/8 启动即拦截并弹窗引导网页版，别装完打不开且无提示
+run_pytest_root test_launcher_boot_feedback.py # 后端起不来必须弹窗告知并指日志路径，禁止静默失败
+run_pytest_root test_win_console_stdio_guard.py # 无控制台时 sys.stdout is None ⇒ uvicorn 配置日志即崩（Windows 双击打不开的真因）
 
 echo ""
 echo "========================================="
