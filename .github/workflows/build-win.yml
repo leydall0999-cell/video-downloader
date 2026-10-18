@@ -233,6 +233,47 @@ jobs:
       # 无头 runner 上 pywebview(winforms) 可能起不来窗口，但 server_thread 独立，
       # 8321 能响应就证明冻结包的后端完整可用。失败不阻断（可能是无头限制），
       # 结果如实写进 Summary。
+      - name: 断言 Windows 子进程无窗口补丁生效（真机）
+        shell: bash
+        run: |
+          # 2026-10-18 事故：GUI 进程 fork 控制台程序（aria2c/ffmpeg/deno）时 Windows 会
+          # 新建黑框窗口，用户侧表现为「一开下载就连弹好几个黑窗」。headless runner 看不到
+          # 窗口，但可以断言补丁在真 Windows 上确实装上、且标志合法可用（非法会直接抛错）。
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          assert os.name == "nt", f"本步骤必须在 Windows runner 上跑，当前 {os.name}"
+          sys.path.insert(0, "server")
+          import win_no_window
+
+          assert win_no_window.install() is True, "Windows 上 install 必须返回 True"
+          assert getattr(subprocess.Popen, "_vdl_no_window", False) is True, "补丁标记未置位"
+
+          # 真起一个子进程：creationflags 非法会在 Windows 上直接抛错，跑通即证明可用
+          p = subprocess.Popen([sys.executable, "-c", "print(1)"],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          out, err = p.communicate(timeout=60)
+          assert p.returncode == 0, f"子进程非零退出 rc={p.returncode} err={err!r}"
+          assert out.strip() == b"1", f"子进程输出异常: {out!r}"
+
+          # 复验标志真的被注入（只测 install 返回 True 不够）
+          class _F:
+              def __init__(self, *a, **k):
+                  self.k = k
+
+          win_no_window.patch_popen(_F)
+          assert _F(["x"]).k.get("creationflags") == 0x08000000, "CREATE_NO_WINDOW 未注入"
+          assert win_no_window.patch_popen(_F) is False, "补丁必须幂等"
+
+          # 源码必须被 app.py 引用，否则根本不会进包
+          src = open("server/app.py", encoding="utf-8").read()
+          assert "win_no_window.install()" in src, "app.py 未调用 install()，补丁不会生效"
+
+          print("OK: Windows 无窗口补丁真机断言通过")
+          PY
+
       - name: Smoke test (backend port)
         id: smoke
         continue-on-error: true
