@@ -237,6 +237,14 @@ run_pytest_root test_auth_routes.py
 run_pytest_root test_dl_stats_browser.py # 下载统计的浏览器判定：顺序敏感(Edge≠chrome/iOS Firefox≠safari)+非浏览器落 unknown 而非 chromium（2026-10-14 接续待办 #7）
 # 下载页安装包按钮：跨域 302 的链接不得带 download 属性（Safari/微信「点了没反应」根因）+ 直连兜底与服务端对象名一致
 run_pytest_root test_download_page_installer_links.py
+
+# 公共 Cookie 池：按账号身份去重 + 入池验真（2026-10-18）
+#   B 站池 1905 条其实是同 1 个账号的 1905 次快照（1902 条未登录），而 get_cookie
+#   取最新一条 ⇒ 解析恒 412。守：未登录不入池 / 同账号留最新 3 条 / 剔除按会话验一次。
+run_pytest_root test_cookie_pool_identity.py
+# B 站 requests 补丁：cookie/proxy/ua 必须按每次请求刷新（冻结首次参数 ⇒ 永久 412），
+# 且无 Cookie 时用池兜底、脚本 UA 换 Chrome。
+run_pytest_root test_bilibili_patch_state.py
 # Cookie 加固：跨站读写 / 属性防护
 run_root test_cookie_hardened.py
 # 路由隔离：静态/API 边界、不得越权

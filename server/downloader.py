@@ -934,6 +934,24 @@ def _clean_header_value(value: str) -> str:
         return "".join(cleaned)
 
 
+_BILIBILI_PATCH_STATE: dict = {"cookie": "", "proxy": "", "ua": ""}
+
+_BILI_UA_FALLBACK = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+
+def _bili_patch_ua(ua: str) -> str:
+    """B 站对脚本类 UA（python-requests / curl / urllib）一律回 412。
+
+    实测同一 Cookie、同一 IP：Chrome UA 200，python-requests UA 412。
+    非浏览器 UA 一律换成 Chrome，避免请求「打得像脚本」。
+    """
+    ua = (ua or "").strip()
+    if (not ua) or ("Mozilla/" not in ua) or ("python" in ua.lower()):
+        return _BILI_UA_FALLBACK
+    return ua
+
+
 def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str = "") -> None:
     """为 BiliBiliIE 打补丁：视频页 HTML 用 requests 预下载，绕过 yt-dlp urllib 经代理 IncompleteRead。
 
@@ -944,6 +962,17 @@ def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str 
         from yt_dlp.extractor.bilibili import BiliBiliIE
     except Exception:
         return
+
+    # 🔴 2026-10-18：补丁是**全局单例**（打一次永远复用），旧实现把首次请求的
+    #    cookie/proxy/ua 冻结在闭包里 ⇒ 服务启动后第一次 B 站请求若没带 Cookie，
+    #    之后每次都是裸奔请求，B 站对无 Cookie 的 HTML 一律 412（实测直连无 Cookie
+    #    412 / 带池内 Cookie 200）。改为每次调用刷新状态，补丁体按最新值发送。
+    if cookie:
+        _BILIBILI_PATCH_STATE["cookie"] = cookie
+    if proxy:
+        _BILIBILI_PATCH_STATE["proxy"] = proxy
+    if ua:
+        _BILIBILI_PATCH_STATE["ua"] = ua
 
     attr = "_vdl_webpage_patched"
     if getattr(BiliBiliIE._download_webpage_handle, attr, False):
@@ -969,22 +998,42 @@ def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str 
                 import requests
                 from urllib.response import addinfourl
 
+                _ck = _BILIBILI_PATCH_STATE.get("cookie") or ""
+                if not _ck:
+                    # 本次请求没带 Cookie（未登录解析 / 调用方没传）→ 用公共池兜底。
+                    # B 站对无 Cookie 的 HTML 请求恒返回 412，而池里已有登录态。
+                    try:
+                        from cookie_pool import get_cookie as _pool_get
+                        _ck = _pool_get("bilibili.com") or ""
+                    except Exception:
+                        _ck = ""
+                _ua = _bili_patch_ua(_BILIBILI_PATCH_STATE.get("ua") or ua)
+                # 🔴 2026-10-18 实测：`/video/BVxxx` **不带尾斜杠**时 B 站直接回 412，
+                #    带斜杠同 Cookie 同 UA 回 200（两台机器各测 2 次，稳定复现）。
+                #    所以先补斜杠再请求，别指望 301 能救——301 响应本身就是 412。
+                _req_url = url
+                try:
+                    from urllib.parse import urlsplit, urlunsplit
+                    _sp = urlsplit(_req_url)
+                    if _sp.path and not _sp.path.endswith("/"):
+                        _req_url = urlunsplit((_sp.scheme, _sp.netloc,
+                                               _sp.path + "/", _sp.query, _sp.fragment))
+                except Exception:
+                    pass
                 headers = {
-                    "User-Agent": ua or (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    ),
+                    "User-Agent": _ua,
                     "Referer": "https://www.bilibili.com/",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
                     "Accept-Encoding": "identity",
                     "Connection": "close",
                 }
-                if cookie:
-                    headers["Cookie"] = _clean_header_value(cookie)
-                proxies = {"http": proxy, "https": proxy} if proxy else None
+                if _ck:
+                    headers["Cookie"] = _clean_header_value(_ck)
+                _px = _BILIBILI_PATCH_STATE.get("proxy") or proxy
+                proxies = {"http": _px, "https": _px} if _px else None
                 resp = requests.get(
-                    url,
+                    _req_url,
                     headers=headers,
                     proxies=proxies,
                     timeout=30,
