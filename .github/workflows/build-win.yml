@@ -235,44 +235,10 @@ jobs:
       # 结果如实写进 Summary。
       - name: 断言 Windows 子进程无窗口补丁生效（真机）
         shell: bash
-        run: |
-          # 2026-10-18 事故：GUI 进程 fork 控制台程序（aria2c/ffmpeg/deno）时 Windows 会
-          # 新建黑框窗口，用户侧表现为「一开下载就连弹好几个黑窗」。headless runner 看不到
-          # 窗口，但可以断言补丁在真 Windows 上确实装上、且标志合法可用（非法会直接抛错）。
-          python - <<'PY'
-          import os
-          import subprocess
-          import sys
-
-          assert os.name == "nt", f"本步骤必须在 Windows runner 上跑，当前 {os.name}"
-          sys.path.insert(0, "server")
-          import win_no_window
-
-          assert win_no_window.install() is True, "Windows 上 install 必须返回 True"
-          assert getattr(subprocess.Popen, "_vdl_no_window", False) is True, "补丁标记未置位"
-
-          # 真起一个子进程：creationflags 非法会在 Windows 上直接抛错，跑通即证明可用
-          p = subprocess.Popen([sys.executable, "-c", "print(1)"],
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-          out, err = p.communicate(timeout=60)
-          assert p.returncode == 0, f"子进程非零退出 rc={p.returncode} err={err!r}"
-          assert out.strip() == b"1", f"子进程输出异常: {out!r}"
-
-          # 复验标志真的被注入（只测 install 返回 True 不够）
-          class _F:
-              def __init__(self, *a, **k):
-                  self.k = k
-
-          win_no_window.patch_popen(_F)
-          assert _F(["x"]).k.get("creationflags") == 0x08000000, "CREATE_NO_WINDOW 未注入"
-          assert win_no_window.patch_popen(_F) is False, "补丁必须幂等"
-
-          # 源码必须被 app.py 引用，否则根本不会进包
-          src = open("server/app.py", encoding="utf-8").read()
-          assert "win_no_window.install()" in src, "app.py 未调用 install()，补丁不会生效"
-
-          print("OK: Windows 无窗口补丁真机断言通过")
-          PY
+        # 🔴 必须调独立脚本文件，**不要**写成 heredoc：YAML block scalar 每行都带缩进，
+        #    而 bash heredoc 的终止符必须在行首（`<<-` 只吃 tab 不吃空格）⇒ 缩进的 PY
+        #    不被识别 ⇒ 脚本读到 EOF 语法错，表现为「步骤 0 秒失败」（2026-10-18 已踩）。
+        run: python desktop/ci_assert_win_no_window.py
 
       - name: Smoke test (backend port)
         id: smoke
@@ -300,11 +266,22 @@ jobs:
           [ "$CODE" = "200" ] || exit 1
 
       - name: 打包 onedir zip（排障/手动验证用）
+        # 🔴 这是**排障件**，不是交付物（交付物是 VideoDownloader-Setup-*.exe）。
+        # 2026-10-18 踩过：本步失败 ⇒ 后面 Upload artifact 与 Release 全被 skipped，
+        # 白跑一整轮 CI 却拿不到包。排障件压不出来（目录大/超时/空间）不该阻断交付，
+        # 因此加 continue-on-error，并给 VER 兜底（version.txt 缺失时退回仓库 VERSION）。
+        continue-on-error: true
         run: |
           cd dist
-          VER="$(cat VideoDownloader/version.txt | tr -d '[:space:]')"
-          powershell -Command "Compress-Archive -Path VideoDownloader -DestinationPath VideoDownloader-onedir-${VER}.zip -Force"
-          ls -la VideoDownloader-onedir-*.zip VideoDownloader-Setup-*.exe
+          VER="$(tr -d '[:space:]' < VideoDownloader/version.txt 2>/dev/null || true)"
+          [ -z "$VER" ] && VER="$(tr -d '[:space:]' < ../VERSION 2>/dev/null || true)"
+          [ -z "$VER" ] && VER="unknown"
+          if powershell -Command "Compress-Archive -Path VideoDownloader -DestinationPath VideoDownloader-onedir-${VER}.zip -Force"; then
+            ls -la VideoDownloader-onedir-*.zip 2>/dev/null || true
+          else
+            echo "⚠️ onedir zip 打包失败（排障件，不影响安装包交付）"
+          fi
+          ls -la VideoDownloader-Setup-*.exe || true
           echo "VER=${VER}" >> "$GITHUB_ENV"
 
       - name: Summary
