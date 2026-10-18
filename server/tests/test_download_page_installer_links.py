@@ -74,7 +74,12 @@ def test_installer_links_have_no_download_attr():
 
 
 def test_installer_buttons_open_new_tab():
-    for need in ("/download/installer?p=macos", "/download/installer?p=windows"):
+    from routers import extension as ext  # noqa: E402
+    # 只校验两个「主安装包」按钮；macos-zip 是同页的备选下载（非主入口，无 _blank）
+    for plat in ("macos", "windows"):
+        if not ext._INSTALLER_ENABLED.get(plat, True):
+            continue          # 已关闭的平台不该有按钮，由下面那条反向用例管
+        need = f"/download/installer?p={plat}"
         tags = _anchors_by_href(need)
         assert len(tags) == 1, f"应恰有一个 {need} 按钮，实际 {len(tags)}"
         tag = tags[0]
@@ -87,15 +92,40 @@ def test_direct_cdn_fallback_matches_server_object():
     from routers import extension as ext  # noqa: E402  延迟导入，避免无谓依赖
 
     html = _html()
-    for plat in ("macos", "windows"):
+    enabled = [p for p in ("macos", "windows")
+               if ext._INSTALLER_ENABLED.get(p, True)]
+    for plat in enabled:
         url = ext._R2_INSTALLER_URLS[plat]
         assert url in html, (
             f"下载页缺少 {plat} 的直连兜底地址（应在页面上出现 {url}）；"
             "升版时请与 extension.py 的 _R2_INSTALLER_URLS 一起改"
         )
-    # 直连链接本身必须是可点的锚点，而不是只写在文案里
-    tags = _anchors(ext._R2_INSTALLER_URLS["windows"])
-    assert tags and 'rel="noopener"' in tags[0]
+        # 直连链接本身必须是可点的锚点，而不是只写在文案里
+        tags = _anchors(url)
+        assert tags and 'rel="noopener"' in tags[0], (
+            f"{plat} 的直连地址必须写成可点锚点（带 rel=noopener）")
+
+
+def test_disabled_platform_has_no_download_entry():
+    """已在服务端关闭的平台，页面上不得留任何可下载入口。
+
+    2026-10-18：Windows 安装包暂时不可用（用户反馈装不上），入口整条关掉。
+    只藏按钮不够——直连 CDN 地址留在页面上，用户照样能下到装不了的包。
+    恢复时把 extension.py 的 _INSTALLER_ENABLED[平台] 改回 True 即可，
+    本用例会自动转为「必须存在按钮 + 直连」的断言。
+    """
+    from routers import extension as ext  # noqa: E402
+
+    html = _html()
+    disabled = [p for p, on in ext._INSTALLER_ENABLED.items() if not on]
+    for plat in disabled:
+        assert not _anchors_by_href(f"/download/installer?p={plat}"), (
+            f"{plat} 已在服务端关闭，页面仍有下载按钮 —— 用户会下到不可用的安装包")
+        assert ext._R2_INSTALLER_URLS[plat] not in html, (
+            f"{plat} 已关闭，页面仍留着直连地址 {ext._R2_INSTALLER_URLS[plat]}")
+    if disabled:
+        assert "修复中" in html or "正在修复" in html, (
+            "入口关闭时页面必须有「修复中」说明，否则用户会以为是页面坏了")
 
 
 def test_wechat_browser_hint_present():

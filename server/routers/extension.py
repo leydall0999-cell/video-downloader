@@ -140,6 +140,17 @@ _INSTALLER_FILES: dict[str, Path] = {
                       or "/opt/vdl-update/VideoDownloader.app.zip"),
 }
 
+# 🔴 2026-10-18：Windows 安装包暂时不可用（用户反馈装上后跑不起来），先把该平台
+#    的下载入口整条关掉——页面按钮置灰、直连兜底撤掉、服务端 302 回下载页。
+#    只藏按钮不够：知道 URL 的人仍能下到装不了的包，所以服务端同源拦截。
+#    修复后把 windows 改回 True，**同时**恢复下载页按钮：下载页守卫直接读这张表，
+#    漏改任一边都会红（避免「服务端开了但页面没入口」或反过来）。
+_INSTALLER_ENABLED: dict[str, bool] = {
+    "macos": True,
+    "macos-zip": True,
+    "windows": False,
+}
+
 # R2 公共地址（自定义域 download.hanyuxz.top → 桶 vdl-download 根）。
 # 2026-10-16：?p=windows 上线（Windows 版首发，Inno Setup 安装程序）。
 # ⚠️ Windows 安装包版本号硬编码在 R2 对象名里（与 mac 两个对象同形态）：每次升版
@@ -188,6 +199,11 @@ def download_installer(p: str = "macos", request: Request = None) -> Response:
     url = _R2_INSTALLER_URLS.get(plat)
     if url is None:
         raise HTTPException(status_code=404, detail="该平台的安装包尚未提供")
+    # 平台级开关（2026-10-18）：关闭期间不下发文件，直接送回下载页——那里有
+    # 「修复中」的说明，比 404 的 JSON 对用户友好，也不会让人误以为链接坏了。
+    if not _INSTALLER_ENABLED.get(plat, True):
+        return RedirectResponse("/download/", status_code=302,
+                                headers={"Cache-Control": "no-store"})
     # 仅计 GET：HEAD 是预检，不计入下载次数（口径同扩展包）。
     try:
         import dl_stats

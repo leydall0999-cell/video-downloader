@@ -81,10 +81,16 @@
         <div class="dl-ico">🪟</div>
         <h3>Windows</h3>
         <p>Setup · 191 MB · 需 Windows 10 / 11（64 位）。</p>
-        <a class="btn btn-block btn-primary" href="/download/installer?p=windows" target="_blank" rel="noopener">下载 Windows</a>
-        <p class="dl-note" style="margin-top:.6rem">安装：双击 Setup 程序按提示完成；若 SmartScreen 提示「Windows 保护了你的电脑」，点「更多信息 → 仍要运行」即可（新发布软件常见提示）。</p>
-        <p class="dl-note" style="margin-top:.4rem">点了没反应？改用<a href="https://download.hanyuxz.top/VideoDownloader-Setup-1.0.74.exe" target="_blank" rel="noopener">直连地址下载</a>（同一个文件，不经过本站跳转）。</p>
-        <!-- ⚠️ 上面这条直连地址带版本号，升版时与 extension.py 的 _R2_INSTALLER_URLS 一起改。 -->
+        <span class="btn btn-block btn-primary" role="button" aria-disabled="true">Windows 版修复中 · 暂不可下载</span>
+        <p class="dl-note" style="margin-top:.6rem"><b>Windows 安装包正在修复，暂时关闭下载。</b>新版验证通过后会在这里恢复按钮；当前如需立即使用，请先走<a href="/">网页版</a>（功能一致，无需安装）。</p>
+        <p class="dl-note" style="margin-top:.4rem">安装：双击 Setup 程序按提示完成；若 SmartScreen 提示「Windows 保护了你的电脑」，点「更多信息 → 仍要运行」即可（新发布软件常见提示）。</p>
+        <!-- 🔴 2026-10-18：Windows 入口暂停（用户反馈装不上）。恢复步骤三处一起改：
+             ① 上面那枚 span 还原成 btn 样式的锚点：href=/download/installer?p=windows，
+                带 target=_blank 与 rel=noopener，文案「下载 Windows」
+             ② 补回直连兜底锚点（地址取 extension.py 的 _R2_INSTALLER_URLS["windows"]）
+             ③ 把 extension.py 的 _INSTALLER_ENABLED["windows"] 改回 True
+             下载页守卫读同一张开关表，漏改任一边都会红。
+             注：注释里故意不写完整锚点标签，避免守卫的 <a> 正则把注释当成真链接。 -->
         <p class="dl-note" style="margin-top:.4rem">暂不支持 Windows 7 / 8（系统过旧，微软已停止支持）：请升级到 Windows 10 / 11，或先使用<a href="/">网页版</a>。</p>
         <p class="dl-note" style="margin-top:.4rem">种子（磁力）下载即将支持；语音识别模型将在首次使用本地字幕时自动下载。</p>
       </div>
