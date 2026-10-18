@@ -318,7 +318,7 @@ def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
 # ── 套餐价格云端真源（2026-10-03）────────────────────────────────────────────
 # 授权中心（/api/license/plans）是价格唯一真源：桌面后台改价会下发云端，网页版
 # 这里按 TTL 拉取覆盖到本地默认之上。云端不可达时自动回退本机覆盖层 + 代码常量。
-_CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}}
+_CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}, "notice": {}}
 # 套餐上架/改价回源节流：原 300s（上架后网页最长 5 分钟才刷新，用户感知「延迟」）。
 # 2026-10-04 配套修复：降到 15s，与会员状态节流(AUTHORITY_MIN_INTERVAL)对齐。
 # 套餐目录是静态配置、单进程每 15s 一次 POST 完全可忽略，且云端不可达仍回退本机。
@@ -361,6 +361,9 @@ def cloud_plan_overrides(force: bool = False) -> dict[str, Any] | None:
             return None
         _CLOUD_PLANS_CACHE["ts"] = now
         _CLOUD_PLANS_CACHE["plans"] = plans
+        # 🔴 2026-10-18：会员中心公告复用同一次拉取（不额外增加往返）。
+        nt = data.get("notice") if isinstance(data, dict) else None
+        _CLOUD_PLANS_CACHE["notice"] = nt if isinstance(nt, dict) else {}
         return plans
     except Exception:  # noqa: BLE001 — 网络/协议异常一律回退本机
         return None
@@ -443,6 +446,68 @@ def effective_daily_limits(force: bool = False) -> tuple[dict[str, int], dict[st
     if str((fq or {}).get("mode") or "").strip().lower() == "off":
         free = {k: 0 for k in free}
     return member, free
+
+
+def cloud_member_notice() -> dict[str, Any]:
+    """会员中心公告（云端下发，管理员可后台编辑）。返回 {enabled, text}。
+
+    🔴 2026-10-18：与套餐共用 `/api/license/plans` 通道（同一次拉取 + 同一 TTL
+    缓存），不额外增加往返。云端不可达 / 未配置 / `VDL_PLANS_CLOUD=0` ⇒ 返回
+    空公告（各端隐藏公告栏）——绝不凭空造一条文案出来。
+    """
+    if str(os.environ.get("VDL_PLANS_CLOUD") or "1").strip().lower() in ("0", "false", "off"):
+        return {"enabled": False, "text": ""}
+    if not _license_api("/api/license/plans"):
+        return {"enabled": False, "text": ""}
+    cloud_plan_overrides()          # 触发/复用同一次拉取与缓存
+    n = _CLOUD_PLANS_CACHE.get("notice")
+    if not isinstance(n, dict):
+        return {"enabled": False, "text": ""}
+    text = str(n.get("text") or "").strip()
+    return {"enabled": bool(n.get("enabled")) and bool(text), "text": text}
+
+
+def push_member_notice_to_cloud(enabled: bool, text: str) -> dict[str, Any]:
+    """把会员中心公告下发授权中心（后台保存后调用）。返回同步状态，绝不抛出。
+
+    🔴 2026-10-18：公告必须走云端——只写本机等于「只有自己那台能看到」。
+    保存成功后清本地缓存，让下一次 plans() 立刻读回新值（否则最长等一个 TTL）。
+    """
+    url = _license_api("/api/license/member_notice_set")
+    if not url:
+        return {"ok": False, "reason": "no_license_base"}
+    try:
+        import admin_store
+        token = admin_store._license_admin_token()  # noqa: SLF001 — 复用既有令牌读取
+    except Exception:  # noqa: BLE001
+        token = ""
+    if not token:
+        return {"ok": False, "reason": "no_admin_token"}
+    try:
+        import urllib.request as _rq
+        body = json.dumps({"token": token, "enabled": bool(enabled),
+                           "text": str(text or "")[:500]}, ensure_ascii=False).encode("utf-8")
+        req = _rq.Request(url, data=body, method="POST",
+                          headers={"Content-Type": "application/json",
+                                   "User-Agent": "VDL-Web/1.0"})
+        with _rq.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8") or "{}")
+        if isinstance(data, dict) and data.get("ok"):
+            nt = data.get("notice") if isinstance(data.get("notice"), dict) else {}
+            _CLOUD_PLANS_CACHE["notice"] = nt
+            _CLOUD_PLANS_CACHE["ts"] = time.time()
+            return {"ok": True, "notice": nt}
+        return {"ok": False, "reason": str((data or {}).get("error") or "cloud_rejected")}
+    except Exception as e:  # noqa: BLE001 — 云端不可达不能拖垮后台保存
+        msg = str(e)
+        try:                            # HTTPError 的业务错误码在 body 里
+            import urllib.error as _ue
+            if isinstance(e, _ue.HTTPError):
+                parsed = json.loads(e.read().decode("utf-8", "replace") or "{}")
+                msg = str(parsed.get("error") or parsed.get("detail") or msg)[:200]
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": False, "reason": f"error: {msg}"}
 
 
 def effective_plans() -> dict[str, dict[str, Any]]:
@@ -1251,6 +1316,8 @@ class MembershipStore:
             },
             "credit_packs": cp,
             "currency": "CNY",
+            # 2026-10-18：会员中心公告（套餐卡上方一行运营文案；空则各端隐藏）
+            "notice": cloud_member_notice(),
         }
 
     # ---- 激活 ----

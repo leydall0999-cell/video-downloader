@@ -92,6 +92,20 @@
     </div>
     <small class="note">数据来源：解析失败自动登记（白名单空白站点 + 未知域名，按「站点×天」计数，重试不重复计）。用途：每月挑 Top 写成专用提取器。</small>
   </section>
+  <section class="panel">
+    <h2><span class="dot" style="background:var(--amber)"></span>会员公告（会员中心套餐卡上方那条）</h2>
+    <label style="display:flex;gap:.45rem;align-items:center;font-size:13px;margin-bottom:8px">
+      <input type="checkbox" id="noticeEnabled" checked> 启用公告
+    </label>
+    <textarea id="noticeText" rows="2" maxlength="500" placeholder="例如：下方价格为测试期间优惠价格，活动结束后恢复原价"
+      style="width:100%;padding:9px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--txt);font:inherit;font-size:13px;resize:vertical"></textarea>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+      <button id="noticeSave">保存并下发</button>
+      <button id="noticeReload" class="ghost">重新加载</button>
+      <small class="note" id="noticeMeta" style="margin:0"></small>
+    </div>
+    <small class="note">真源在授权中心：保存后所有用户（桌面端 + 网页版）的会员中心都会显示，两侧最长 15 秒刷新。清空内容 = 关闭公告栏。</small>
+  </section>
 </div>
 <div id="toast"></div>
 <script>
@@ -116,6 +130,7 @@ async function load(){
     renderEvents(e);
     loadWebStats(key);   // 独立加载：失败只影响该面板，不牵连上面两块
     loadResolveDemand(key);   // 解析需求榜：同样独立，失败不牵连
+    loadNotice(key);          // 会员公告：独立加载，失败不影响其它面板
     toast('已刷新');
   } catch(err){
     toast('加载失败：' + err.message + '（密钥错误？）', true);
@@ -190,6 +205,40 @@ async function loadResolveDemand(key){
     $('rdBody').innerHTML = '<tr><td colspan="6" class="empty">无</td></tr>';
   }
 }
+// 会员公告：写授权中心（经 worker 的管理端点）。空内容 = 关闭公告栏。
+async function loadNotice(key){
+  try {
+    const r = await fetch('/api/admin/member-notice', { headers: { 'X-Admin-Key': key } });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.detail || d.error || ('HTTP ' + r.status));
+    const n = d.notice || {};
+    $('noticeText').value = n.text || '';
+    $('noticeEnabled').checked = n.enabled !== false;
+    $('noticeMeta').textContent = n.enabled ? '当前：已启用' : '当前：未启用（会员中心不显示）';
+  } catch(e){
+    $('noticeMeta').textContent = '加载失败：' + e.message;
+  }
+}
+async function saveNotice(key){
+  const enabled = $('noticeEnabled').checked;
+  const text = ($('noticeText').value || '').trim();
+  if (enabled && !text){ toast('公告内容不能为空（不想展示请取消勾选）', true); return; }
+  $('noticeMeta').textContent = '正在下发…';
+  try {
+    const r = await fetch('/api/admin/member-notice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Key': key },
+      body: JSON.stringify({ enabled, text }),
+    });
+    const d = await r.json();
+    if (d.ok){ toast('已下发，所有用户可见'); loadNotice(key); }
+    else toast('保存失败：' + (d.error || (d.cloud && d.cloud.reason) || '未知原因'), true);
+  } catch(e){
+    toast('保存失败：' + e.message, true);
+  }
+}
+$('noticeSave').onclick = ()=> saveNotice(getKey() || $('key').value.trim());
+$('noticeReload').onclick = ()=> loadNotice(getKey() || $('key').value.trim());
 $('load').onclick = load;
 $('clear').onclick = ()=>{ setKey(''); $('key').value=''; toast('已清除本地密钥'); };
 if(getKey()){ $('key').value = getKey(); load(); }

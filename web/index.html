@@ -746,6 +746,12 @@
       <button type="button" class="mem-seg-btn" data-memtrack="ai" role="tab" aria-selected="false">AI 会员</button>
       <button type="button" class="mem-seg-btn" data-memtrack="credits" role="tab" aria-selected="false">积分包</button>
     </nav>
+    <!-- 会员公告（2026-10-18）：管理员在运维控制台「会员公告」编辑，云端下发到所有端。
+         无内容时整条 hidden —— 不留空白边框，也不占位。 -->
+    <div class="mem-notice" id="memNotice" hidden>
+      <span class="mem-notice-icon" aria-hidden="true">📢</span>
+      <span class="mem-notice-text" id="memNoticeText"></span>
+    </div>
     <div class="mem-tracks" id="memTracks"><p class="pf-plan-empty">加载中…</p></div>
     <p class="pf-plan-note" id="memNote"></p>
     <span class="convert-status" id="memStatus" aria-live="polite"></span>

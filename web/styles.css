@@ -2174,6 +2174,20 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
    栅格 minmax(240px,1fr)：880px 正文宽下正好 3 列（6 档 = 3×2，与桌面端会员中心同版式）；
    auto-fit 会折叠空轨道，所以只有 2 档的 AI 会员 / 积分包自动铺成 2 列，不留空洞。 */
 .mem-lead { color: var(--text-mute); font-size: .85rem; line-height: 1.6; margin: .1rem 0 1rem; }
+/* 会员公告（2026-10-18）：管理员可编辑，云端下发；空内容整条 hidden。
+   允许换行（运营可能写两三句），长文本自动折行不撑破卡片。 */
+.mem-notice {
+  display: flex; align-items: flex-start; gap: .45rem;
+  margin: 0 0 .9rem; padding: .55rem .75rem;
+  border: 1px solid #fde68a; border-left: 3px solid #f59e0b;
+  border-radius: var(--radius-md, 10px); background: #fffbeb;
+  font-size: .84rem; line-height: 1.55; color: #92400e;
+  white-space: pre-wrap; word-break: break-word;
+}
+.mem-notice[hidden] { display: none; }
+.mem-notice-icon { flex: none; line-height: 1.55; }
+.mem-notice-text { flex: 1 1 auto; }
+html.theme-dark .mem-notice { background: #2a2110; border-color: #7c4a1e; border-left-color: #d97706; color: #fcd34d; }
 .mem-top {
   display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
   margin: 0 0 1rem; padding: .6rem .8rem; font-size: .82rem;

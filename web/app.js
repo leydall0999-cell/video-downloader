@@ -7562,10 +7562,22 @@
     return nowSec <= fe ? 'active' : 'ended';
   };
 
+  // 会员公告（2026-10-18）：云端下发，管理员在运维控制台「会员公告」编辑。
+  // 用 textContent 赋值（公告文案不当作 HTML 解释）；空内容整条隐藏。
+  const _renderMemNotice = (notice) => {
+    const box = document.getElementById('memNotice');
+    const txt = document.getElementById('memNoticeText');
+    if (!box || !txt) return;
+    const text = (notice && notice.enabled) ? String(notice.text || '').trim() : '';
+    if (!text) { box.hidden = true; txt.textContent = ''; return; }
+    txt.textContent = text;
+    box.hidden = false;
+  };
   const pfRenderPlans = async () => {
     if (!el.pfPlans) return;
     let p = null;
     try { p = await request('/api/member/plans'); } catch (_e) { /* 后端不可用时静默 */ }
+    _renderMemNotice(p && p.notice);
     const plans = (p && p.download_member && p.download_member.plans) || {};
     const codes = Object.keys(plans);
     if (!codes.length) {
@@ -7820,6 +7832,7 @@
       el.memTracks.innerHTML = '<p class="pf-plan-empty">套餐加载失败，请稍后重试</p>';
       return;
     }
+    _renderMemNotice(_memPlans.notice);
     if (!memTrackData(_memTrack)) _memTrack = 'download';   // 当前轨没数据时回落到VIP会员
     memSyncSeg();
     memRenderTrack();
