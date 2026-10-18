@@ -1127,6 +1127,25 @@ run_pytest_root test_win_version_guard.py # Win7/8 启动即拦截并弹窗引�
 run_pytest_root test_launcher_boot_feedback.py # 后端起不来必须弹窗告知并指日志路径，禁止静默失败
 run_pytest_root test_win_console_stdio_guard.py # 无控制台时 sys.stdout is None ⇒ uvicorn 配置日志即崩（Windows 双击打不开的真因）
 
+#  test_admin_usage_cloud_display.py —— 后台「用户使用详情」必须看得见云端用量
+#    （2026-10-18）：网页版账号的消耗记在授权中心 authority.usage，不进本机
+#    usage_history；旧版判空只读本机 ⇒ 云端明明用过也报「没有任何使用记录」。
+#    用 node 实跑产品代码段 + 静态断言双保险（杜绝「grep 到字符串就算过」）。
+run_one test_admin_usage_cloud_display.py # 云端用量必须渲染，判空必须算云端
+
+#  test_license_usage_history.py —— 授权中心「账号级用量近一年按天历史」（2026-10-18）
+#    日切时把前一天归档进 user["usage_history"]（保留 366 天），usage_impl 一并下发；
+#    桌面 App 与网页版共用同一份账号级 daily，所以两端用量都进这份历史。
+#    边界：只对上线之后发生的用量生效，过去被覆盖的日期无法补录。
+run_one test_license_usage_history.py
+
+#  test_cookie_pool_identity.py —— 公共 Cookie 池的身份去重与入池验真（2026-10-18）
+#    B 站池 1905 条其实是同 1 个账号的 1905 次快照，其中 1902 条是未登录游客态，
+#    而 get_cookie 取「最新一条」⇒ 解析恒 412 只能靠 yt-dlp 兜底。
+#    本用例守住三件事：未登录不得入池 / 同账号只留最新 N 条 / 剔除时按会话验一次
+#    而不是逐条打 1905 次请求（后者必然触发风控）。
+run_pytest_root test_cookie_pool_identity.py # 身份去重 + 入池验真 + 会话级验真预算
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

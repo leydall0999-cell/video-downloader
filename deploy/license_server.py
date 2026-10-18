@@ -355,6 +355,85 @@ def _authority_view(user: dict[str, Any], now: float) -> dict[str, Any]:
     }
 
 
+# ── 账号级用量历史归档（2026-10-18）────────────────────────────────────────── #
+# 背景：`user["daily"]` 只保留**当天**计数（跨天直接覆盖），于是后台「使用详情」
+# 永远只看得到「今天用了什么」，翻不了历史。这里在日切那一刻把前一天那一条
+# 落进 `user["usage_history"]`，保留最近一年（366 天）。
+#
+# 边界（必须诚实，别对用户承诺错）：
+#   · **只对上线之后发生的用量生效**。过去已经被跨天覆盖掉的日期无法补录，
+#     任何「补齐过去一年」的说法都是假的；
+#   · 日切发生在下一次用量上报时，所以「长期不用」的空档天然没有记录（也确实没用过）；
+#   · 归档失败绝不能影响配额判定 —— 整段吞异常。
+USAGE_HISTORY_DAYS = 366
+
+
+def _clean_counts(counts: Any) -> dict[str, int]:
+    """把 {资源: 次数} 洗干净：非数值丢弃、<=0 丢弃、键截断到 32 字符。"""
+    out: dict[str, int] = {}
+    if not isinstance(counts, dict):
+        return out
+    for k, v in counts.items():
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out[str(k)[:32]] = n
+    return out
+
+
+def _archive_daily(user: dict[str, Any], daily: Any) -> None:
+    """日切前把旧的 `daily` 归档进 `user["usage_history"]`（幂等、容错）。"""
+    try:
+        d = str((daily or {}).get("date") or "")[:16]
+        if not d:
+            return
+        clean = _clean_counts((daily or {}).get("counts") or {})
+        if not clean:
+            return                              # 那天没有任何消耗 → 不留空行
+        hist = user.get("usage_history")
+        if not isinstance(hist, list):
+            hist = []
+        # 同一天重复归档（重放 / 多次日切）只保留一条，避免列表膨胀出重复日期
+        hist = [h for h in hist if str((h or {}).get("date") or "") != d]
+        hist.append({"date": d, "counts": clean})
+        hist.sort(key=lambda h: str((h or {}).get("date") or ""))
+        user["usage_history"] = hist[-USAGE_HISTORY_DAYS:]
+    except Exception:  # noqa: BLE001 — 归档失败不允许影响配额判定
+        pass
+
+
+def _usage_history_view(user: dict[str, Any], now: float) -> list[dict[str, Any]]:
+    """账号级用量历史（近一年，**新的在前**）；最后补上「今天」的实时计数。
+
+    返回 `[{"date": "2026-10-18", "counts": {"download": 2}}, ...]`，直接给后台渲染。
+    当天可能尚未日切（仍躺在 `user["daily"]` 里），所以这里合并一次，
+    保证面板看到的是「含今天」的完整视图。
+    """
+    out: list[dict[str, Any]] = []
+    hist = user.get("usage_history")
+    if isinstance(hist, list):
+        for h in hist:
+            if not isinstance(h, dict):
+                continue
+            d = str(h.get("date") or "")[:16]
+            clean = _clean_counts(h.get("counts") or {})
+            if d and clean:
+                out.append({"date": d, "counts": clean})
+
+    today = _bj_day(now)
+    daily = user.get("daily") or {}
+    if str(daily.get("date") or "") == today:
+        clean = _clean_counts(daily.get("counts") or {})
+        if clean:
+            out = [x for x in out if x.get("date") != today]
+            out.append({"date": today, "counts": clean})
+
+    out.sort(key=lambda x: str(x.get("date") or ""), reverse=True)
+    return out[:USAGE_HISTORY_DAYS]
+
+
 def spend_impl(state: dict[str, Any], token: str, items: Any, now: float,
                secret: str, ip: str = "") -> dict[str, Any]:
     """客户端积分扣减上报（幂等）：永久积分直接扣余额，AI 积分记累计消耗。
@@ -427,6 +506,7 @@ def daily_impl(state: dict[str, Any], token: str, items: Any, now: float,
     today = _bj_day(now)
     daily = user.get("daily") or {}
     if str(daily.get("date") or "") != today:
+        _archive_daily(user, daily)      # 2026-10-18：日切前把前一天落进一年历史
         daily = {"date": today, "counts": {}}
     counts = daily.setdefault("counts", {})
     applied = 0
@@ -749,7 +829,9 @@ _UNSET = object()   # 区分「调用方没传」与「显式传 null 清除覆�
 
 def free_quota_impl(state: dict[str, Any], now: float,
                     cloud_lifetime: Any = _UNSET,
-                    mode: Any = _UNSET) -> dict[str, Any]:
+                    mode: Any = _UNSET,
+                    daily_free_limits: Any = _UNSET,
+                    daily_member_limits: Any = _UNSET) -> dict[str, Any]:
     """管理员下发「免费额度」覆盖（终身免费次数 + 免费额度口径 mode）。
 
     与 `plans_set` 分开的原因：plans_set 的入参契约是**套餐价格**（每档必须含
@@ -801,6 +883,37 @@ def free_quota_impl(state: dict[str, Any], now: float,
             if m not in ("on", "off"):
                 raise ApiError(400, "BAD_MODE", "mode 只能是 on / off 或 null")
             fq["mode"] = m
+        changed = True
+
+    # 🔴 2026-10-17：每日免费/会员额度也上云。
+    # 背景：后台「免费额度」分栏改的 daily_free_limits 过去**只写客户端本机
+    # plans.json**，中心压根没有这个字段 ⇒ 网页版（没有任何本机覆盖概念）永远
+    # 显示代码默认值，同一账号桌面 3/3、网页 10/10，用户实测发现对不上。
+    # 现在与 cloud_lifetime 同一通道下发：中心存 {resource: 次数}，各端从
+    # /api/license/plans 的 free_quota 读回。
+    #   · 传 null  = 清除（回代码常量）  · 不传 = 不动  · 传字典 = 覆盖
+    # 免费档 >= 0；会员档允许 -1（业务语义：不限次）。
+    for _fname, _raw, _min in (("daily_free_limits", daily_free_limits, 0),
+                               ("daily_member_limits", daily_member_limits, -1)):
+        if _raw is _UNSET:
+            continue
+        if _raw is None:
+            fq.pop(_fname, None)
+            changed = True
+            continue
+        if not isinstance(_raw, dict):
+            raise ApiError(400, "BAD_LIMITS",
+                           f"{_fname} 必须是 {{resource: 次数}} 字典或 null")
+        _clean: dict[str, int] = {}
+        for _k, _v in _raw.items():
+            try:
+                _n = int(_v)
+            except (TypeError, ValueError):
+                raise ApiError(400, "BAD_LIMITS", f"{_fname}.{_k} 的次数必须是整数")
+            if _n < _min:
+                raise ApiError(400, "BAD_LIMITS", f"{_fname}.{_k} 的次数不能小于 {_min}")
+            _clean[str(_k)] = _n
+        fq[_fname] = _clean
         changed = True
 
     if changed:
@@ -887,6 +1000,9 @@ def usage_impl(state: dict[str, Any], email: str, now: float) -> dict[str, Any]:
         "purchases": user.get("purchases") or [],
         "spends": user.get("spends") or [],
         "adjusts": user.get("adjusts") or [],
+        # 2026-10-18：账号级用量历史（近一年，新的在前）。数据从本功能上线当天起
+        # 按天累积 —— 更早的日期已被「跨天覆盖」机制丢弃，**无法补录**。
+        "usage_history": _usage_history_view(user, now),
         "banned": bool(user.get("banned")),
         "ban_note": user.get("ban_note", ""),
         # 2026-10-16：后台「使用详情」对无本机镜像的云端账号直接渲染本响应，
@@ -2788,7 +2904,12 @@ class Handler(BaseHTTPRequestHandler):
                             cloud_lifetime=(data["cloud_lifetime"]
                                             if "cloud_lifetime" in data else _UNSET),
                             # 2026-10-13：免费额度口径 mode 也随之下发/清除。
-                            mode=(data["mode"] if "mode" in data else _UNSET))
+                            mode=(data["mode"] if "mode" in data else _UNSET),
+                            # 2026-10-17：每日免费/会员额度也上云（网页版据此对齐）。
+                            daily_free_limits=(data["daily_free_limits"]
+                                               if "daily_free_limits" in data else _UNSET),
+                            daily_member_limits=(data["daily_member_limits"]
+                                                 if "daily_member_limits" in data else _UNSET))
                     elif action == "cloud_quota_refund":
                         # 🔴 安全审计 2026-10-11（P0-4）受信额度退还：
                         #   客户端自退 = 消费→退还→再消费的无限套利（真实云端大模型

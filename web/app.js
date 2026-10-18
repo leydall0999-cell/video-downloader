@@ -23023,6 +23023,53 @@ el.dwVidPlayer.hidden = true;
       subtitle_extract: '字幕提取', compress: '文件压缩', sr: '超分',
     };
     const _usageResLabel = (k) => _USAGE_RES_LABELS[k] || k;
+    // 云端当日用量（2026-10-18 修）：网页版 / 其它设备上的消耗记在授权中心
+    // `authority.usage`，**不写入本机 store 的 usage_history**。旧版面板只读本机，
+    // 于是把「云端明明用过」误报成「这个账号还没有任何使用记录」。
+    // 注意：云端只保留**当天**计数（按 usage_date 跨天重置），没有逐日历史。
+    const _usageCloudUsage = (u) => {
+      const auth = ((((u || {}).cloud) || {}).data || {}).authority || {};
+      const raw = auth.usage || {};
+      const items = {};
+      Object.keys(raw).forEach((k) => {
+        const n = Number(raw[k]) || 0;
+        if (n > 0) items[k] = n;
+      });
+      return {
+        date: String(auth.usage_date || ''),
+        items,
+        total: Object.keys(items).reduce((s, k) => s + items[k], 0),
+      };
+    };
+    // 云端用量的一句话明细（无用量返回空串，调用方自行判断是否渲染）
+    const _usageCloudUsageText = (cu) => {
+      const ks = Object.keys((cu || {}).items || {});
+      return ks.length ? ks.map((k) => _usageResLabel(k) + ' ' + cu.items[k]).join('、') : '';
+    };
+    // 云端按天历史（2026-10-18）：授权中心在日切时把前一天归档，保留 366 天。
+    // 数组形态 [{date:"2026-10-18", counts:{download:2}}]，**新的在前**。
+    // 老版本云端没有这个字段 ⇒ 返回空数组，面板自动退回「只有当天」的展示。
+    const _usageCloudHistory = (u) => {
+      const rows = ((((u || {}).cloud) || {}).data || {}).usage_history;
+      if (!Array.isArray(rows)) return [];
+      const out = [];
+      rows.forEach((r) => {
+        if (!r || typeof r !== 'object' || !r.date) return;
+        const items = {};
+        Object.keys(r.counts || {}).forEach((k) => {
+          const n = Number(r.counts[k]) || 0;
+          if (n > 0) items[k] = n;
+        });
+        const ks = Object.keys(items);
+        if (!ks.length) return;          // 没有消耗的日子不留空行（0 值/空 counts 一律丢弃）
+        out.push({
+          date: String(r.date),
+          items,
+          total: ks.reduce((s, k) => s + items[k], 0),
+        });
+      });
+      return out;
+    };
     const _USAGE_VIA_LABELS = { pay: '购买', grant: '后台赠送', admin: '后台操作', test: '测试', activate: '激活' };
     const _usageViaLabel = (v) => _USAGE_VIA_LABELS[v] || (v || '—');
     const _usageRows = (rows) => rows.map((r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td></tr>`).join('');
@@ -23089,6 +23136,13 @@ el.dwVidPlayer.hidden = true;
       const dlg = _usageDlg;
       dlg.dataset.uid = uid || '';
       const body = dlg.querySelector('.aud-body');
+      // 2026-10-18 修（错号）：弹窗是**单例复用**的，而账号头原先只在「有使用记录」
+      // 分支里写。空状态分支直接 return ⇒ 顶部会残留**上一次打开那个账号**的名字
+      // 与注册时间（实测：点 2649348580@qq.com，顶部却写着 guodong9@foxmail.com）。
+      // 所以进入时先无条件把账号头刷成本次 uid，加载完再补注册时间。
+      const _uidEsc = esc(uid || '');
+      dlg.querySelector('.aud-user').innerHTML =
+        `<b>${_uidEsc}</b><code class="admin-uid" data-copy="${_uidEsc}" title="点击复制">${_uidEsc}</code>`;
       body.innerHTML = '<div class="admin-empty">加载中…</div>';
       if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
       else dlg.setAttribute('open', '');
@@ -23097,11 +23151,24 @@ el.dwVidPlayer.hidden = true;
       try {
         const r = await adminRequest('/api/admin/users/' + encodeURIComponent(uid) + '/usage');
         if (!r || !r.ok) throw new Error((r && r.error) || '查询失败');
+        // 竞态守卫：连着点了两个账号时，先发的请求可能后返回 —— 结果属于旧账号，
+        // 直接丢弃，否则会把旧账号的数据写进当前弹窗（比残留账号头更严重）。
+        if (dlg.dataset.uid !== (uid || '')) return;
         const u = r.usage || {};
+        // 账号头在**所有分支之前**统一刷新（含注册时间）——空状态分支也要写，
+        // 否则「无使用记录」的账号会顶着上一个用户的标题。
+        dlg.querySelector('.aud-user').innerHTML =
+          `<b>${esc(u.identifier || uid)}</b><code class="admin-uid" data-copy="${esc(uid)}" title="点击复制">${esc(uid)}</code>`
+          + (u.created_at ? ` · 注册于 ${esc(_usageFmtDate(u.created_at))}` : '')
+          + (u.disabled ? ' · <span class="admin-chip is-red">已禁用</span>' : '')
+          + (u.is_admin ? ' · <span class="admin-chip is-gold">超管</span>' : '');
         const m = u.membership || {};
         const us0 = u.usage_summary || {};
-        // 全新账号确实什么都不该有 —— 但要讲清「为什么空」，而不是留一片空白
-        if (!us0.days && !us0.total && !(u.activations || []).length
+        const cu0 = _usageCloudUsage(u);   // 云端（网页版 / 其它设备）当日用量
+        // 全新账号确实什么都不该有 —— 但要讲清「为什么空」，而不是留一片空白。
+        // 2026-10-18 修：判空必须把**云端当日用量**算进来，否则网页版账号
+        // （本机无消耗记录、云端有）会被误报成「没有任何使用记录」。
+        if (!us0.days && !us0.total && !cu0.total && !(u.activations || []).length
             && !(u.support || {}).total_threads && !m.permanent_credits
             && !Number((m.ai_member || {}).credits_left || 0)) {
           body.innerHTML = '<section class="aud-sec"><h4>这个账号还没有任何使用记录</h4>'
@@ -23116,16 +23183,11 @@ el.dwVidPlayer.hidden = true;
               ['AI 会员', (m.ai_member || {}).active ? '有效' : '无'],
               ['积分', String(m.credits_total != null ? m.credits_total : 0)],
               ['设备指纹', u.device_fp || '—（从未在本机登录）'],
-              ['云端授权', (u.cloud || {}).ok ? '云端有记录' : ((u.cloud || {}).reason || '未拉到')],
+              ['云端授权', (u.cloud || {}).ok ? '云端有档案（权益可查）' : ((u.cloud || {}).reason || '未拉到')],
             ]) + '</tbody></table></section>'
             + _usageCloudDataSec(u);   // 没有使用记录，也可能已有云端资料
           return;
         }
-        dlg.querySelector('.aud-user').innerHTML =
-          `<b>${esc(u.identifier || uid)}</b><code class="admin-uid" data-copy="${esc(uid)}" title="点击复制">${esc(uid)}</code>`
-          + ` · 注册于 ${esc(_usageFmtDate(u.created_at))}`
-          + (u.disabled ? ' · <span class="admin-chip is-red">已禁用</span>' : '')
-          + (u.is_admin ? ' · <span class="admin-chip is-gold">超管</span>' : '');
 
         // 会员与积分（字段名对齐 membership.status()：credits_left 在 ai_member 下，
         // 永久积分是顶层 permanent_credits；device_locked 是一机一码锁，排障关键）
@@ -23146,7 +23208,7 @@ el.dwVidPlayer.hidden = true;
             : '')
           + '</tbody></table></section>';
 
-        // 今日 + 近 N 天配额消耗
+        // 今日 + 近 N 天配额消耗（**本机**口径）
         const us = u.usage_summary || {};
         const today = u.today || {};
         const dayRows = (u.usage_days || []).map((d) => {
@@ -23154,7 +23216,7 @@ el.dwVidPlayer.hidden = true;
             .map((k) => `${_usageResLabel(k)} ${d.items[k]}`).join('、') || '未使用';
           return `<tr><td>${esc(d.date)}</td><td>${d.total}</td><td class="aud-items">${esc(items)}</td></tr>`;
         }).join('');
-        h += '<section class="aud-sec"><h4>配额消耗（近 '
+        h += '<section class="aud-sec"><h4>本机配额消耗（近 '
           + (us.days || 0) + ' 天，共 ' + (us.total || 0) + ' 次 / 活跃 ' + (us.active_days || 0) + ' 天）</h4>'
           + '<div class="aud-today">今日 ' + (today.total || 0) + ' 次'
           + (Object.keys(today.items || {}).length
@@ -23162,8 +23224,38 @@ el.dwVidPlayer.hidden = true;
           + '</div>'
           + (dayRows
             ? '<div class="aud-table-wrap"><table class="admin-table"><thead><tr><th>日期</th><th>次数</th><th>明细</th></tr></thead><tbody>' + dayRows + '</tbody></table></div>'
-            : '<div class="admin-empty">近 ' + (us.days || 0) + ' 天没有任何使用记录</div>')
+            : '<div class="admin-empty">近 ' + (us.days || 0) + ' 天本机没有消耗记录</div>')
           + '</section>';
+
+        // 云端当日用量（2026-10-18）：网页版 / 其它设备的消耗只记在授权中心，
+        // 不进本机 usage_history —— 不单独渲染出来就会被误读成「这个号没用过」。
+        const cu = cu0;
+        const cuHist = _usageCloudHistory(u);
+        if (cu.total || cuHist.length) {
+          h += '<section class="aud-sec"><h4>云端用量（桌面 App + 网页版 / 其它设备）</h4>';
+          if (cu.total) {
+            h += '<div class="aud-today">' + (cu.date ? esc(cu.date) + ' 当天 ' : '当日 ')
+              + cu.total + ' 次'
+              + (Object.keys(cu.items).length ? '（' + esc(_usageCloudUsageText(cu)) + '）' : '')
+              + '</div>';
+          }
+          if (cuHist.length) {
+            const cuRows = cuHist.map((d) => {
+              const items = Object.keys(d.items)
+                .map((k) => _usageResLabel(k) + ' ' + d.items[k]).join('、') || '—';
+              return `<tr><td>${esc(d.date)}</td><td>${d.total}</td><td class="aud-items">${esc(items)}</td></tr>`;
+            }).join('');
+            h += '<div class="aud-table-wrap" style="max-height:420px;overflow:auto">'
+              + '<table class="admin-table"><thead><tr><th>日期</th><th>次数</th><th>明细</th></tr></thead>'
+              + '<tbody>' + cuRows + '</tbody></table></div>';
+          }
+          h += '<div class="admin-empty">这部分消耗记在授权中心（账号级：桌面 App 登录后与网页版共用同一份），'
+            + '不写入本机记录，所以不会出现在上面的「本机配额消耗」里。<br>'
+            + (cuHist.length > 1
+              ? '历史保留近一年（' + cuHist.length + ' 天有记录），满一年自动截断。'
+              : '历史按天累积，满一年自动截断；归档功能上线之前的日期没有存档，无法补录。')
+            + '</div></section>';
+        }
 
         // 激活 / 购买历史
         const acts = u.activations || [];
