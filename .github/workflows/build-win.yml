@@ -233,16 +233,6 @@ jobs:
       # 无头 runner 上 pywebview(winforms) 可能起不来窗口，但 server_thread 独立，
       # 8321 能响应就证明冻结包的后端完整可用。失败不阻断（可能是无头限制），
       # 结果如实写进 Summary。
-      - name: 断言 Windows 子进程无窗口补丁生效（真机）
-        # 🔴 两个坑（2026-10-18 连踩，都表现为「步骤 0 秒失败」）：
-        #   1. 别写成 heredoc：YAML block scalar 每行都带缩进，而 bash heredoc 的终止符
-        #      必须在**行首**（`<<-` 只吃 tab 不吃空格）⇒ 缩进的 PY 不被识别 ⇒ 读到 EOF
-        #      语法错。改为调独立脚本文件。
-        #   2. 别指定 `shell: bash`：Windows runner 的 bash 是 Git Bash，`python` 命中的
-        #      常是 Microsoft Store 别名（直接非零退出）。用默认 shell（pwsh）+ setup-python
-        #      装好的 python 才稳。
-        run: python desktop/ci_assert_win_no_window.py
-
       - name: Smoke test (backend port)
         id: smoke
         continue-on-error: true
@@ -332,3 +322,19 @@ jobs:
             gh release create "$TAG" --title "$TAG" --notes "Windows 安装包（CI 自动构建）"
           gh release upload "$TAG" dist/VideoDownloader-Setup-*.exe --clobber
           gh release view "$TAG" --json assets -q '.assets[].name, .assets[].size'
+
+      # ── 真机断言：Windows 上「子进程不弹黑窗」补丁确实生效 ──
+      # 🔴 放在 Release **之后**：2026-10-18 连挂三轮都是这个附属步骤把后续
+      #    Upload/Release 全部 skipped，白跑一轮却拿不到包。断言要保留阻断力，
+      #    但不能让它卡住交付 ⇒ 挪到最后，包已发布，断言红了一样能取包排查。
+      # 🔴 三个已踩的坑：
+      #   1. 别写 heredoc：YAML block scalar 每行带缩进，而 bash heredoc 终止符必须在
+      #      行首（`<<-` 只吃 tab 不吃空格）⇒ 读到 EOF 语法错，表现为「0 秒失败」。
+      #   2. Windows runner 的 python stdout 是本地代码页（cp1252），脚本里任何中文输出
+      #      都会抛 UnicodeEncodeError ⇒ 进程立刻非零退出，同样是「0 秒失败」且无信息。
+      #      脚本内已 reconfigure UTF-8，这里再兜一层 PYTHONIOENCODING。
+      #   3. 脚本本身对非 Windows 是 SKIP（rc=0），不会误伤其他平台。
+      - name: 断言 Windows 子进程无窗口补丁生效（真机）
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python desktop/ci_assert_win_no_window.py

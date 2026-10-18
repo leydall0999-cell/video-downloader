@@ -21,10 +21,19 @@ import sys
 
 CREATE_NO_WINDOW = 0x08000000
 
+# 🔴 Windows runner 的 stdout/stderr 默认是本地代码页（cp1252/gbk），脚本里任何
+# 中文输出都会抛 UnicodeEncodeError ⇒ 进程立刻非零退出，CI 上表现为「步骤 0 秒失败」
+# 且看不到有用信息（2026-10-18 连挂三轮才定位）。先强制 UTF-8，再把日志文案写成英文。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 def main() -> int:
     if os.name != "nt":
-        print(f"SKIP: 非 Windows（os.name={os.name}），本断言只在 windows-latest 上生效")
+        print(f"SKIP: not Windows (os.name={os.name}); this assertion is Windows-only")
         return 0
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -56,7 +65,7 @@ def main() -> int:
         src = f.read()
     assert "win_no_window.install()" in src, "app.py 未调用 install()，补丁不会生效"
 
-    print("OK: Windows 无窗口补丁真机断言通过")
+    print("OK: Windows no-window patch verified on a real Windows runner")
     return 0
 
 
