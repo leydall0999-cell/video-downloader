@@ -17803,16 +17803,29 @@ el.dwVidPlayer.hidden = true;
       el.memberStatus.hidden = false;
     } catch (_) { /* 后端未就绪时静默，保持面板可开 */ }
   }
+  // 会员公告（2026-10-18）：云端下发，管理员在后台「会员公告」编辑。
+  // 用 textContent 而非拼 HTML —— 公告是运营写的文案，不应被当作标记语言解释。
+  // 空内容 = 关闭：整条隐藏，避免页面留下一条空胶囊。
+  function _renderMemberNotice(notice) {
+    const box = $('memberNotice');
+    const txt = $('memberNoticeText');
+    if (!box || !txt) return;
+    const text = (notice && notice.enabled) ? String(notice.text || '').trim() : '';
+    if (!text) { box.hidden = true; txt.textContent = ''; return; }
+    txt.textContent = text;
+    box.hidden = false;
+  }
   async function renderMemberPlans() {
     try {
       const p = await request('/api/member/plans');
+      _renderMemberNotice(p.notice);
       const dlPlans = (p.download_member && p.download_member.plans) || {};
       const aiPlans = (p.ai_member && p.ai_member.plans) || {};
       const packs = (p.credit_packs) || {};
       const dlBenefits = (p.download_member && p.download_member.benefits) || [];
-      // VIP会员（5 档：1/7/30 天 + 半年/年）+ 共享权益清单
+      // VIP会员（6 档：1/3/7/30 天 + 半年/年）+ 共享权益清单
       // 2026-10-16 用户定档：卡片不再挂「/ N 天」后缀——档位名（VIP会员·1天 等）
-      // 已自带时长；3 天档随云端覆盖层一并下架。
+      // 已自带时长。3 天档当天下架后又按用户要求恢复上架，阵容为 6 档。
       const dlCards = Object.entries(dlPlans).map(([code, plan]) =>
         _memberCard(plan, code, {})).join('');
       const dlList = dlBenefits.map(b => `<li>${escHtml(b.text)}</li>`).join('');
@@ -22052,7 +22065,7 @@ el.dwVidPlayer.hidden = true;
       else if (name === 'stats') loadStats();
       // 🔴 2026-10-06：AI 积分成本 + 免费额度都已挪到「系统配置」页（同区块），
       // 所以这里也必须调 loadAiCosts()，否则免费额度区一片空白。
-      else if (name === 'config') { loadConfig(); loadAiCosts(); }
+      else if (name === 'config') { loadConfig(); loadAiCosts(); loadMemberNotice(); }
       else if (name === 'aiaccounts') { loadAiAccounts(); loadAiCosts(); }
       else if (name === 'monitor') loadMonitor();
       // 每日对账（2026-10-09）：已从运维监控页提出，独立成 tab，按需拉报告
@@ -23616,6 +23629,56 @@ el.dwVidPlayer.hidden = true;
         }
       });
     }
+    // ── 会员公告（2026-10-18）──────────────────────────────────────────────
+    // 会员中心套餐卡上方那行运营文案。真源在授权中心（云端）：保存即下发，
+    // 所有用户下次打开会员中心就能看到；这里只负责「读当前生效值 / 写新值」。
+    // 拉取失败时保持输入框原内容，绝不覆盖成空（否则一进后台就像公告被清空了）。
+    const loadMemberNotice = async () => {
+      try {
+        const r = await adminRequest('/api/admin/member-notice');
+        if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
+        const n = r.notice || {};
+        const t = $('adminNoticeText');
+        if (t) t.value = String(n.text || '');
+        const cb = $('adminNoticeEnabled');
+        if (cb) cb.checked = n.enabled !== false;
+        _adminMsg($('adminNoticeMeta'), n.enabled ? '当前：已启用' : '当前：未启用（会员中心不显示）');
+        _adminMsg($('adminNoticeMsg'), '');
+      } catch (_e) { /* 静默：保留上次内容 */ }
+    };
+    const saveMemberNotice = async () => {
+      const t = $('adminNoticeText');
+      const cb = $('adminNoticeEnabled');
+      const enabled = cb ? !!cb.checked : true;
+      const text = ((t && t.value) || '').trim();
+      if (enabled && !text) {
+        _adminMsg($('adminNoticeMsg'), '公告内容不能为空（不想展示请取消「启用公告」）', true);
+        return;
+      }
+      _adminMsg($('adminNoticeMsg'), '正在下发…');
+      try {
+        const r = await adminRequest('/api/admin/member-notice', {
+          method: 'POST', body: JSON.stringify({ enabled, text }),
+        });
+        if (r && r.ok) {
+          _adminMsg($('adminNoticeMsg'), '已下发，所有用户将看到最新公告');
+          loadMemberNotice();
+        } else {
+          const why = (r && (r.error || (r.cloud && r.cloud.reason))) || '未知原因';
+          _adminMsg($('adminNoticeMsg'), '保存失败：' + why, true);
+        }
+      } catch (e) {
+        _adminMsg($('adminNoticeMsg'), '保存失败：' + ((e && e.message) || e), true);
+      }
+    };
+    // 事件委托：与「保存套餐配置」同一套路，避免按钮节点缺失时绑定整体落空
+    document.addEventListener('click', (e) => {
+      const t = e.target;
+      if (!t || !t.closest) return;
+      if (t.closest('#adminNoticeSave')) saveMemberNotice();
+      else if (t.closest('#adminNoticeReload')) loadMemberNotice();
+    });
+
     const loadConfig = async () => {
       try {
         const r = await adminRequest('/api/admin/config');

@@ -3874,6 +3874,12 @@
           <button type="button" class="member-tab" id="memberTabAi" role="tab" data-page-node-id="pPHWXRYPstCgFhYMHqaxLj">AI 会员</button>
           <button type="button" class="member-tab" id="memberTabPacks" role="tab" data-page-node-id="ye8RKaAySpWGJ8TvJ9cvFQ">积分包</button>
         </div>
+        <!-- 会员公告（2026-10-18）：管理员在后台「会员公告」编辑，云端下发到所有端。
+             无内容时整条 hidden —— 不留空白边框，也不占位。 -->
+        <div class="member-notice" id="memberNotice" hidden>
+          <span class="member-notice-icon" aria-hidden="true">📢</span>
+          <span class="member-notice-text" id="memberNoticeText"></span>
+        </div>
         <div class="member-pane" id="memberPaneDl" role="tabpanel" data-page-node-id="ONGf5yuvWUECZyq4t1ZCxu"></div>
         <div class="member-pane" id="memberPaneAi" role="tabpanel" hidden data-page-node-id="NEJMFtZeu0FYUzw1fvlvHW"></div>
         <div class="member-pane" id="memberPanePacks" role="tabpanel" hidden data-page-node-id="LndpHFmUfNfoEx8nujNvwe"></div>
@@ -4243,6 +4249,25 @@
               <button type="button" id="smtpCancel" class="admin-btn admin-btn-sm" data-page-node-id="k5NjbLEvaCT35O1AwDH3st">取消</button>
             </form>
             <p id="adminSmtpMsg" class="admin-msg" data-page-node-id="ZZfSpxNX8rDp9HgWf7dteZ"></p>
+          </div>
+          <!-- 会员公告（2026-10-18）：会员中心套餐卡上方展示的一行运营文案。
+               走云端下发（所有用户可见），保存即生效；清空 = 关闭公告栏。 -->
+          <div class="admin-cfg-section" id="adminNoticeSec" data-page-node-id="adminNoticeSec">
+            <div class="admin-cfg-head" data-page-node-id="adminNoticeHead">
+              <h3 data-page-node-id="adminNoticeTitle">会员公告</h3>
+              <span class="admin-cfg-hint" data-page-node-id="adminNoticeHint">会员中心套餐卡上方显示，保存后所有用户可见</span>
+            </div>
+            <label class="admin-check" data-page-node-id="adminNoticeEnableWrap"><input type="checkbox" id="adminNoticeEnabled" checked data-page-node-id="adminNoticeEnabled" /> 启用公告</label>
+            <textarea class="admin-input admin-input-sm" id="adminNoticeText" rows="2" maxlength="500"
+                      placeholder="例如：下方价格为测试期间优惠价格，活动结束后恢复原价"
+                      style="width:100%;resize:vertical;min-height:56px;margin-top:.45rem"
+                      data-page-node-id="adminNoticeText"></textarea>
+            <div style="display:flex;gap:.5rem;align-items:center;margin-top:.5rem;flex-wrap:wrap" data-page-node-id="adminNoticeBar">
+              <button type="button" id="adminNoticeSave" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="adminNoticeSave">保存并下发</button>
+              <button type="button" id="adminNoticeReload" class="admin-btn admin-btn-sm" data-page-node-id="adminNoticeReload">重新加载</button>
+              <span class="admin-cfg-hint" id="adminNoticeMeta" data-page-node-id="adminNoticeMeta"></span>
+            </div>
+            <p id="adminNoticeMsg" class="admin-msg" data-page-node-id="adminNoticeMsg"></p>
           </div>
           <!-- 套餐与积分成本 -->
           <div class="admin-cfg-section" data-page-node-id="wRDcTVjctOtyJaRlP54Y91">

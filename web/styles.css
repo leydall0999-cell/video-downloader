@@ -4787,6 +4787,19 @@ html.theme-dark .pf-pool-note.is-warn { color: #fbbf24; }
 .member-chip-trial { background: var(--warn-soft, #fef3c7); color: #92400e; }
 .member-chip-trial.is-out { background: var(--surface-soft, #f3f4f6); color: var(--text-dim, #6b7280); }
 .member-total { margin-left: auto; color: var(--text-mute); font-size: .78rem; }
+/* 会员公告（2026-10-18）：管理员可在后台「会员公告」编辑，云端下发到所有端。
+   空内容＝关闭 → 整条 hidden，不留空白边框。允许换行（运营可能写两三句）。 */
+.member-notice {
+  display: flex; align-items: flex-start; gap: .45rem;
+  margin: 0 0 .8rem; padding: .5rem .7rem;
+  border: 1px solid #fde68a; border-left: 3px solid #f59e0b;
+  border-radius: var(--radius-md); background: #fffbeb;
+  font-size: .82rem; line-height: 1.5; color: #92400e;
+  white-space: pre-wrap; word-break: break-word;
+}
+.member-notice[hidden] { display: none; }
+.member-notice-icon { flex: none; line-height: 1.5; }
+.member-notice-text { flex: 1 1 auto; }
 .member-tabs {
   display: flex; gap: .35rem; margin-bottom: .8rem; padding: .25rem;
   background: #f1f2f7; border-radius: var(--radius-md); width: fit-content;
@@ -6953,6 +6966,7 @@ html.theme-dark .member-cloud-dev .cloud-data-sync { background: #2b2e37; color:
 html.theme-dark .member-status-inner { background: var(--bg-soft); border-color: var(--line); }
 html.theme-dark .member-status-empty { background: var(--bg-soft); }
 html.theme-dark .member-tabs { background: #17191d; }
+html.theme-dark .member-notice { background: #2a2110; border-color: #7c4a1e; border-left-color: #d97706; color: #fcd34d; }
 html.theme-dark .member-tab.is-active { background: #2b2e37; box-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
 /* 通用表单控件深色兜底（解说页有更具体的 gated 规则，不受影响） */
 html.theme-dark input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]),

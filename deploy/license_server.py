@@ -2225,7 +2225,28 @@ def plans_payload(st: dict) -> dict:
     return {
         "plans": _plan_overrides(st),
         "free_quota": _free_quota_overrides(st),
+        "notice": _member_notice(st),   # 2026-10-18 会员中心公告
         "updated_at": float((st or {}).get(PLAN_PRICE_UPDATED_KEY) or 0.0),
+    }
+
+
+NOTICE_MAX_CHARS = 500
+
+
+def _member_notice(st: dict) -> dict:
+    """会员中心公告（管理员可编辑，如「下方价格为测试期间优惠价格」）。
+
+    2026-10-18：只存**文案 + 开关**，无任何用户数据；随 `/api/license/plans`
+    一次拉取下发（各端无需额外往返）。空文案 ⇒ enabled=False ⇒ 各端隐藏公告栏。
+    """
+    raw = (st or {}).get("member_notice")
+    if not isinstance(raw, dict):
+        return {"enabled": False, "text": "", "updated_at": 0.0}
+    text = str(raw.get("text") or "").strip()[:NOTICE_MAX_CHARS]
+    return {
+        "enabled": bool(raw.get("enabled", True)) and bool(text),
+        "text": text,
+        "updated_at": float(raw.get("updated_at") or 0.0),
     }
 
 
@@ -2629,7 +2650,9 @@ class Handler(BaseHTTPRequestHandler):
                             # 🔴 2026-10-13 安装/插件统计（按平台）聚合查询（只读）
                             "stat_query",
                             # 🔴 2026-10-14 反破解风控（第 1 批纯观测）：风险画像查询 / 人工抹平 / 队列
-                            "risk_query", "risk_clear", "risk_top"):
+                            "risk_query", "risk_clear", "risk_top",
+                            # 🔴 2026-10-18 会员中心公告（管理员编辑）
+                            "member_notice_set"):
                 self._require_admin(data)
                 with _LOCK:
                     st = _load_state()
@@ -2743,6 +2766,18 @@ class Handler(BaseHTTPRequestHandler):
                         _save_state(st)
                         out = {"ok": True, "plans": clean,
                                "updated_at": now}
+                    elif action == "member_notice_set":
+                        # 🔴 2026-10-18 会员中心公告可编辑（套餐卡上方一行运营文案）。
+                        #   只存文案/开关，不含凭据；空文案等价于关闭公告栏，
+                        #   避免各端渲染一条空白边框。
+                        _text = str(data.get("text") or "").strip()[:NOTICE_MAX_CHARS]
+                        _enabled = bool(data.get("enabled", True))
+                        if _enabled and not _text:
+                            raise ApiError(400, "BAD_NOTICE", "公告内容不能为空")
+                        st["member_notice"] = {"enabled": _enabled, "text": _text,
+                                               "updated_at": float(now)}
+                        _save_state(st)
+                        out = {"ok": True, "notice": _member_notice(st)}
                     elif action == "free_quota_set":
                         # 🔴 2026-10-06 免费额度覆盖：后台改终身次数 → 下发中心，
                         #   中心按覆盖值判定放行（此前只写客户端本机，改了不生效）。

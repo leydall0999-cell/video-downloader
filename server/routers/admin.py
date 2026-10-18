@@ -634,6 +634,34 @@ def admin_config_plans(payload: dict[str, Any] = Body(...), request: Request = N
     return out
 
 
+# ── 会员中心公告（2026-10-18）──────────────────────────────────────────────
+# 用户要求：会员中心套餐卡上方加一条**可手动编辑**的公告（首条为
+# 「下方价格为测试期间优惠价格」）。公告**必须走云端**——只写本机等于只有
+# 管理员这台能看到，其他用户的会员中心不会出现任何东西。
+# GET 读当前生效值（云端为准，读不到即为空公告）；POST 写云端并即时刷新缓存。
+@router.get("/api/admin/member-notice")
+def admin_member_notice_get(request: Request = None) -> dict[str, Any]:
+    require_admin(request)
+    import membership as _M
+    return {"ok": True, "notice": _M.cloud_member_notice()}
+
+
+@router.post("/api/admin/member-notice")
+def admin_member_notice_set(payload: dict[str, Any] = Body(...),
+                            request: Request = None) -> dict[str, Any]:
+    require_admin(request)
+    enabled = bool(payload.get("enabled", True))
+    text = str(payload.get("text") or "").strip()
+    if len(text) > 500:
+        return {"ok": False, "error": "公告最多 500 字"}
+    if enabled and not text:
+        return {"ok": False, "error": "公告内容不能为空（不想展示请关闭开关）"}
+    import membership as _M
+    out = _M.push_member_notice_to_cloud(enabled, text)
+    return {"ok": bool(out.get("ok")), "cloud": out,
+            "notice": out.get("notice") or {"enabled": enabled, "text": text}}
+
+
 # ── AI 积分成本配置（2026-10-05 新增）────────────────────────────────────────
 # 用户定档：「所有 Key 由后台配好」+「每个功能每次消耗多少积分要能在后台配」。
 # 这两个接口把 `membership.AI_CREDIT_COSTS` 的运行时生效价暴露出来并允许改价。

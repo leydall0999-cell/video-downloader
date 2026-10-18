@@ -556,7 +556,8 @@ def _overlay_plans(defaults: dict[str, Any], override: Any) -> dict[str, Any]:
 # 于是出现「App 159/298、网页 99.90/179、实际扣款按云端」三方分叉。
 # 现在授权中心是唯一真源：本机保存时下发（push_plans_to_cloud），读取时云端优先
 # （cloud_plan_overrides，TTL 5 分钟），云端不可达才回退本机覆盖层 + 代码常量。
-_CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}, "free_quota": {}}
+_CLOUD_PLANS_CACHE: dict[str, Any] = {"ts": 0.0, "plans": {}, "free_quota": {},
+                                     "notice": {}}
 # 套餐上架/改价回源节流：原 300s（云端被别处改动后桌面最长 5 分钟才反映）。
 # 2026-10-04 配套修复：降到 15s，与会员状态节流对齐；桌面自己 push_plans_to_cloud
 # 仍会主动刷新缓存，降 TTL 只让「被动感知云端变化」更快。
@@ -602,6 +603,9 @@ def cloud_plan_overrides(force: bool = False) -> dict[str, Any] | None:
         #    供 cloud_free_quota_overrides() 读回（换机/重装后恢复口径）。
         fq = data.get("free_quota") if isinstance(data, dict) else None
         _CLOUD_PLANS_CACHE["free_quota"] = fq if isinstance(fq, dict) else {}
+        # 🔴 2026-10-18：会员中心公告复用同一次拉取（不额外增加往返）。
+        nt = data.get("notice") if isinstance(data, dict) else None
+        _CLOUD_PLANS_CACHE["notice"] = nt if isinstance(nt, dict) else {}
         return plans
     except Exception:  # noqa: BLE001 — 网络/协议异常一律回退本机
         return None
@@ -624,6 +628,25 @@ def cloud_free_quota_overrides(force: bool = False) -> dict[str, Any]:
     cloud_plan_overrides(force=force)          # 触发/复用同一次拉取与缓存
     fq = _CLOUD_PLANS_CACHE.get("free_quota")
     return fq if isinstance(fq, dict) else {}
+
+
+def cloud_member_notice() -> dict[str, Any]:
+    """会员中心公告（云端下发，管理员可后台编辑）。返回 {enabled, text}。
+
+    🔴 2026-10-18：与套餐共用 `/api/license/plans` 通道（同一次拉取 + 同一 TTL
+    缓存），不额外增加往返。云端不可达 / 未配置 / `VDL_PLANS_CLOUD=0` ⇒ 返回
+    空公告（各端隐藏公告栏）——绝不凭空造一条文案出来。
+    """
+    if str(os.environ.get("VDL_PLANS_CLOUD") or "1").strip().lower() in ("0", "false", "off"):
+        return {"enabled": False, "text": ""}
+    if not _license_api("/api/license/plans"):
+        return {"enabled": False, "text": ""}
+    cloud_plan_overrides()          # 触发/复用同一次拉取与缓存
+    n = _CLOUD_PLANS_CACHE.get("notice")
+    if not isinstance(n, dict):
+        return {"enabled": False, "text": ""}
+    text = str(n.get("text") or "").strip()
+    return {"enabled": bool(n.get("enabled")) and bool(text), "text": text}
 
 
 def local_plans() -> dict[str, dict[str, Any]]:
@@ -672,6 +695,49 @@ def push_plans_to_cloud() -> dict[str, Any]:
         return {"ok": False, "reason": str((data or {}).get("error") or "cloud_rejected")}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "reason": f"error: {e}"}
+
+
+def push_member_notice_to_cloud(enabled: bool, text: str) -> dict[str, Any]:
+    """把会员中心公告下发授权中心（后台保存后调用）。返回同步状态，绝不抛出。
+
+    🔴 2026-10-18：公告必须走云端——只写本机等于「只有自己那台能看到」，
+    其他用户屏幕上什么都不会出现。保存成功后清本地缓存，让下一次 plans()
+    立刻读回新值（否则最长要等一个 TTL 才刷新）。
+    """
+    url = _license_api("/api/license/member_notice_set")
+    if not url:
+        return {"ok": False, "reason": "no_license_base"}
+    try:
+        import admin_store
+        token = admin_store._license_admin_token()  # noqa: SLF001 — 复用既有令牌读取
+    except Exception:  # noqa: BLE001
+        token = ""
+    if not token:
+        return {"ok": False, "reason": "no_admin_token"}
+    try:
+        import urllib.request as _rq
+        body = json.dumps({"token": token, "enabled": bool(enabled),
+                           "text": str(text or "")[:500]}, ensure_ascii=False).encode("utf-8")
+        req = _rq.Request(url, data=body, method="POST",
+                          headers={"Content-Type": "application/json"})
+        with _rq.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8") or "{}")
+        if isinstance(data, dict) and data.get("ok"):
+            nt = data.get("notice") if isinstance(data.get("notice"), dict) else {}
+            _CLOUD_PLANS_CACHE["notice"] = nt
+            _CLOUD_PLANS_CACHE["ts"] = time.time()
+            return {"ok": True, "notice": nt}
+        return {"ok": False, "reason": str((data or {}).get("error") or "cloud_rejected")}
+    except Exception as e:  # noqa: BLE001 — 云端不可达不能拖垮后台保存
+        msg = str(e)
+        try:                            # HTTPError 的业务错误码在 body 里
+            import urllib.error as _ue
+            if isinstance(e, _ue.HTTPError):
+                parsed = json.loads(e.read().decode("utf-8", "replace") or "{}")
+                msg = str(parsed.get("error") or parsed.get("detail") or msg)[:200]
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": False, "reason": f"error: {msg}"}
 
 
 def push_free_quota_to_cloud() -> dict[str, Any]:
@@ -1496,6 +1562,8 @@ class MembershipStore:
             },
             "credit_packs": cp,
             "currency": "CNY",
+            # 2026-10-18：会员中心公告（套餐卡上方一行运营文案；空则各端隐藏）
+            "notice": cloud_member_notice(),
         }
 
     # ---- 激活 ----

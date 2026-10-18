@@ -1004,6 +1004,12 @@ run_one test_nmw_extractor.py
 #     host 节流/聚合口径/坏行跳过/2MB 截断真生效（截断曾漏写回，守卫抓出）。
 run_one test_resolve_demand.py
 
+# 63.11 test_member_notice.py —— 会员中心公告守卫（2026-10-18 用户要求）：会员中心
+#     套餐卡上方一条可手动编辑的公告，真源在授权中心、随 /api/license/plans 下发。
+#     钉住：云端关闭⇒空公告（不凭空造文案）/enabled=False /空文本⇒隐藏 /plans() 带
+#     notice /下发失败不抛 / 前端 textContent 渲染（公告不当 HTML 解释）。
+run_one test_member_notice.py
+
 # 63. test_release_audit.py —— 发布包「机密数据」核查工具的离线守卫（2026-10-13 用户要求
 #     「发布的安装包绝对不含机密数据」，并要求写入档案）。七类：明文凭据 / 私钥 / 服务端
 #     凭据文件 / 用户数据 / 内部信息 / 打包垃圾 / 我方明文源码；另含三个**真实误报**的回归钉子
