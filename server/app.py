@@ -4415,6 +4415,70 @@ def cookie_contribute(payload: dict, request: Request) -> dict:
     logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s ckey=%s", domain, ip, added, bool(ckey))
     return {"ok": True, "added": added, "verified": (ok is True), "ckey": bool(ckey)}
 
+# 浏览器扩展送进来的域名：只允许常规域名形态（字母数字与 . -），长度 ≤ 100。
+# 目的不是白名单（本机缓存允许任意站，只影响用户自己），而是堵路径注入 ——
+# cookie_cache._cache_file 把 "/" 换成 "_"，但没必要让它有机会处理 "/" 本身。
+_PUSH_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.\-]{0,98}[a-z0-9])?$")
+
+@app.post("/api/cookie/browser-push")
+def cookie_browser_push(payload: dict, request: Request) -> dict:
+    """接收浏览器扩展采集到的登录态，写入本机 Cookie 缓存（2026-10-18）。
+
+    为什么要这条通道（与 /api/cookie/sync/from-local 的分工）
+    ------------------------------------------------------
+    from-local 是「App 自己去解密本机浏览器 Cookie 库」：只认 Chrome/Edge/Brave/
+    Chromium 的默认 profile 模式，且 macOS 上会撞钥匙串授权。而浏览器扩展读的是
+    **用户此刻正在用的那个 profile**，多开、便携版、公司策略加密库都能拿到。
+    所以扩展直接把 Cookie 送进来，比 App 自己解密更准。
+
+    安全边界（三条，缺一不可）
+    ------------------------
+      1) 仅本机直连：socket 对端必须环回且未带任何代理头（_is_local_direct 真源）；
+      2) 来源只允许扩展 / 本机页面 / 无 Origin：网页版（https://hanyuxz.top）等
+         外部来源一律拒 —— 否则任意站点都能借用户的浏览器把伪造 Cookie 写进本机
+         缓存，下一次解析就会带着它们去请求目标站；
+      3) 只写 ~/.videodownloader/cookies（本机缓存），**不进公共池**。是否贡献给
+         云端由用户在扩展里显式勾选，另走 /api/cookie/contribute。
+    另外这里**不做验真**：验真要对目标站发请求（12 个站就是十几次网络往返），而这条
+    通道存的是「用户自己机器上的登录态」，存错了只影响他自己、且解析失败会回退到
+    浏览器解密；云端池那条必须验真，因为别人也会用得到。
+    """
+    if not _is_local_direct(request):
+        raise HTTPException(status_code=403, detail="仅允许本机调用")
+    origin = (request.headers.get("origin") or "").strip()
+    if origin and not (_EXT_ORIGIN_RE.match(origin) or _LOCAL_ORIGIN_RE.match(origin)):
+        raise HTTPException(status_code=403, detail="仅允许浏览器扩展调用")
+
+    from cookie_pool import _norm_domain
+    domain = _norm_domain((payload or {}).get("domain") or "")
+    if not domain or not _PUSH_HOST_RE.match(domain):
+        raise HTTPException(status_code=400, detail="domain 不合法")
+    cookie = ((payload or {}).get("cookie") or "").strip()
+    if not cookie or "=" not in cookie:
+        raise HTTPException(status_code=400, detail="cookie 不合法（需为 name=value; … 形式）")
+    if len(cookie) > 8192:
+        raise HTTPException(status_code=400, detail="cookie 过长")
+    if "\r" in cookie or "\n" in cookie:
+        # 防请求头注入：这份字符串会被原样塞进下游请求的 Cookie 头
+        raise HTTPException(status_code=400, detail="cookie 含非法字符")
+
+    from cookie_cache import _save, _cache_file
+    _save(domain, cookie)
+    # _save 全异常吞掉（历史设计：缓存是增强功能，不能影响主链路），
+    # 所以这里回读确认真的落盘了，别对扩展谎报成功。
+    saved = False
+    try:
+        f = _cache_file(domain)
+        if f.exists():
+            saved = (json.loads(f.read_text(encoding="utf-8")).get("header") or "") == cookie
+    except Exception:
+        saved = False
+    if not saved:
+        raise HTTPException(status_code=500, detail="本机缓存写入失败")
+    logger.info("[cookie] browser-push domain=%s bytes=%d platform=%s",
+                domain, len(cookie), (payload or {}).get("platform") or "")
+    return {"ok": True, "saved": True, "domain": domain, "bytes": len(cookie)}
+
 @app.get("/api/cookie/status")
 def cookie_status(url: str = "") -> dict:
     """查询某链接是否需要 Cookie、本机浏览器是否已有可用登录态、以及公共池新鲜度。"""

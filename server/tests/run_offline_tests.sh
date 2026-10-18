@@ -537,6 +537,39 @@ else
 fi
 
 echo ""
+echo "=== extension/tests/test_cookie_harvest.js（登录态采集：拼头/登录判据/推送契约，node） ==="
+# 2026-10-18：扩展新增「登录态同步」——按站用 chrome.cookies 拉全量登录态，交给本机
+# App（私密）或云端公共池（共享）。要害都在「拼出来的 Cookie 头能不能直接用」：
+# 同名重复/过期/空值任何一条没滤掉，服务端验真就 400，用户看到的是「同步失败」
+# 而不是「Cookie 无效」；登录判据若用 cna/buvid3 这类游客字段，会把没登录的站
+# 显示成已登录，点同步必被拒。故写成行为测试（chrome.cookies 用桩）。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_cookie_harvest.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
+echo "=== extension/tests/test_cookie_zone.js（登录态面板：按钮闸门/白名单/缺权限文案，node + DOM 桩） ==="
+# 三个真实用户会踩的点：① 扫到已登录却按钮仍灰（以为坏了）/ 没勾同意就能贡献到云端
+# （共享语义被绕过）；② 微博/爱奇艺不在云端白名单，不能让用户点了吃 400；
+# ③ manifest 加 cookies 权限后 Chrome 会停用扩展，文案必须指向「重新启用」，
+# 而不是显示成「没有已登录的平台」（那会逼用户白重登一遍）。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_cookie_zone.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
 echo "=== extension/tests/test_page_title_lag.js（嗅探标题滞后：SPA 换页「地址先到、标题后到」必须补推，node + chrome 桩） ==="
 # 2026-10-02 用户实测「app上嗅探到的比视频慢一步，最新嗅探到的是上一个视频，
 # 想要看的当前视频的嗅探结果得打开另一个视频」。根因：SPA 换页那一刻 Chrome 只给得到
@@ -1145,6 +1178,16 @@ run_one test_license_usage_history.py
 #    本用例守住三件事：未登录不得入池 / 同账号只留最新 N 条 / 剔除时按会话验一次
 #    而不是逐条打 1905 次请求（后者必然触发风控）。
 run_pytest_root test_cookie_pool_identity.py # 身份去重 + 入池验真 + 会话级验真预算
+
+#  test_cookie_browser_push.py —— 扩展登录态推送接口 + 本机缓存根域回落（2026-10-18）
+#    ① 扩展（extension/cookie-harvest.js）采集到登录态后 POST /api/cookie/browser-push，
+#       写进 ~/.videodownloader/cookies —— 比 App 自己解密浏览器 Cookie 库更准
+#       （扩展读的是用户此刻正在用的那个 profile）。
+#    ② 只允许本机直连 + 扩展/本机来源：外部站点若能调它，就能借用户浏览器把伪造
+#       Cookie 写进本机缓存，下次解析带着它们去请求目标站。
+#    ③ 扩展按根域推（bilibili.com）、解析按具体域取（www./api.）⇒ 缓存必须能按根域
+#       回落，否则扩展同步等于白做；但精确 host 的缓存必须优先（含 host-only cookie）。
+run_pytest_root test_cookie_browser_push.py # 登录态推送闸门 + 根域回落
 
 echo ""
 echo "========================================="

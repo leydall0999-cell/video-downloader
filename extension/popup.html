@@ -54,11 +54,39 @@
     <div class="empty">当前页没有嗅探到媒体流。<br>播放页面里的视频或音频后这里会自动列出；已离开的页面不会保留。</div>
   </main>
 
+  <!-- 登录态（2026-10-18）：按站读取用户浏览器里的**完整登录态**（chrome.cookies），
+       交给本机 App 写进 Cookie 缓存，或用户显式同意后贡献到云端公共池——
+       网页版受同源策略限制拿不到别站 Cookie，公共池是它唯一的登录态来源。
+       默认折叠：多数用户只用嗅探，展开才真正去读 Cookie（避免无谓的权限调用）。 -->
+  <details class="ckz" id="ckZone">
+    <summary class="ckz-hd">
+      <span class="ckz-title">登录态同步</span>
+      <span class="ckz-sub" id="ckSummary">展开后点「扫描」</span>
+    </summary>
+    <div class="ckz-body">
+      <div class="ckz-bar">
+        <button id="ckScan" class="mini">扫描已登录平台</button>
+        <span class="ckz-tip">只读取，不会自动外发</span>
+      </div>
+      <div id="ckList" class="ckz-list"></div>
+      <label class="ckz-agree">
+        <input type="checkbox" id="ckAgree">
+        同意把这些登录态贡献到云端公共池（其他用户解析同站时也会用到）
+      </label>
+      <div class="ckz-actions">
+        <button id="ckPushLocal" class="primary" disabled>存到我自己的 App</button>
+        <button id="ckPushCloud" class="ghost" disabled>贡献到云端池</button>
+      </div>
+      <div id="ckMsg" class="ckz-msg" hidden></div>
+    </div>
+  </details>
+
   <footer class="ft">
     <label class="ck"><input type="checkbox" id="carryCookie" checked> 发送时携带页面 Cookie</label>
     <span class="hint">发送后在桌面端任务列表查看进度</span>
   </footer>
 
+  <script src="cookie-harvest.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
