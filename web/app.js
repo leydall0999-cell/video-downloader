@@ -22065,7 +22065,7 @@ el.dwVidPlayer.hidden = true;
       else if (name === 'stats') loadStats();
       // 🔴 2026-10-06：AI 积分成本 + 免费额度都已挪到「系统配置」页（同区块），
       // 所以这里也必须调 loadAiCosts()，否则免费额度区一片空白。
-      else if (name === 'config') { loadConfig(); loadAiCosts(); loadMemberNotice(); }
+      else if (name === 'config') { loadConfig(); loadAiCosts(); }
       else if (name === 'aiaccounts') { loadAiAccounts(); loadAiCosts(); }
       else if (name === 'monitor') loadMonitor();
       // 每日对账（2026-10-09）：已从运维监控页提出，独立成 tab，按需拉报告
@@ -23680,6 +23680,8 @@ el.dwVidPlayer.hidden = true;
     });
 
     const loadConfig = async () => {
+      // 会员公告与「系统配置」同页，随该页一起加载；独立请求，失败不影响 SMTP/套餐
+      loadMemberNotice();
       try {
         const r = await adminRequest('/api/admin/config');
         if (!r || !r.ok) { if (r && r.error) _needLogin(r.error); return; }
