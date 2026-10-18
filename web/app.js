@@ -22072,6 +22072,8 @@ el.dwVidPlayer.hidden = true;
       else if (name === 'recon') loadMonitorRecon();
       // 解析需求榜（2026-10-17）：解析失败自动登记的站点热度，按需拉取
       else if (name === 'demand') loadResolveDemand();
+      // Cookie 池（2026-10-19）：默认只读文件（毫秒级），联网验真要显式点按钮
+      else if (name === 'cookies') loadCookies();
     };
 
     const loadAll = () => {
@@ -22255,6 +22257,255 @@ el.dwVidPlayer.hidden = true;
         box.innerHTML = `<div class="admin-empty">加载失败：${esc(err && err.message || err)}</div>`;
       }
     };
+    // ---- Cookie 池（2026-10-19）-----------------------------------------
+    // 公共池是网页版解析的命脉：池里某个站集体失效时，症状是「网页版解析全失败」，
+    // 而后台原本完全看不见。这里把「哪个站还有效、剩几个账号、每账号存了多少项、
+    // 多久没更新」摊开，并支持粘贴补注入。
+    // 三态口径（与后端 admin_cookies.py 一致）：
+    //   valid   站点明确回答已登录（probe=struct 时只是「含登录字段」，界面标出来）
+    //   invalid 站点明确回答未登录 / 超过 30 天 TTL / 本机判定缺登录字段
+    //   unknown 没有探针或网络不可达 —— **不等于无效**，不能按无效删
+    let _ckData = null;
+    let _ckBusy = false;
+
+    const _ckAgo = (sec) => {
+      const n = Number(sec) || 0;
+      if (n <= 0) return '-';
+      if (n < 60) return '刚刚';
+      if (n < 3600) return Math.floor(n / 60) + ' 分钟前';
+      if (n < 86400) return Math.floor(n / 3600) + ' 小时前';
+      return Math.floor(n / 86400) + ' 天前';
+    };
+
+    const _ckChip = (kind, n, label) => (n > 0
+      ? '<span class="ckp-chip ckp-' + kind + '">' + esc(label) + ' ' + n + '</span>' : '');
+
+    const _ckSrcLabel = (v) => ({
+      sync: 'App 自动同步', contrib: '网页/扩展贡献', admin: '后台注入',
+    }[v] || (v || '-'));
+
+    const _ckStatusCell = (it) => {
+      if (it.status === 'valid') {
+        const tag = it.probe === 'struct' ? ' <span class="ckp-note">结构校验</span>' : '';
+        return '<span class="ckp-st ckp-ok">● 有效</span>' + tag;
+      }
+      if (it.status === 'invalid') return '<span class="ckp-st ckp-bad">● 无效</span>';
+      return '<span class="ckp-st ckp-unk">● 未校验</span>';
+    };
+
+    const _ckFillDomains = (d) => {
+      const sel = $('adminCkDomain');
+      if (!sel || sel.dataset.filled === '1') return;
+      const opts = (d.injectable || []).map((x) =>
+        '<option value="' + esc(x.domain) + '">' + esc(x.title) + '</option>').join('');
+      sel.innerHTML = '<option value="">选择平台…</option>' + opts;
+      sel.dataset.filled = '1';
+    };
+
+    const _ckRender = (d, note) => {
+      const body = $('adminCkBody');
+      const sum = $('adminCkSummary');
+      const hint = $('adminCkHint');
+      if (!body) return;
+      const s = d.summary || {};
+      const doms = d.domains || [];
+      _ckFillDomains(d);
+
+      if (sum) {
+        // 数据源必须一眼可见：桌面端的「本机池」和网页版真正在用的「云端池」
+        // 是两个池，看错了会得出完全相反的结论（本机空 = 以为网页版也没 Cookie）。
+        const srcTag = d.source === 'cloud' ? '☁ 云端公共池' : '💻 本机池';
+        sum.textContent = srcTag + ' · ' + (d.source_label && d.source !== 'cloud' ? d.source_label + ' · ' : '')
+          + '共 ' + doms.length + ' 个平台 · ' + (s.accounts || 0) + ' 个账号 · '
+          + (s.entries || 0) + ' 份 Cookie';
+        sum.title = d.pool_dir ? ('池目录：' + d.pool_dir) : '';
+      }
+      if (hint) {
+        const bits = [];
+        if (note) bits.push(note);
+        // 云端不可达而回退本机时，必须把原因顶在最前面：否则管理员会把「本机空」
+        // 当成「网页版池也空了」，转头去补一堆其实不缺的 Cookie。
+        if (d.cloud_error) bits.push('⚠ 云端池不可达，当前显示的是本机池：' + d.cloud_error);
+        if (d.checked_at) {
+          bits.push('上次联网校验：' + _ckAgo(d.check_age_sec) + '（点「立即校验」重新打平台确认）');
+        } else {
+          bits.push('还没做过联网校验：「未校验」只是本机字段检查，不代表失效');
+        }
+        const gaps = d.gaps || [];
+        if (gaps.length) {
+          const names = gaps.map((x) => {
+            const hit = doms.find((y) => y.domain === x);
+            return hit ? hit.title : x;
+          });
+          // 截断：缺口多的时候列满一行会把「上次校验」挤没，反而看不清重点
+          const shown = names.slice(0, 5).join('、')
+            + (names.length > 5 ? ' 等 ' + names.length + ' 个' : '');
+          bits.push('⚠ 建议补注入：' + shown);
+        }
+        hint.textContent = bits.join('  ·  ');
+      }
+
+      if (!doms.length) {
+        body.innerHTML = '<div class="admin-empty">池里还没有任何 Cookie。用上面的「补注入」粘贴一份，'
+          + '或等 App / 浏览器扩展自动同步。</div>';
+        return;
+      }
+
+      body.innerHTML = doms.map((r) => {
+        const rows = (r.items || []).map((a) => {
+          const ids = (a.entries || []).map((e) => e.id).join(',');
+          return '<tr>'
+            + '<td><b>' + esc(a.label) + '</b>'
+            + (a.snapshots > 1 ? ' <span class="ckp-note">' + a.snapshots + ' 份快照</span>' : '')
+            + '</td>'
+            + '<td>' + _ckStatusCell(a) + '</td>'
+            + '<td>' + a.parts + ' 项</td>'
+            + '<td>' + a.snapshots + '</td>'
+            + '<td>' + esc(_ckSrcLabel(a.source)) + '</td>'
+            + '<td>' + _ckAgo(a.age_sec) + '</td>'
+            + '<td class="ckp-detail" title="' + esc(a.detail || '') + '">' + esc(a.detail || '-') + '</td>'
+            + '<td><button type="button" class="admin-btn admin-btn-ghost admin-btn-sm"'
+            + ' data-ck-del="' + esc(r.domain) + '" data-ck-ids="' + esc(ids) + '">删除</button></td>'
+            + '</tr>';
+        }).join('');
+
+        return '<div class="ckp-block">'
+          + '<div class="ckp-hd">'
+          + '<b>' + esc(r.title) + '</b>'
+          + '<span class="ckp-meta">' + r.accounts + ' 个账号 · ' + r.entries + ' 份</span>'
+          + _ckChip('ok', r.valid, '有效')
+          + _ckChip('bad', r.invalid, '无效')
+          + _ckChip('unk', r.unknown, '未校验')
+          + (r.broken ? '<span class="ckp-chip ckp-bad">解不开 ' + r.broken + '</span>' : '')
+          + '<span class="ckp-meta">' + (r.last_ts ? '更新于 ' + _ckAgo(d.now - r.last_ts) : '无记录') + '</span>'
+          + '<button type="button" class="admin-btn admin-btn-sm" data-ck-inject="' + esc(r.domain) + '">补注入</button>'
+          + '</div>'
+          + '<div class="admin-table-wrap"><table class="admin-table">'
+          + '<thead><tr><th>账号</th><th>状态</th><th>Cookie 项</th><th>份数</th>'
+          + '<th>来源</th><th>最近更新</th><th>说明</th><th>操作</th></tr></thead>'
+          + '<tbody>' + rows + '</tbody></table></div>'
+          + '</div>';
+      }).join('');
+    };
+
+    const loadCookies = async (note) => {
+      const body = $('adminCkBody');
+      if (!body) return;
+      if (!_ckData) body.innerHTML = '<div class="admin-empty">加载中…</div>';
+      try {
+        const d = await adminRequest('/api/admin/cookies');
+        if (!d || !d.ok) throw new Error((d && (d.error || d.detail)) || '接口返回异常');
+        _ckData = d;
+        _ckRender(d, note);
+      } catch (err) {
+        body.innerHTML = '<div class="admin-empty">加载失败：' + esc(err && err.message || err) + '</div>';
+      }
+    };
+
+    const _ckVerify = async () => {
+      if (_ckBusy) return;
+      _ckBusy = true;
+      const btn = $('adminCkVerify');
+      const label = btn ? btn.textContent : '立即校验';
+      if (btn) { btn.disabled = true; btn.textContent = '校验中…'; }
+      try {
+        const r = await adminRequest('/api/admin/cookies/verify', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        if (!r || !r.ok) throw new Error((r && (r.error || r.detail)) || '校验失败');
+        const note = (r.source === 'cloud' ? '云端校验 ' : '本机校验 ') + r.checked
+          + ' 个会话（' + r.elapsed + 's）：有效 ' + r.valid + '、无效 ' + r.invalid
+          + '、未确认 ' + r.unknown;
+        await loadCookies(note);
+      } catch (err) {
+        if ($('adminCkHint')) $('adminCkHint').textContent = '校验失败：' + (err && err.message || err);
+      } finally {
+        _ckBusy = false;
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+      }
+    };
+
+    const _ckInject = async () => {
+      const sel = $('adminCkDomain');
+      const area = $('adminCkHeader');
+      const msgEl = $('adminCkInjectMsg');
+      const btn = $('adminCkInjectBtn');
+      const domain = sel ? sel.value : '';
+      const raw = area ? area.value : '';
+      const say = (text, isErr) => {
+        if (!msgEl) return;
+        msgEl.textContent = text || '';
+        msgEl.className = 'admin-msg' + (isErr ? ' is-err' : (text ? ' is-ok' : ''));
+      };
+      if (!domain) { say('先选一个平台', true); return; }
+      if (!raw.trim()) { say('请粘贴 Cookie 内容', true); return; }
+      const label = btn ? btn.textContent : '注入';
+      if (btn) { btn.disabled = true; btn.textContent = '注入中…'; }
+      say('', false);
+      try {
+        const r = await adminRequest('/api/admin/cookies/inject', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: domain, header: raw }),
+        });
+        if (r && r.ok) {
+          say('注入成功：' + r.parts + ' 项 Cookie'
+            + (r.verified ? '（已验真）' : '（站点未确认，已按可用处理）')
+            + (r.target === 'cloud' ? '，已进云端池（网页版立刻可用）' : '，仅写入本机'), false);
+          if (area) area.value = '';
+          await loadCookies();
+        } else {
+          say((r && r.error) || '注入失败', true);
+        }
+      } catch (err) {
+        say('注入失败：' + (err && err.message || err), true);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+      }
+    };
+
+    const _ckDelete = async (domain, idsCsv) => {
+      const ids = String(idsCsv || '').split(',').filter(Boolean);
+      if (!ids.length) return;
+      const name = (function () {
+        const hit = ((_ckData && _ckData.domains) || []).find((x) => x.domain === domain);
+        return hit ? hit.title : domain;
+      })();
+      if (typeof confirm === 'function'
+        && !confirm('删除「' + name + '」的 ' + ids.length + ' 份 Cookie 快照？\n\n'
+          + '删除后该账号立即从公共池移除，网页版解析不再使用它。')) return;
+      try {
+        const r = await adminRequest('/api/admin/cookies/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: domain, ids: ids }),
+        });
+        if (r && r.ok) await loadCookies('已删除 ' + r.removed + ' 份');
+        else if (typeof alert === 'function') alert((r && r.error) || '删除失败');
+      } catch (err) {
+        if (typeof alert === 'function') alert('删除失败：' + (err && err.message || err));
+      }
+    };
+
+    // 事件委托：平台块的「补注入 / 删除」都是运行时渲染出来的，绑不到具体元素上。
+    if ($('adminCkBody')) {
+      $('adminCkBody').addEventListener('click', (e) => {
+        const del = e.target && e.target.closest ? e.target.closest('[data-ck-del]') : null;
+        if (del) {
+          _ckDelete(del.dataset.ckDel, del.dataset.ckIds);
+          return;
+        }
+        const inj = e.target && e.target.closest ? e.target.closest('[data-ck-inject]') : null;
+        if (inj) {
+          const sel = $('adminCkDomain');
+          if (sel) sel.value = inj.dataset.ckInject;
+          const sec = $('adminCkInjectSec') || (sel && sel.closest('.admin-cfg-section'));
+          if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          if ($('adminCkHeader')) $('adminCkHeader').focus();
+        }
+      });
+    }
+    if ($('adminCkVerify')) $('adminCkVerify').addEventListener('click', _ckVerify);
+    if ($('adminCkRefresh')) $('adminCkRefresh').addEventListener('click', () => loadCookies());
+
     // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
     let _monRange = 'day';
     // 当前统计范围的可视提示：按钮高亮之外再给一行文字，避免「以为没生效」

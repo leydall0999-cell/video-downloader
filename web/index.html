@@ -4180,6 +4180,7 @@
         <button type="button" class="admin-tab" data-admin-view="monitor" data-page-node-id="adminMonTab">运维监控</button>
         <button type="button" class="admin-tab" data-admin-view="recon" data-page-node-id="adminReconTab">每日对账</button>
         <button type="button" class="admin-tab" data-admin-view="demand" data-page-node-id="adminDemandTab">解析需求</button>
+        <button type="button" class="admin-tab" data-admin-view="cookies" data-page-node-id="adminCkTab">Cookie 池</button>
       </nav>
       <div class="admin-body" data-page-node-id="RYA0sEY7fsTbPcGaQp5gmC">
         <section class="admin-view" data-admin-view="users" id="adminViewUsers" data-page-node-id="p6bUVjPAOQ0OpOAa2jjHg7">
@@ -4452,6 +4453,38 @@
             </div>
             <div id="adminDemandBody" class="admin-table-wrap"></div>
           </div>
+        </section>
+        <!-- Cookie 池（2026-10-19）：公共池是网页版解析的命脉，池里某个站集体失效
+             时症状是「网页版全解析失败」而后台看不见。本页把「哪个站还有效、剩几个
+             账号、每账号存了多少项、多久没更新」摊开，并支持粘贴补注入。
+             🔴 默认只读本机/服务端文件，不联网；「立即校验」才真打平台。 -->
+        <section class="admin-view" data-admin-view="cookies" id="adminViewCookies" hidden data-page-node-id="adminCkView">
+          <div class="admin-toolbar" data-page-node-id="adminCkTb">
+            <span id="adminCkSummary" class="admin-count">加载中…</span>
+            <div class="admin-inline-form">
+              <button type="button" id="adminCkVerify" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="adminCkVerify">立即校验</button>
+              <button type="button" id="adminCkRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminCkRefresh">刷新</button>
+            </div>
+          </div>
+          <p id="adminCkHint" class="admin-hint"></p>
+
+          <div class="admin-cfg-section" data-page-node-id="adminCkInjectSec">
+            <div class="admin-cfg-head" data-page-node-id="adminCkInjectHead">
+              <h3 data-page-node-id="adminCkInjectTitle">补注入 Cookie</h3>
+              <span class="admin-cfg-hint" data-page-node-id="adminCkInjectHint">登录目标站 → 开发者工具 Network → 复制请求头里的 Cookie；注入前会自动验真，无效的不入池</span>
+            </div>
+            <div class="admin-inline-form" data-page-node-id="adminCkInjectBar">
+              <select id="adminCkDomain" class="admin-input admin-input-sm" data-page-node-id="adminCkDomain"></select>
+              <button type="button" id="adminCkInjectBtn" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="adminCkInjectBtn">注入</button>
+              <span id="adminCkInjectMsg" class="admin-msg" data-page-node-id="adminCkInjectMsg"></span>
+            </div>
+            <textarea id="adminCkHeader" class="admin-input" rows="3"
+                      placeholder="粘贴 Cookie：支持 `Cookie: a=b; c=d`、每行一个 k=v、或 Copy as cURL 的整段"
+                      style="width:100%;resize:vertical;min-height:66px;margin-top:.55rem;font-family:ui-monospace,Menlo,monospace;font-size:.78rem"
+                      data-page-node-id="adminCkHeader"></textarea>
+          </div>
+
+          <div id="adminCkBody" data-page-node-id="adminCkBody"></div>
         </section>
       </div>
     </div>

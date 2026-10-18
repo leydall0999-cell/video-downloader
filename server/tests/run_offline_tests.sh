@@ -1205,6 +1205,17 @@ run_pytest_root test_cookie_pool_identity.py # 身份去重 + 入池验真 + 会
 #       回落，否则扩展同步等于白做；但精确 host 的缓存必须优先（含 host-only cookie）。
 run_pytest_root test_cookie_browser_push.py # 登录态推送闸门 + 根域回落
 
+#  test_admin_cookies_panel.py —— 超管后台「Cookie 池」页（2026-10-17）
+#    ① 页面看的是「云端公共池」（网页版真在用的那个），不是本机空池；云端不可达才回落
+#       本机并标注来源，绝不冒充成功。
+#    ② 三态口径：valid / invalid / unknown（无探针≠无效），静态旁证只下 invalid 结论，
+#       避免把游客态当「还能用」、也避免把没验过的当「不能删」。
+#    ③ 同一账号多份快照，验真结论要回写「同会话全部 entry_id」，否则页面按最新一份
+#       展示时命中不到缓存，永远显示「未校验」。
+#    ④ 注入必须先验真再入池（无效拒收）、多行粘贴逐行校验防 CRLF 头注入；
+#       云端入口只暴露脱敏信息，且必须带 VDL_COOKIE_SYNC_TOKEN。
+run_pytest_root test_admin_cookies_panel.py # 后台 Cookie 池：概览/校验/注入/删除/云端代理
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

@@ -7328,3 +7328,34 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .admin-trial-chips label { display: inline-flex; align-items: center; gap: .25rem; padding: .18rem .45rem; border: 1px solid var(--border, #e5e7eb); border-radius: 999px; background: var(--surface, #fff); font-size: 12px; cursor: pointer; }
 .admin-trial-chips label input { width: 13px; height: 13px; cursor: pointer; }
 .admin-trial-chips label.is-out { color: var(--text-dim, #9ca3af); text-decoration: line-through; }
+
+/* ---- 后台 · Cookie 池（2026-10-19）--------------------------------------
+   一个平台一块卡：标题行放「账号数 / 有效 / 无效 / 未校验 / 最近更新 / 补注入」，
+   下面才是账号明细。运营扫一眼就够判断「这个站要不要补 Cookie」。
+   状态色只表达「站点确认的结果」：绿=站点说已登录，红=站点说未登录，
+   灰=没验过（不是坏）。 */
+.ckp-block {
+  margin-bottom: 1rem; border: 1px solid var(--line);
+  border-radius: var(--radius-md); overflow: hidden;
+}
+.ckp-hd {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  padding: .6rem .9rem; background: #f7f8fa;
+  border-bottom: 1px solid var(--line); font-size: .85rem;
+}
+.ckp-hd b { font-size: .9rem; }
+.ckp-hd .admin-btn { margin-left: auto; }
+.ckp-meta { color: var(--text-mute); font-size: .78rem; }
+.ckp-chip {
+  font-size: .72rem; padding: .1rem .42rem; border-radius: 999px;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.ckp-chip.ckp-ok { color: var(--success); background: rgba(16, 185, 129, .10); border-color: rgba(16, 185, 129, .25); }
+.ckp-chip.ckp-bad { color: var(--danger); background: rgba(239, 68, 68, .08); border-color: rgba(239, 68, 68, .20); }
+.ckp-chip.ckp-unk { color: var(--text-mute); background: #f1f3f5; border-color: var(--line); }
+.ckp-st { font-weight: 600; }
+.ckp-st.ckp-ok { color: var(--success); }
+.ckp-st.ckp-bad { color: var(--danger); }
+.ckp-st.ckp-unk { color: var(--text-mute); }
+.ckp-note { color: var(--text-mute); font-size: .74rem; }
+.ckp-detail { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -4087,6 +4087,10 @@ from routers import auth as _auth_rtr
 app.include_router(_auth_rtr.router)
 from routers import admin as _admin_rtr
 app.include_router(_admin_rtr.router)
+# Cookie 池管理（2026-10-19）：后台可视化「哪个平台还有效、剩几个账号、多久没更新」，
+# 并支持粘贴注入。独立成模块（不动 1500 行的 admin.py），鉴权复用 require_admin。
+from routers import admin_cookies as _admin_cookies_rtr
+app.include_router(_admin_cookies_rtr.router)
 from routers import support as _support_rtr
 app.include_router(_support_rtr.router)
 from routers import system as _system_rtr
