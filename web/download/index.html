@@ -60,9 +60,13 @@
         <div class="dl-ico">🍎</div>
         <h3>macOS</h3>
         <p>DMG · 297 MB · macOS 11+（Intel / Apple Silicon 通用版）。</p>
-        <a class="btn btn-block btn-primary" href="/download/installer?p=macos" download>下载 macOS</a>
+        <!-- 2026-10-18 去掉 download 属性：该地址会 302 到跨域 CDN，Safari / 微信内置浏览器
+             对「download 属性 + 跨域跳转」会静默不下载（点了没反应）。普通导航在所有浏览器
+             都会被 CDN 的二进制响应直接触发下载，也仍然走本机计数端点。 -->
+        <a class="btn btn-block btn-primary" href="/download/installer?p=macos" target="_blank" rel="noopener">下载 macOS</a>
         <p class="dl-note" style="margin-top:.6rem">安装：打开下载的 DMG，把「视频工坊」拖进「应用程序」文件夹。首次打开若提示无法验证，请右键点按图标再选「打开」（仅需一次）。</p>
         <p class="dl-note" style="margin-top:.4rem">打不开 DMG？<a href="/download/installer?p=macos-zip">下载 ZIP 版</a>（270 MB，解压后同样拖进「应用程序」）</p>
+        <p class="dl-note" style="margin-top:.4rem">点了没反应？改用<a href="https://download.hanyuxz.top/VideoDownloader.dmg" target="_blank" rel="noopener">直连地址下载</a>（同一个文件，不经过本站跳转）。</p>
         <details class="dl-slow">
           <summary>下载太慢？点这里提速</summary>
           <div class="dl-slow-body">
@@ -77,8 +81,10 @@
         <div class="dl-ico">🪟</div>
         <h3>Windows</h3>
         <p>Setup · 191 MB · 需 Windows 10 / 11（64 位）。</p>
-        <a class="btn btn-block btn-primary" href="/download/installer?p=windows" download>下载 Windows</a>
+        <a class="btn btn-block btn-primary" href="/download/installer?p=windows" target="_blank" rel="noopener">下载 Windows</a>
         <p class="dl-note" style="margin-top:.6rem">安装：双击 Setup 程序按提示完成；若 SmartScreen 提示「Windows 保护了你的电脑」，点「更多信息 → 仍要运行」即可（新发布软件常见提示）。</p>
+        <p class="dl-note" style="margin-top:.4rem">点了没反应？改用<a href="https://download.hanyuxz.top/VideoDownloader-Setup-1.0.74.exe" target="_blank" rel="noopener">直连地址下载</a>（同一个文件，不经过本站跳转）。</p>
+        <!-- ⚠️ 上面这条直连地址带版本号，升版时与 extension.py 的 _R2_INSTALLER_URLS 一起改。 -->
         <p class="dl-note" style="margin-top:.4rem">暂不支持 Windows 7 / 8（系统过旧，微软已停止支持）：请升级到 Windows 10 / 11，或先使用<a href="/">网页版</a>。</p>
         <p class="dl-note" style="margin-top:.4rem">种子（磁力）下载即将支持；语音识别模型将在首次使用本地字幕时自动下载。</p>
       </div>
@@ -130,6 +136,8 @@
     </section>
 
     <p class="dl-note">安装包由 Cloudflare 全球边缘网络分发，下载即最新版；后续版本可在客户端内「检查更新」一键升级（Mac 为增量补丁通常只有几 MB，Windows 自动下载完整安装包静默升级）。安装包已不含语音识别模型——首次使用本地字幕/识别功能时会自动下载该模型（146 MB，同样走全速边缘，有进度显示，可跳过不用）。</p>
+
+    <p class="dl-note">在微信 / QQ 里打开本页时，请先点右上角「···」→「在浏览器打开」再下载：微信内置浏览器会拦截 .dmg / .exe 这类安装包，表现就是点了没有任何反应。</p>
 
   </main>
 </body>
