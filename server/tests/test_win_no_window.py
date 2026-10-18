@@ -208,10 +208,64 @@ def test_posix_auto_uses_aria2c():
     check("带并发参数", "aria2c" in (o.get("downloader_args") or {}))
 
 
-def test_windows_explicit_aria2c_honored():
-    print("▶ Windows + 显式 aria2c：仍按用户指定启用")
+def test_windows_explicit_aria2c_forced_native():
+    print("▶ Windows + 显式 aria2c：强制改回原生（事故修复，不允许弹黑窗）")
     o = _opts(True, downloader_type="aria2c")
-    check("显式指定生效", o.get("downloader") == "aria2c", f"实际 {o.get('downloader')}")
+    check("显式 aria2c 在 Windows 被强制改原生", "downloader" not in o,
+          f"实际 {o.get('downloader')}")
+    check("仍带 http_chunk_size 分块提速", o.get("http_chunk_size", 0) > 0)
+
+
+def test_windows_retry_matrix_no_aria2c():
+    print("▶ Windows 失败重试矩阵：绝不升级到 aria2c")
+    orig_is_win = downloader._is_windows
+    orig_a2 = downloader._aria2c_path
+    downloader._is_windows = lambda: True
+    downloader._aria2c_path = lambda: "C:/bin/aria2c.exe"
+    try:
+        matrix = downloader._retry_matrix("native")
+    finally:
+        downloader._is_windows = orig_is_win
+        downloader._aria2c_path = orig_a2
+    used = [m[0] for m in matrix]
+    check("Windows 矩阵不含 aria2c", "aria2c" not in used, f"实际 {used}")
+    check("保留原生 + 切 HLS 两个变体", used == ["native", "native"], f"实际 {used}")
+    check("第二个变体开 alt_protocol", matrix[1][1] is True)
+
+
+def test_posix_retry_matrix_keeps_aria2c_escalation():
+    print("▶ POSIX 失败重试矩阵：保留「换成 aria2c」策略（别修坏 macOS）")
+    orig_is_win = downloader._is_windows
+    orig_a2 = downloader._aria2c_path
+    downloader._is_windows = lambda: False
+    downloader._aria2c_path = lambda: "/opt/bin/aria2c"
+    try:
+        matrix = downloader._retry_matrix("native")
+    finally:
+        downloader._is_windows = orig_is_win
+        downloader._aria2c_path = orig_a2
+    used = [m[0] for m in matrix]
+    check("POSIX 仍会尝试 aria2c", "aria2c" in used, f"实际 {used}")
+
+
+def test_win_clipboard_contract():
+    print("▶ Windows 剪贴板：纯 ctypes 实现（不许起子进程，否则每 2 秒闪一次窗）")
+    import win_clipboard
+    src = (Path(win_clipboard.__file__)).read_text(encoding="utf-8")
+    check("模块不 import subprocess", "import subprocess" not in src)
+    check("非 Windows 返回 None（调用方走 pbpaste 分支）",
+          win_clipboard.read_text() is None)
+    check("暴露 read_text", callable(getattr(win_clipboard, "read_text", None)))
+    check("用的是 Win32 剪贴板 API", "GetClipboardData" in src and "OpenClipboard" in src)
+
+
+def test_launcher_clipboard_no_powershell_poll():
+    print("▶ 启动器 read_clipboard：优先 ctypes，powershell 仅作兜底且带无窗口标志")
+    src = (Path(__file__).resolve().parents[2] / "desktop" / "desktop_launcher.py"
+           ).read_text(encoding="utf-8")
+    check("调用了 win_clipboard", "win_clipboard" in src)
+    check("兜底 powershell 带 CREATE_NO_WINDOW",
+          'creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)' in src)
 
 
 def test_windows_explicit_native():
@@ -233,7 +287,11 @@ def main():
     test_aria2c_path_posix_plain()
     test_windows_auto_no_aria2c()
     test_posix_auto_uses_aria2c()
-    test_windows_explicit_aria2c_honored()
+    test_windows_explicit_aria2c_forced_native()
+    test_windows_retry_matrix_no_aria2c()
+    test_posix_retry_matrix_keeps_aria2c_escalation()
+    test_win_clipboard_contract()
+    test_launcher_clipboard_no_powershell_poll()
     test_windows_explicit_native()
     print(f"🎉 Windows 无窗口回归测试全部通过（{_checks} 项断言）")
 

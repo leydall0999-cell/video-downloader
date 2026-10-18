@@ -4856,6 +4856,14 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
     #   - 显式 "aria2c" → 有就用，无则警告回退；显式 "native" → 强制原生。
     _a2 = _aria2c_path()
     _dl_choice = (downloader_type or VDL_DOWNLOADER).strip().lower()
+    if _dl_choice == "aria2c" and _is_windows():
+        # 🔴 Windows 一律不用 aria2c，**包括调用方显式指定**（2026-10-18 用户实测）。
+        # 桌面版是 --windowed 的 GUI 进程，Windows 会给它 fork 的 aria2c.exe 新建控制台
+        # 黑窗；实测这些窗口里的 aria2c 起不来、还挂着不退出 ⇒ 一开下载就不断弹新窗口。
+        # 前端高级选项里仍留着 aria2c 下拉项（历史配置可能已被选中），所以必须在
+        # 服务端兜住，而不是只依赖 auto 分支。
+        logger.warning("Windows 不支持 aria2c（会弹控制台窗口），自动改用内置下载器")
+        _dl_choice = "native"
     if _dl_choice == "auto":
         # 🔴 Windows：auto **不启用** aria2c（2026-10-18 用户实测事故）。
         # 桌面版是 GUI 进程，Windows 会给它 fork 的控制台程序新开一个黑窗；
@@ -5023,6 +5031,13 @@ def _retry_matrix(downloader_type: str) -> list[tuple[str, bool]]:
     """
     matrix: list[tuple[str, bool]] = [(downloader_type, False)]
     choice = (downloader_type or VDL_DOWNLOADER).strip().lower()
+    if _is_windows():
+        # 🔴 Windows 的失败重试**绝不升级到 aria2c**（2026-10-18 用户实测）。
+        # 原逻辑：原生下载失败 → 换 aria2c 再试一次。但 Windows 上 aria2c 会弹控制台
+        # 黑窗且起不来，于是「下载一失败就多出几个关不掉的窗口」，失败重试越多窗口越多。
+        # Windows 只保留「原生下载器 + 切 HLS 分片链路」两个变体。
+        matrix.append((downloader_type, True))
+        return matrix
     aria2c_available = _aria2c_path() is not None
     will_use_aria2c = choice == "aria2c" or (choice == "auto" and aria2c_available)
     if will_use_aria2c:

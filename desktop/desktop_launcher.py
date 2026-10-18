@@ -864,9 +864,23 @@ class VdlApi:
         import subprocess
         try:
             if sys.platform == "win32":
+                # 🔴 2026-10-18 用户实测事故：前端每 2 秒轮询一次剪贴板，而这里原来每次
+                # 都 `subprocess.run(["powershell", ...])`。桌面版是 --windowed 的 GUI
+                # 进程，Windows 会给它 fork 出来的控制台程序新建窗口 ⇒ 用户只打开了一次
+                # App，屏幕就每隔一两秒闪一下、窗口不停自己弹（看着像中毒）。
+                # 改走 Win32 API 直读（零进程、零窗口）；只有 API 不可用时才回退 powershell，
+                # 且回退分支显式带 CREATE_NO_WINDOW 双保险。
+                try:
+                    import win_clipboard as _wcb
+                    _txt = _wcb.read_text()
+                except Exception:
+                    _txt = None
+                if _txt is not None:
+                    return _txt
                 p = subprocess.run(
                     ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
                     capture_output=True, timeout=5,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 if p.returncode != 0:
                     return ""
