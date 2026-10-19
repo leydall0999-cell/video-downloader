@@ -3398,7 +3398,25 @@ def _js_challenge_options() -> dict[str, Any]:
     只在能真正找到 runtime / 支持该组件时才写进 options：
     `YoutubeDL._clean_js_runtimes()` 对**不认识的名字会直接 raise ValueError**，
     所以必须拿装好的 yt-dlp 自己的注册表来过滤，而不是硬编码。
+
+    🔴 VDL_YT_JS_RUNTIME=off：整体关闭 JS 求解（运维开关，默认不开）。
+    2026-10-19 香港节点实测：2 核小机上 deno 解一次 nsig 挑战要 **43s+**
+    （桌面 M1 同操作 1~5s），App 的多级重试链叠加后必然撞穿前端 70s 预算
+    ⇒ 网页版 YouTube 解析一律「超时」。关掉后格式列表不变（bare yt-dlp
+    实测 50 格式 / 1.3~5.8s），但 DASH 直链的签名不再解密 ⇒ 下载侧必须配合
+    「无 POT 时 ≤1080p 优先 HLS 混合流」（见 _yt_prefer_hls）一起用，
+    否则会选中签名未解密的 DASH 轨。桌面端（deno 快）不要开。
+
+    🔴 返回的 dict 会被 `options.update(...)` 合并进 yt-dlp 选项 ⇒ off 时
+    **必须显式返回 `{"js_runtimes": {}}`**：空 dict 是 update no-op，而
+    YoutubeDL 的库默认是 `{'deno': {}}`（YoutubeDL.py: `params.get(
+    'js_runtimes', {'deno': {}})`），只返回空 dict 而不写这个键，等于没关
+    （deno 照跑）——这是本函数的接线前提，改动前先读这段。
     """
+    if os.environ.get("VDL_YT_JS_RUNTIME", "").strip().lower() in (
+            "0", "off", "none", "disabled", "false", "no"):
+        _cookie_diag("yt_js_challenge", "runtimes=[] components=[] (VDL_YT_JS_RUNTIME=off)")
+        return {"js_runtimes": {}}
     try:
         from yt_dlp.globals import supported_js_runtimes, supported_remote_components
         ok_runtimes = set(supported_js_runtimes.value.keys())
@@ -3626,6 +3644,41 @@ def _bgutil_reachable() -> bool:
     except OSError:
         return False
 
+_POT_USABLE_CACHE: dict[str, bool] = {}
+
+def _pot_usable(proxy: str = "") -> bool:
+    """PO Token（pot:bgutil:http）此刻是否真的可用（默认每代理只探测一次）。
+
+    两件事都满足才算可用：
+    ① server 在 127.0.0.1:4416 监听（_bgutil_reachable 的裸 socket 预检，
+       绝不走代理——走代理会被拖死 367s，见其注释）；
+    ② **yt-dlp 实际会用的代理也放行 127.0.0.1:4416** —— 插件的
+       _request_webpage 走 yt-dlp 全局网络栈（getpot_bgutil_http.py 里
+       `'proxy': request.request_proxy`），代理是 socks/海外节点时
+       CONNECT 127.0.0.1:4416 必失败。2026-10-19 香港节点实测：裸 socket
+       报「可达」，但经 socks 代理 0.28s 快速失败 ⇒ POT 静默失效，
+       而 fetch_pot=always 仍按「可用」在跑，既浪费又掩盖真实状态。
+    """
+    key = (proxy or "").strip()
+    if key in _POT_USABLE_CACHE:
+        return _POT_USABLE_CACHE[key]
+    result = False
+    if _bgutil_reachable():
+        if not key:
+            # 无代理：插件请求直连本机 4416，server 在监听就跑得通
+            result = True
+        else:
+            try:
+                import urllib.request
+                opener = urllib.request.build_opener(
+                    urllib.request.ProxyHandler({"http": key, "https": key}))
+                with opener.open("http://127.0.0.1:4416/ping", timeout=0.8) as resp:
+                    result = int(getattr(resp, "status", 0) or resp.getcode() or 0) == 200
+            except Exception:
+                result = False
+    _POT_USABLE_CACHE[key] = result
+    return result
+
 def _yt_real_video_heights(formats: list) -> list[int]:
     """真实视频轨高度（排除纯音频与 mhtml 雪碧图/storyboard）。"""
     out: list[int] = []
@@ -3709,7 +3762,7 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
         if use_visitor and not cookie_text and visitor_data:
             ya = opts.setdefault("extractor_args", {}).setdefault("youtube", {})
             ya["visitor_data"] = [visitor_data]
-            ya["fetch_pot"] = ["always"] if _bgutil_reachable() else ["never"]
+            ya["fetch_pot"] = ["always"] if _pot_usable(effective_proxy) else ["never"]
         try:
             with _YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -3725,24 +3778,25 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
                     and os.environ.get("VDL_YT_HLS_FALLBACK", "1").strip().lower()
                     not in ("0", "false", "no", "off")):
                 _old_max = max(_yt_real_video_heights(info.get("formats") or []), default=0)
-                _bg_ok = _bgutil_reachable()
+                _pot_ok = _pot_usable(effective_proxy)
                 try:
                     opts_h = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
                     opts_h["format"] = None
                     _ya_h = opts_h.setdefault("extractor_args", {}).setdefault("youtube", {})
                     _ya_h["player_client"] = [
                         os.environ.get("VDL_YT_HLS_CLIENT", "").strip() or "web_safari"]
-                    # bgutil server 没跑时必须显式关 POT，否则插件 ping 127.0.0.1:4416
-                    # 会被全局代理拖死（实测 367s）；server 在跑则保留 POT 拿 DASH 全轨。
-                    if not _bg_ok:
+                    # POT 不可用（server 没跑 / 代理不放行 4416）时必须显式关 POT，
+                    # 否则插件 ping 127.0.0.1:4416 会被全局代理拖死（实测 367s）；
+                    # POT 可用则保留 POT 拿 DASH 全轨。
+                    if not _pot_ok:
                         _ya_h["fetch_pot"] = ["never"]
                     with _YoutubeDL(opts_h) as ydl_h:
                         info_h = ydl_h.extract_info(url, download=False)
                     _new_max = max(_yt_real_video_heights((info_h or {}).get("formats") or []), default=0)
                     if info_h and _new_max > _old_max:
                         logger.info(
-                            "[youtube] PO Token 饥饿（最高 %sP）→ web_safari/HLS 补救成功（最高 %sP，bgutil=%s）",
-                            _old_max, _new_max, _bg_ok)
+                            "[youtube] PO Token 饥饿（最高 %sP）→ web_safari/HLS 补救成功（最高 %sP，pot=%s）",
+                            _old_max, _new_max, _pot_ok)
                         return info_h
                 except (DownloadError, ExtractorError) as exc_h:
                     logger.info("[youtube] PO Token 饥饿补救失败（保留原结果）: %s", str(exc_h)[:120])
@@ -4792,6 +4846,51 @@ def _format_selector(quality_key: str) -> str:
         f"bv*[height<={height}]+ba/b[height<={height}]/b[height<={height}]"
     )
 
+def _yt_prefer_hls(quality_key: str) -> bool:
+    """无 PO Token 时，YouTube 该清晰度档是否优先走 HLS 混合流。
+
+    判据（2026-10-19 实测）：googlevideo 对**无 PO Token 的 DASH 自适应流
+    按连接限速**——单连接 ~40~80KB/s，16 连接聚合仅 ~600KB/s，且频繁硬
+    阻断直至「网络连接超时」（用户 637MB 的 1080P 任务因此在 35% 失败，
+    截图里瞬时 81KB/s、ETA 1:40）。同源 **HLS 混合流（itag 91-96，
+    avc1+aac）不限速：单连接实测 1.5MB/s**。
+    故 POT 不可用时 ≤1080p 直接要 HLS；>1080p 只有 DASH 一条路（仍会用，
+    只是慢），音频/VP9 不受该限速影响、保持原选择器。
+    env：VDL_YT_PREFER_HLS=0 可整体关闭（不需要重新发版）。
+    """
+    if os.environ.get("VDL_YT_PREFER_HLS", "1").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    if quality_key in (AUDIO_KEY, M4A_KEY, WEBM_KEY):
+        return False
+    if quality_key == BEST_KEY:
+        return True  # 「最佳画质」本就封顶 1080p avc1（见 _format_selector）
+    try:
+        return int(quality_key) <= 1080
+    except (TypeError, ValueError):
+        return False
+
+
+def _youtube_hls_selector(quality_key: str) -> str:
+    """YouTube HLS 优先的格式选择器；拿不到 HLS 时原样回落 DASH 链。
+
+    protocol^=m3u8 命中 itag 91-96（m3u8_native 混合流）；height 上限与
+    请求档一致（BEST_KEY 视同 1080）。注意 HLS 是**音视频混合流**，不需要
+    合并音轨，落盘即成品。
+    """
+    if quality_key == BEST_KEY:
+        cap = 1080
+    else:
+        try:
+            cap = int(quality_key)
+        except (TypeError, ValueError):
+            return _format_selector(quality_key)
+    return (
+        f"b[protocol^=m3u8][height<={cap}]/"
+        f"best[protocol^=m3u8][height<={cap}]/"
+        f"{_format_selector(quality_key)}"
+    )
+
+
 def is_valid_quality(quality_key: str) -> bool:
     # 常量档（最佳/仅音频/WebM/M4A）或任意 1..4320 真实清晰度档（2026-09-06 全档平铺后放开）
     if quality_key in (BEST_KEY, AUDIO_KEY, WEBM_KEY, M4A_KEY):
@@ -4876,8 +4975,17 @@ class _ProgressReporter:
             self._store.update(self._task.id, status="merging", progress=98.0)
 
 def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressReporter, *, cookie: str = "", proxy: str = "", format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> dict:
+    # YouTube 无 PO Token 时 ≤1080p 优先 HLS 混合流：DASH 自适应流被
+    # googlevideo 按连接限速（2026-10-19 实测 ~600KB/s 聚合 + 硬阻断超时），
+    # HLS 单连接即 1.5MB/s。判据与回落见 _yt_prefer_hls / _youtube_hls_selector。
+    _fmt = _format_selector(quality_key)
+    _task_host = _host_of(task.url)
+    if (_task_host and _is_youtube_host(_task_host) and _yt_prefer_hls(quality_key)
+            and not _pot_usable(proxy or _resolve_proxy(_task_host))):
+        _fmt = _youtube_hls_selector(quality_key)
+        logger.info("[youtube] 无 PO Token ⇒ %s 档优先 HLS 混合流（避开 DASH 按连接限速）", quality_key)
     options = _base_options(DOWNLOAD_RETRIES, _host_of(task.url), cookie=cookie, proxy=proxy) | {
-        "format": _format_selector(quality_key),
+        "format": _fmt,
         "outtmpl": {"default": f"%(title).{MAX_TITLE_CHARS}s.%(ext)s"},
         "paths": {"home": str(task.workdir)},
         "windowsfilenames": True,

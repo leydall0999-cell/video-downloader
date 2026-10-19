@@ -146,6 +146,7 @@ run_one test_quality_options.py
 run_one test_quality_member_gate.py          # 清晰度会员门槛：免费档 2K/4K → 402 引导开会员（2026-10-02 用户「免费用户 1080 以上要弹会员」）
 run_one test_quality_member_ui_wiring.py     # 清晰度门槛三端接线：后端两入口都挂门 + 前端弹会员中心（不弹＝用户不知道怎么解锁）
 run_one test_yt_pot_starved.py
+run_one test_youtube_hls_prefer.py         # YouTube 无 POT ⇒ ≤1080p 优先 HLS 混合流（2026-10-19 用户「下载速度慢」）：DASH 无 POT 被 googlevideo 按连接限速（16 连接聚合 ~600KB/s + 硬阻断超时），HLS 单连接 1.5MB/s；含 _pot_usable 代理感知判定 + VDL_YT_JS_RUNTIME=off 开关
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py
 run_one test_dewatermark_core.py
