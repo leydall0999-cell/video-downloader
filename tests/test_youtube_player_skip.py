@@ -6,8 +6,17 @@
 即「省掉一次 ytcfg 请求」且不裁掉 HLS/DASH 格式。
 
 本用例守住两件事：
-  1. YouTube 的 opts 里必须带上 player_skip=["configs"]（且不能动 player_client）
+  1. YouTube 的 opts 里必须带上 player_skip=["configs"]
   2. VDL_YT_PLAYER_SKIP=0 时能整段关掉（线上紧急回滚，不用发版）
+
+🔴 2026-10-19 变更：不再强制 player_client=web_safari，改走 yt-dlp 默认客户端链。
+香港节点矩阵实测（CuK9hrKXb8U，visitor_data 已注入、fetch_pot=never）：
+    (default 链)  → 9.5s / 50 格式（m3u8_native×16 最高 1440p + https×30）
+    web_safari    → FAIL "Requested format is not available"（js 开/关都败）
+    android       → 仅 5 格式（无 m3u8）；tv/ios/mweb/web/web_embedded/tv_simply 全 FAIL
+web_safari 是 2026-09-21 按「与 bgutil PO Token 同 client」选的，但那只在
+**POT 真可用**时成立；POT 不可用时它连格式列表都拿不到 ⇒ 网页版解析全坏。
+player_client 是「合并」模式，传任何单客户端都会覆盖默认链，故一个都不传。
 """
 import os
 import sys
@@ -33,19 +42,23 @@ def _yt_args(**kw):
 
 
 def test_youtube_opts_carry_player_skip_configs(monkeypatch):
-    """YouTube：必须带 player_skip=configs，且 player_client 仍是 web_safari。"""
+    """YouTube：必须带 player_skip=configs，且不得强制 player_client。"""
     monkeypatch.delenv("VDL_YT_PLAYER_SKIP", raising=False)
+    monkeypatch.delenv("VDL_YT_HLS_CLIENT", raising=False)
     ya = _yt_args()
-    assert ya.get("player_client") == ["web_safari"], f"player_client 不应被改动：{ya}"
+    assert "player_client" not in ya, (
+        f"默认客户端链才能拿到完整格式列表，不得强制 player_client（HK 矩阵："
+        f"web_safari 在 POT 不可用时直接 'format is not available'）：{ya}")
     assert ya.get("player_skip") == ["configs"], f"应带 player_skip=configs：{ya}"
 
 
 def test_youtube_player_skip_can_be_disabled_by_env(monkeypatch):
     """VDL_YT_PLAYER_SKIP=0：整段关掉（线上紧急回滚通道）。"""
     monkeypatch.setenv("VDL_YT_PLAYER_SKIP", "0")
+    monkeypatch.delenv("VDL_YT_HLS_CLIENT", raising=False)
     ya = _yt_args()
     assert "player_skip" not in ya, f"关掉后不应有 player_skip：{ya}"
-    assert ya.get("player_client") == ["web_safari"]
+    assert "player_client" not in ya
 
 
 @pytest.mark.parametrize("flag", ["false", "no", "off", "FALSE"])

@@ -280,6 +280,59 @@ class TestSourceWiring(unittest.TestCase):
         self.assertIn("_pot_usable(", body)
 
 
+class TestPlayerClientNotForced(unittest.TestCase):
+    """🔴 2026-10-19：不得再强制 player_client=web_safari。
+
+    香港节点客户端矩阵实测（CuK9hrKXb8U，visitor_data 已注入、fetch_pot=never）：
+        (default 链)  → 9.5s / 50 格式（m3u8_native×16 最高 1440p + https×30）
+        web_safari    → FAIL "Requested format is not available"（js 开/关都败）
+        android       → 仅 5 格式（无 m3u8）；tv/ios/mweb/web/web_embedded/tv_simply 全 FAIL
+    web_safari 是 2026-09-21 按「与 bgutil PO Token 同 client」选的，只在 POT
+    **真可用**时成立；POT 不可用时它连格式列表都拿不到 ⇒ 网页版 YouTube 解析全坏
+    （用户看到的 70s「超时」= 重试链烧穿预算）。且 yt-dlp 的 player_client 是
+    「合并」模式，传任何单客户端都会覆盖默认链 ⇒ 默认链一个都不传。
+    """
+
+    def test_base_options_does_not_force_client(self):
+        """运行时：_base_options 的 youtube extractor_args 不该有 player_client。"""
+        with mock.patch.object(D, "_resolve_proxy", lambda *a, **kw: ""), \
+             mock.patch.object(D, "_cn_proxy_url", lambda *a, **kw: ""):
+            env = dict(os.environ)
+            env.pop("VDL_YT_HLS_CLIENT", None)
+            with mock.patch.dict(os.environ, env, clear=True):
+                opts = D._base_options(host="youtube.com")
+        ya = (opts.get("extractor_args") or {}).get("youtube") or {}
+        self.assertNotIn("player_client", ya,
+                         f"不得强制 player_client（应走默认客户端链）：{ya}")
+
+    def test_source_has_no_forced_web_safari(self):
+        """源码级：_base_options 内不得再出现 player_client = ["web_safari"]。"""
+        src = _read_source()
+        i = src.find("def _base_options(")
+        self.assertNotEqual(i, -1)
+        body = src[i:i + 8000]
+        self.assertNotIn('"player_client"] = ["web_safari"]', body,
+                         "_base_options 仍在强制 web_safari（HK 实测它会直接 FAIL）")
+
+    def test_fallback_clients_default_first(self):
+        """下载降级链：默认客户端链必须前置，单客户端降为兜底。"""
+        src = _read_source()
+        i = src.find("_yt_clients = [")
+        self.assertNotEqual(i, -1)
+        line = src[i:src.find("]", i) + 1]
+        self.assertIn('"(default)"', line, f"默认链应前置：{line}")
+        self.assertTrue(line.index('"(default)"') < line.index('"web_safari"'),
+                        f"(default) 必须排在 web_safari 之前：{line}")
+
+    def test_pot_starved_fallback_tries_client_chain(self):
+        """PO Token 饥饿补救：单一客户端会整段报废，必须依次尝试客户端链。"""
+        src = _read_source()
+        self.assertIn("for _hls_client in _hls_clients", src,
+                      "饥饿补救仍是单客户端（web_safari FAIL 时整段报废）")
+        self.assertIn('_hls_clients = [_hls_client_env] if _hls_client_env else ["web_safari", "android"]',
+                      src, "饥饿补救的客户端链内容变了，请同步本守卫")
+
+
 if __name__ == "__main__":
     print("🧪 YouTube 无 POT ⇒ HLS 优先 守卫测试（web-dev）\n")
     loader = unittest.TestLoader()
@@ -292,6 +345,7 @@ if __name__ == "__main__":
             TestPotUsableNoServer,
             TestJsRuntimeSwitch,
             TestSourceWiring,
+            TestPlayerClientNotForced,
         )
     )
     r = unittest.TextTestRunner(verbosity=2).run(suite)

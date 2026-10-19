@@ -1817,18 +1817,22 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
             cookie_text = f"SESSDATA={cookie_text}"
             _cookie_diag("cookie_bare_value_fixed", "bilibili bare SESSDATA auto-prefixed")
         headers["Cookie"] = cookie_text
-    # YouTube 专用参数：player_client 选择。
-    # 2026-09-21 实测（yt-dlp 2026.08.19）：原选的 tv_embedded 已被 yt-dlp 移除
-    # （日志 "Skipping unsupported client tv_embedded"），触发静默回退到默认
-    # android_vr；而 bgutil 是按 client 生成 gvs PO Token 的（默认为 web_safari），
-    # token 与 client 不匹配 → googlevideo 对分片一律 403
-    # （现象：/api/resolve 解析成功且能拿到 play_url，下载却 403）。
-    # 改用 web_safari：与 bgutil 生成的 PO Token 同 client，实测可正常下载。
-    # 注意：yt-dlp 的 player_client 是「合并」模式而非「依次尝试」，
-    # 多 client 列表会导致空 SABR 结果污染整体，必须只传一个。
+    # YouTube 专用参数。
+    # 🔴 2026-10-19 香港节点客户端矩阵实测（yt-dlp 2026.08.19 + WARP socks 出口，
+    #    fetch_pot=never、visitor_data 已注入，CuK9hrKXb8U）：
+    #      (default 链)  → 9.5s / 50 格式（m3u8_native×16 最高 1440p + https×30）
+    #      web_safari    → FAIL "Requested format is not available"（2.4s，js 开/关都败）
+    #      android       → 仅 5 格式（无 m3u8）；tv/ios/mweb/web/web_embedded/tv_simply 全 FAIL
+    #    ⇒ 曾按 2026-09-21「与 bgutil PO Token 同 client」逻辑强制的 web_safari，
+    #      在**POT 实际不可用**（HK 经 socks 代理打不通 4416，见 _pot_usable）时
+    #      连格式列表都拿不到 —— 网页版 YouTube 解析是全坏的（用户看到的 70s
+    #      「超时」即重试链把预算烧穿）。与 app-dev 2026-09-26 的结论一致：
+    #      **不传 player_client，走 yt-dlp 默认客户端链**才能拿到完整格式列表。
+    #    注意：yt-dlp 的 player_client 是「合并」模式而非「依次尝试」，
+    #    多 client 列表会导致空 SABR 结果污染整体，必须只传一个——所以这里
+    #    一个都不传（默认链由 yt-dlp 内部依序尝试，不属于合并模式）。
     if host and ("youtube.com" in host or "youtu.be" in host):
         _yt_args = options.setdefault("extractor_args", {}).setdefault("youtube", {})
-        _yt_args["player_client"] = ["web_safari"]
         # 🔴 VDL_YT_JS_RUNTIME=off：关掉 deno 的 nsig JS 求解（运维开关，默认不开）。
         # 2026-10-19 香港节点实测：2 核小机上 deno 解一次 nsig 挑战要 43s+
         # （桌面 M1 同操作 1~5s），多级重试链叠加后必撞穿前端 70s 解析预算
@@ -3619,27 +3623,36 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
                     not in ("0", "false", "no", "off")):
                 _old_max = max(_yt_real_video_heights(info.get("formats") or []), default=0)
                 _pot_ok = _pot_usable(effective_proxy)
-                try:
-                    opts_h = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
-                    opts_h["format"] = None
-                    _ya_h = opts_h.setdefault("extractor_args", {}).setdefault("youtube", {})
-                    _ya_h["player_client"] = [
-                        os.environ.get("VDL_YT_HLS_CLIENT", "").strip() or "web_safari"]
-                    # bgutil server 没跑 / 代理不放行 4416 时必须显式关 POT，否则插件
-                    # ping 127.0.0.1:4416 会被全局代理拖死（实测 367s）；
-                    # POT 真可用则保留 POT 拿 DASH 全轨。
-                    if not _pot_ok:
-                        _ya_h["fetch_pot"] = ["never"]
-                    with _YoutubeDL(opts_h) as ydl_h:
-                        info_h = ydl_h.extract_info(url, download=False)
-                    _new_max = max(_yt_real_video_heights((info_h or {}).get("formats") or []), default=0)
-                    if info_h and _new_max > _old_max:
-                        logger.info(
-                            "[youtube] PO Token 饥饿（最高 %sP）→ web_safari/HLS 补救成功（最高 %sP，pot=%s）",
-                            _old_max, _new_max, _pot_ok)
-                        info = info_h
-                except Exception as _fb_exc:
-                    logger.info("[youtube] web_safari/HLS 补救失败（保留原结果）: %s", str(_fb_exc)[:120])
+                # 🔴 2026-10-19 香港节点矩阵：web_safari 在 POT 不可用时**连格式列表
+                # 都拿不到**（FAIL "Requested format is not available"），单一客户端
+                # 补救会整段报废 ⇒ 改成依次尝试客户端链，谁的真实最高清晰度更高就用谁；
+                # 全败则保留原结果（原逻辑的兜底语义不变）。
+                # env VDL_YT_HLS_CLIENT=<name> 可钉死单客户端（排障用）。
+                _hls_client_env = os.environ.get("VDL_YT_HLS_CLIENT", "").strip()
+                _hls_clients = [_hls_client_env] if _hls_client_env else ["web_safari", "android"]
+                for _hls_client in _hls_clients:
+                    try:
+                        opts_h = _base_options(PROBE_RETRIES, host, cookie=cookie_text, proxy=proxy)
+                        opts_h["format"] = None
+                        _ya_h = opts_h.setdefault("extractor_args", {}).setdefault("youtube", {})
+                        _ya_h["player_client"] = [_hls_client]
+                        # bgutil server 没跑 / 代理不放行 4416 时必须显式关 POT，否则插件
+                        # ping 127.0.0.1:4416 会被全局代理拖死（实测 367s）；
+                        # POT 真可用则保留 POT 拿 DASH 全轨。
+                        if not _pot_ok:
+                            _ya_h["fetch_pot"] = ["never"]
+                        with _YoutubeDL(opts_h) as ydl_h:
+                            info_h = ydl_h.extract_info(url, download=False)
+                        _new_max = max(_yt_real_video_heights((info_h or {}).get("formats") or []), default=0)
+                        if info_h and _new_max > _old_max:
+                            logger.info(
+                                "[youtube] PO Token 饥饿（最高 %sP）→ %s/HLS 补救成功（最高 %sP，pot=%s）",
+                                _old_max, _hls_client, _new_max, _pot_ok)
+                            info = info_h
+                            break
+                    except Exception as _fb_exc:
+                        logger.info("[youtube] %s/HLS 补救失败（保留原结果）: %s",
+                                    _hls_client, str(_fb_exc)[:120])
             return info
         except (DownloadError, ExtractorError) as exc:
             low = str(exc).lower()
@@ -4479,7 +4492,12 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
                     opts2 = _base_options(PROBE_RETRIES, _host_of(url), cookie=cookie, proxy=proxy)
                     opts2["extract_flat"] = "in"
                     if "youtube.com" in (_host_of(url) or "") or "youtu.be" in (_host_of(url) or ""):
-                        opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = ["web_safari"]
+                        # 🔴 2026-10-19：不再默认强制 web_safari（HK 矩阵实测它在 POT
+                        # 不可用时直接 "format is not available"，会把本来能成的降级
+                        # 也带崩）。走 yt-dlp 默认客户端链；仅在排障 env 指定时才钉死。
+                        _flat_client = os.environ.get("VDL_YT_HLS_CLIENT", "").strip()
+                        if _flat_client:
+                            opts2.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = [_flat_client]
                     with _YoutubeDL(opts2) as ydl2:
                         info = ydl2.extract_info(url, download=False)
                         _last_err = None  # 降级成功
@@ -5378,7 +5396,10 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                     #   按 client 生成，与 android 不匹配；tv_embedded 已被 yt-dlp 移除）
                     #   web_safari → ✅ 与 PO Token 同 client，实测 12MB 秒下
                     # 故 web_safari 前置，其余兜底。
-                    _yt_clients = ["web_safari", "android", "ios", "tv"]
+                    # 🔴 2026-10-19 香港节点矩阵：(default 链) 9.5s / 50 格式（m3u8×16
+                    # 最高 1440p）完胜任何单客户端；web_safari 在 POT 不可用时直接
+                    # FAIL ⇒ 默认链前置，单客户端降为兜底。
+                    _yt_clients = ["(default)", "web_safari", "android", "ios", "tv"]
                     _done = False
                     for _client in _yt_clients:
                         if task.cancel_requested:

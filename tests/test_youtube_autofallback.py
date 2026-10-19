@@ -159,12 +159,39 @@ def test_youtube_visitor_data_injected_for_pot(monkeypatch):
 
     monkeypatch.setattr(dl, "_YoutubeDL", _VisYDL)
     monkeypatch.setattr(dl, "_fetch_youtube_visitor_data", lambda *a, **kw: "Cgtestvisitordata123")
+    # bgutil 可用（裸 socket 通 4416 + 经代理也通 /ping）→ POT 路径成立
+    monkeypatch.setattr(dl, "_pot_usable", lambda *a, **kw: True)
 
     info = dl._resolve_youtube("https://youtu.be/eVAx63QSgc4")
     assert info["title"] == "Test Video"
     ya = captured["extractor_args"].get("youtube") or {}
     assert ya.get("visitor_data") == ["Cgtestvisitordata123"], f"应注入 visitor_data，实际 {ya}"
     assert ya.get("fetch_pot") == ["always"], f"应强制 fetch_pot，实际 {ya}"
+
+
+def test_youtube_pot_never_when_bgutil_unusable(monkeypatch):
+    """🔴 2026-10-19：POT 可用性必须代理感知——bgutil 打不通时绝不能 fetch_pot=always。
+
+    香港节点实测：4416 上 bgutil(node) 直连 ping 得通，但经 WARP socks 代理
+    （VDL_PROXY_YT=socks5h://127.0.0.1:40000）打不通；而 POT 插件走的是
+    yt-dlp 全局代理 ⇒ 旧的裸 _bgutil_reachable() 会误判可用，于是
+    fetch_pot=always 静默失效（解析干等到超时）。
+    """
+    _patch_env(monkeypatch)
+    captured = {}
+
+    class _VisYDL(_FakeYDL):
+        def extract_info(self, url, download=False):
+            captured["extractor_args"] = self.opts.get("extractor_args") or {}
+            return dict(OK_INFO)
+
+    monkeypatch.setattr(dl, "_YoutubeDL", _VisYDL)
+    monkeypatch.setattr(dl, "_fetch_youtube_visitor_data", lambda *a, **kw: "Cgtestvisitordata123")
+    monkeypatch.setattr(dl, "_pot_usable", lambda *a, **kw: False)
+
+    dl._resolve_youtube("https://youtu.be/eVAx63QSgc4")
+    ya = captured["extractor_args"].get("youtube") or {}
+    assert ya.get("fetch_pot") == ["never"], f"bgutil 不可用时必须显式关 POT，实际 {ya}"
 
 
 def test_youtube_cookie_path_no_visitor(monkeypatch):
