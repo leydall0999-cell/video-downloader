@@ -7367,3 +7367,31 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .ckp-st.ckp-unk { color: var(--text-mute); }
 .ckp-note { color: var(--text-mute); font-size: .74rem; }
 .ckp-detail { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 平台筛选 + tab 条（2026-10-19 用户要求「每个平台一个分页，不要排一起」）：
+   默认「全部平台」= tab 条逐个看；下拉选具体平台 = 只渲染那一个块。 */
+.ckp-filter {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  margin-bottom: .6rem;
+}
+.ckp-filter-label { font-size: .82rem; color: var(--text-mute); }
+.ckp-filter select { max-width: 320px; }
+.ckp-filter-hint { font-size: .74rem; color: var(--text-mute); }
+.ckp-tabs {
+  display: flex; flex-wrap: wrap; gap: .4rem;
+  margin-bottom: .8rem; padding-bottom: .2rem;
+}
+.ckp-tab {
+  display: inline-flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+  padding: .34rem .68rem; cursor: pointer; font-size: .8rem;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface, #fff); color: var(--text);
+}
+.ckp-tab:hover { border-color: var(--brand); }
+.ckp-tab.is-on {
+  border-color: var(--brand); background: #eef0ff;
+  color: var(--brand); font-weight: 600;
+}
+.ckp-tab-name { white-space: nowrap; }
+.ckp-tab-meta { color: var(--text-mute); font-size: .72rem; white-space: nowrap; }
+.ckp-tab.is-on .ckp-tab-meta { color: inherit; opacity: .75; }

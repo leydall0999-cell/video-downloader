@@ -316,12 +316,19 @@ def case_ui_wiring() -> None:
     repo = Path(__file__).resolve().parents[2]
     js = (repo / "web" / "app.js").read_text(encoding="utf-8")
     html = (repo / "web" / "index.html").read_text(encoding="utf-8")
-    for bid in ("adminCkVerify", "adminCkRefresh", "adminCkInjectBtn"):
+    for bid in ("adminCkVerify", "adminCkRefresh", "adminCkInjectBtn", "adminCkPlatformSel"):
         check(f"{bid} 有 addEventListener 绑定", f"$('{bid}').addEventListener" in js)
         check(f"{bid} 在 HTML 里存在", f'id="{bid}"' in html)
     # 每行的「补注入」只负责选平台 + 聚焦，真正提交仍走上面那个按钮
     check("平台块有 data-ck-inject 入口", "data-ck-inject=" in js)
     check("admin tab 有 Cookie 池入口", 'data-admin-view="cookies"' in html)
+    # 2026-10-19：平台列表改「下拉筛选 + tab 条」，默认全部平台、一次只展示一个平台
+    check("tab 条容器在 HTML 里", 'id="adminCkTabs"' in html)
+    check("tab 条有点击委托", "closest('[data-ck-tab]')" in js)
+    check("tab 用 data-ck-tab 标识", "data-ck-tab=" in js)
+    check("下拉默认「全部平台」", "全部平台（" in js)
+    check("选具体平台后不再渲染 tab 条", "_ckFilter ? '' : doms.map" in js)
+    check("切 tab 只重渲染不打接口", "if (_ckData) _ckRender(_ckData);" in js)
 
 
 def case_cloud_proxy() -> None:

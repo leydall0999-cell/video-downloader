@@ -22267,6 +22267,10 @@ el.dwVidPlayer.hidden = true;
     //   unknown 没有探针或网络不可达 —— **不等于无效**，不能按无效删
     let _ckData = null;
     let _ckBusy = false;
+    // 平台筛选：'' = 全部平台（tab 浏览）；具体域名 = 只看该平台
+    let _ckFilter = '';
+    // 当前展示哪个平台的明细（tab 浏览时的当前 tab）
+    let _ckActiveDomain = null;
 
     const _ckAgo = (sec) => {
       const n = Number(sec) || 0;
@@ -22302,10 +22306,65 @@ el.dwVidPlayer.hidden = true;
       sel.dataset.filled = '1';
     };
 
+    const _ckFillPlatformSel = (d) => {
+      const sel = $('adminCkPlatformSel');
+      if (!sel) return;
+      const doms = d.domains || [];
+      // 选项里直接带摘要：运营不用逐个点进去就知道该补哪个站
+      const opts = ['<option value="">全部平台（' + doms.length + '）</option>']
+        .concat(doms.map((r) => {
+          const bits = [r.accounts + ' 账号', r.entries + ' 份'];
+          if (r.valid) bits.push('有效 ' + r.valid);
+          if (r.invalid) bits.push('无效 ' + r.invalid);
+          if (r.unknown) bits.push('未校验 ' + r.unknown);
+          return '<option value="' + esc(r.domain) + '">' + esc(r.title)
+            + '（' + esc(bits.join(' · ')) + '）</option>';
+        }));
+      sel.innerHTML = opts.join('');
+      sel.value = _ckFilter || '';
+    };
+
+    const _ckBlock = (r, d) => {
+      const rows = (r.items || []).map((a) => {
+        const ids = (a.entries || []).map((e) => e.id).join(',');
+        return '<tr>'
+          + '<td><b>' + esc(a.label) + '</b>'
+          + (a.snapshots > 1 ? ' <span class="ckp-note">' + a.snapshots + ' 份快照</span>' : '')
+          + '</td>'
+          + '<td>' + _ckStatusCell(a) + '</td>'
+          + '<td>' + a.parts + ' 项</td>'
+          + '<td>' + a.snapshots + '</td>'
+          + '<td>' + esc(_ckSrcLabel(a.source)) + '</td>'
+          + '<td>' + _ckAgo(a.age_sec) + '</td>'
+          + '<td class="ckp-detail" title="' + esc(a.detail || '') + '">' + esc(a.detail || '-') + '</td>'
+          + '<td><button type="button" class="admin-btn admin-btn-ghost admin-btn-sm"'
+          + ' data-ck-del="' + esc(r.domain) + '" data-ck-ids="' + esc(ids) + '">删除</button></td>'
+          + '</tr>';
+      }).join('');
+
+      return '<div class="ckp-block">'
+        + '<div class="ckp-hd">'
+        + '<b>' + esc(r.title) + '</b>'
+        + '<span class="ckp-meta">' + r.accounts + ' 个账号 · ' + r.entries + ' 份</span>'
+        + _ckChip('ok', r.valid, '有效')
+        + _ckChip('bad', r.invalid, '无效')
+        + _ckChip('unk', r.unknown, '未校验')
+        + (r.broken ? '<span class="ckp-chip ckp-bad">解不开 ' + r.broken + '</span>' : '')
+        + '<span class="ckp-meta">' + (r.last_ts ? '更新于 ' + _ckAgo(d.now - r.last_ts) : '无记录') + '</span>'
+        + '<button type="button" class="admin-btn admin-btn-sm" data-ck-inject="' + esc(r.domain) + '">补注入</button>'
+        + '</div>'
+        + '<div class="admin-table-wrap"><table class="admin-table">'
+        + '<thead><tr><th>账号</th><th>状态</th><th>Cookie 项</th><th>份数</th>'
+        + '<th>来源</th><th>最近更新</th><th>说明</th><th>操作</th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table></div>'
+        + '</div>';
+    };
+
     const _ckRender = (d, note) => {
       const body = $('adminCkBody');
       const sum = $('adminCkSummary');
       const hint = $('adminCkHint');
+      const tabs = $('adminCkTabs');
       if (!body) return;
       const s = d.summary || {};
       const doms = d.domains || [];
@@ -22346,46 +22405,40 @@ el.dwVidPlayer.hidden = true;
       }
 
       if (!doms.length) {
+        _ckFilter = '';
+        _ckActiveDomain = null;
+        _ckFillPlatformSel(d);
+        if (tabs) tabs.innerHTML = '';
         body.innerHTML = '<div class="admin-empty">池里还没有任何 Cookie。用上面的「补注入」粘贴一份，'
           + '或等 App / 浏览器扩展自动同步。</div>';
         return;
       }
 
-      body.innerHTML = doms.map((r) => {
-        const rows = (r.items || []).map((a) => {
-          const ids = (a.entries || []).map((e) => e.id).join(',');
-          return '<tr>'
-            + '<td><b>' + esc(a.label) + '</b>'
-            + (a.snapshots > 1 ? ' <span class="ckp-note">' + a.snapshots + ' 份快照</span>' : '')
-            + '</td>'
-            + '<td>' + _ckStatusCell(a) + '</td>'
-            + '<td>' + a.parts + ' 项</td>'
-            + '<td>' + a.snapshots + '</td>'
-            + '<td>' + esc(_ckSrcLabel(a.source)) + '</td>'
-            + '<td>' + _ckAgo(a.age_sec) + '</td>'
-            + '<td class="ckp-detail" title="' + esc(a.detail || '') + '">' + esc(a.detail || '-') + '</td>'
-            + '<td><button type="button" class="admin-btn admin-btn-ghost admin-btn-sm"'
-            + ' data-ck-del="' + esc(r.domain) + '" data-ck-ids="' + esc(ids) + '">删除</button></td>'
-            + '</tr>';
-        }).join('');
+      // 筛选态自愈：选过的平台被删 / 云端换了池 → 回「全部平台」
+      if (_ckFilter && !doms.some((x) => x.domain === _ckFilter)) _ckFilter = '';
+      if (_ckActiveDomain && !doms.some((x) => x.domain === _ckActiveDomain)) _ckActiveDomain = null;
+      // 下拉选了具体平台 → 直接锁定该平台；「全部平台」→ 用当前 tab（没有则第一个）
+      if (_ckFilter) _ckActiveDomain = _ckFilter;
+      if (!_ckActiveDomain) _ckActiveDomain = doms[0].domain;
+      _ckFillPlatformSel(d);
 
-        return '<div class="ckp-block">'
-          + '<div class="ckp-hd">'
-          + '<b>' + esc(r.title) + '</b>'
-          + '<span class="ckp-meta">' + r.accounts + ' 个账号 · ' + r.entries + ' 份</span>'
-          + _ckChip('ok', r.valid, '有效')
-          + _ckChip('bad', r.invalid, '无效')
-          + _ckChip('unk', r.unknown, '未校验')
-          + (r.broken ? '<span class="ckp-chip ckp-bad">解不开 ' + r.broken + '</span>' : '')
-          + '<span class="ckp-meta">' + (r.last_ts ? '更新于 ' + _ckAgo(d.now - r.last_ts) : '无记录') + '</span>'
-          + '<button type="button" class="admin-btn admin-btn-sm" data-ck-inject="' + esc(r.domain) + '">补注入</button>'
-          + '</div>'
-          + '<div class="admin-table-wrap"><table class="admin-table">'
-          + '<thead><tr><th>账号</th><th>状态</th><th>Cookie 项</th><th>份数</th>'
-          + '<th>来源</th><th>最近更新</th><th>说明</th><th>操作</th></tr></thead>'
-          + '<tbody>' + rows + '</tbody></table></div>'
-          + '</div>';
-      }).join('');
+      const active = doms.find((x) => x.domain === _ckActiveDomain) || doms[0];
+
+      // tab 条只在「全部平台」模式出现：选了具体平台就只展示那一个，不再给 tab
+      if (tabs) {
+        tabs.innerHTML = _ckFilter ? '' : doms.map((r) => {
+          const on = r.domain === active.domain;
+          return '<button type="button" class="ckp-tab' + (on ? ' is-on' : '') + '"'
+            + ' data-ck-tab="' + esc(r.domain) + '"'
+            + (on ? ' aria-selected="true"' : ' aria-selected="false"') + '>'
+            + '<span class="ckp-tab-name">' + esc(r.title) + '</span>'
+            + '<span class="ckp-tab-meta">' + r.accounts + ' 账号 · ' + r.entries + ' 份</span>'
+            + _ckChip('ok', r.valid, '有效') + _ckChip('bad', r.invalid, '无效') + _ckChip('unk', r.unknown, '未校验')
+            + '</button>';
+        }).join('');
+      }
+
+      body.innerHTML = _ckBlock(active, d);
     };
 
     const loadCookies = async (note) => {
@@ -22501,6 +22554,26 @@ el.dwVidPlayer.hidden = true;
           if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'center', behavior: 'smooth' });
           if ($('adminCkHeader')) $('adminCkHeader').focus();
         }
+      });
+    }
+    // 平台 tab 条：一次只看一个平台（2026-10-19 用户要求「不要排一起」）。
+    // 同样是运行时渲染 → 事件委托；切换只重渲染，不打接口（数据已在 _ckData 里）。
+    if ($('adminCkTabs')) {
+      $('adminCkTabs').addEventListener('click', (e) => {
+        const tab = e.target && e.target.closest ? e.target.closest('[data-ck-tab]') : null;
+        if (!tab) return;
+        const domain = tab.dataset.ckTab;
+        if (!domain || domain === _ckActiveDomain) return;
+        _ckActiveDomain = domain;
+        if (_ckData) _ckRender(_ckData);
+      });
+    }
+    // 平台筛选下拉：默认「全部平台」（tab 浏览）；选具体平台只展示该平台。
+    if ($('adminCkPlatformSel')) {
+      $('adminCkPlatformSel').addEventListener('change', (e) => {
+        _ckFilter = (e.target && e.target.value) || '';
+        if (_ckFilter) _ckActiveDomain = _ckFilter;
+        if (_ckData) _ckRender(_ckData);
       });
     }
     if ($('adminCkVerify')) $('adminCkVerify').addEventListener('click', _ckVerify);
