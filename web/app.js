@@ -8013,10 +8013,12 @@
 
   // 登录 + 取分享凭据。⚠️ 不缓存：服务端「取 token 即计数」，前端约定每次上传前
   // 都重新取一次（次数 ≈ 上传次数）；缓存复用会让限次形同虚设。
-  const shareEnsureToken = async (say) => {
+  const shareEnsureToken = async (say, src) => {
     say('正在校验账号…');
     let r = null;
-    try { r = await request('/api/share/token'); } catch (_e) { r = null; }
+    // 🔴 2026-10-19：带子页签（shareqr / pagegen）—— 服务端按它分派配额键
+    // （share_qr / share_page），两个功能各计各的，个人中心「使用统计」才看得到。
+    try { r = await request('/api/share/token?src=' + encodeURIComponent(src || 'shareqr')); } catch (_e) { r = null; }
     if (!r || !r.ok) {
       if (r && r.code === 'NO_AUTH') {
         say('请先登录');
@@ -8040,7 +8042,8 @@
   const sqrRenderLimits = async () => {
     if (!pfToken()) return;
     try {
-      const r = await request('/api/share/limits');      // 只读端点，不计数
+      // 只读端点，不计数。带当前子页签 ⇒ 读的是该功能的配额（各自独立计次）
+      const r = await request('/api/share/limits?src=' + encodeURIComponent(_sharePane || 'shareqr'));
       if (r && r.ok) { _shareLimits = r.limits; shareApplyLimitTexts(r.limits); }
     } catch (_e) { /* 匿名/离线就保持静态文案 */ }
   };
@@ -8089,7 +8092,7 @@
       shareSay(`「${f.name}」${shareFmtSize(f.size)} 超过网页版单文件 ${maxMb}MB 上限，请先压缩或用桌面端（支持 2GB）。`);
       return;
     }
-    const tok = await shareEnsureToken(shareSay);
+    const tok = await shareEnsureToken(shareSay, 'shareqr');
     if (!tok) return;
     const days = parseInt(el.sqrExpire.value, 10) || 7;
     el.sqrCount.textContent = `${f.name}（${shareFmtSize(f.size)}）`;
@@ -8369,7 +8372,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   };
   const pgToLink = async () => {
     if (!_pgBlob) { pgSay('请先「生成本机网页文件」'); return; }
-    const tok = await shareEnsureToken(pgSay);
+    const tok = await shareEnsureToken(pgSay, 'pagegen');
     if (!tok) return;
     const days = parseInt(el.pgExpire && el.pgExpire.value, 10)
       || (_shareTok.limits && _shareTok.limits.default_expire_days) || 7;

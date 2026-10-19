@@ -6,8 +6,9 @@
   ① 未登录 → ok=False + code=NO_AUTH（绝不把分享 token 发给匿名访客，
      否则等于开放公网文件托管，滥用/合规风险）；
   ② 节点无 token 文件 → SHARE_UNAVAILABLE（HK 节点没有分享服务，前端据此降级）；
-  ③ 每日限次：取满 VDL_WEB_SHARE_DAILY 次后 DAILY_LIMIT；
-  ④ /api/share/consume 计数 +1；
+  ③ 每日限次（2026-10-19 改走**账号级配额** share_qr / share_page，取代旧的本地
+     文件计数）：取满当日额度后 DAILY_LIMIT；
+  ④ 配额键按子页签分派（pagegen → share_page，其余 → share_qr），两个功能各计各的；
   ⑤ app.py 必须 include 本 router（铁律：新模块与 include 同提交，否则全新 clone 起不来）。
 全程离线：token 文件用临时路径，计数走 VDL_DATA_DIR 隔离目录。
 运行：cd server && python tests/test_share_token.py
@@ -35,12 +36,14 @@ c = TestClient(server_app.app)
 _H = {}
 
 
-def _login():
-    if not _H:
-        uid = create_user(f"sharetok_{os.getpid()}@self.test", "pw123456")
+def _login(tag="main"):
+    """按 tag 造独立账号（配额按账号计，各用例之间不能互相污染已用次数）。"""
+    key = f"h_{tag}"
+    if key not in _H:
+        uid = create_user(f"sharetok_{os.getpid()}_{tag}@self.test", "pw123456")
         assert uid, "本地造账号失败"
-        _H["Authorization"] = f"Bearer {issue_token(uid)}"
-    return _H
+        _H[key] = {"Authorization": f"Bearer {issue_token(uid)}"}
+    return _H[key]
 
 
 def _write_token(tok="tok-share-test-123"):
@@ -89,26 +92,57 @@ def test_limits_readonly_no_token_leak():
 
 
 def test_daily_cap_counts_on_fetch():
-    """取 token 即计数：VDL_WEB_SHARE_DAILY=3，第 4 次必须 DAILY_LIMIT。"""
+    """取 token 即计数：当日额度 3 次，第 4 次必须 DAILY_LIMIT。
+
+    2026-10-19：额度来源从「本端点本地文件 VDL_WEB_SHARE_DAILY」换成账号级
+    配额表（membership.FREE_DAILY_LIMITS["share_qr"]），测试期间把它压到 3。
+    """
+    import membership
     _write_token()
-    for i in range(3):
-        r2 = c.get("/api/share/token", headers=_login()).json()
-        assert r2.get("ok") is True, f"第 {i + 1} 次取 token 不应被拦：{r2}"
-        assert r2.get("limits", {}).get("used_today") == i + 1, f"used_today 应随取递增：{r2}"
-    r3 = c.get("/api/share/token", headers=_login()).json()
-    assert r3.get("ok") is False and r3.get("code") == "DAILY_LIMIT", \
-        f"超出每日限次必须 DAILY_LIMIT：{r3}"
-    print("✅ 每日限次（取 token 即计数，3 次后 DAILY_LIMIT）")
+    old = membership.FREE_DAILY_LIMITS.get("share_qr")
+    membership.FREE_DAILY_LIMITS["share_qr"] = 3
+    try:
+        for i in range(3):
+            r2 = c.get("/api/share/token", headers=_login("cap")).json()
+            assert r2.get("ok") is True, f"第 {i + 1} 次取 token 不应被拦：{r2}"
+            assert r2.get("limits", {}).get("used_today") == i + 1, f"used_today 应随取递增：{r2}"
+        r3 = c.get("/api/share/token", headers=_login("cap")).json()
+        assert r3.get("ok") is False and r3.get("code") == "DAILY_LIMIT", \
+            f"超出每日限次必须 DAILY_LIMIT：{r3}"
+        # 文案必须报**功能名**，不能把资源键 share_qr 甩给用户
+        assert "生成二维码" in (r3.get("error") or ""), f"超限文案应报功能名：{r3}"
+    finally:
+        membership.FREE_DAILY_LIMITS["share_qr"] = old
+    print("✅ 每日限次（取 token 即计数，额度用尽后 DAILY_LIMIT）")
 
 
-def test_consume_counts():
-    """计数器底层：_incr_used 递增、_read_used 一致。"""
+def test_quota_key_dispatch_by_pane():
+    """子页签分派：pagegen → share_page；shareqr / 不传 → share_qr。"""
     st = __import__("routers.share_token", fromlist=["share_token"])
-    used1 = st._incr_used("u_counter_x")
-    used2 = st._incr_used("u_counter_x")
-    assert used2 == used1 + 1, f"计数应递增：{used1} -> {used2}"
-    assert st._read_used("u_counter_x") == used2, "_read_used 应与计数一致"
-    print("✅ 计数器递增")
+    assert st._share_resource("pagegen") == "share_page"
+    assert st._share_resource("PAGEGEN") == "share_page"
+    for s in ("shareqr", "", None, "unknown"):
+        assert st._share_resource(s) == "share_qr", s
+    print("✅ 配额键按子页签分派（生成网页 / 生成二维码 各计各的）")
+
+
+def test_pagegen_has_its_own_quota():
+    """拆池语义：生成二维码用尽不影响生成网页（两个键独立）。"""
+    import membership
+    _write_token()
+    old_qr = membership.FREE_DAILY_LIMITS.get("share_qr")
+    old_pg = membership.FREE_DAILY_LIMITS.get("share_page")
+    membership.FREE_DAILY_LIMITS["share_qr"] = 1
+    membership.FREE_DAILY_LIMITS["share_page"] = 1
+    try:
+        assert c.get("/api/share/token?src=shareqr", headers=_login("pg")).json().get("ok") is True
+        assert c.get("/api/share/token?src=shareqr", headers=_login("pg")).json().get("ok") is False
+        r = c.get("/api/share/token?src=pagegen", headers=_login("pg")).json()
+        assert r.get("ok") is True, f"生成网页应有自己的额度，不该被二维码用尽：{r}"
+    finally:
+        membership.FREE_DAILY_LIMITS["share_qr"] = old_qr
+        membership.FREE_DAILY_LIMITS["share_page"] = old_pg
+    print("✅ 生成二维码 / 生成网页 各自独立计次")
 
 
 def test_app_includes_router():
@@ -128,6 +162,7 @@ if __name__ == "__main__":
     test_unavailable_without_token_file()
     test_limits_readonly_no_token_leak()
     test_daily_cap_counts_on_fetch()
-    test_consume_counts()
+    test_quota_key_dispatch_by_pane()
+    test_pagegen_has_its_own_quota()
     test_app_includes_router()
     print("\n✅ 分享凭据端点回归测试全部通过")

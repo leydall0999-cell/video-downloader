@@ -113,9 +113,11 @@ def test_usage_status_lists_all_web_functions(tmp_path):
     rows = feature_usage_status(store, "today")
     names = [r["name"] for r in rows]
     for must in ("下载视频", "在线转码", "音乐转换", "图片转换", "在线拼接",
-                 "图片去水印", "PDF 去水印", "字幕提取", "字幕烧录", "字幕翻译"):
+                 "图片去水印", "PDF 去水印", "字幕提取", "字幕烧录", "字幕翻译",
+                 # 2026-10-19 同轮补全：分享的两个子页签（详见 test_share_quota_split.py）
+                 "生成二维码", "生成网页"):
         assert must in names, f"使用统计缺少「{must}」：{names}"
-    assert len(rows) == 10, f"网页版使用统计应为 10 行，实际 {len(rows)}：{names}"
+    assert len(rows) == 12, f"网页版使用统计应为 12 行，实际 {len(rows)}：{names}"
 
 
 # --------------------------------------------------------------------------- #

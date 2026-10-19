@@ -67,17 +67,37 @@ function hasGate(resource) {
     || hasDispatchGate(resource);
 }
 
-// 2026-10-19：音乐转换 / 图片转换的配额键按「目标格式」分派，写成
-// `cloud_quota_gate(request, resource=_convert_resource(target))`，
-// 资源名不在调用点上做字面量，而在 helper 的 return 里。守卫认这种形态，
-// 但必须同时满足两件事，否则仍算「页面上写着、实际做不到」：
-//   ① 该 helper 的返回值真的被喂给了 cloud_quota_gate（不是自己写着玩）；
+// 2026-10-19：配额键开始**按参数分派**，资源名不在调用点上做字面量，而在 helper
+// 的 return 里（如 `cloud_quota_gate(request, resource=_convert_resource(target))`、
+// `res = _share_resource(src); store.use_daily(res, 1)`）。守卫认这种形态，但必须
+// 同时满足两件事，否则仍算「页面上写着、实际做不到」：
+//   ① helper 的返回值真的被喂给了拦截点（use_daily / quota_state /
+//      cloud_quota_gate），不是自己写着玩；
 //   ② helper 里确实有该资源键的 return 分支。
+// 🔴 判据写成**通用**的（扫所有 `def _xxx_resource(`），不要每加一个分派就往这里
+//   塞一个函数名 —— 2026-10-19 第一次写死了 _convert_resource，加 share 分派时
+//   直接判红，等于逼着新功能把资源键写回字面量。
 function hasDispatchGate(resource) {
-  const holder = businessPy.find(({ src }) => /def _convert_resource\(/.test(src));
-  if (!holder) return false;
-  if (!/cloud_quota_gate\([^)]*resource=\s*_convert_resource\(/.test(holder.src)) return false;
-  return new RegExp(`return\\s+["']${resource}["']`).test(holder.src);
+  const reReturn = new RegExp(`return\\s+["']${resource}["']`);
+  for (const { src } of businessPy) {
+    for (const m of src.matchAll(/def\s+(_\w+_resource)\s*\(/g)) {
+      const fn = m[1];
+      if (!reReturn.test(src)) continue;                       // ② 该键的 return 分支
+      // ①a 直接把 helper 的返回值交给拦截点
+      if (new RegExp(`use_daily\\(\\s*${fn}\\(`).test(src)) return true;
+      if (new RegExp(`quota_state\\(\\s*${fn}\\(`).test(src)) return true;
+      if (new RegExp(`cloud_quota_gate\\([^)]*resource=\\s*${fn}\\(`).test(src)) return true;
+      // ①b 先赋值给变量再交给拦截点（`res = _share_resource(src)` → `use_daily(res, 1)`）
+      const asg = src.match(new RegExp(`\\b(\\w+)\\s*=\\s*${fn}\\s*\\(`));
+      if (asg) {
+        const v = asg[1];
+        if (new RegExp(`use_daily\\(\\s*${v}\\b`).test(src)) return true;
+        if (new RegExp(`quota_state\\(\\s*${v}\\b`).test(src)) return true;
+        if (new RegExp(`cloud_quota_gate\\([^)]*resource=\\s*${v}\\b`).test(src)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 for (const r of rows) {

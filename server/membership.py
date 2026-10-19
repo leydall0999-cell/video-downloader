@@ -79,6 +79,15 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     "cloud_subtitle": 200,    # 字幕提取 / 日（会员）
     "cloud_subtitle_burn": 200,     # 字幕烧录 / 日（会员）
     "cloud_subtitle_translate": 200,  # 字幕翻译 / 日（会员）
+    # 🔴 2026-10-19：「生成二维码 / 生成网页」此前只有 share_token.py 里一份
+    # **本地文件计数**（20 次/日，写死、后台改不了、不与 App 关联），个人中心
+    # 「使用统计」里根本没有这两行（用户反馈「统计不全」）。现并入账号级每日配额
+    # 体系（走 use_daily，按天 + 上云 + 与桌面端同一账号共用）。
+    # ⚠️ 刻意**不**走 cloud_quota_gate 的「终身 N 次」口径：分享吃的是分享节点
+    # 磁盘不是大模型算力，且中心 _CLOUD_RESOURCES 只认 8 个旧键（未知键会被
+    # 回退成 cloud_commentary，等于让分享去消耗「视频解说」的终身额度）。
+    "share_qr": 200,          # 生成二维码（分享链接）/ 日（会员）
+    "share_page": 200,        # 生成网页（转在线链接）/ 日（会员）
 }
 # 免费档每日配额（2026-10-04 定稿：免费下载 10 次/日；2026-10-06 起各功能免费 3 次/日独立计）
 FREE_DAILY_LIMITS: dict[str, int] = {
@@ -93,6 +102,10 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "cloud_subtitle": 3,      # 字幕提取 免费 3 次/日（独立计）
     "cloud_subtitle_burn": 3,     # 字幕烧录 免费 3 次/日（独立计）
     "cloud_subtitle_translate": 3,  # 字幕翻译 免费 3 次/日（独立计）
+    # 🔴 2026-10-19：沿用受限版分享原有的 20 次/日（此前由 share_token.py 的
+    # VDL_WEB_SHARE_DAILY 写死），迁到配额表后后台可改，且与桌面端同账号共用。
+    "share_qr": 20,           # 生成二维码 免费 20 次/日
+    "share_page": 20,         # 生成网页 免费 20 次/日
 }
 # 不限次资源：网页端没有「评论/数据/字幕批量」功能（那是从 DataTool 抄来的、V1 未实现），
 # 故为空元组。quota_state 遇到不在两张表里的 resource 会走 unknown → fail-open 放行。
@@ -141,6 +154,12 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     {"key": "cloud_subtitle",    "name": "字幕提取",   "resource": "cloud_subtitle",    "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
     {"key": "cloud_subtitle_burn", "name": "字幕烧录", "resource": "cloud_subtitle_burn", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
     {"key": "cloud_subtitle_translate", "name": "字幕翻译", "resource": "cloud_subtitle_translate", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
+    # 🔴 2026-10-19：分享的两个子页签此前**完全没进统计表**（计数只在
+    # share_token.py 的本地文件里，个人中心看不到）。计数点见
+    # routers/share_token.py::_share_resource() —— 按子页签分派，
+    # 「生成网页」转在线链接计 share_page，其余计 share_qr。
+    {"key": "share_qr",    "name": "生成二维码", "resource": "share_qr",    "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
+    {"key": "share_page",  "name": "生成网页",   "resource": "share_page",  "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
 ]
 
 # --------------------------------------------------------------------------- #
@@ -985,6 +1004,9 @@ _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     # 🔴 2026-10-19：音乐/图片转换独立计次（与桌面端同档），有配额就必须有卖点文案
     ("convert_audio", "音乐转换 {v} 次/日"),
     ("convert_image", "图片转换 {v} 次/日"),
+    # 🔴 2026-10-19：分享进配额表 ⇒ 必须有对应卖点文案（守卫 test_feature_usage_gate ③）
+    ("share_qr", "生成二维码 {v} 次/日"),
+    ("share_page", "生成网页 {v} 次/日"),
 )
 # 不走每日配额、但属于会员权益的说明项
 _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
@@ -1729,7 +1751,13 @@ class MembershipStore:
                              "cloud_dewatermark_pdf": "PDF 去水印",
                              "cloud_subtitle": "字幕提取",
                              "cloud_subtitle_burn": "字幕烧录",
-                             "cloud_subtitle_translate": "字幕翻译"}.get(resource, resource)
+                             "cloud_subtitle_translate": "字幕翻译",
+                             # 2026-10-19：新键必须有中文名，否则超限文案会直接
+                             # 把资源键（convert_audio / share_qr）甩给用户看。
+                             "convert_audio": "音乐转换",
+                             "convert_image": "图片转换",
+                             "share_qr": "生成二维码",
+                             "share_page": "生成网页"}.get(resource, resource)
                     msg = f"今日免费{label}次数已用尽（{q['limit']}/日）"
                     if q.get("member_limit"):
                         msg += f"— 开通会员可解锁 {q['member_limit']} 次/日"

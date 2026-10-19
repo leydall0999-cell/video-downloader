@@ -101,11 +101,14 @@ assert.ok(/parseInt\(el\.pgExpire && el\.pgExpire\.value, 10\)/.test(pgLinkBlock
   '生成网页转在线链接必须读取 #pgExpire 有效期');
 
 // ---- ④ 登录门禁 + 凭据契约 ----
-const setStart = appJs.indexOf('const shareEnsureToken = async (say) => {');
-assert.ok(setStart > 0, '缺少 shareEnsureToken');
+// 2026-10-19：签名多一个 src 形参 —— 服务端按子页签分派配额键
+// （shareqr → share_qr / pagegen → share_page），两个功能各计各的，
+// 也才能出现在个人中心「使用统计」里。
+const setStart = appJs.indexOf('const shareEnsureToken = async (say, src) => {');
+assert.ok(setStart > 0, '缺少 shareEnsureToken（签名应为 async (say, src)）');
 const setEnd = appJs.indexOf('const shareApplyLimitTexts', setStart);
 const set = appJs.slice(setStart, setEnd);
-assert.ok(set.includes("request('/api/share/token')"), '凭据必须来自 /api/share/token');
+assert.ok(set.includes("request('/api/share/token?src='"), '凭据必须来自 /api/share/token 且必须带子页签 src');
 assert.ok(/code === 'NO_AUTH'/.test(set) && /openAuthModal\(/.test(set),
   '未登录取凭据必须弹登录框（不许静默失败）');
 assert.ok(/code === 'SHARE_UNAVAILABLE'|r\.error/.test(set), '节点不支持时要给用户明确提示');
@@ -126,9 +129,15 @@ assert.ok(/\/api\/upload'/.test(up), '上传端点应为 /api/upload（nginx 同
 assert.ok(!appJs.includes('/api/share/consume'), '/api/share/consume 已废弃，不得再调用');
 const setBlock = appJs.slice(setStart, appJs.indexOf('const shareApplyLimitTexts', setStart));
 assert.ok(!/if \(_shareTok\) return/.test(setBlock), 'shareEnsureToken 不得缓存复用 token（限次靠每次取新 token 计数）');
-assert.ok(appJs.includes("request('/api/share/limits')"), '限额文案必须走只读 /api/share/limits（不计数）');
+assert.ok(appJs.includes("request('/api/share/limits?src='"), '限额文案必须走只读 /api/share/limits（不计数）且带子页签');
 assert.ok((appJs.match(/await shareEnsureToken\(/g) || []).length >= 2,
   '两条上传路径（二维码 / 网页转链接）都必须先取凭据');
+// 2026-10-19：两个入口必须传**各自**的子页签，否则服务端只能按默认键计数，
+// 两个功能又并成一个计数器（个人中心只看到一行）。
+assert.ok(appJs.includes("shareEnsureToken(shareSay, 'shareqr')"),
+  '生成二维码入口必须传 src=shareqr');
+assert.ok(appJs.includes("shareEnsureToken(pgSay, 'pagegen')"),
+  '生成网页入口必须传 src=pagegen');
 
 // ---- ⑤ 受限版上限（前端必须拦） ----
 assert.ok(/f\.size > maxMb \* 1024 \* 1024/.test(appJs), '生成二维码前端必须校验单文件大小');
