@@ -32,6 +32,8 @@ import os
 import sys
 import threading
 import unittest
+import urllib.request
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
@@ -156,6 +158,25 @@ class _PingHandler(BaseHTTPRequestHandler):
         pass
 
 
+@contextmanager
+def _force_proxy_use():
+    """强制探测「真的经过代理」（屏蔽 no_proxy / 系统级例外名单）。
+
+    🔴 2026-10-20 实测踩坑：本机（macOS + 代理客户端）系统代理例外里带
+    127.0.0.1，`urllib.request.proxy_bypass("127.0.0.1:4416")` 返回 **True**
+    ⇒ ProxyHandler 直接放行直连，于是「代理指到死端口」也探测成功、用例假红。
+    这不是代码 bug：插件的请求同样走 urllib 的 ProxyHandler，同样会被绕过
+    ⇒ 此时 POT 确实可用。用例要验的是「代理真被使用」时的判定（HK Linux
+    实测同型），所以必须在探测期间强制不绕过。
+    """
+    orig = urllib.request.proxy_bypass
+    urllib.request.proxy_bypass = lambda host: False
+    try:
+        yield
+    finally:
+        urllib.request.proxy_bypass = orig
+
+
 class TestPotUsable(unittest.TestCase):
     """_pot_usable：server 在 + 代理放行 localhost 才算可用。"""
 
@@ -178,16 +199,32 @@ class TestPotUsable(unittest.TestCase):
         self.assertTrue(D._pot_usable(""))
 
     def test_server_up_dead_proxy(self):
-        # 代理指到没人听的端口 ⇒ 插件请求必然失败 ⇒ 不可用
+        # 代理指到没人听的端口 ⇒ 代理真被使用时请求必然失败 ⇒ 不可用
         # （HK 实测同型：socks 代理打不通 127.0.0.1:4416，POT 静默失效）
-        self.assertFalse(D._pot_usable("http://127.0.0.1:9"))
+        with _force_proxy_use():
+            self.assertFalse(D._pot_usable("http://127.0.0.1:9"))
+
+    def test_proxy_bypass_means_direct_and_usable(self):
+        """系统/环境把 127.0.0.1 列入「绕过代理」时，插件请求本身也是直连
+        ⇒ 探测必须跟着判「可用」（否则 macOS + Clash 一类用户会白丢 POT，
+        退回 SABR 受限的 360p 画质）。这条守的是「别为了对付代理把绕过逻辑
+        一起改掉」。"""
+        orig = urllib.request.proxy_bypass
+        urllib.request.proxy_bypass = lambda host: True
+        try:
+            D._POT_USABLE_CACHE.clear()
+            self.assertTrue(D._pot_usable("http://127.0.0.1:9"))
+        finally:
+            urllib.request.proxy_bypass = orig
+            D._POT_USABLE_CACHE.clear()
 
     def test_cache_per_proxy(self):
         D._POT_USABLE_CACHE["http://cached:1"] = True
         self.assertTrue(D._pot_usable("http://cached:1"))
         with mock.patch.object(D, "_bgutil_reachable", return_value=True):
             D._POT_USABLE_CACHE.clear()
-            self.assertFalse(D._pot_usable("http://127.0.0.1:9"))
+            with _force_proxy_use():
+                self.assertFalse(D._pot_usable("http://127.0.0.1:9"))
             D._POT_USABLE_CACHE.clear()
             # 缓存命中不再探测
             D._POT_USABLE_CACHE["http://cached:2"] = False

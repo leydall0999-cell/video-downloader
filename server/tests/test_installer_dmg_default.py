@@ -39,7 +39,8 @@ from routers import extension as ext  # noqa: E402
 
 _R2_DMG = "https://download.hanyuxz.top/VideoDownloader.dmg"
 _R2_ZIP = "https://download.hanyuxz.top/VideoDownloader.app.zip"
-_R2_EXE = "https://download.hanyuxz.top/VideoDownloader-Setup-1.0.74.exe"
+# 不在这里写死 exe 地址：版本号内嵌在对象名里，写死过一次（1.0.74）与产品脱钩。
+# 期望值一律从 `ext._R2_INSTALLER_URLS[...]` 取。
 
 
 def _client() -> TestClient:
@@ -122,8 +123,12 @@ def test_macos_zip_fallback_redirects():
         ext._r2_reachable = orig
 
 
-def test_windows_setup_redirects_to_r2():
-    """p=windows → 302：Location 指向 R2 上的 Inno Setup 安装程序。"""
+def test_windows_disabled_returns_download_page():
+    """windows 关闭期（2026-10-18 起）：GET/HEAD 一律 302 回 /download/。
+
+    关闭原因：用户反馈 Win 包装上跑不起来。只把页面按钮置灰不够——知道
+    URL 的人仍能下到装不了的包，所以服务端同源拦截。
+    """
     orig = _patch_reachable(True)
     try:
         c = _client()
@@ -131,16 +136,45 @@ def test_windows_setup_redirects_to_r2():
             r = getattr(c, method)("/download/installer?p=windows",
                                    follow_redirects=False)
             assert r.status_code == 302, \
-                f"{method.upper()} 应 302，实际 {r.status_code}"
-            assert r.headers.get("location") == _R2_EXE, \
-                f"Location 应指向 R2 exe: {r.headers.get('location')}"
+                f"{method.upper()} 应 302 回下载页，实际 {r.status_code}"
+            assert r.headers.get("location") == "/download/", \
+                f"{method.upper()} 应回 /download/，实际 {r.headers.get('location')}"
             assert r.headers.get("cache-control") == "no-store"
     finally:
         ext._r2_reachable = orig
 
 
+def test_windows_enabled_redirects_to_r2():
+    """开关打开后的契约（桩模拟）：302 到 R2 上的 Inno Setup 安装程序 + 计数。
+
+    🔴 期望地址**从源码取**，不写死版本号：写死过 `...-Setup-1.0.74.exe`，
+    而 R2 上最新已是 1.0.76 ⇒ 用例与产品一起「假绿」，等真开窗口时给用户
+    下发一个旧包（本次漂移就是这么攒下的）。
+    """
+    orig = _patch_reachable(True)
+    orig_flag = ext._INSTALLER_ENABLED.get("windows")
+    ext._INSTALLER_ENABLED["windows"] = True
+    try:
+        def body(rec):
+            c = _client()
+            for method in ("head", "get"):
+                r = getattr(c, method)("/download/installer?p=windows",
+                                       follow_redirects=False)
+                assert r.status_code == 302, \
+                    f"{method.upper()} 应 302，实际 {r.status_code}"
+                assert r.headers.get("location") == ext._R2_INSTALLER_URLS["windows"], \
+                    f"Location 应指向 R2 exe: {r.headers.get('location')}"
+                assert r.headers.get("cache-control") == "no-store"
+            assert rec.calls == [("installer", "windows")], \
+                f"windows 应独立计一行且 HEAD 不计，实际 {rec.calls}"
+        _with_recorder(body)
+    finally:
+        ext._INSTALLER_ENABLED["windows"] = orig_flag
+        ext._r2_reachable = orig
+
+
 def test_stats_merged_by_platform():
-    """计数口径：macos-zip 并入 macos；windows 独立计；HEAD 不计、GET 计。"""
+    """计数口径：macos-zip 并入 macos；HEAD 不计、GET 计；**关闭的平台不计数**。"""
     orig = _patch_reachable(True)
     try:
         def body(rec):
@@ -149,10 +183,18 @@ def test_stats_merged_by_platform():
             assert rec.calls == [], f"HEAD 不应计数，实际 {rec.calls}"
             c.get("/download/installer?p=macos", follow_redirects=False)
             c.get("/download/installer?p=macos-zip", follow_redirects=False)
-            c.get("/download/installer?p=windows", follow_redirects=False)
-            assert rec.calls == [("installer", "macos"), ("installer", "macos"),
-                                 ("installer", "windows")], \
-                f"macos-zip 归并 macos、windows 独立计，实际 {rec.calls}"
+            assert rec.calls == [("installer", "macos"), ("installer", "macos")], \
+                f"macos-zip 应归并进 macos，实际 {rec.calls}"
+            # 2026-10-18 起 windows 整条关掉（包装上跑不起来）⇒ 平台关闭时
+            # **一个字节都没下发，就不该计数**，否则后台会长期挂着
+            # 「有人在下 Windows」的假数据，排障时被带偏。
+            n_before = len(rec.calls)
+            r = c.get("/download/installer?p=windows", follow_redirects=False)
+            assert r.status_code == 302, f"关闭的平台应 302，实际 {r.status_code}"
+            assert r.headers.get("location") == "/download/", \
+                f"关闭的平台应回下载页，实际 {r.headers.get('location')}"
+            assert len(rec.calls) == n_before, \
+                f"关闭的平台不应计数，实际 {rec.calls}"
         _with_recorder(body)
     finally:
         ext._r2_reachable = orig

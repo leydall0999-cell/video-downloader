@@ -138,6 +138,11 @@ def test_installer_head_302_to_r2():
     def body():
         c = _client()
         for plat, url in ext._R2_INSTALLER_URLS.items():
+            if not ext._INSTALLER_ENABLED.get(plat, True):
+                # 2026-10-18 起 windows 整条关闭（服务端 302 回 /download/），
+                # 本用例只验「开着的平台跳 R2」；关闭平台的契约在
+                # test_installer_dmg_default.py::test_windows_disabled_returns_download_page。
+                continue
             r = c.head(f"/download/installer?p={plat}", follow_redirects=False)
             assert r.status_code == 302, f"{plat} 应 302，实际 {r.status_code}"
             assert r.headers.get("location") == url, \
