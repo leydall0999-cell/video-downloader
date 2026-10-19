@@ -688,7 +688,7 @@ def retry_task(task_id: str, request: app.Request) -> dict:
     if not resume:
         # 2026-10-19：带上标题与平台，便于后台定位「这次下载的是什么」
         app.current_member_store(request).use_daily(
-            'download', 1, title=(task.title or task.url),
+            'download', 1, title=(getattr(task, 'title', '') or task.url),
             platform=getattr(task, 'platform', '') or '')
     return {'task_id': task_id, 'status': 'pending', 'resume': resume}
 
