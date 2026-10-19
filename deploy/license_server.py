@@ -422,13 +422,17 @@ def _usage_history_view(user: dict[str, Any], now: float) -> list[dict[str, Any]
             if d and clean:
                 out.append({"date": d, "counts": clean})
 
-    today = _bj_day(now)
+    # 🔴 2026-10-19 修（跨天丢记录）：`daily` 只在「用户下一次上报」时才归档
+    # （daily_impl → _archive_daily）。若用户隔天没再来，昨天那条既不是「今天」
+    # 也不在 usage_history 里 ⇒ 后台「使用详情」读成「从未使用」。
+    # 实测：guodong9@foxmail.com 云端确有 2026-10-18 download×2，面板却显示空白。
+    # 这里把 daily 的那一条**无条件**并入（同日期去重覆盖），不再依赖是否已日切。
     daily = user.get("daily") or {}
-    if str(daily.get("date") or "") == today:
-        clean = _clean_counts(daily.get("counts") or {})
-        if clean:
-            out = [x for x in out if x.get("date") != today]
-            out.append({"date": today, "counts": clean})
+    _d = str(daily.get("date") or "")[:16]
+    _clean = _clean_counts(daily.get("counts") or {})
+    if _d and _clean:
+        out = [x for x in out if x.get("date") != _d]
+        out.append({"date": _d, "counts": _clean})
 
     out.sort(key=lambda x: str(x.get("date") or ""), reverse=True)
     return out[:USAGE_HISTORY_DAYS]

@@ -145,6 +145,11 @@ def test_guard_against_regression() -> None:
           re.search(r"\.cloud[\s\S]{0,80}?\.data[\s\S]{0,40}?\.authority", src) is not None)
     check("读取 authority.usage", "const raw = auth.usage || {};" in src)
     check("判空条件包含 !cu0.total", "!us0.total && !cu0.total" in src)
+    # 2026-10-19 跨天漏判：昨天用过、今天没用 ⇒ 当日 usage 为空但历史有记录，
+    # 旧判空只看到 cu0.total 就报「从未使用」。实测 guodong9@foxmail.com（10-18 下载 2 次）。
+    check("判空条件也把云端按天历史算进来（跨天不误报为空）",
+          "!cu0.total && !cuH0.length" in src)
+    check("云端历史只算一次并在下方复用", "const cuHist = cuH0;" in src)
     check("空状态文案仍保留（只是条件更严）", "这个账号还没有任何使用记录" in src)
     check("正常视图渲染「云端用量」区块", "云端用量（桌面 App + 网页版 / 其它设备）" in src)
     check("「本机配额消耗」与云端口径区分", "本机配额消耗" in src)

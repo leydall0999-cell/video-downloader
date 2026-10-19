@@ -23420,10 +23420,15 @@ el.dwVidPlayer.hidden = true;
         const m = u.membership || {};
         const us0 = u.usage_summary || {};
         const cu0 = _usageCloudUsage(u);   // 云端（网页版 / 其它设备）当日用量
+        const cuH0 = _usageCloudHistory(u); // 云端按天历史（近一年，新的在前）
         // 全新账号确实什么都不该有 —— 但要讲清「为什么空」，而不是留一片空白。
         // 2026-10-18 修：判空必须把**云端当日用量**算进来，否则网页版账号
         // （本机无消耗记录、云端有）会被误报成「没有任何使用记录」。
-        if (!us0.days && !us0.total && !cu0.total && !(u.activations || []).length
+        // 2026-10-19 再修（跨天漏判）：只看「当日」仍不够 —— 用户昨天用过、今天没再用，
+        // 云端 usage_history 里有记录但 cu0.total=0，旧判空照样报空。
+        // 实测：guodong9@foxmail.com 10-18 在网页版下载 2 次，面板却显示「从未使用」。
+        if (!us0.days && !us0.total && !cu0.total && !cuH0.length
+            && !(u.activations || []).length
             && !(u.support || {}).total_threads && !m.permanent_credits
             && !Number((m.ai_member || {}).credits_left || 0)) {
           body.innerHTML = '<section class="aud-sec"><h4>这个账号还没有任何使用记录</h4>'
@@ -23485,7 +23490,7 @@ el.dwVidPlayer.hidden = true;
         // 云端当日用量（2026-10-18）：网页版 / 其它设备的消耗只记在授权中心，
         // 不进本机 usage_history —— 不单独渲染出来就会被误读成「这个号没用过」。
         const cu = cu0;
-        const cuHist = _usageCloudHistory(u);
+        const cuHist = cuH0;
         if (cu.total || cuHist.length) {
           h += '<section class="aud-sec"><h4>云端用量（桌面 App + 网页版 / 其它设备）</h4>';
           if (cu.total) {
