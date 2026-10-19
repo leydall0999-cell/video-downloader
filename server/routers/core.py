@@ -669,9 +669,12 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, device_id=_device_of(request))
     app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     # V1：任务成功创建才计费（预检在 store.create 之前，计数在其之后）
-    # 2026-10-19：带标题与平台，后台「使用详情」显示「下载了什么」
+    # 2026-10-19：带标题与平台，后台「使用详情」显示「下载了什么」。
+    # 标题优先取前端解析出的真名（payload.title），没有才回落 URL 尾段。
     member_quota = _mq_public(_member_quota_count(
-        request, gate, n=1, details=[{"t": _detail_title(url), "p": platform.name}]))
+        request, gate, n=1,
+        details=[{"t": (payload.title or "").strip() or _detail_title(url),
+                  "p": platform.name}]))
     return {'task_id': task.id, 'status': task.status, 'quota': {'subscribed': subscribed, 'free_used': free_used, 'free_daily': free_daily}, 'member_quota': member_quota}
 
 class BatchRequest(app.BaseModel):

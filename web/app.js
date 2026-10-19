@@ -3667,6 +3667,8 @@
         method: 'POST',
         body: JSON.stringify({
           url: item.url,
+          // 2026-10-19：歌单项自带标题，带上 ⇒ 用量明细记真名（后台可定位）
+          title: (item.title || '').slice(0, 200),
           quality: 'best',
           cookie: '',
           proxy: '',
@@ -3835,6 +3837,8 @@
         method: 'POST',
         body: JSON.stringify({
           url,
+          // 2026-10-19：解析后的视频真名随下载带上 ⇒ 用量明细记标题而非 URL 尾段
+          title: (resolved?.video?.title || '').slice(0, 200),
           quality,
           cookie: opts.cookie ?? resolved?.cookie ?? '',
           proxy: opts.proxy ?? resolved?.proxy ?? '',

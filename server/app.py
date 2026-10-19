@@ -2173,6 +2173,10 @@ class ResolveRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
+    # 2026-10-19：前端解析后已知视频标题，随下载请求带上 ⇒ 用量明细记「真名」。
+    # 不带（旧客户端 / 批量）时后端回落取 URL 尾段（如 BV 号），后台仍可定位。
+    # 与桌面端同口径（max_length=256）；前端发送前自行截断，避免 422。
+    title: str = Field(default="", max_length=256)
     quality: str = Field(default=downloader.BEST_KEY, max_length=16)
     cookie: str = Field(default="", max_length=8192)
     proxy: str = Field(default="", max_length=256)

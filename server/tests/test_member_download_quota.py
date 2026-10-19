@@ -178,6 +178,54 @@ def test_logged_in_download_counts_to_user():
 
 
 # --------------------------------------------------------------------------- #
+# 3b. 下载明细记「真名」（2026-10-19）：前端解析出的标题优先，没有才回落 URL 尾段
+# --------------------------------------------------------------------------- #
+def test_download_details_prefer_real_title():
+    """后台「使用详情」要能显示下载了什么：payload.title（解析真名）优先，
+    旧客户端 / 批量不带 title 时回落 _detail_title(url)（URL 尾段，如 BV 号，
+    仍可在站内搜索定位）。"""
+    with tempfile.TemporaryDirectory() as d:
+        _patch_global_store(d)
+        from auth_store import issue_token
+
+        # 3b-1：带真名 → 明细记真名 + 平台名
+        token = issue_token("u_detail_title")
+        req = _StubRequest(auth=f"Bearer {token}")
+        _patch_engine_calls(None)
+        payload = A.DownloadRequest(
+            url="https://www.bilibili.com/video/BV1GJ411x7h7",
+            title="少帅 第5集", quality="360")
+        core_rt.create_download(payload, req)
+        st = um.get_user_store("u_detail_title")._state
+        det = (st.get("daily_details") or {}).get("download") or []
+        assert len(det) == 1 and det[0]["t"] == "少帅 第5集", f"应记真名，实为 {det}"
+        assert det[0]["p"] == "Test", f"平台名应随明细落库，实为 {det[0]}"
+
+        # 3b-2：不带 title → 回落 URL 尾段（BV 号仍可在站内搜索定位）
+        token2 = issue_token("u_detail_url")
+        req2 = _StubRequest(auth=f"Bearer {token2}")
+        _patch_engine_calls(None)
+        payload2 = A.DownloadRequest(
+            url="https://www.bilibili.com/video/BV1GJ411x7h7", quality="360")
+        core_rt.create_download(payload2, req2)
+        st2 = um.get_user_store("u_detail_url")._state
+        det2 = (st2.get("daily_details") or {}).get("download") or []
+        assert len(det2) == 1 and det2[0]["t"] == "BV1GJ411x7h7", f"应回落 URL 尾段，实为 {det2}"
+
+        # 3b-3：空白标题（strip 后为空）同样回落，不记空串
+        token3 = issue_token("u_detail_blank")
+        req3 = _StubRequest(auth=f"Bearer {token3}")
+        _patch_engine_calls(None)
+        payload3 = A.DownloadRequest(
+            url="https://www.bilibili.com/video/BV1xx411c7mD", title="   ", quality="360")
+        core_rt.create_download(payload3, req3)
+        st3 = um.get_user_store("u_detail_blank")._state
+        det3 = (st3.get("daily_details") or {}).get("download") or []
+        assert len(det3) == 1 and det3[0]["t"] == "BV1xx411c7mD", f"空白标题应回落，实为 {det3}"
+    print("✅ 下载明细：解析真名优先（payload.title），空/旧客户端回落 URL 尾段")
+
+
+# --------------------------------------------------------------------------- #
 # 4. /api/batch：剩余不足按剩余截断，只按实际创建数计数
 # --------------------------------------------------------------------------- #
 def test_batch_caps_at_remaining():
@@ -324,9 +372,10 @@ if __name__ == "__main__":
     test_anonymous_rejected_403()
     test_exhausted_gate_blocks_before_create()
     test_logged_in_download_counts_to_user()
+    test_download_details_prefer_real_title()
     test_batch_caps_at_remaining()
     test_batch_zero_remaining_rejects()
     test_relay_mode_gate_and_count()
     test_engine_error_fail_open()
     test_quota_use_check_only()
-    print("\n全部通过 ✅（V1 下载配额墙：计数/归因/回派/fail-open 共 8 例）")
+    print("\n全部通过 ✅（V1 下载配额墙：计数/归因/明细真名/回派/fail-open 共 9 例）")
