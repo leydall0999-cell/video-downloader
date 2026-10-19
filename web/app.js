@@ -10825,9 +10825,16 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
     _udAutoTimer = setTimeout(() => { _udAutoTimer = null; void udAutoSync(); }, delayMs || 5000);
   }
 
+  // 🔴 2026-10-19 用户要求隐藏「云端资料」卡片。
+  // 只隐藏**展示入口**：登录后的自动同步、端到端加密备份、换浏览器自动落回等
+  // 后台链路全部照旧（udAutoSync / udSync 与 udRender 互不依赖），只是不再显示
+  // 状态行和「立即同步」按钮。需要恢复时把这个开关改回 true 即可。
+  const UD_CARD_VISIBLE = false;
+
   async function udRender() {
     const card = document.getElementById('cloudDataCard');
     if (!card) return;
+    if (!UD_CARD_VISIBLE) { card.hidden = true; return; }
     if (!pfToken()) { card.hidden = true; return; }
     let st = null;
     try { st = await request('/api/userdata/status'); } catch (_) { st = null; }

@@ -69,6 +69,10 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     # 旧总池键 "cloud" 已无调用点（routers 全部改传独立键），按 2026-10-04 同样的
     # 清理原则一并移除，避免权益页渲染一条重复的旧文案。
     "cloud_convert": 200,     # 在线转码 / 日（会员）
+    # 🔴 2026-10-19：音乐/图片转换从「在线转码」拆出独立计数（与桌面端同键同名，
+    # 见 FEATURE_USAGE_DEFS 注释）。不在这张表里 ⇒ quota_state 视为未知资源而放行。
+    "convert_audio": 200,     # 音乐转换 / 日（会员）
+    "convert_image": 200,     # 图片转换 / 日（会员）
     "cloud_concat": 200,      # 在线拼接 / 日（会员）
     "cloud_dewatermark": 200, # 图片去水印 / 日（会员）
     "cloud_dewatermark_pdf": 200,  # PDF 去水印 / 日（会员）
@@ -80,6 +84,9 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
 FREE_DAILY_LIMITS: dict[str, int] = {
     "download": 10,
     "cloud_convert": 3,       # 在线转码 免费 3 次/日（独立计）
+    # 🔴 2026-10-19：与桌面端 convert_audio / convert_image 同档（免费 5 次/日）
+    "convert_audio": 5,       # 音乐转换 免费 5 次/日（独立计）
+    "convert_image": 5,       # 图片转换 免费 5 次/日（独立计）
     "cloud_concat": 3,        # 在线拼接 免费 3 次/日（独立计）
     "cloud_dewatermark": 3,   # 图片去水印 免费 3 次/日（独立计）
     "cloud_dewatermark_pdf": 3,  # PDF 去水印 免费 3 次/日（独立计）
@@ -120,6 +127,14 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     # 故无 cloud_commentary 行；桌面端 4 行齐全）。resource 与 app.py cloud_quota_gate
     # 的调用点一一对应（routers/convert.py、dewatermark.py、subtitle.py、subtitles.py）。
     {"key": "cloud_convert",     "name": "在线转码",   "resource": "cloud_convert",     "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
+    # 🔴 2026-10-19 用户反馈「使用统计不全，没有全部统计上去」：网页版此前把
+    # 音乐转换 / 图片转换都算进「在线转码」一个计数器（两条前端入口共用
+    # /api/upload-convert 与 upload-chunk/finish 的 cloud_convert 闸门），
+    # 表里看不到这两项。现按**桌面端口径**拆成独立键（免费 5 次/日、会员 200 次/日），
+    # 计数点见 routers/convert.py 的 _convert_resource()：按 target 落在
+    # CONVERT_AUDIO / CONVERT_IMAGE 集合里分派，其余仍是 cloud_convert。
+    {"key": "convert_audio",     "name": "音乐转换",   "resource": "convert_audio",     "unit": "次", "free_limit": 5, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
+    {"key": "convert_image",     "name": "图片转换",   "resource": "convert_image",     "unit": "次", "free_limit": 5, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
     {"key": "cloud_concat",      "name": "在线拼接",   "resource": "cloud_concat",      "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
     {"key": "cloud_dewatermark", "name": "图片去水印", "resource": "cloud_dewatermark", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
     {"key": "cloud_dewatermark_pdf", "name": "PDF 去水印", "resource": "cloud_dewatermark_pdf", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
@@ -967,6 +982,9 @@ _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("cloud_subtitle", "字幕提取 {v} 次/日"),
     ("cloud_subtitle_burn", "字幕烧录 {v} 次/日"),
     ("cloud_subtitle_translate", "字幕翻译 {v} 次/日"),
+    # 🔴 2026-10-19：音乐/图片转换独立计次（与桌面端同档），有配额就必须有卖点文案
+    ("convert_audio", "音乐转换 {v} 次/日"),
+    ("convert_image", "图片转换 {v} 次/日"),
 )
 # 不走每日配额、但属于会员权益的说明项
 _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (

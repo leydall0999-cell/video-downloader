@@ -9,12 +9,33 @@ import user_membership
 
 router = APIRouter()
 
+
+def _convert_resource(target: str, is_image: bool = False) -> str:
+    """按目标格式分派「云端算力」配额键（2026-10-19 拆池）。
+
+    背景：音乐转换 / 图片转换此前与「在线转码」共用 cloud_convert 一个计数器，
+    个人中心「使用统计」里看不到这两项（用户反馈「统计不全，没有全部统计上去」）。
+    现按桌面端口径拆键，次数也与桌面端对齐（免费 5 次/日、会员 200 次/日）。
+
+    分派规则：CONVERT_IMAGE（png/jpg/webp/bmp/tiff…）→ convert_image；
+    CONVERT_AUDIO（mp3/m4a/wav/flac/aac/opus/wma/mp2）→ convert_audio；
+    其余（视频容器，含 gif）仍走 cloud_convert。
+    ⚠️ 必须在 gates 表里（DAILY_QUOTA_LIMITS / FREE_DAILY_LIMITS）同时登记，
+    否则 quota_state 会把未知资源 fail-open 放行。
+    """
+    t = str(target or "").strip().lower()
+    if is_image or t in app.CONVERT_IMAGE:
+        return "convert_image"
+    if t in app.CONVERT_AUDIO:
+        return "convert_audio"
+    return "cloud_convert"
+
 @router.post("/api/convert")
 def create_convert(payload: app.ConvertRequest, request: app.Request) -> dict:
     user_membership.require_login_user(request)
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)  # 旧 IP 墙（已停用，仅喂响应字段）
-    gate = app.cloud_quota_gate(request, resource="cloud_convert")
+    gate = app.cloud_quota_gate(request, resource=_convert_resource(payload.target))
     task = app._require_task(payload.task_id, _device_of(request))
     if task.status != "completed" or not task.filepath or not task.filepath.exists():
         raise app.HTTPException(status_code=409, detail="原任务文件尚未准备好，无法转换")
@@ -94,7 +115,7 @@ def create_upload_convert(
     """
     app._check_rate_limit(request)
     subscribed, free_used, free_daily = app._check_convert_quota(request)  # 旧 IP 墙（已停用，仅喂响应字段）
-    gate = app.cloud_quota_gate(request, resource="cloud_convert")
+    gate = app.cloud_quota_gate(request, resource=_convert_resource(target))
     if target not in app.CONVERT_TARGETS:
         raise app.HTTPException(status_code=400, detail="不支持的目标格式")
     suffix = app.Path(file.filename or "upload.mp4").suffix.lower() or ".mp4"
@@ -170,7 +191,7 @@ def _submit_convert_job(save_path, target, resolution, bitrate, audio, rotate, r
     免重传重转；保留期由 app._cleanup_merged_upload_sources（2h TTL）兜底清理。
 
     云端算力账号级配额（免费 3 次/日）：预检在落盘后、计数在任务成功创建后。"""
-    gate = app.cloud_quota_gate(request, resource="cloud_convert")
+    gate = app.cloud_quota_gate(request, resource=_convert_resource(target, is_image))
     ext = app.CONVERT_EXT[target]
     job_id = app.uuid.uuid4().hex[:12]
     out_path = app.CONVERT_DIR / f"up_conv_{job_id}.{ext}"

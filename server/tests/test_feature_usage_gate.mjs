@@ -63,7 +63,21 @@ const free = readLimits('FREE_DAILY_LIMITS');
 function hasGate(resource) {
   const reA = new RegExp(`(use_daily|quota_state)\\(\\s*["']${resource}["']`);
   const reB = new RegExp(`cloud_quota_gate\\([^)]*resource=\\s*["']${resource}["']`);
-  return businessPy.some(({ src }) => reA.test(src) || reB.test(src));
+  return businessPy.some(({ src }) => reA.test(src) || reB.test(src))
+    || hasDispatchGate(resource);
+}
+
+// 2026-10-19：音乐转换 / 图片转换的配额键按「目标格式」分派，写成
+// `cloud_quota_gate(request, resource=_convert_resource(target))`，
+// 资源名不在调用点上做字面量，而在 helper 的 return 里。守卫认这种形态，
+// 但必须同时满足两件事，否则仍算「页面上写着、实际做不到」：
+//   ① 该 helper 的返回值真的被喂给了 cloud_quota_gate（不是自己写着玩）；
+//   ② helper 里确实有该资源键的 return 分支。
+function hasDispatchGate(resource) {
+  const holder = businessPy.find(({ src }) => /def _convert_resource\(/.test(src));
+  if (!holder) return false;
+  if (!/cloud_quota_gate\([^)]*resource=\s*_convert_resource\(/.test(holder.src)) return false;
+  return new RegExp(`return\\s+["']${resource}["']`).test(holder.src);
 }
 
 for (const r of rows) {
