@@ -320,6 +320,10 @@ function loadEngine(opts) {
       settings: { count: 4, files: ['a.json', 'b.json', 'c.json', 'd.json'] },
       cookies: { count: 3, platforms: ['bilibili'] } } }));
     await a.eng.udRender();
+    // 2026-10-19 用户要求隐藏这张卡片：文案逻辑仍要正确（后面几项），但绝不能显示。
+    check('🔴 卡片默认隐藏（UD_CARD_VISIBLE=false）',
+      a.els.cloudDataCard.hidden === true,
+      JSON.stringify({ hidden: a.els.cloudDataCard.hidden }));
     check('计数用云端实际量（4 项偏好 / 3 个登录态）',
       a.els.cloudDataText.textContent === '云端资料 · 已备份 4 项偏好 / 3 个平台登录态',
       a.els.cloudDataText.textContent);

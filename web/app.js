@@ -10829,17 +10829,18 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   // 只隐藏**展示入口**：登录后的自动同步、端到端加密备份、换浏览器自动落回等
   // 后台链路全部照旧（udAutoSync / udSync 与 udRender 互不依赖），只是不再显示
   // 状态行和「立即同步」按钮。需要恢复时把这个开关改回 true 即可。
+  // ⚠️ 文案仍然照常渲染（只是卡片 hidden）：这样计数/提示语的逻辑继续被
+  //    test_web_userdata_sync.js ⑤ 覆盖，将来恢复显示不用重测一遍。
   const UD_CARD_VISIBLE = false;
 
   async function udRender() {
     const card = document.getElementById('cloudDataCard');
     if (!card) return;
-    if (!UD_CARD_VISIBLE) { card.hidden = true; return; }
     if (!pfToken()) { card.hidden = true; return; }
     let st = null;
     try { st = await request('/api/userdata/status'); } catch (_) { st = null; }
     if (!st || !st.ok) { card.hidden = true; return; }
-    card.hidden = false;
+    card.hidden = !UD_CARD_VISIBLE;
     const cloud = st.cloud || null;
     const ckCloud = (cloud && cloud.cookies) || null;
     const nPref = cloud ? Number((cloud.settings || {}).count || 0) : 0;

@@ -109,7 +109,6 @@ run_node test_dw_preview_zoom.mjs          # 去水印捏合缩放(只放大图�
 run_node test_view_top_gap.mjs             # 顶层视图卡片与吸顶顶栏间距：main > .panel 3rem，防「顶栏+卡片」粘连（2026-10-04 用户反馈）
 run_node test_mobile_header_tabs.mjs       # 手机网页版顶栏功能导航：≤760px 换行让 tabs 不被挤成 0 宽而整排消失（2026-10-07 用户反馈）
 run_node test_activate_gate.mjs            # 激活码通道收口：/api/member/activate 仅超管 + 前端入口已移除（2026-10-04 白嫖后门）
-run_pytest_root test_convert_quota_split.py   # 音乐转换/图片转换独立计次：按目标格式分派 + 使用统计补全 10 行（2026-10-19）
 run_node test_feature_usage_gate.mjs        # 「今日使用」功能配额表逐行须有真实 use_daily 拦截点（2026-10-04 清占位行）
 run_node test_deploy_surface_parity.mjs     # cn/hk 双部署面：activate 超管门禁必须两端同步（2026-10-04 hk 实测被白嫖）
 run_node test_benefit_copy_hide.mjs          # 会员页权益文案不得含「云端/算力/AI/本地」字眼，但配额与限流原样（2026-10-04 用户定档）
@@ -246,6 +245,9 @@ run_pytest_root test_cookie_pool_identity.py
 # B 站 requests 补丁：cookie/proxy/ua 必须按每次请求刷新（冻结首次参数 ⇒ 永久 412），
 # 且无 Cookie 时用池兜底、脚本 UA 换 Chrome。
 run_pytest_root test_bilibili_patch_state.py
+run_pytest_root test_convert_quota_split.py # 音乐转换/图片转换独立计次：按目标格式分派 + 使用统计补全 10 行（2026-10-19）
+# ⚠️ 必须写在 run_pytest_root 定义（第 ~206 行）之后：写在前面会报
+#    「run_pytest_root: command not found」而静默跳过（2026-10-19 真踩过）。
 # Cookie 加固：跨站读写 / 属性防护
 run_root test_cookie_hardened.py
 # 路由隔离：静态/API 边界、不得越权
