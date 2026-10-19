@@ -55,6 +55,10 @@ def _resolve_pool_dir() -> Path:
 _POOL_DIR = _resolve_pool_dir()
 _TTL = 30 * 24 * 3600  # 30 天，超时视为失效
 _LOCK = threading.Lock()
+# 「最近一次使用」的落盘节流窗口：get_cookie 每次解析都会命中，不节流等于
+# 每次解析都重写池文件（读-改-写 + 原子替换）。60s 对「最近一次使用」这个
+# 展示粒度完全够，却能把写放大压到「每条每分钟一次」。
+_USED_MARK_INTERVAL = 60
 
 # 白名单基础集（根域）。实际允许范围由 _root_domains() 动态计算：
 #   = 基础集 + downloader._COOKIE_HARDENED_DOMAINS 派生 + env VDL_COOKIE_POOL_DOMAINS 扩展。
@@ -313,6 +317,12 @@ def _save(domain: str, cookies: list) -> bool:
             ident = c.get("id") or _identity(domain, _decrypt_item(c))
             if ident:
                 item["id"] = ident
+            # 「最近一次使用」痕迹必须 survives _save：_save 是按字段白名单重建
+            # 条目的，漏掉 used_ts 会让每次 add/prune 都把使用记录清掉，
+            # 后台「最近一次使用」那一列永远空着。
+            used = int(c.get("used_ts") or 0)
+            if used:
+                item["used_ts"] = used
             header = c.get("header") or ""
             enc = c.get("header_enc") or ""
             if not header and not enc:
@@ -374,12 +384,46 @@ def get_cookie(domain: str) -> str | None:
                 header = _decrypt_item(c)
                 if header:
                     logger.info("[cookie_pool] get hit domain=%s candidate=%s len=%s", domain, d, len(header))
+                    # 记录「最近一次使用」：后台据此判断哪条 Cookie 真在被消耗、
+                    # 哪些常年没人用（补注入 / 清理的唯一依据）。节流见 _mark_used。
+                    _mark_used(f, header)
                     return header
         except Exception as e:
             logger.warning("[cookie_pool] get read error domain=%s file=%s: %s", domain, f, e)
             continue
     logger.info("[cookie_pool] get miss domain=%s", domain)
     return None
+
+
+def _mark_used(f: Path, header: str) -> None:
+    """把这条 Cookie 标记为「刚被用过」（后台「最近一次使用」列的数据源）。
+
+    两个设计约束：
+    1. **节流**：同一条目 60s 内最多落盘一次（_USED_MARK_INTERVAL）。解析高峰
+       期 get_cookie 每秒被打很多次，不节流等于每次都重写池文件。
+    2. **只改一个字段**：不走 _save()——它按 ts/source/id 白名单重建整张表，
+       会把别的字段顺带重写；这里读原文件、只改 used_ts、原样原子写回。
+
+    匹配按**明文**：同文件内明文唯一（add_cookie 按明文去重），解密比对最稳，
+    不依赖 ts/id 在并发写入后发生变化。任何异常都静默吞掉：使用痕迹丢一条
+    无所谓，绝不能让它影响解析主流程。
+    """
+    now = int(time.time())
+    with _LOCK:
+        try:
+            if not f.exists():
+                return
+            data = json.loads(f.read_text())
+            for c in data.get("cookies") or []:
+                if _decrypt_item(c) != header:
+                    continue
+                if now - int(c.get("used_ts") or 0) < _USED_MARK_INTERVAL:
+                    return  # 刚记过，不写盘
+                c["used_ts"] = now
+                atomic_io.atomic_write_text(f, json.dumps(data, ensure_ascii=False))
+                return
+        except Exception:
+            pass
 
 
 def add_cookie(domain: str, header: str, source: str = "sync") -> bool:

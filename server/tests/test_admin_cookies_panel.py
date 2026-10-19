@@ -329,6 +329,10 @@ def case_ui_wiring() -> None:
     check("下拉默认「全部平台」", "全部平台（" in js)
     check("选具体平台后不再渲染 tab 条", "_ckFilter ? '' : doms.map" in js)
     check("切 tab 只重渲染不打接口", "if (_ckData) _ckRender(_ckData);" in js)
+    # 2026-10-19：「最近一次使用」列（判断哪条 Cookie 真在被消耗 / 哪些常年没人用）
+    check("表格有「最近使用」列", "<th>最近更新</th><th>最近使用</th>" in js)
+    check("该列取 used_ts，未使用时显示「未使用」",
+          "a.used_ts ? _ckAgo(a.used_age_sec)" in js and "未使用" in js)
 
 
 def case_cloud_proxy() -> None:
@@ -409,6 +413,50 @@ def case_pool_admin_token() -> None:
             check("错令牌连删除都不执行", deny.status_code == 403, deny.status_code)
 
 
+def case_last_used() -> None:
+    print("\n[10] 最近一次使用：命中要落 used_ts、节流不写盘、 survives _save")
+    now = int(time.time())
+    h1 = "SESSDATA=aaa; DedeUserID=111"
+    with _pool({"bilibili.com": [_item(h1, now - 600)]}) as (pool_dir, client):
+        # 用之前：没有使用痕迹。0 必须和「刚刚用过」区分开（页面显示「未使用」）
+        d0 = client.get("/api/admin/cookies").json()
+        bili0 = {x["domain"]: x for x in d0["domains"]}["bilibili.com"]
+        check("未使用前 used_ts=0", bili0["items"][0]["used_ts"] == 0, bili0["items"][0])
+
+        got = cp.get_cookie("bilibili.com")
+        check("get_cookie 返回该条", got == h1, got)
+        saved = json.loads((pool_dir / "bilibili.com.json").read_text())
+        first = int(saved["cookies"][0].get("used_ts") or 0)
+        check("命中后写入 used_ts", first > 0, saved)
+
+        # 概览（账号级 + 条目级）都要读得出来，前端那一列才有数据
+        d1 = client.get("/api/admin/cookies").json()
+        bili1 = {x["domain"]: x for x in d1["domains"]}["bilibili.com"]
+        check("账号级 used_ts/used_age_sec 有值",
+              bili1["items"][0]["used_ts"] > 0 and bili1["items"][0]["used_age_sec"] >= 0,
+              bili1["items"][0])
+        check("条目级也带 used_ts", bili1["items"][0]["entries"][0]["used_ts"] > 0,
+              bili1["items"][0]["entries"][0])
+
+        # 节流：60s 内再命中一次，used_ts 不变（不重复写盘）
+        cp.get_cookie("bilibili.com")
+        saved2 = json.loads((pool_dir / "bilibili.com.json").read_text())
+        check("60s 内重复命中不重写 used_ts",
+              int(saved2["cookies"][0].get("used_ts") or 0) == first, saved2)
+
+        # used_ts 必须 survives _save：_save 按字段白名单重建条目，漏字段等于
+        # 每次 add/prune 都把「最近一次使用」清掉（那一列永远空）。
+        with patch.object(cp, "verify_cookie", lambda d, h: True):
+            cp.add_cookie("bilibili.com", "SESSDATA=bbb; DedeUserID=222", source="admin")
+        saved3 = json.loads((pool_dir / "bilibili.com.json").read_text())
+        old = [c for c in saved3["cookies"] if cp._decrypt_item(c) == h1][0]
+        check("add_cookie 后老条目的 used_ts 保留",
+              int(old.get("used_ts") or 0) == first, saved3)
+        # 没用过的新条目没有使用痕迹
+        new = [c for c in saved3["cookies"] if cp._decrypt_item(c) != h1][0]
+        check("新条目 used_ts 缺省为 0", int(new.get("used_ts") or 0) == 0, new)
+
+
 def test_admin_cookies_panel() -> None:
     case_auth_required()
     case_overview()
@@ -421,6 +469,7 @@ def test_admin_cookies_panel() -> None:
     case_ui_wiring()
     case_cloud_proxy()
     case_pool_admin_token()
+    case_last_used()
     print("\n" + ("✅ 全部通过" if not _FAILED else "❌ 有失败：%d 项" % len(_FAILED)))
     for n in _FAILED:
         print("   - " + n)

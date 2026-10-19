@@ -22336,6 +22336,7 @@ el.dwVidPlayer.hidden = true;
           + '<td>' + a.snapshots + '</td>'
           + '<td>' + esc(_ckSrcLabel(a.source)) + '</td>'
           + '<td>' + _ckAgo(a.age_sec) + '</td>'
+          + '<td>' + (a.used_ts ? _ckAgo(a.used_age_sec) : '<span class="ckp-note">未使用</span>') + '</td>'
           + '<td class="ckp-detail" title="' + esc(a.detail || '') + '">' + esc(a.detail || '-') + '</td>'
           + '<td><button type="button" class="admin-btn admin-btn-ghost admin-btn-sm"'
           + ' data-ck-del="' + esc(r.domain) + '" data-ck-ids="' + esc(ids) + '">删除</button></td>'
@@ -22355,7 +22356,7 @@ el.dwVidPlayer.hidden = true;
         + '</div>'
         + '<div class="admin-table-wrap"><table class="admin-table">'
         + '<thead><tr><th>账号</th><th>状态</th><th>Cookie 项</th><th>份数</th>'
-        + '<th>来源</th><th>最近更新</th><th>说明</th><th>操作</th></tr></thead>'
+        + '<th>来源</th><th>最近更新</th><th>最近使用</th><th>说明</th><th>操作</th></tr></thead>'
         + '<tbody>' + rows + '</tbody></table></div>'
         + '</div>';
     };

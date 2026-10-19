@@ -192,6 +192,10 @@ def _read_domain(domain: str, now: float, cache: dict) -> dict:
             eid = _entry_id(header)
             ts = int(c.get("ts") or 0)
             age = max(0, int(now - ts)) if ts else 0
+            # 「最近一次使用」：get_cookie 命中时由 cookie_pool._mark_used 落盘。
+            # 0 = 从未被使用过（不是「刚刚用过」），页面必须区分这两种。
+            used_ts = int(c.get("used_ts") or 0)
+            used_age = max(0, int(now - used_ts)) if used_ts else 0
             ident = cp._entry_identity(host, c) or ""
             cached = cache.get(f"{domain}|{eid}") or {}
             status = str(cached.get("status") or "")
@@ -228,6 +232,8 @@ def _read_domain(domain: str, now: float, cache: dict) -> dict:
                 "parts": _parts_count(header),
                 "ts": ts,
                 "age_sec": age,
+                "used_ts": used_ts,
+                "used_age_sec": used_age,
                 "source": str(c.get("source") or ""),
                 "status": status,
                 "detail": detail,
@@ -248,6 +254,9 @@ def _read_domain(domain: str, now: float, cache: dict) -> dict:
         latest = items[0]
         # 账号状态取「最新一份」的结论：同一账号的多份快照是同一会话的不同时刻，
         # 最新那份最能代表现在能不能用。
+        # 「最近一次使用」取所有快照里最新的那次：任意一份被用过，这个号就在服役。
+        used_ts = max([e["used_ts"] for e in items], default=0)
+        used_age = max(0, int(now - used_ts)) if used_ts else 0
         accounts.append({
             "ident": ident,
             "label": _ident_label(ident),
@@ -255,6 +264,8 @@ def _read_domain(domain: str, now: float, cache: dict) -> dict:
             "parts": latest["parts"],
             "ts": latest["ts"],
             "age_sec": latest["age_sec"],
+            "used_ts": used_ts,
+            "used_age_sec": used_age,
             "source": latest["source"],
             "status": latest["status"],
             "detail": latest["detail"],
@@ -263,6 +274,7 @@ def _read_domain(domain: str, now: float, cache: dict) -> dict:
             "suspect": bool(latest.get("suspect")),
             "entries": [
                 {k: it[k] for k in ("id", "host", "parts", "ts", "age_sec",
+                                    "used_ts", "used_age_sec",
                                     "source", "status", "detail", "probe",
                                     "verified_ts", "suspect")}
                 for it in items
