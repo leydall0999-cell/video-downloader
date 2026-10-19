@@ -134,4 +134,17 @@ def quota_use(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str
         return _store(request).quota_state(resource)
     if not _require_user(request):
         return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+    # 2026-10-19：可选 details（[{t: 标题, p: 平台}]），逐条记账，让后台
+    # 「使用详情」能看到具体下载了什么。缺省/长度不符时退回单次计数。
+    details = payload.get("details")
+    if isinstance(details, list) and len(details) == n and n > 0:
+        _st = _store(request)
+        _last = None
+        for d in details:
+            if not isinstance(d, dict):
+                continue
+            _last = _st.use_daily(resource, 1, title=str(d.get("t") or ""),
+                                  platform=str(d.get("p") or ""))
+        if _last is not None:
+            return _last
     return _store(request).use_daily(resource, n=n)

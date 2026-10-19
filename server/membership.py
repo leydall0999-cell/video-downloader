@@ -1634,6 +1634,13 @@ class MembershipStore:
             if old_day and old_day != "":
                 hist = self._state.setdefault("usage_history", {})
                 hist[old_day] = {k: int(v) for k, v in du.items() if k != "date"}
+                # 2026-10-19：明细随计数一起归档（与桌面端/云端同构 {资源:[{t,p,at}]}）
+                _det = self._state.get("daily_details") or {}
+                _clean = {k: v[-50:] for k, v in _det.items()
+                          if isinstance(v, list) and v}
+                if _clean and isinstance(hist.get(old_day), dict):
+                    hist[old_day]["details"] = _clean
+                self._state["daily_details"] = {}
                 # 只保留最近 90 天，避免无限增长
                 cutoff = time.strftime("%Y-%m-%d", time.localtime(now - 90 * 86400))
                 for k in list(hist.keys()):
@@ -1676,8 +1683,13 @@ class MembershipStore:
                 "member_limit": member_limits.get(resource),
                 "free_limit": free_limits.get(resource, 0)}
 
-    def use_daily(self, resource: str, n: int = 1) -> dict[str, Any]:
-        """消耗下载类配额（免费档 resolve 10/日；会员档按表）。超限返回 ok=False。"""
+    def use_daily(self, resource: str, n: int = 1, title: str = "",
+                  platform: str = "") -> dict[str, Any]:
+        """消耗下载类配额（免费档 resolve 10/日；会员档按表）。超限返回 ok=False。
+
+        title / platform（2026-10-19）：记录「具体做了什么」，随用量上云，
+        后台「使用详情」据此显示可定位的明细（如「少帅 第5集 · 抖音」）。
+        """
         if n <= 0:
             return {"ok": False, "error": "n 必须为正"}
         q = self.quota_state(resource)
@@ -1713,11 +1725,23 @@ class MembershipStore:
             return {"ok": False, "error": f"超出 {resource} 日配额上限 {q['limit']}",
                     "resource": resource, "code": "MEMBER_QUOTA"}
         self._state["daily_usage"][resource] = new_used
+        # 2026-10-19：本机也留一份明细（云端才是真源，这里只是本机兜底）
+        import time as _t
+        _title = str(title or "").strip()[:120]
+        if _title:
+            try:
+                _det = self._state.setdefault("daily_details", {})
+                _lst = _det.setdefault(str(resource)[:32], [])
+                _lst.append({"t": _title, "p": str(platform or "").strip()[:64],
+                             "at": int(_t.time())})
+                _det[str(resource)[:32]] = _lst[-50:]
+            except Exception:  # noqa: BLE001 — 记账明细绝不能影响配额判定
+                pass
         self._persist()
         # 异步上云记账（同一账号 App/网页共用每日配额；失败/离线进队列下次心跳补报）
         try:
             import cloud_link
-            cloud_link.report_usage_async(self, resource, n)
+            cloud_link.report_usage_async(self, resource, n, title=title, platform=platform)
         except Exception:  # noqa: BLE001 — 上云失败绝不影响本地结果
             pass
         return {"ok": True, "resource": resource, "used": new_used,

@@ -362,10 +362,14 @@ def _report_usage(store: Any, items: list[dict]) -> None:
         _queue_usage(store, items)
 
 
-def report_usage_async(store: Any, resource: str, n: int = 1) -> None:
+def report_usage_async(store: Any, resource: str, n: int = 1, title: str = "",
+                       platform: str = "") -> None:
     """`MembershipStore.use_daily` 的上云钩子（fire-and-forget，不阻塞主流程）。
 
     幂等 id 唯一 → 重试/补报不会重复计；断网排队、下次心跳补报。
+
+    title / platform（2026-10-19）：随用量上报「具体做了什么」，授权中心按天归档，
+    后台「使用详情」据此显示可定位的明细（如「少帅 第5集 · 抖音」）。
     """
     if not link_enabled():
         return
@@ -379,7 +383,12 @@ def report_usage_async(store: Any, resource: str, n: int = 1) -> None:
     if n <= 0 or not res:
         return
     ev = uuid.uuid4().hex[:16]
-    items = [{"res": res, "n": n, "id": f"{ev}-{res[:16]}"}]
+    it: dict = {"res": res, "n": n, "id": f"{ev}-{res[:16]}"}
+    _t = str(title or "").strip()[:120]
+    if _t:
+        it["t"] = _t
+        it["p"] = str(platform or "").strip()[:64]
+    items = [it]
     import threading
     try:
         threading.Thread(target=_report_usage, args=(store, items), daemon=True,

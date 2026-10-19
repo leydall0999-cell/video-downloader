@@ -603,21 +603,36 @@ def _member_quota_gate(request, need: int = 1) -> dict:
         return {"mode": "local", "store": None, "remaining": None}
 
 
-def _member_quota_count(request, gate: dict, n: int = 1) -> dict | None:
+def _member_quota_count(request, gate: dict, n: int = 1,
+                        details: list | None = None) -> dict | None:
     """任务成功创建后的计数（V1：成功创建才计费）。失败只记日志，不影响已建任务。
+
+    details（2026-10-19）：可选，[{t: 标题, p: 平台}]，长度应与 n 一致。带上后
+    按条记账，后台「使用详情」能显示「下载了什么」而不是只有次数。
 
     匿名（回派收到 NO_AUTH）落本机全局匿名共享池 —— 与 user_membership 的
     「匿名回退 app.member_store」同一份，保证预检与计数落在同一个池。
     """
     if n <= 0:
         return None
+    _details = [d for d in (details or []) if isinstance(d, dict)]
     try:
         if gate.get("mode") == "relay":
-            res = _relay_member_quota(request, {"resource": "download", "n": n})
+            _payload = {"resource": "download", "n": n}
+            if _details and len(_details) == n:
+                _payload["details"] = _details
+            res = _relay_member_quota(request, _payload)
             if isinstance(res, dict) and res.get("ok") is False and res.get("code") == "NO_AUTH":
                 return app.member_store.use_daily("download", n=n)
             return res
         store = gate.get("store") or app.current_member_store(request)
+        if _details and len(_details) == n:
+            _last = None
+            for d in _details:
+                _last = store.use_daily("download", 1, title=str(d.get("t") or ""),
+                                        platform=str(d.get("p") or ""))
+            if _last is not None:
+                return _last
         return store.use_daily("download", n=n)
     except Exception as e:  # noqa: BLE001 — 计数失败绝不回滚已创建的任务
         try:
@@ -634,6 +649,14 @@ def _mq_public(mq) -> dict | None:
     return {k: mq[k] for k in ("resource", "used", "remaining") if k in mq}
 
 
+def _detail_title(url: str) -> str:
+    """从链接里取一个可读的明细标题（2026-10-19：后台要能看到下载了什么）。"""
+    u = str(url or "").split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    tail = u.rsplit("/", 1)[-1] if "/" in u else u
+    tail = tail.split(".", 1)[0] if "." in tail else tail
+    return (tail or u)[:60]
+
+
 @router.post('/api/download')
 def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     app._check_rate_limit(request)
@@ -646,7 +669,9 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, device_id=_device_of(request))
     app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     # V1：任务成功创建才计费（预检在 store.create 之前，计数在其之后）
-    member_quota = _mq_public(_member_quota_count(request, gate, n=1))
+    # 2026-10-19：带标题与平台，后台「使用详情」显示「下载了什么」
+    member_quota = _mq_public(_member_quota_count(
+        request, gate, n=1, details=[{"t": _detail_title(url), "p": platform.name}]))
     return {'task_id': task.id, 'status': task.status, 'quota': {'subscribed': subscribed, 'free_used': free_used, 'free_daily': free_daily}, 'member_quota': member_quota}
 
 class BatchRequest(app.BaseModel):
@@ -678,6 +703,7 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
     task_ids: list[str] = []
     skipped = 0
     quota_exhausted = False
+    _batch_details: list[dict] = []      # 2026-10-19：逐条明细（标题 + 平台）
     for u in urls:
         if member_cap is not None and len(task_ids) >= member_cap:
             quota_exhausted = True
@@ -694,6 +720,7 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
         except (app.UnsupportedPlatformError, app.LinkError):
             skipped += 1
             continue
+        _batch_details.append({"t": _detail_title(url), "p": platform.name})
         task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, device_id=_device_of(request))
         app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, retries)
         task_ids.append(task.id)
@@ -702,7 +729,9 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
             raise app.HTTPException(status_code=402, detail='今日免费下载次数已用完，订阅可解锁无限下载')
         raise app.HTTPException(status_code=400, detail='链接均无法识别，请确认是视频播放页链接')
     # V1：任务成功创建才计费（按实际创建数，剩余不足时只计创建的那部分）
-    member_quota = _mq_public(_member_quota_count(request, gate, n=len(task_ids)))
+    # 2026-10-19：带逐条明细，后台能按平台看到这批下载了什么
+    member_quota = _mq_public(_member_quota_count(
+        request, gate, n=len(task_ids), details=_batch_details or None))
     return {'task_ids': task_ids, 'count': len(task_ids), 'skipped': skipped, 'quota_exhausted': quota_exhausted, 'member_quota': member_quota}
 
 @router.get('/api/tasks')
