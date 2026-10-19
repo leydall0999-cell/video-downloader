@@ -293,6 +293,11 @@ run_root test_ydlp_update.py
 run_root test_youku_series_title.py
 run_root test_youtube_autofallback.py
 run_root test_youtube_player_skip.py
+#  YouTube「无 PO Token ⇒ ≤1080p 优先 HLS 混合流」+ VDL_YT_JS_RUNTIME=off 开关
+#  接线守卫（2026-10-19，HK 小机 43s deno / DASH 按连接限速两病灶的回归）：
+#  档位矩阵 / HLS 选择器回落 / _download_options 接线 / _pot_usable 代理感知 /
+#  off 必须写空 js_runtimes（yt-dlp 库默认 deno，不写=没关）/ fetch_pot 源码接线。
+run_pytest_root test_youtube_hls_prefer.py
 run_root test_crypto_routes.py              # crypto 路由（web 适用节，自设开关）
 #  用户信息类数据云备份 · 网页版接入（2026-10-17）：与桌面端同一账号资料包通道但
 #  scope="web" 分文件（互不覆盖）、无登录/无云端身份必拒、parts 空必拒、scope 必须
