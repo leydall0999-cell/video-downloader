@@ -18092,6 +18092,12 @@ el.dwVidPlayer.hidden = true;
   // 这里只补两件事：**给用户看到状态**、**允许手动补一次同步**。
   // ⚠️ 硬边界：界面绝不展示任何 Cookie 内容 —— 平台登录态由用户本机端到端加密后
   //    上传，云端与超管都只拿得到「有哪些平台、几条」。功能产物（成片/图片）不上云。
+  //
+  // 🔴 2026-10-20 用户要求：这张卡**隐藏**（与网页版同步处理）。只掐展示入口：
+  //    renderCloudData 的状态文案/计数照常渲染（只是 hidden），登录/换机的自动同步
+  //    （cloudSyncAccount → /api/cloud/sync、userdata 自动 push）全部照旧，后台链路
+  //    与这张卡的显隐无关。要恢复显示把这个开关改回 true。
+  const CLOUD_DATA_CARD_VISIBLE = false;
   async function renderCloudData() {
     const row = $('cloudDataRow');
     if (!row) return;
@@ -18099,7 +18105,7 @@ el.dwVidPlayer.hidden = true;
     let st = null;
     try { st = await request('/api/userdata/status'); } catch (_) { row.hidden = true; return; }
     if (!st || !st.ok) { row.hidden = true; return; }
-    row.hidden = false;
+    row.hidden = !CLOUD_DATA_CARD_VISIBLE;   // 隐藏期：照常渲染，只是不展示
     // 🔴 2026-10-17 修：N / M 一律取**云端实际**备份量（st.cloud ← 授权中心摘要，
     //    见 /api/userdata/status），不再拿 st.settings_local / st.cookies_local
     //    冒充「已备份」—— 否则云端一条 Cookie 都没有时也会显示「已备份 7 个平台登录态」。
@@ -18127,7 +18133,7 @@ el.dwVidPlayer.hidden = true;
     }
     const hint = $('cloudDataHint');
     if (hint) {
-      hint.hidden = false;
+      hint.hidden = !CLOUD_DATA_CARD_VISIBLE;   // 与卡片同上：文案照填，不展示
       let h;
       if (!st.available && ckLocal > 0) {
         h = '本机加密组件不可用，平台登录态暂不上云（设置与偏好仍会同步）。';

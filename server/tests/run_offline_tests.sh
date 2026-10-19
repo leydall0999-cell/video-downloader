@@ -1231,6 +1231,12 @@ run_pytest_root test_usage_details_ledger.py
 run_pytest_root test_license_base.py # 授权中心 base url：云同步配置/环境变量/兜底优先级
 run_pytest_root test_membership_device.py # 设备绑定：激活记账/换机不锁/弱指纹不锁/吊销
 
+# 64. test_cloud_data_card_hidden.mjs —— 会员中心「云端资料」卡片隐藏（2026-10-20 用户要求，
+#      与网页版同步）：只掐展示入口，元素不删（app.js $() 取节点）、文案照常渲染
+#      （恢复显示不用重测），登录自动同步 /api/cloud/sync、/api/userdata/status、
+#      /api/userdata/sync 三条后台链路一个都不能少。开关在 app.js 的 CLOUD_DATA_CARD_VISIBLE。
+run_node test_cloud_data_card_hidden.mjs
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

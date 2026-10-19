@@ -138,6 +138,38 @@ def test_report_hook_carries_title() -> None:
           "report_usage_async(self, resource, n, title=title, platform=platform)" in m_src)
 
 
+@_strict
+def test_usage_bundle_includes_today_details() -> None:
+    """[E] 后台「使用详情」必须能看到**今天**下载了什么（2026-10-20 修）。
+
+    真身：`usage_history` 只装已日切的日子，今天的数据还在 `daily_usage` /
+    `daily_details` 里。旧代码「遍历 days 找今天再补明细」永远找不到今天
+    ⇒ 面板只显示「今日 N 次」，明细一栏空白（用户反馈「下载记录还是看不到详情」）。
+    """
+    print("\n[E] _usage_bundle 的「今天」行带次数与明细")
+    from routers import admin as A  # noqa: E402 — 延迟导入，避免污染别的用例
+
+    st = _fresh("bundle")
+    st.use_daily("download", 1, title="【官方4K版】A2O LITE 出道舞台", platform="哔哩哔哩")
+    st.use_daily("download", 1, title="少帅 第5集", platform="腾讯视频")
+
+    b = A._usage_bundle("u_probe", "probe@self.test", False, False, 0, st)
+    days = b.get("usage_days") or []
+    today_key = __import__("time").strftime("%Y-%m-%d")
+    check("今天在 usage_days 里有一行（旧代码会缺这一行）",
+          bool(days) and days[0].get("date") == today_key,
+          str([d.get("date") for d in days]))
+    row = days[0] if days else {}
+    check("这一行次数=2", row.get("total") == 2, str(row))
+    det = (row.get("details") or {}).get("download") or []
+    check("明细条数=2", len(det) == 2, str(det))
+    titles = {d.get("t") for d in det}
+    check("明细带真实标题", "少帅 第5集" in titles, str(titles))
+    check("明细带平台", any(d.get("p") == "哔哩哔哩" for d in det), str(det))
+    check("today 字段与 usage_days 今天行同口径",
+          (b.get("today") or {}).get("total") == 2, str(b.get("today")))
+
+
 def main() -> int:
     print("== test_usage_details_ledger ==")
     try:
@@ -145,6 +177,7 @@ def main() -> int:
         test_cap_and_sanitize()
         test_roll_daily_archives_details()
         test_report_hook_carries_title()
+        test_usage_bundle_includes_today_details()
     except AssertionError as e:
         print("\n" + str(e))
         return 1

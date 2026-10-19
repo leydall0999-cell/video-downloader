@@ -1294,15 +1294,30 @@ def _usage_bundle(uid: str, ident: str, disabled: bool, is_admin: bool,
         items = _counts(hist.get(day))
         days.append({"date": day, "total": sum(items.values()), "items": items,
                      "details": _details(hist.get(day))})
-    # 2026-10-19：今天还没日切，明细仍在 daily_details 里，一并补上
-    _today_details = _details((getattr(store, "_state", {}) or {}).get("daily_details"))
-    if _today_details:
-        for d in days:
-            if d["date"] == _t.strftime("%Y-%m-%d", _t.localtime(now)):
-                d.setdefault("details", {}).update(_today_details)
-    today_row = (getattr(store, "_state", {}) or {}).get("daily_usage") or {}
-    today_items = _counts(today_row)
-    today = next((d for d in days if d["date"] == _t.strftime("%Y-%m-%d", _t.localtime(now))), None)
+    # 2026-10-20 修：`usage_history` 只装**已日切**的日子 —— 「今天」的数据还在
+    # `daily_usage` / `daily_details` 里，根本不在 hist 里。旧写法是「遍历 days
+    # 找今天、找到才补明细」，等于永远补不上；更致命的是把 `daily_details`
+    # 这个**字典本身**喂给了 `_details()`（它要的是带 `details` 键的一整行）⇒
+    # 取到 None ⇒ 明细永远为空。这就是「下载记录还是看不到详情」的真身。
+    # 现在：按 `daily_usage["date"]`（真实日期，不硬按今天算）补一行进 days。
+    _state = getattr(store, "_state", {}) or {}
+    _today_details = _details({"details": _state.get("daily_details") or {}})
+    _today_row_raw = _state.get("daily_usage") or {}
+    _live_day = str(_today_row_raw.get("date") or "")[:10]
+    _live_counts = _counts(_today_row_raw)
+    if _live_day and (_live_counts or _today_details):
+        _live = next((d for d in days if d["date"] == _live_day), None)
+        if _live is None:
+            _live = {"date": _live_day, "total": sum(_live_counts.values()),
+                     "items": _live_counts, "details": {}}
+            days.append(_live)
+            days.sort(key=lambda d: str(d.get("date") or ""), reverse=True)
+        if _today_details:
+            _live.setdefault("details", {})
+            for _k, _v in _today_details.items():
+                _live["details"][_k] = _v
+    today_row = _today_row_raw
+    today_items = _live_counts
 
     # ---- 激活 / 购买历史（倒序）----
     meta = (getattr(store, "_state", {}) or {}).get("meta") or {}
