@@ -578,7 +578,9 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=_task_cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, referer=(payload.referer or '').strip(), owner_id=app._task_owner(request))
     app.scheduler.submit(_runner, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     # 任务创建成功才计费（失败/被拒不烧免费额度）
-    _charged = app.current_member_store(request).use_daily('download', 1)
+    # 2026-10-19：带上标题与平台，后台「使用详情」能显示「下载了什么」而不是干巴巴的次数
+    _charged = app.current_member_store(request).use_daily(
+        'download', 1, title=(task.title or task.url), platform=platform.name)
     _qs = app.current_member_store(request).quota_state('download')
     record_event('download', {'platform': platform.name, 'quality': payload.quality})
     return {'task_id': task.id, 'status': task.status,
@@ -629,7 +631,7 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
             continue
         task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, owner_id=app._task_owner(request))
         app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, retries)
-        app.current_member_store(request).use_daily('download', 1)  # 每个成功创建的任务计 1 次下载配额
+        app.current_member_store(request).use_daily('download', 1, title=url, platform=platform.name)  # 每个成功创建的任务计 1 次下载配额
         task_ids.append(task.id)
     if not task_ids:
         if quota_exhausted:
@@ -684,7 +686,10 @@ def retry_task(task_id: str, request: app.Request) -> dict:
     else:
         app.scheduler.submit(app.downloader.run_download, task, app.store, task.quality_key, task.cookie, task.proxy, app.BATCH_RETRIES_DEFAULT, '', task.concurrent_fragments, task.downloader_type, resume)
     if not resume:
-        app.current_member_store(request).use_daily('download', 1)
+        # 2026-10-19：带上标题与平台，便于后台定位「这次下载的是什么」
+        app.current_member_store(request).use_daily(
+            'download', 1, title=(task.title or task.url),
+            platform=getattr(task, 'platform', '') or '')
     return {'task_id': task_id, 'status': 'pending', 'resume': resume}
 
 @router.post('/api/tasks/{task_id}/extract-text')

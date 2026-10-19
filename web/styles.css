@@ -7242,6 +7242,14 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .admin-usage-dlg .aud-today { font-size: .82rem; color: var(--text-mute, #6b7280); margin-bottom: 6px; }
 .admin-usage-dlg .aud-table-wrap { max-height: 200px; overflow: auto; border: 1px solid var(--line, #e5e7eb); border-radius: 8px; }
 .admin-usage-dlg .aud-items { color: var(--text-mute, #6b7280); white-space: normal; }
+/* ── 明细按平台分组（2026-10-19）：一个平台一行，避免标题堆成一团 ── */
+.admin-usage-dlg .aud-plat { display: flex; align-items: baseline; gap: .5rem; padding: 2px 0; }
+.admin-usage-dlg .aud-plat + .aud-plat { border-top: 1px dashed var(--line, #e5e7eb); }
+.admin-usage-dlg .aud-plat-name { flex: 0 0 auto; min-width: 5.5rem; font-size: .74rem;
+  font-weight: 600; color: var(--text, #1f2937); background: var(--bg-soft, #f3f4f6);
+  border-radius: 4px; padding: 1px 6px; text-align: center; }
+.admin-usage-dlg .aud-plat-titles { flex: 1 1 auto; font-size: .78rem; color: var(--text-mute, #6b7280);
+  word-break: break-word; }
 .admin-usage-dlg .aud-thread { border: 1px solid var(--line, #e5e7eb); border-radius: 8px;
   padding: .5rem .6rem; margin-bottom: .45rem; }
 .admin-usage-dlg .aud-thread-h { display: flex; align-items: center; gap: .45rem;

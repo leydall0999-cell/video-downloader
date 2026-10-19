@@ -1218,6 +1218,13 @@ run_pytest_root test_cookie_browser_push.py # 登录态推送闸门 + 根域回�
 #       云端入口只暴露脱敏信息，且必须带 VDL_COOKIE_SYNC_TOKEN。
 run_pytest_root test_admin_cookies_panel.py # 后台 Cookie 池：概览/校验/注入/删除/云端代理
 
+#  test_usage_details_ledger.py —— 用量明细台账（2026-10-19）
+#    ① use_daily(title/platform) 把「下载了什么」写进 daily_details，供后台定位；
+#    ② 无标题不记、每资源最多 50 条、标题/平台截断（防无限增长）；
+#    ③ 跨天日切时明细随计数一起归档进 usage_history，并清空当日明细；
+#    ④ 上云钩子必须把标题/平台带进 items（授权中心按天归档 details）。
+run_pytest_root test_usage_details_ledger.py
+
 #  补登此前「写了 run_pytest_root 但函数尚未定义」的两个用例（2026-10-19）：它们在
 #  文件前段曾被调用，实际只打了 command not found，从未进过构建自验证。
 run_pytest_root test_license_base.py # 授权中心 base url：云同步配置/环境变量/兜底优先级

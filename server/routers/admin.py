@@ -1264,10 +1264,42 @@ def _usage_bundle(uid: str, ident: str, disabled: bool, is_admin: bool,
                 out[str(k)] = n
         return out
 
+    def _details(row: Any) -> dict[str, list[dict[str, Any]]]:
+        """取「资源名 → 明细列表」（2026-10-19：让面板显示下载了什么）。"""
+        out: dict[str, list[dict[str, Any]]] = {}
+        raw = (row or {}).get("details")
+        if not isinstance(raw, dict):
+            return out
+        for k, v in raw.items():
+            if not isinstance(v, list):
+                continue
+            items: list[dict[str, Any]] = []
+            for it in v[-50:]:
+                if not isinstance(it, dict):
+                    continue
+                t = str(it.get("t") or "")[:120]
+                if not t:
+                    continue
+                try:
+                    at = int(it.get("at") or 0)
+                except (TypeError, ValueError):
+                    at = 0
+                items.append({"t": t, "p": str(it.get("p") or "")[:64], "at": at})
+            if items:
+                out[str(k)[:32]] = items
+        return out
+
     days = []
     for day in sorted(hist.keys(), reverse=True)[:_USAGE_DAYS]:
         items = _counts(hist.get(day))
-        days.append({"date": day, "total": sum(items.values()), "items": items})
+        days.append({"date": day, "total": sum(items.values()), "items": items,
+                     "details": _details(hist.get(day))})
+    # 2026-10-19：今天还没日切，明细仍在 daily_details 里，一并补上
+    _today_details = _details((getattr(store, "_state", {}) or {}).get("daily_details"))
+    if _today_details:
+        for d in days:
+            if d["date"] == _t.strftime("%Y-%m-%d", _t.localtime(now)):
+                d.setdefault("details", {}).update(_today_details)
     today_row = (getattr(store, "_state", {}) or {}).get("daily_usage") or {}
     today_items = _counts(today_row)
     today = next((d for d in days if d["date"] == _t.strftime("%Y-%m-%d", _t.localtime(now))), None)

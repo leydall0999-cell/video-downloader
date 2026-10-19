@@ -77,7 +77,8 @@ def create_image_download(payload: ImageDownloadRequest,
         app.scheduler.submit(image_download.run_image_download, task, app.store,
                              None, app.scheduler)
         # 任务创建成功才计费（失败/被拒不烧免费额度）—— 与 /api/download 同规
-        app.current_member_store(request).use_daily('download', 1)
+        # 2026-10-19：带上链接与平台，后台能看到「下载了什么」
+        app.current_member_store(request).use_daily('download', 1, title=url, platform='图片')
         task_ids.append(task.id)
     if not task_ids:
         if quota_exhausted:

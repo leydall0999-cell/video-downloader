@@ -556,11 +556,15 @@ def _report_usage(store, items: list[dict]) -> None:
         _queue_pending_usages(store, items)  # 断网/超时：排队下次补报
 
 
-def report_usage_async(store, resource: str, n: int = 1) -> None:
+def report_usage_async(store, resource: str, n: int = 1, title: str = "",
+                       platform: str = "") -> None:
     """membership.use_daily 的上云钩子（fire-and-forget，幂等 id 防重复计）。
 
     离线测试环境（pytest / VDL_OFFLINE_TESTS）直接跳过：后台线程会污染全局
     store 单例并发起真实网络请求。
+
+    title / platform（2026-10-19）：随用量一起上报「具体做了什么」，
+    授权中心按天归档，后台「使用详情」据此显示可定位的明细。
     """
     import os
     if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
@@ -575,7 +579,12 @@ def report_usage_async(store, resource: str, n: int = 1) -> None:
     import threading
     import uuid
     ev = uuid.uuid4().hex[:16]
-    items = [{"res": res, "n": n, "id": f"{ev}-{res[:16]}"}]
+    it: dict = {"res": res, "n": n, "id": f"{ev}-{res[:16]}"}
+    _t = str(title or "").strip()[:120]
+    if _t:
+        it["t"] = _t
+        it["p"] = str(platform or "").strip()[:64]
+    items = [it]
     try:
         threading.Thread(target=_report_usage, args=(store, items),
                          daemon=True, name="vdl-usage-report").start()

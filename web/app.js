@@ -23302,8 +23302,10 @@ el.dwVidPlayer.hidden = true;
       return ks.length ? ks.map((k) => _usageResLabel(k) + ' ' + cu.items[k]).join('、') : '';
     };
     // 云端按天历史（2026-10-18）：授权中心在日切时把前一天归档，保留 366 天。
-    // 数组形态 [{date:"2026-10-18", counts:{download:2}}]，**新的在前**。
+    // 数组形态 [{date:"2026-10-18", counts:{download:2},
+    //           details:{download:[{t:"少帅 第5集",p:"douyin.com",at:...}]}}]，**新的在前**。
     // 老版本云端没有这个字段 ⇒ 返回空数组，面板自动退回「只有当天」的展示。
+    // details（2026-10-19）：具体下载/处理了什么，按天归档，供后台定位。
     const _usageCloudHistory = (u) => {
       const rows = ((((u || {}).cloud) || {}).data || {}).usage_history;
       if (!Array.isArray(rows)) return [];
@@ -23320,10 +23322,53 @@ el.dwVidPlayer.hidden = true;
         out.push({
           date: String(r.date),
           items,
+          details: _cleanDetails(r.details),
           total: ks.reduce((s, k) => s + items[k], 0),
         });
       });
       return out;
+    };
+
+    // 明细清洗（2026-10-19）：云端/本机同构 {资源: [{t, p, at}]}；无标题的条目丢掉。
+    const _cleanDetails = (raw) => {
+      const out = {};
+      if (!raw || typeof raw !== 'object') return out;
+      Object.keys(raw).forEach((k) => {
+        const v = raw[k];
+        if (!Array.isArray(v)) return;
+        const items = [];
+        v.slice(-50).forEach((it) => {
+          if (!it || typeof it !== 'object') return;
+          const t = String(it.t || '').slice(0, 120);
+          if (!t) return;
+          items.push({ t, p: String(it.p || ''), at: Number(it.at || 0) });
+        });
+        if (items.length) out[String(k)] = items;
+      });
+      return out;
+    };
+
+    // 明细按平台分组的 HTML（2026-10-19）：用户要「按平台分类，不要堆一起」。
+    // 输入 {资源: [{t, p, at}]}，输出每个平台一行的 chips 列表；无明细返回空串。
+    const _usageDetailsByPlatform = (details) => {
+      const det = _cleanDetails(details);
+      const byPlatform = {};      // 平台 -> {标题: 次数}
+      Object.keys(det).forEach((res) => {
+        det[res].forEach((it) => {
+          const p = it.p || '未知平台';
+          if (!byPlatform[p]) byPlatform[p] = {};
+          byPlatform[p][it.t] = (byPlatform[p][it.t] || 0) + 1;
+        });
+      });
+      const ps = Object.keys(byPlatform);
+      if (!ps.length) return '';
+      return ps.map((p) => {
+        const titles = Object.keys(byPlatform[p])
+          .map((t) => esc(t) + (byPlatform[p][t] > 1 ? ' ×' + byPlatform[p][t] : ''))
+          .join('、');
+        return '<div class="aud-plat"><span class="aud-plat-name">' + esc(p) + '</span>'
+          + '<span class="aud-plat-titles">' + titles + '</span></div>';
+      }).join('');
     };
     const _USAGE_VIA_LABELS = { pay: '购买', grant: '后台赠送', admin: '后台操作', test: '测试', activate: '激活' };
     const _usageViaLabel = (v) => _USAGE_VIA_LABELS[v] || (v || '—');
@@ -23474,7 +23519,13 @@ el.dwVidPlayer.hidden = true;
         const dayRows = (u.usage_days || []).map((d) => {
           const items = Object.keys(d.items || {})
             .map((k) => `${_usageResLabel(k)} ${d.items[k]}`).join('、') || '未使用';
-          return `<tr><td>${esc(d.date)}</td><td>${d.total}</td><td class="aud-items">${esc(items)}</td></tr>`;
+          // 2026-10-19：本机明细同样按平台分组（与云端口径一致）
+          const detail = _usageDetailsByPlatform(d.details);
+          return `<tr><td>${esc(d.date)}</td><td>${d.total}</td>`
+            + (detail
+              ? '<td class="aud-items">' + detail + '</td>'
+              : `<td class="aud-items">${esc(items)}</td>`)
+            + '</tr>';
         }).join('');
         h += '<section class="aud-sec"><h4>本机配额消耗（近 '
           + (us.days || 0) + ' 天，共 ' + (us.total || 0) + ' 次 / 活跃 ' + (us.active_days || 0) + ' 天）</h4>'
@@ -23503,7 +23554,13 @@ el.dwVidPlayer.hidden = true;
             const cuRows = cuHist.map((d) => {
               const items = Object.keys(d.items)
                 .map((k) => _usageResLabel(k) + ' ' + d.items[k]).join('、') || '—';
-              return `<tr><td>${esc(d.date)}</td><td>${d.total}</td><td class="aud-items">${esc(items)}</td></tr>`;
+              // 2026-10-19：明细按平台分组渲染；老数据没有明细时退回次数摘要
+              const detail = _usageDetailsByPlatform(d.details);
+              return `<tr><td>${esc(d.date)}</td><td>${d.total}</td>`
+                + (detail
+                  ? '<td class="aud-items">' + detail + '</td>'
+                  : `<td class="aud-items">${esc(items)}</td>`)
+                + '</tr>';
             }).join('');
             h += '<div class="aud-table-wrap" style="max-height:420px;overflow:auto">'
               + '<table class="admin-table"><thead><tr><th>日期</th><th>次数</th><th>明细</th></tr></thead>'

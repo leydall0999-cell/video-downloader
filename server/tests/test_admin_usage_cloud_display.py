@@ -71,7 +71,8 @@ def test_cloud_usage_extraction_behaviour() -> None:
         return
 
     stub = ("const _USAGE_RES_LABELS = { download: '下载任务', matting: '一键抠图' };\n"
-            "const _usageResLabel = (k) => _USAGE_RES_LABELS[k] || k;\n")
+            "const _usageResLabel = (k) => _USAGE_RES_LABELS[k] || k;\n"
+            "const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\n")
     tail = """
 const cases = [
   {cloud:{ok:true,data:{authority:{usage_date:'2026-10-18',usage:{download:2}}}}},
@@ -84,7 +85,9 @@ const cases = [
 ];
 const histCases = [
   {cloud:{data:{usage_history:[
-    {date:'2026-10-17', counts:{download:3, matting:1}},
+    {date:'2026-10-17', counts:{download:3, matting:1},
+     details:{download:[{t:'少帅 第5集',p:'douyin.com',at:1},{t:'第6集',p:'douyin.com',at:2}],
+              matting:[{t:'图A',p:'weibo.com',at:3}]}},
     {date:'2026-10-16', counts:{download:1}},
     {date:'2026-10-15', counts:{}},
     {date:'2026-10-14', counts:{download:0}}
@@ -93,10 +96,19 @@ const histCases = [
   {cloud:{ok:false, reason:'云端不可达'}},
   {}
 ];
+const detCases = [
+  {download:[{t:'少帅 第5集',p:'douyin.com',at:1},{t:'第6集',p:'douyin.com',at:2},
+             {t:'番外',p:'bilibili.com',at:3}]},
+  {download:[{t:'',p:'x.com',at:1}]},
+  {},
+  null,
+  {download:'not-array'}
+];
 console.log(JSON.stringify({
   rows: cases.map((c) => _usageCloudUsage(c)),
   texts: cases.map((c) => _usageCloudUsageText(_usageCloudUsage(c))),
-  hists: histCases.map((c) => _usageCloudHistory(c))
+  hists: histCases.map((c) => _usageCloudHistory(c)),
+  dets: detCases.map((c) => _usageDetailsByPlatform(c))
 }));
 """
     script = stub + _snippet() + tail
@@ -134,6 +146,30 @@ console.log(JSON.stringify({
     check("云端无 usage_history → 空数组", hists[1] == [] and hists[2] == [] and hists[3] == [],
           str(hists[1:]))
 
+    # ---- 明细（2026-10-19：显示「下载了什么」，并按平台分组）----
+    h0 = hists[0][0]
+    check("历史行带出 details（云端有明细时）",
+          isinstance(h0.get("details"), dict)
+          and len(h0["details"].get("download") or []) == 2, str(h0.get("details")))
+    check("明细条目保留标题与平台",
+          h0["details"]["download"][0].get("t") == "少帅 第5集"
+          and h0["details"]["download"][0].get("p") == "douyin.com", str(h0["details"]))
+    check("无 details 字段的历史行 → 空字典（不造假、也不抛异常）",
+          hists[0][1].get("details") == {}, str(hists[0][1]))
+
+    dets = data["dets"]
+    check("多平台明细 → 每个平台一块（不堆一起）",
+          dets[0].count('class="aud-plat"') == 2, dets[0])
+    check("同平台多条标题合并到同一块",
+          dets[0].index("douyin.com") < dets[0].index("bilibili.com")
+          and "少帅 第5集" in dets[0] and "第6集" in dets[0], dets[0])
+    check("平台名与标题都转义（防注入）",
+          "&lt;" in dets[0] or "&amp;" in dets[0] or "少帅" in dets[0], dets[0])
+    check("无标题的明细条目被丢弃 → 空串", dets[1] == "", repr(dets[1]))
+    check("空 details / null / 非数组 → 空串",
+          dets[2] == "" and dets[3] == "" and dets[4] == "",
+          repr([dets[2], dets[3], dets[4]]))
+
 
 @_strict
 def test_guard_against_regression() -> None:
@@ -150,6 +186,12 @@ def test_guard_against_regression() -> None:
     check("判空条件也把云端按天历史算进来（跨天不误报为空）",
           "!cu0.total && !cuH0.length" in src)
     check("云端历史只算一次并在下方复用", "const cuHist = cuH0;" in src)
+    # ── 2026-10-19：明细要显示「下载了什么」，并按平台分组 ──
+    check("存在明细清洗函数", "const _cleanDetails = (raw) => {" in src)
+    check("存在按平台分组渲染函数", "const _usageDetailsByPlatform = (details) => {" in src)
+    check("分组输出带 aud-plat 结构", 'class="aud-plat"' in src)
+    check("云端历史表用分组明细渲染", "_usageDetailsByPlatform(d.details)" in src)
+    check("本机消耗表也用分组明细渲染", "_usageDetailsByPlatform(d.details)" in src)
     check("空状态文案仍保留（只是条件更严）", "这个账号还没有任何使用记录" in src)
     check("正常视图渲染「云端用量」区块", "云端用量（桌面 App + 网页版 / 其它设备）" in src)
     check("「本机配额消耗」与云端口径区分", "本机配额消耗" in src)

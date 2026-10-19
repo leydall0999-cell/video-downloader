@@ -383,6 +383,38 @@ def _clean_counts(counts: Any) -> dict[str, int]:
     return out
 
 
+def _clean_details(raw: Any) -> dict[str, list[dict[str, Any]]]:
+    """把 {资源: [明细]} 洗干净：标题必填（无标题的条目没意义，丢弃），
+    平台/时间戳可选；每条标题截断到 120 字符，每资源最多保留 50 条。
+
+    2026-10-19：后台「使用详情」原先只能看到「下载任务 2」，用户反馈时说不出
+    具体下载了什么。这里让客户端上报时顺带带上标题与平台，按天归档，
+    面板就能显示「少帅 第5集 · 抖音」这类可定位的明细。
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        res = str(k)[:32]
+        if not res or not isinstance(v, list):
+            continue
+        items: list[dict[str, Any]] = []
+        for it in v[-50:]:
+            if not isinstance(it, dict):
+                continue
+            t = str(it.get("t") or "")[:120]
+            if not t:
+                continue
+            try:
+                at = int(it.get("at") or 0)
+            except (TypeError, ValueError):
+                at = 0
+            items.append({"t": t, "p": str(it.get("p") or "")[:64], "at": at})
+        if items:
+            out[res] = items
+    return out
+
+
 def _archive_daily(user: dict[str, Any], daily: Any) -> None:
     """日切前把旧的 `daily` 归档进 `user["usage_history"]`（幂等、容错）。"""
     try:
@@ -392,12 +424,16 @@ def _archive_daily(user: dict[str, Any], daily: Any) -> None:
         clean = _clean_counts((daily or {}).get("counts") or {})
         if not clean:
             return                              # 那天没有任何消耗 → 不留空行
+        details = _clean_details((daily or {}).get("details") or {})
         hist = user.get("usage_history")
         if not isinstance(hist, list):
             hist = []
         # 同一天重复归档（重放 / 多次日切）只保留一条，避免列表膨胀出重复日期
         hist = [h for h in hist if str((h or {}).get("date") or "") != d]
-        hist.append({"date": d, "counts": clean})
+        row: dict[str, Any] = {"date": d, "counts": clean}
+        if details:
+            row["details"] = details
+        hist.append(row)
         hist.sort(key=lambda h: str((h or {}).get("date") or ""))
         user["usage_history"] = hist[-USAGE_HISTORY_DAYS:]
     except Exception:  # noqa: BLE001 — 归档失败不允许影响配额判定
@@ -407,7 +443,8 @@ def _archive_daily(user: dict[str, Any], daily: Any) -> None:
 def _usage_history_view(user: dict[str, Any], now: float) -> list[dict[str, Any]]:
     """账号级用量历史（近一年，**新的在前**）；最后补上「今天」的实时计数。
 
-    返回 `[{"date": "2026-10-18", "counts": {"download": 2}}, ...]`，直接给后台渲染。
+    返回 `[{"date": "2026-10-18", "counts": {"download": 2},
+            "details": {"download": [{"t": "少帅 第5集", "p": "douyin.com", "at": ...}]}}, ...]`。
     当天可能尚未日切（仍躺在 `user["daily"]` 里），所以这里合并一次，
     保证面板看到的是「含今天」的完整视图。
     """
@@ -420,7 +457,11 @@ def _usage_history_view(user: dict[str, Any], now: float) -> list[dict[str, Any]
             d = str(h.get("date") or "")[:16]
             clean = _clean_counts(h.get("counts") or {})
             if d and clean:
-                out.append({"date": d, "counts": clean})
+                row: dict[str, Any] = {"date": d, "counts": clean}
+                det = _clean_details(h.get("details") or {})
+                if det:
+                    row["details"] = det
+                out.append(row)
 
     # 🔴 2026-10-19 修（跨天丢记录）：`daily` 只在「用户下一次上报」时才归档
     # （daily_impl → _archive_daily）。若用户隔天没再来，昨天那条既不是「今天」
@@ -431,8 +472,12 @@ def _usage_history_view(user: dict[str, Any], now: float) -> list[dict[str, Any]
     _d = str(daily.get("date") or "")[:16]
     _clean = _clean_counts(daily.get("counts") or {})
     if _d and _clean:
+        _det = _clean_details(daily.get("details") or {})
         out = [x for x in out if x.get("date") != _d]
-        out.append({"date": _d, "counts": _clean})
+        _row: dict[str, Any] = {"date": _d, "counts": _clean}
+        if _det:
+            _row["details"] = _det
+        out.append(_row)
 
     out.sort(key=lambda x: str(x.get("date") or ""), reverse=True)
     return out[:USAGE_HISTORY_DAYS]
@@ -533,6 +578,14 @@ def daily_impl(state: dict[str, Any], token: str, items: Any, now: float,
         applied += n
         if iid:
             ids.append(iid)
+        # 2026-10-19：顺带记录「具体做了什么」（标题 + 平台），供后台使用详情定位。
+        # 无标题的条目直接忽略，不占空间；每条最多 120 字符、每资源最多 50 条。
+        _t = str(it.get("t") or "").strip()[:120]
+        if _t:
+            _det = daily.setdefault("details", {})
+            _lst = _det.setdefault(res, [])
+            _lst.append({"t": _t, "p": str(it.get("p") or "").strip()[:64], "at": int(now)})
+            _det[res] = _lst[-50:]
     user["daily"] = daily
     user["usage_ids"] = ids[-500:]
     if applied > 0:
