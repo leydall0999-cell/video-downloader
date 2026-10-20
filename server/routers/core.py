@@ -13,6 +13,7 @@ import time as _time
 from pathlib import Path as _Path
 
 import app
+import object_store
 from fastapi import APIRouter
 router = APIRouter()
 
@@ -843,6 +844,46 @@ def download_file(task_id: str, request: app.Request, download: int=0) -> app.Re
             headers={'Content-Disposition': f"attachment; filename=\"{_ascii}\"; filename*=UTF-8''{_encoded}"},
         )
     return app.FileResponse(path=task.filepath, filename=task.filepath.name, media_type=_mt)
+
+
+@router.get('/api/tasks/{task_id}/direct_url')
+def task_direct_url(task_id: str, request: app.Request) -> app.Response:
+    """对象存储直链（方案③，2026-10-20；2026-10-21 从 app-dev 快照移植进 web-dev）。
+
+    为什么要有这条：`/file?download=1` 是**部署节点单流回传**。实测 Cloudflare 把
+    国内流量导到美国（PDX/SJC）再回源，单连接 ~110KB/s，418MB 要约 65 分钟。
+    直链方案让节点先上传一次到 OSS（同地域走内网，免流量费），浏览器再直连 OSS
+    全速拉 —— 一次上传，之后重下/多设备/分享都是全速。
+
+    状态码契约（前端据此决定是否回退，必须严格遵守）：
+      200 就绪：{status:'ready', url, expires_in, size, cdn}
+      202 上传中：{status:'uploading', uploaded, total, percent}
+      404 未配置对象存储（前端**静默**回退 /file，行为与旧版一致）
+      409 成品还没准备好
+      502 上传失败（前端回退 /file，并提示走的是慢通道）
+    """
+    task = app._require_task(task_id, _device_of(request))
+    if task.status != 'completed' or not task.filepath or (not task.filepath.exists()):
+        raise app.HTTPException(status_code=409, detail='文件尚未准备好')
+    if not object_store.enabled():
+        return app.JSONResponse(status_code=404, content={
+            'status': 'disabled', 'detail': '未配置对象存储（VDL_OSS_*）'})
+    try:
+        state = object_store.ensure_uploaded(
+            task_id, task.filepath, getattr(task, 'filename', '') or task.filepath.name)
+    except Exception as e:  # noqa: BLE001 — 任何异常都不能挡住「能下载」这条底线
+        app.logger.warning('对象存储直链失败 task=%s：%s', task_id, e)
+        return app.JSONResponse(status_code=502, content={
+            'status': 'failed', 'error': str(e)[:200]})
+    status = state.get('status')
+    if status == 'ready':
+        return state
+    if status == 'uploading':
+        return app.JSONResponse(status_code=202, content=state)
+    if status == 'disabled':
+        return app.JSONResponse(status_code=404, content=state)
+    return app.JSONResponse(status_code=502, content=state)
+
 
 @router.delete('/api/tasks/{task_id}')
 def cancel_task(task_id: str, request: app.Request) -> dict:

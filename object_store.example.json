@@ -1,0 +1,13 @@
+{
+  "provider": "aliyun_oss",
+  "endpoint": "oss-cn-guangzhou.aliyuncs.com",
+  "upload_endpoint": "oss-cn-guangzhou-internal.aliyuncs.com",
+  "bucket": "your-bucket",
+  "access_key_id": "LTAI****************",
+  "access_key_secret": "**************************",
+  "prefix": "vdl/tasks",
+  "cdn": "",
+  "expires": 86400,
+  "region": "auto",
+  "path_style": false
+}

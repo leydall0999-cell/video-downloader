@@ -249,6 +249,8 @@ run_pytest_root test_cookie_pool_identity.py
 run_pytest_root test_bilibili_patch_state.py
 run_pytest_root test_convert_quota_split.py # 音乐转换/图片转换独立计次：按目标格式分派 + 使用统计补全（2026-10-19）
 run_pytest_root test_share_quota_split.py   # 生成二维码/生成网页 进统计表：子页签分派 + 免费20/会员200 + 不走终身额度 + 前端带 src（2026-10-19）
+# 对象存储直链（方案③）：OSS V1/SigV4 签名 + 假 OSS 端到端 + 内网上传 endpoint（2026-10-21 移植进 web-dev）
+run_pytest_root test_object_store.py
 # ⚠️ 必须写在 run_pytest_root 定义（第 ~206 行）之后：写在前面会报
 #    「run_pytest_root: command not found」而静默跳过（2026-10-19 真踩过）。
 # Cookie 加固：跨站读写 / 属性防护
