@@ -791,6 +791,14 @@ def push_free_quota_to_cloud() -> dict[str, Any]:
             kwargs["cloud_lifetime"] = fq.get("cloud_lifetime")
         if "mode" in fq:
             kwargs["mode"] = fq.get("mode")
+        # 🔴 2026-10-20：每档每日额度（免费/会员）此前**从未下发**。后果：后台把
+        #    「生成二维码」免费次数改成 2，桌面端按本机 plans.json 生效，网页版
+        #    （只读授权中心，没有本机覆盖概念）仍按代码默认 20 显示并放行 ——
+        #    用户实测「改了没生效」。云端 free_quota_overrides 从 10-17 起就缺
+        #    share_qr/share_page 两个键，正是这个漏发造成的。
+        for _lk in ("daily_free_limits", "daily_member_limits"):
+            if _lk in fq:
+                kwargs[_lk] = fq.get(_lk)
         if not kwargs:
             return {"ok": True, "reason": "no_override", "effective": {}}
         import license_client
