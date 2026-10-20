@@ -61,6 +61,11 @@ def test_wiring() -> None:
           "_flashFixed.push(catName + '档 ' + k + ' 已清掉残留的秒杀参数')" in src)
     check("切回普通时顺手清掉活动角标（秒杀/限时/抢购/特价）",
           "if (it.badge && /秒杀|限时|抢购|特价/.test(String(it.badge))) it.badge = '';" in src)
+    # 后台必须让管理员「看得见」活动已结束，否则他只看到秒杀模式还勾着，会以为没回落
+    check("后台档位行给出「秒杀已结束」可见角标",
+          "const flashOverChip = _flashOver" in src
+          and "秒杀已结束" in src
+          and "${statusChip}${flashOverChip}" in src)
 
     check("校验只认秒杀模式档位（普通/限量/活动不误伤）",
           "if (!it || it.mode !== 'flash_sale') return;" in src)

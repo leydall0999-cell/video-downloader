@@ -24339,11 +24339,21 @@ el.dwVidPlayer.hidden = true;
             : (st.buyable === false
               ? `<span class="admin-chip is-red">${esc(st.reason || '不可购买')}</span>`
               : (st.is_flash ? '<span class="admin-chip is-gold">秒杀中</span>' : ''));
+          // 🔴 2026-10-20：秒杀窗口已过但 mode 仍是 flash_sale 时，必须让管理员看得见
+          //    「这档活动已经结束」。前台此时已按原价卖、秒杀元素也收起了，但后台如果不提示，
+          //    管理员会以为活动还在（这正是用户报「没落回普通无活动模式」的现场）。
+          //    保存套餐配置时会自动切回普通模式（见 savePlans 归一化块）。
+          const _flashOver = (p.mode === 'flash_sale')
+            && (Number(p.flash_end) || 0) > 0
+            && (Number(p.flash_end) || 0) <= Date.now() / 1000;
+          const flashOverChip = _flashOver
+            ? '<span class="admin-chip is-gray" title="秒杀窗口已结束：前台已按原价销售、秒杀元素已收起；点「保存套餐配置」会自动切回普通模式">秒杀已结束</span>'
+            : '';
           const saleBtn = `<button type="button" class="admin-btn admin-btn-sm ${off ? 'admin-btn-primary' : 'admin-btn-soft'} plan-sale-toggle" data-plan="${esc(k)}" data-cat="${esc(cat)}" data-table="${esc(_CAT_TABLE[cat] || cat)}" title="${off ? '重新上架该档（不影响已购买用户权益）' : '立即下架该档：前台隐藏且无法下单，已购用户权益不受影响'}">${off ? '↑ 上架' : '↓ 下架'}</button>`;
           h += `<div class="admin-plan-item${off ? ' is-off' : ''}" data-plan="${esc(k)}">
             <div class="admin-plan-row">
               <span class="admin-plan-name">${esc(p.label || k)} <code class="admin-plan-code">${esc(k)}</code></span>
-              ${statusChip}
+              ${statusChip}${flashOverChip}
               <label>标题<input class="admin-input admin-input-sm plan-label" data-plan="${esc(k)}" value="${esc(p.label || k)}"></label>
               <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(k)}" value="${esc(p.price_cny)}" type="number" step="0.01"></label>
               ${extra}
