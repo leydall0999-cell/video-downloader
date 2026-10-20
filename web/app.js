@@ -5701,7 +5701,9 @@
       const r = await fetch('/api/share/upload_path', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authBearerHeaders() },
-        body: JSON.stringify({ path: outPath, expire: 0 }),   // 0 = 永久有效
+        // 🔴 2026-10-20：src=pagegen → 服务端按「生成网页」独立配额（share_page）
+        //    计数；不传则全部落到「生成二维码」（share_qr）的额度上。
+        body: JSON.stringify({ path: outPath, expire: 0, src: 'pagegen' }),   // 0 = 永久有效
       });
       if (r.status === 404) throw new Error('当前版本没有分享通道');
       const d = await r.json().catch(() => null);

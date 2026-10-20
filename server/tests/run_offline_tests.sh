@@ -314,6 +314,12 @@ run_one test_commentary_style_intensity.py
 #                                        节点删失败必须保留记录、通道根推导（direct 只能上传，
 #                                        删除/探活须用源站根）、上传须透传 X-Expire 且成功后落历史
 run_one test_share_history.py
+#  18b. test_share_quota_keys.py    —— 分享两子功能并入账号级每日配额（2026-10-20 新增）：
+#                                        src 分派（pagegen→share_page / 其余→share_qr）、
+#                                        闸门放行/429/fail-open、**路径校验之后才计数**
+#                                        （第一版曾把闸门放在校验之前，与自己的注释相反）、
+#                                        会员中心功能表必须出现「生成二维码/生成网页」两行
+run_one test_share_quota_keys.py
 #  19. test_login_error_message.py  —— 登录提示不得张冠李戴 + 手机号账号的云端建号（2026-09-22 新增）：
 #                                      本机账号表决定「账号是否存在」（本机区分 BAD_PASSWORD /
 #                                      NO_ACCOUNT，公网仍模糊防枚举）、手机号老账号自愈只在

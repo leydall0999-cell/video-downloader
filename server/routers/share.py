@@ -46,10 +46,55 @@ import urllib.parse
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Body, File, UploadFile
+from fastapi import APIRouter, Body, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 router = APIRouter()
+
+# ---- 每日配额键分派（2026-10-20 补齐，与网页版 share_token.py 同口径）----------
+# 「生成网页」转在线链接计 share_page；「生成二维码」及其余（含老客户端不传 src）
+# 计 share_qr。两个键都在 membership.FEATURE_USAGE_DEFS 里（会员中心两行 +
+# 管理后台配额面板两块），免费 20 次/日、会员 200 次/日，按账号按天上云，
+# 同一账号网页版 / 桌面端共用。
+# ⚠️ 写成两条独立 return（不要三元）：守卫 test_feature_usage_gate 按
+# `return "键"` 逐行确认每个配额键都有真实分派分支，三元扫不到 else 分支。
+def _share_resource(src: str) -> str:
+    if str(src or "").strip().lower() == "pagegen":
+        return "share_page"
+    return "share_qr"
+
+
+def _share_quota_gate(request, src: str):
+    """账号级每日配额闸门（2026-10-20 补齐，与网页版 share_token.py 同口径）。
+
+    返回 None = 放行；返回 JSONResponse = 拒绝（429 + DAILY_LIMIT）。
+
+    ⚠️ 两个 use_daily 调用**刻意写成字面量**（不变量分派）：守卫
+    test_feature_usage_gate.py 按 `use_daily("键")` 逐字确认每个配额键都有真实
+    拦截点，传变量的写法扫不到，会把这两行判成「页面上有、代码里没有」。
+
+    计数时机与网页版一致：**发起分享即计一次**（网页版在 token 签发时计，
+    这里在上传任务创建时计）—— 取一次计一次，不按最终是否上传成功回退。
+    未登录（匿名 store）与配额引擎异常一律放行：本地自用场景不因登录态/引擎
+    故障打断（fail-open，与既有闸门一致）。
+    """
+    try:
+        # 局部导入：本模块会被 app.py 反向 include，顶层 import app 会循环导入。
+        import app as _app
+        _store = _app.current_member_store(request)
+        if _share_resource(src) == "share_page":
+            _q = _store.use_daily("share_page", 1)
+        else:
+            _q = _store.use_daily("share_qr", 1)
+    except Exception:
+        return None
+    if _q.get("ok"):
+        return None
+    return JSONResponse(
+        {"ok": False, "error": _q.get("error") or "今日分享次数已用完，明天再来",
+         "code": "DAILY_LIMIT", "resource": _q.get("resource") or _share_resource(src)},
+        status_code=429)
+
 
 # ---- 内置默认（2026-09-26 起公网入口改为主域 hanyuxz.top）----
 # 运行时以 ~/.videodownloader/share.json 为准，这里是它缺失（换机/重装）时的兜底。
@@ -464,13 +509,17 @@ def _start_upload(tid: str, make_reader, total: int, filename: str,
 
 
 @router.post("/api/share/upload_path")
-def share_upload_path(payload: dict = Body(...)):
+def share_upload_path(payload: dict = Body(...), request: Request = None):
     """桌面端入口：传本机绝对路径，由后端流式读取并转发到分享节点。
 
     🔴 安全审计 2026-10-11（P2-14）：此前接受**任意绝对路径**，等于对外提供
     「读任意本机文件并发布成公网短链」的原语（~/.ssh/id_rsa、users.json、
     .auth_secret 都能传成公开链接）。现改走共用的本机路径护栏
     `app._assert_shareable_local_path`（用户目录白名单 + 敏感位置黑名单）。
+
+    🔴 2026-10-20：加账号级每日配额闸门（share_qr / share_page，按 payload 的
+    src 分派）—— 与网页版 share_token.py 同一把尺子，同一账号两端共用次数。
+    取一次计一次；节点不可用不计（见下方顺序注释）。
     """
     raw_path = (payload or {}).get("path") or ""
     # 局部导入：本模块会被 app.py 反向 include，顶层 `import app` 会构成循环导入。
@@ -493,6 +542,12 @@ def share_upload_path(payload: dict = Body(...)):
     if total > MAX_UPLOAD:
         return JSONResponse({"ok": False, "error": "too_large",
                              "max": MAX_UPLOAD, "size": total}, status_code=413)
+
+    # 🔴 配额闸门放在**路径/大小校验之后、启动上传之前**：文件不存在、超限的
+    #    请求不计数（没真用时不许扣额度）。与网页版同一把尺子：发起分享计一次。
+    _deny = _share_quota_gate(request, (payload or {}).get("src"))
+    if _deny is not None:
+        return _deny
 
     name = os.path.basename(path)
     expire = _norm_expire((payload or {}).get("expire"))
@@ -541,15 +596,24 @@ def _spool_to_tempfile(f) -> str:
 
 
 @router.post("/api/share/upload_file")
-def share_upload_file(file: UploadFile = File(...), expire: int = 0):
+def share_upload_file(file: UploadFile = File(...), expire: int = 0,
+                      src: str = "", request: Request = None):
     """浏览器入口：multipart 上传（Web 版没有本地路径权限）。
 
     expire 走 query 参数（`?expire=86400`），语义与桌面端一致：0 = 永久。
+    src 走 query 参数（`?src=pagegen` = 生成网页；其余 = 生成二维码），决定每日
+    配额键（2026-10-20，与网页版 share_token.py 同口径）。
 
     ⚠️ 本函数刻意是**同步 def**：改成 async def 后 Starlette 会在响应返回时关闭
     `UploadFile.file`，而后台上传线程仍在读它（见 `_spool_to_tempfile` 的说明）。
     同步 def 由 FastAPI 丢进线程池执行，`file.file` 在本函数返回前一直可用。
     """
+    # 🔴 2026-10-20：账号级每日配额闸门（share_qr / share_page，按 src 分派）。
+    #    放在最前面：文件都没读就拒绝，不浪费 IO；取一次计一次（与网页版 token
+    #    签发时计数同一口径）。未登录/引擎异常放行（fail-open）。
+    _deny = _share_quota_gate(request, src)
+    if _deny is not None:
+        return _deny
     f = file.file
     try:
         f.seek(0, os.SEEK_END)

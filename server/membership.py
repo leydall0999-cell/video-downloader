@@ -102,6 +102,13 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     "sr_video": 200,          # 视频超分（会员）
     "concat_video": 200,      # 视频拼接（会员）
     "concat_audio": 200,      # 音频拼接（会员）
+    # 🔴 2026-10-20 补齐（网页版 10-19 已加，漏了 App 分支）：分享两个子功能并入
+    # 账号级每日配额 —— 走 use_daily、按天 + 上云，同一账号网页版/桌面端共用，
+    # 且出现在个人中心「使用统计」与管理后台配额面板（此前两处都看不到这两行）。
+    # ⚠️ 刻意不走 cloud_quota_gate 的「终身 N 次」口径：分享吃的是分享节点磁盘，
+    # 不是大模型算力（与网页版 share_token.py 的注释同一理由）。
+    "share_qr": 200,          # 生成二维码（分享链接）（会员）
+    "share_page": 200,        # 生成网页（转在线链接）（会员）
     # 老键：仅用于存量归集与后台对照，不再有写入点
     "app_compute": 200,
 }
@@ -132,6 +139,9 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "sr_video": 5,            # 视频超分 5 次/日
     "concat_video": 5,        # 视频拼接 5 次/日
     "concat_audio": 5,        # 音频拼接 5 次/日
+    # 🔴 2026-10-20 补齐（与网页版 10-19 同值）：分享两个子功能免费 20 次/日
+    "share_qr": 20,           # 生成二维码 免费 20 次/日
+    "share_page": 20,         # 生成网页 免费 20 次/日
     # 老键：存量归集用
     "app_compute": 5,
 }
@@ -322,6 +332,16 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     {"key": "cloud_subtitle",   "name": "字幕提取",     "resource": "cloud_subtitle",   "unit": "次", "free_limit": 3,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕识别 / 提取"},
     {"key": "cloud_subtitle_burn", "name": "字幕烧录",   "resource": "cloud_subtitle_burn", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕压进画面（独立额度）"},
     {"key": "cloud_subtitle_translate", "name": "字幕翻译", "resource": "cloud_subtitle_translate", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 5, "credit_op": "subtitle_translate", "shared_note": "网页版：字幕翻译（另按 AI 积分计费）"},
+    # 🔴 2026-10-20 补齐（网页版 10-19 已加，漏了 App 分支）：「生成二维码 / 生成网页」
+    # 两个子页签并入账号级每日配额体系（走 use_daily，按天 + 上云 + 与网页版同一
+    # 账号共用）。此前这两行在 App 的会员中心「使用统计」和管理后台配额面板里
+    # **完全不存在**（用户 2026-10-20 截图对比网页版后发现），且 App 侧分享上传
+    # 从不计数 —— 等于网页版在限次、桌面端无限用。
+    # ⚠️ 刻意不走 cloud_quota_gate 的「终身 N 次」口径：分享吃的是分享节点磁盘，
+    # 不是大模型算力；授权中心 _CLOUD_RESOURCES 只认 8 个旧键，未知键会被回退成
+    # cloud_commentary —— 那等于让「生成二维码」去消耗「视频解说」的终身额度。
+    {"key": "share_qr",    "name": "生成二维码", "resource": "share_qr",    "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机文件 → 短链 + 二维码（与网页版同账号共用每日次数）"},
+    {"key": "share_page",  "name": "生成网页",   "resource": "share_page",  "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机文件 → 自包含 HTML → 在线链接（独立额度）"},
 ]
 
 # ── 🔴 纯 AI 积分功能（2026-10-12）──────────────────────────────────────────
@@ -1357,6 +1377,9 @@ _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("sr", "高清修复 {v} 次/日"),
     ("sr_video", "视频超分 {v} 次/日"),
     ("bridge", "音视频桥接（合成 / 替换）{v} 次/日"),
+    # 🔴 2026-10-20 补齐（网页版 10-19 已加，漏了 App 分支）：分享两个子功能
+    ("share_qr", "生成二维码 {v} 次/日"),
+    ("share_page", "生成网页 {v} 次/日"),
     # 老键：仅存量归集用，不作为对外权益展示（否则用户看到「视频处理」会以为
     # 转换/压缩/超分还共用一份额度 —— 拆键后已不共用）
 )
