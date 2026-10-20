@@ -17716,7 +17716,17 @@ el.dwVidPlayer.hidden = true;
       || (st.mode === 'flash_sale' && Number(st.flash_price) > 0 && _fs && _fe
         ? (_nowSec < _fs ? 'upcoming' : (_nowSec <= _fe ? 'active' : 'ended')) : 'none');
     const flashSoon = flashPhase === 'upcoming';
-    const mkBadge = (st.badge && flashPhase !== 'ended')
+    // 🔴 2026-10-20：角标只允许出现在「真·秒杀档（未开始/进行中）」或「非秒杀档且无秒杀残渣」。
+    //    flash_phase 只覆盖秒杀档三态，覆盖不到两类残渣 —— 用户看到的就是「活动结束了还挂着限时秒杀」：
+    //    ① 秒杀模式但秒杀价/时间被清空（phase='none'，不是 'ended'）；
+    //    ② 已切回普通模式却留着旧秒杀字段（flash_price/flash_start/flash_end）。
+    //    这两种情况价格早已是原价，角标再挂「限时秒杀」等于骗人，一律不显示。
+    const _flashResidual = st.mode !== 'flash_sale'
+      && (Number(st.flash_price) > 0 || _fs > 0 || _fe > 0);
+    const _flashBadgeOk = st.mode === 'flash_sale'
+      ? (flashPhase === 'upcoming' || flashPhase === 'active')
+      : !_flashResidual;
+    const mkBadge = (st.badge && _flashBadgeOk)
       ? `<span class="member-badge member-badge-flash">${escHtml(st.badge)}</span>` : '';
     const outBadge = (!st.buyable && st.reason) ? `<span class="member-badge member-badge-off">${escHtml(st.reason)}</span>` : '';
     const soonBadge = flashSoon ? '<span class="member-badge member-badge-flash">即将开抢</span>' : '';
@@ -24495,24 +24505,69 @@ el.dwVidPlayer.hidden = true;
         const el = plansBox.querySelector(`.cost-val[data-cost="${k}"]`);
         costs[k] = el ? (parseInt(el.value, 10) || 0) : (cfg.credit_costs[k]);
       });
+      // 🔴 2026-10-20：活动结束后必须落回「普通·无活动」模式。
+      //    此前窗口过了只是「效果上」回落（价格回原价、秒杀元素靠 flash_phase=ended 收起），
+      //    **mode 字段永远停在 flash_sale**，后台一直挂着旧秒杀配置；更糟的是秒杀价留空
+      //    （截图那种）会让 flash_phase 变成 'none' 而不是 'ended'，角标压根不会收起。
+      //    这里在写盘前做一次确定性归一（保存即落回，不依赖人工回想）：
+      //    ① 秒杀窗口已过 → mode 切 normal + 清零秒杀三字段 + 清掉活动角标；
+      //    ② 非秒杀模式却留着秒杀字段 → 清零（杜绝「普通档挂限时秒杀」残渣）。
+      //    ⚠️ 参数不全（价格/时间没填完）**不归一**，交给下面的 _flashBad 拦截 —— 否则
+      //       管理员正在填一半的活动会被静默改回普通模式，输入白丢。
+      const _flashFixed = [];
+      const _nowSecSave = Date.now() / 1000;
+      [['下载', dl], ['AI', ai], ['积分包', cp]].forEach(function (pair) {
+        const catName = pair[0]; const group = pair[1];
+        Object.keys(group || {}).forEach(function (k) {
+          const it = group[k];
+          if (!it) return;
+          const fp0 = Number(it.flash_price) || 0;
+          const fs0 = Number(it.flash_start) || 0;
+          const fe0 = Number(it.flash_end) || 0;
+          if (it.mode !== 'flash_sale') {
+            if (fp0 > 0 || fs0 > 0 || fe0 > 0) {
+              it.flash_price = 0; it.flash_start = 0; it.flash_end = 0;
+              _flashFixed.push(catName + '档 ' + k + ' 已清掉残留的秒杀参数');
+            }
+            return;
+          }
+          if (fp0 > 0 && fs0 && fe0 && fe0 <= _nowSecSave) {
+            it.mode = 'normal';
+            it.flash_price = 0; it.flash_start = 0; it.flash_end = 0;
+            if (it.badge && /秒杀|限时|抢购|特价/.test(String(it.badge))) it.badge = '';
+            _flashFixed.push(catName + '档 ' + k + ' 秒杀已结束，已切回普通模式');
+          }
+        });
+      });
       // 🔴 2026-10-17：秒杀价必须低于原价，否则没有价差——卡片不划线、没有「秒杀」观感，
       //    窗口结束后价格回原价（而原价就是秒杀价），看起来「秒杀永远不结束」。
       //    本次线上 1 天档正是「原价=秒杀价=0.1」导致用户误判。保存前拦一道。
+      // 🔴 2026-10-20 补两个洞：秒杀价留空 / 开始≥结束时间（旧版对前者直接 return，
+      //    等于放行「挂秒杀模式按原价卖」）。
       const _flashBad = [];
       [['下载', dl], ['AI', ai], ['积分包', cp]].forEach(function (pair) {
         const catName = pair[0]; const group = pair[1];
         Object.keys(group || {}).forEach(function (k) {
           const it = group[k];
-          if (!it || it.mode !== 'flash_sale' || !(Number(it.flash_price) > 0)) return;
+          if (!it || it.mode !== 'flash_sale') return;
           const base = Number(it.price_cny) || 0;
+          const fp = Number(it.flash_price) || 0;
+          const fs = Number(it.flash_start) || 0;
+          const fe = Number(it.flash_end) || 0;
+          if (!(fp > 0)) {
+            _flashBad.push(catName + '档 ' + k + ' 选了秒杀模式但秒杀价为空（会按原价卖却挂着秒杀角标）');
+            return;
+          }
           if (base <= 0) { _flashBad.push(catName + '档 ' + k + ' 原价为 0，无法判断价差'); return; }
-          if (Number(it.flash_price) >= base) {
+          if (fp >= base) {
             _flashBad.push(catName + '档 ' + k + ' 秒杀价 ¥' + it.flash_price + ' 不低于原价 ¥' + base);
           }
-          if (!it.flash_start || !it.flash_end) {
+          if (!fs || !fe) {
             _flashBad.push(catName + '档 ' + k + ' 缺少秒杀开始/结束时间');
-          } else if (it.flash_end <= Date.now() / 1000) {
-            _flashBad.push(catName + '档 ' + k + ' 秒杀结束时间已过（价格将立即回原价）');
+          } else if (fe <= _nowSecSave) {
+            _flashBad.push(catName + '档 ' + k + ' 秒杀结束时间已过（价格会立即回原价）');
+          } else if (fs >= fe) {
+            _flashBad.push(catName + '档 ' + k + ' 秒杀结束时间必须晚于开始时间');
           }
         });
       });
@@ -24537,8 +24592,10 @@ el.dwVidPlayer.hidden = true;
           loadConfig();
           // 价格唯一真源在授权中心：云端同步成功才算全端生效，未同步要明确告知
           const cloud = r.cloud || {};
-          if (cloud.ok) _adminMsg(plansMsg, '套餐配置已保存，并已同步到云端（网页版同步生效）', false);
-          else _adminMsg(plansMsg, `套餐配置已保存到本机，但云端同步失败（${_cloudReasonLabel(cloud.reason)}）——网页版与实际扣款价暂未变更`, true);
+          // 归一化必须说出来：否则管理员会以为「我刚保存的秒杀配置怎么没了」
+          const _fixNote = _flashFixed.length ? '（' + _flashFixed.join('；') + '）' : '';
+          if (cloud.ok) _adminMsg(plansMsg, '套餐配置已保存，并已同步到云端（网页版同步生效）' + _fixNote, false);
+          else _adminMsg(plansMsg, `套餐配置已保存到本机，但云端同步失败（${_cloudReasonLabel(cloud.reason)}）——网页版与实际扣款价暂未变更` + _fixNote, true);
         }
         else _adminMsg(plansMsg, (r && r.error) || '保存失败', true);
       } catch (e) {

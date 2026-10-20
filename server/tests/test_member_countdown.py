@@ -87,12 +87,18 @@ def test_frontend_wiring() -> None:
     check("秒杀三态：优先用后端下发的 flash_phase", "const flashPhase = st.flash_phase" in src)
     check("秒杀三态：老后端没该字段时按 mode/flash_start/flash_end 自行推导",
           "_nowSec < _fs ? 'upcoming' : (_nowSec <= _fe ? 'active' : 'ended')" in src)
-    check("角标与三态联动（ended 不显示）",
-          "const mkBadge = (st.badge && flashPhase !== 'ended')" in src)
+    # 2026-10-20：角标收敛成单一判定 _flashBadgeOk —— 除 flash_phase 三态外，
+    # 还要挡两类残渣（秒杀档参数被清空 phase='none' / 已切普通却留旧秒杀字段）。
+    check("角标与三态联动（只认 _flashBadgeOk，ended 与残渣都不显示）",
+          "const mkBadge = (st.badge && _flashBadgeOk)" in src)
+    check("角标残渣防护：非秒杀档残留秒杀字段 → 不显示角标",
+          "const _flashResidual = st.mode !== 'flash_sale'" in src)
     i_phase = src.find("const flashPhase = st.flash_phase")
-    i_badge = src.find("const mkBadge = (st.badge && flashPhase !== 'ended')")
-    check("flashPhase 必须先于 mkBadge 声明（const 有 TDZ，写反会抛 ReferenceError）",
-          i_phase > 0 and i_badge > i_phase, f"phase@{i_phase} badge@{i_badge}")
+    i_ok = src.find("const _flashBadgeOk = st.mode === 'flash_sale'")
+    i_badge = src.find("const mkBadge = (st.badge && _flashBadgeOk)")
+    check("flashPhase / _flashBadgeOk 必须先于 mkBadge 声明（const 有 TDZ，写反直接 ReferenceError）",
+          i_phase > 0 and i_ok > i_phase and i_badge > i_ok,
+          f"phase@{i_phase} ok@{i_ok} badge@{i_badge}")
     check("「秒杀至…」只在 active 出现",
           "else if (flashPhase === 'active' && _fe) bits.push(`秒杀至" in src)
 
@@ -192,6 +198,20 @@ const ended = Object.assign({}, base, {
            flash_start: NOW - 7200, flash_end: NOW - 60,
            start_at: 0, end_at: 0, stock: 0, sold: 0, remaining: null, badge: '限时秒杀', desc: '' },
 });
+// 2026-10-20：两类「没落回普通模式」的残渣 —— 价格早已是原价，角标绝不能再挂「限时秒杀」
+//   ① 已切回普通模式却留着旧秒杀字段；② 秒杀模式但秒杀价被清空（flash_phase 会变 none 而非 ended）
+const residue = Object.assign({}, base, {
+  state: { mode: 'normal', on_sale: true, buyable: true, reason: '', price: 9.9,
+           original_price: 9.9, is_flash: false, flash_price: 0.1,
+           flash_start: NOW - 300000, flash_end: NOW - 200000,
+           start_at: 0, end_at: 0, stock: 0, sold: 0, remaining: null, badge: '限时秒杀', desc: '' },
+});
+const incomplete = Object.assign({}, base, {
+  state: { mode: 'flash_sale', on_sale: true, buyable: true, reason: '', price: 9.9,
+           original_price: 9.9, is_flash: false, flash_price: 0,
+           flash_start: NOW - 60, flash_end: NOW - 60,
+           start_at: 0, end_at: 0, stock: 0, sold: 0, remaining: null, badge: '限时秒杀', desc: '' },
+});
 console.log(JSON.stringify({
   now: NOW,
   flash: _memberCard(flash, 'download_1day', { unit: ' / 1天' }),
@@ -199,6 +219,8 @@ console.log(JSON.stringify({
   ev: _memberCard(ev, 'download_1day', { unit: ' / 1天' }),
   none: _memberCard(none, 'download_1day', { unit: ' / 1天' }),
   ended: _memberCard(ended, 'download_1day', { unit: ' / 1天' }),
+  residue: _memberCard(residue, 'download_1day', { unit: ' / 1天' }),
+  incomplete: _memberCard(incomplete, 'download_1day', { unit: ' / 1天' }),
 }));
 """
     out = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=25)
@@ -232,6 +254,13 @@ console.log(JSON.stringify({
     check("秒杀已结束：没有「秒杀至」文案", "秒杀至" not in h5)
     check("秒杀已结束：没有倒计时节点", "member-plan-count" not in h5)
     check("秒杀已结束：不划原价（已回原价）", "member-price-orig" not in h5)
+
+    # 2026-10-20：角标残渣 —— 这两类「没落回普通模式」的配置同样不许挂秒杀角标
+    for _k, _label in (("residue", "普通档留着旧秒杀字段"), ("incomplete", "秒杀档秒杀价被清空")):
+        hx = r.get(_k, "")
+        check(f"残渣（{_label}）：不显示「限时秒杀」角标", "限时秒杀" not in hx, hx[:200])
+        check(f"残渣（{_label}）：不划原价、无倒计时",
+              "member-price-orig" not in hx and "member-plan-count" not in hx, hx[:200])
     check("秒杀已结束：卡片仍正常渲染原价且按钮可点（不是置灰）",
           "member-price-now" in h5 and 'class="btn btn-primary btn-sm member-buy"' in h5 and "disabled" not in h5)
 
