@@ -16870,6 +16870,13 @@ el.dwVidPlayer.hidden = true;
       const tid = (data.task_ids || []).length;
       if (n === 0) {
         showSubHint('已是最新，没有新视频', false);
+      } else if (data.quota_exhausted) {
+        // 订阅追更与「视频下载」共用同一份每日额度（2026-10-20）：额度用尽时
+        // 只会把剩下的次数用掉，其余留到下一轮自动重试 —— 必须说清楚，否则
+        // 用户会以为「显示 10 个新视频怎么只下了 3 个」是 bug。
+        showSubHint(`发现 ${n} 个新视频，但今日下载额度已用完，本次只加入 ${tid} 个任务；`
+          + '剩余的下次检查会自动重试 — 开通VIP会员可解锁更多次数', true);
+        if (tid) switchView('download');
       } else {
         showSubHint(`发现 ${n} 个新视频，已加入下载队列（${tid} 个任务）`, false);
         switchView('download');

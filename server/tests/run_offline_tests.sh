@@ -948,6 +948,13 @@ run_one test_local_trust_p3_1.py
 #      （parse_source 仅做「功能白名单」，对非已知平台回退 _generic_platform 并不拦截内部地址）。
 run_one test_subscription_ssrf_p3_2.py
 
+# 59b. test_subscription_download_quota.py —— 订阅追更也计「下载」额度（2026-10-20 新增）：
+#      「使用统计」里「视频下载 / 订阅追更」两行 resource 同为 download（共用一份额度），
+#      但 _run_subscription_check 此前**一条都没计** ⇒ 免费档 10 次/日可被订阅完全绕过，
+#      且订阅任务无 usage_ref、不进「使用详情」。守卫：每条扣 1 次 + 挂 ref；额度用尽即停
+#      且剩余不进基线（下轮重试）；账本异常 fail-open；u:/d: 归属还原；会员 1000/日不误拦。
+run_one test_subscription_download_quota.py
+
 # 55. tests/test_crypto_routes.py（仓库根，非 server/tests）—— 保险箱路由集成（TestClient）：
 #      加密→原件移回收站→库识别加密项→**encfile 播放内容与原文一致**→解密还原→锁定 423→禁用 404。
 #      ⚠️ 安全审计 2026-10-11（P1-7）把解密播放从「落盘临时文件」改成「内存流式解密 + Range」后，

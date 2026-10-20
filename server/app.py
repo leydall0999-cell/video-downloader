@@ -2578,6 +2578,24 @@ def _task_owner(request) -> str:
     return ("d:" + dev[:64]) if dev else ""
 
 
+def _member_store_for_owner(owner_id: str):
+    """按任务归属取生效会员 store —— 给**没有 Request 的后台线程**用（2026-10-20）。
+
+    订阅自动追更跑在 watchdog 线程里，拿不到 Request；而计额度必须落到**订阅主人**
+    的账本上，否则会记到匿名桶里（等于谁登录都看不到自己订阅吃掉的次数）。
+    归属标识与 `_task_owner()` 同源（"u:<uid>" / "d:<device>" / ""），直接交给
+    `user_membership.store_for_owner()` 还原，保证与请求链路的选店逻辑同一份实现。
+
+    取不到时返回 None，调用方按 **fail-open** 放行（宁漏计一次，也不让整轮追更挂掉）。
+    """
+    try:
+        from user_membership import store_for_owner
+        return store_for_owner(owner_id)
+    except Exception:  # noqa: BLE001 - 会员态是尽力而为，绝不因读不到就中断追更
+        logger.exception("按归属取会员 store 失败：owner=%s", owner_id)
+        return None
+
+
 def _require_owned_task(task_id: str, request):
     """取任务并校验归属：非本人任务一律 404（不返回 403，避免任务 id 可枚举）。
 
@@ -3933,6 +3951,9 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
 
     基线策略：仅把"成功创建下载任务"的视频 id 计入 last_video_ids，
     解析失败的 id 不计入（下次 check 仍可重试）；任务最终失败由用户在下载面板手动重试。
+
+    配额（2026-10-20）：每条新视频计 1 次「下载」额度（与手动下载同一份），
+    额度用尽即停本轮、剩余新视频不进基线（下次重试），返回值带 quota_exhausted。
     """
     items = subs_mod.probe_channel(sub.url, sub.cookie, sub.proxy, limit=SUBSCRIBE_PROBE_LIMIT)
     known = set(sub.last_video_ids)
@@ -3940,6 +3961,9 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
     task_ids: list[str] = []
     failed: list[str] = []
     submitted_ids: set[str] = set()
+    quota_exhausted = False
+    # 按订阅主人取账本（后台线程没有 Request，见 _member_store_for_owner）。
+    _mb = _member_store_for_owner(getattr(sub, "owner_id", "") or "")
     for it in fresh:
         if not it.get("url"):
             continue
@@ -3948,12 +3972,31 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
         except (UnsupportedPlatformError, LinkError):
             failed.append(it["title"])
             continue
+        # 🔴 2026-10-20：订阅自动下载与手动下载**计同一份额度**。「使用统计」里
+        #    「订阅追更」那一行写着「与视频下载共用下载额度」，但这里此前**一次都没计过**
+        #    ⇒ 免费档 10 次/日可被订阅完全绕过；且任务没有 usage_ref，不进「使用详情」。
+        #    现在：每下一条先扣 1 次；额度用尽即停本轮，剩余新视频**不进基线**，
+        #    下一轮 check 会重试（与「解析失败下次重试」同一策略）。
+        _ch = None
+        if _mb is not None:
+            try:
+                _ch = _mb.use_daily("download", 1, title=it["title"], platform=platform.name)
+            except Exception:  # noqa: BLE001 - 计额度失败不阻断追更（fail-open）
+                logger.exception("订阅 %s 计下载额度失败（本次放行）", sub.id)
+                _ch = None
+            if _ch is not None and not _ch.get("ok"):
+                quota_exhausted = True
+                break
         task = store.create(
             url=url, title=it["title"], platform=platform.name,
             quality=downloader.quality_label(sub.quality_key), quality_key=sub.quality_key,
             owner_id=getattr(sub, "owner_id", "") or "",
         )
         scheduler.submit(downloader.run_download, task, store, sub.quality_key, sub.cookie, sub.proxy, SINGLE_DOWNLOAD_RETRIES)
+        # ref/账本挂到任务上，结束后由 mark_usage_result 回写成败（与手动下载同口径）
+        if _ch is not None and _ch.get("ref"):
+            task.usage_ref = str(_ch["ref"])
+            task._usage_store = _mb
         task_ids.append(task.id)
         submitted_ids.add(it["id"])
     # 合并基线（保留最近最多 200 条），仅计入成功提交任务的 id
@@ -3962,7 +4005,8 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
         if vid not in new_baseline:
             new_baseline.append(vid)
     sub_store.update(sub.id, last_video_ids=new_baseline[:200], last_checked=time.time())
-    return {"sub_id": sub.id, "checked": len(items), "new_videos": fresh, "task_ids": task_ids, "failed": failed}
+    return {"sub_id": sub.id, "checked": len(items), "new_videos": fresh, "task_ids": task_ids,
+            "failed": failed, "quota_exhausted": quota_exhausted}
 
 class SubscribeRequest(BaseModel):
     url: str = Field(min_length=4, max_length=8192)
