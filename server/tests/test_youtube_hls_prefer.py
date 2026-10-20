@@ -27,6 +27,7 @@ import os
 import sys
 import threading
 import unittest
+import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
@@ -173,16 +174,24 @@ class TestPotUsable(unittest.TestCase):
         self.assertTrue(D._pot_usable(""))
 
     def test_server_up_dead_proxy(self):
-        # 代理指到没人听的端口 ⇒ 插件请求必然失败 ⇒ 不可用
+        # 代理打不通 ⇒ 插件请求必然失败 ⇒ 不可用
         # （HK 实测同型：socks 代理打不通 127.0.0.1:4416，POT 静默失效）
-        self.assertFalse(D._pot_usable("http://127.0.0.1:9"))
+        # 🔧 用 mock 精确模拟「死代理 open 抛异常」，而非依赖真实死端口：
+        # 本机若挂了透明代理，localhost:9 的连接会被拦截转发给 4416 ⇒
+        # open 反而 200，误判为「可用」。死代理的语义本就是 open 失败，这里直接模拟。
+        with mock.patch("urllib.request.build_opener") as mba:
+            mba.return_value.open.side_effect = urllib.error.URLError("connection refused")
+            self.assertFalse(D._pot_usable("http://127.0.0.1:9"))
 
     def test_cache_per_proxy(self):
         D._POT_USABLE_CACHE["http://cached:1"] = True
         self.assertTrue(D._pot_usable("http://cached:1"))
         with mock.patch.object(D, "_bgutil_reachable", return_value=True):
             D._POT_USABLE_CACHE.clear()
-            self.assertFalse(D._pot_usable("http://127.0.0.1:9"))
+            # 死代理 ⇒ open 失败 ⇒ 不可用（mock 掉网络，避免本机透明代理误判）
+            with mock.patch("urllib.request.build_opener") as mba:
+                mba.return_value.open.side_effect = urllib.error.URLError("refused")
+                self.assertFalse(D._pot_usable("http://127.0.0.1:9"))
             D._POT_USABLE_CACHE.clear()
             # 缓存命中不再探测
             D._POT_USABLE_CACHE["http://cached:2"] = False
