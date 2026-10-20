@@ -3893,6 +3893,7 @@
   const _DL_MAX_CHUNKS = 400;                // 分片上限（≈4GB）：超出走单流，避免分片数组把内存吃爆
   let _dlAbort = null;
   let _dlBusy = false;
+  let _dlStartAt = 0;                       // 本次下载开始时刻：用于 700ms 防误触判定
   let _dlLastPaint = 0;
 
   const _dlRelayUrl = (url, base) =>
@@ -4005,6 +4006,10 @@
   // 取消：再点一次同一按钮
   const _dlCancel = () => {
     if (_dlBusy && _dlAbort) {
+      // 防误触（2026-10-20）：一次物理点击在一些设备/习惯上会派发两次 click，
+      // 第二次落在「刚开始」的窗口内会把第一次 abort 掉 —— 用户看到的现象就是
+      // 「点一下就变已取消下载」。起步 700ms 内的重复点击直接吞掉，不当作取消。
+      if (performance.now() - _dlStartAt < 700) return true;
       el.directHint.textContent = '正在取消…';
       _dlAbort.abort();
       return true;
@@ -4407,6 +4412,7 @@
     const title = (resolved && resolved.video && resolved.video.title) || 'video';
     const base = (resolved && resolved.base) || '';
     _dlBusy = true;
+    _dlStartAt = performance.now();
     _dlAbort = new AbortController();
     const signal = _dlAbort.signal;
     const btn = el.browserHlsBtn;
@@ -4446,18 +4452,36 @@
   };
 
   const triggerDirectDownload = async (url, title, base = '') => {
-    if (_dlCancel()) return;                 // 正在下载 → 本次点击视为取消
+    // 正在下载时：起步 700ms 内的重复点击按「误触」忽略；之后再点才是取消。
+    // （一次物理点击在部分设备/习惯下会派发两次 click，第二次把第一次 abort 掉
+    //  就是用户看到的「点一下就变已取消下载」——2026-10-20 修）
+    if (_dlCancel()) return;
     if (!url) return;
     _dlBusy = true;
-    _dlAbort = new AbortController();
-    const signal = _dlAbort.signal;
+    _dlStartAt = performance.now();
+    const controller = new AbortController();
+    _dlAbort = controller;
+    const signal = controller.signal;
     const label = el.downloadBtn.lastChild;
     const origLabel = label ? label.textContent : '';
     // 保持按钮可点：它是唯一的「取消」入口
     el.downloadBtn.disabled = false;
     el.serverFallbackBtn.hidden = true;
     const t0 = performance.now();
-    const state = { done: 0, total: 0, t0 };
+    const state = { done: 0, total: 0, t0, timedOut: false };
+    // 点下去立刻有反馈：过去「探测源站」阶段界面毫无变化，用户以为没点上就再点一次，
+    // 第二次把第一次 abort 掉 —— 这正是「点一下就变已取消下载」的成因。
+    el.directHint.textContent = '⬇ 正在连接源站…（下载开始后再点一次按钮可取消）';
+    // 空闲看门狗：连续 25s 没有任何字节进展（含探测期）才中止，避免误杀正常的大文件下载。
+    let idleTimer = null;
+    const bumpIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        state.timedOut = true;
+        try { controller.abort(); } catch (_e) { /* 已结束 */ }
+      }, 25000);
+    };
+    bumpIdle();
     try {
       const blob = await _dlRun(url, {
         base,
@@ -4466,6 +4490,7 @@
         onProgress: (done, total) => {
           state.done = done;
           state.total = total;
+          bumpIdle();
           _dlPaint(state);
         },
       });
@@ -4474,7 +4499,14 @@
         `✅ 已保存到本机（${formatBytes(blob.size)}）。文件从源站直取、不落我们的服务器磁盘，也不计入服务器下载额度。`;
     } catch (err) {
       if (err && err.name === 'AbortError') {
-        el.directHint.textContent = '已取消下载。再次点击可直接重试。';
+        if (state.timedOut) {
+          // 不是用户取消，是源站/中继 25s 没给数据 → 直接交给浏览器原生下载
+          el.directHint.textContent =
+            '⚠ 连接源站超过 25 秒无响应，已改用浏览器直接下载。若仍没有文件，请点下方「改用服务器下载」。';
+          _dlAnchorDownload(url, title);
+          return;
+        }
+        el.directHint.textContent = '已取消下载。再点一次即重新保存。';
         return;
       }
       // 中继不可用 → 退回浏览器直连源站（零服务器带宽，代价是没进度）
@@ -4482,6 +4514,7 @@
         `⚠ 加速下载不可用（${err.message || err}），已改用浏览器直接下载。若仍失败，请点下方「改用服务器下载」。`;
       _dlAnchorDownload(url, title);
     } finally {
+      if (idleTimer) clearTimeout(idleTimer);
       _dlBusy = false;
       _dlAbort = null;
       const l = el.downloadBtn.lastChild;

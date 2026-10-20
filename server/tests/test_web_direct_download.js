@@ -592,7 +592,8 @@ async function testCancelOnSecondClick() {
   };
   const { api, env } = loadEngine(hang);
   const p1 = api.triggerDirectDownload('https://x.invalid/a.mp4', '标题', '');
-  await sleep(20);
+  // 必须等过 700ms 防误触窗口：窗口内的重复点击按新版语义是「忽略」，不是取消。
+  await sleep(760);
   // 第二次点击 = 取消（async 函数始终返回 Promise，故用「有没有发起新请求」判定，而不是返回值）
   await api.triggerDirectDownload('https://x.invalid/a.mp4', '标题', '');
   await p1;
@@ -603,6 +604,36 @@ async function testCancelOnSecondClick() {
     '取消后不得落盘、也不得误触发直连降级（env.clicked 是降级入口）');
   ok(env.el.downloadBtn.lastChild.textContent === '直接保存到本机 ⬇', '取消后按钮文案必须复原');
   done('再点一次按钮 = 取消（AbortError 分支可读，且不误触发降级）');
+}
+
+async function testRapidSecondClickDoesNotCancel() {
+  // 回归（2026-10-20，用户报「点一下就变已取消下载」）：一次物理点击在部分设备/习惯下
+  // 会派发两次 click；旧实现第二次立刻 abort 第一次 ⇒ 看起来「单击被取消」。
+  // 新版：起步 700ms 内的重复点击按误触忽略，下载继续。
+  let calls = 0;
+  const hang = (url, o = {}) => {
+    calls += 1;
+    return new Promise((_resolve, reject) => {
+      const sig = o.signal;
+      if (!sig) return;
+      if (sig.aborted) return reject(abortError());
+      sig.addEventListener('abort', () => reject(abortError()));
+    });
+  };
+  const { api, env } = loadEngine(hang);
+  const p1 = api.triggerDirectDownload('https://x.invalid/a.mp4', '标题', '');
+  await sleep(30);
+  // 窗口内的第二次点击：必须被忽略（不取消、不另起请求）
+  await api.triggerDirectDownload('https://x.invalid/a.mp4', '标题', '');
+  ok(calls === 1, `700ms 内的重复点击不得另起请求，实际 ${calls} 次`);
+  ok(!/已取消下载/.test(env.el.directHint.textContent),
+    `700ms 内重复点击不得取消下载，实际提示：${env.el.directHint.textContent}`);
+  // 收尾：过窗口后真正取消，避免挂起的 Promise 让进程不退出
+  await sleep(750);
+  await api.triggerDirectDownload('https://x.invalid/a.mp4', '标题', '');
+  await p1;
+  ok(/已取消下载/.test(env.el.directHint.textContent), '过窗口后再次点击仍可正常取消');
+  done('起步 700ms 内的重复点击 = 忽略（不会「点一下就变已取消下载」）');
 }
 
 async function testSuccessSavesBlobWithExtension() {
@@ -643,6 +674,7 @@ async function main() {
   await testPeerRelayMissingFallsBackToMainNode();
   await testRelayFailureFallsBackToAnchorDownload();
   await testCancelOnSecondClick();
+  await testRapidSecondClickDoesNotCancel();
   await testSuccessSavesBlobWithExtension();
   console.log(`\n✅ 网页直链分片下载引擎回归测试全部通过（${PASS} 项）`);
 }
