@@ -684,6 +684,10 @@ def retry_task(task_id: str, request: app.Request) -> dict:
         raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _err)
     task.cancel_requested = False
     task.cancel_reason = ''
+    # 2026-10-20：「这次执行是否已回报过结果」是**按次**的 —— 重试/续传是新一轮执行，
+    # 必须清掉旧标志，否则新 ref（重试计费）或旧 ref（续传）都不会再回写结果，
+    # 最终成败永远停在上一轮的 fail 上。续传时 ref 不变，成功会覆盖成「已保存」。
+    task._usage_reported = False
     # 图片任务（kind=image，2026-10-12 P0）没有 .part 断点续传概念 —— 单文件直传，
     # 取消即删半成品，重试就是一次新传输；执行器也要换成 run_image_download。
     _is_image = getattr(task, 'kind', 'video') == 'image'

@@ -42,6 +42,27 @@ from typing import Any
 from platforms import LinkError
 from tasks import DownloadTask, TaskStore
 
+
+def _note_usage_result(task: DownloadTask, ok: bool, size: int = 0) -> None:
+    """把图片下载的成败回写到用量账本（2026-10-20，与视频下载同一套口径）。
+
+    成功＝status completed 且成品文件真实存在且非空（由 downloader 的同名函数判定）。
+    延迟导入避免「downloader ← image_download」的循环依赖；任何异常都吞掉 ——
+    记账绝不能影响下载本身。
+    """
+    if getattr(task, "_usage_reported", False):
+        return
+    ref = str(getattr(task, "usage_ref", "") or "")
+    store = getattr(task, "_usage_store", None)
+    if not ref or store is None:
+        return
+    task._usage_reported = True
+    try:
+        store.mark_usage_result(ref, bool(ok), resource="download",
+                                size=int(size or 0))
+    except Exception:  # noqa: BLE001
+        pass
+
 # 看门狗口径与视频下载同源（import 失败时按同名环境变量兜底，保证模块可独立测试）
 try:  # pragma: no cover - 导入路径在打包/源码两种模式都成立
     from downloader import DOWNLOAD_STALL_TIMEOUT, WATCHDOG_POLL
@@ -715,9 +736,43 @@ def _platform_hint(url: str) -> str:
     return ""
 
 
+def _settle_usage(task: DownloadTask) -> None:
+    """图片任务终态统一回写用量结果（2026-10-20）。
+
+    · completed + 有 filepath → 成品真实存在且非空才算「✅ 已保存」，否则「❌ 未完成」；
+    · completed 但无 filepath → 是「已展开 N 张图」的汇总条目，不是一次真实下载，
+      **不回写**（面板显示“未上报”，比假装成功更诚实）；
+    · failed / canceled / 其它 → 「❌ 未完成」。
+    """
+    st = str(getattr(task, "status", "") or "")
+    if st == "completed":
+        fp = getattr(task, "filepath", None)
+        if not fp:
+            return
+        try:
+            p = Path(fp)
+            sz = p.stat().st_size if p.exists() else 0
+        except OSError:
+            sz = 0
+        _note_usage_result(task, sz > 0, sz)
+        return
+    if st in ("failed", "canceled"):
+        _note_usage_result(task, False)
+
+
 def run_image_download(task: DownloadTask, store: TaskStore,
                        max_bytes: int | None = None,
                        scheduler: Any = None) -> None:
+    """图片下载入口（2026-10-20：外面包一层终态回写，内部逻辑见 _run_image_download）。"""
+    try:
+        _run_image_download(task, store, max_bytes, scheduler)
+    finally:
+        _settle_usage(task)
+
+
+def _run_image_download(task: DownloadTask, store: TaskStore,
+                        max_bytes: int | None = None,
+                        scheduler: Any = None) -> None:
     """后台线程执行：URL → SSRF-safe 流式落盘 → 落终态。全部异常写回任务，不向外抛。
 
     scheduler 可选：传入后，若链接打开的是**网页**（分享页），会把页面里提取到的

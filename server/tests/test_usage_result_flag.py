@@ -314,6 +314,15 @@ def test_wiring() -> None:
     core = (ROOT / "server" / "routers" / "core.py").read_text(encoding="utf-8")
     check("下单时把 ref 挂到任务上", 'task.usage_ref = str(_charged["ref"])' in core)
     check("重试时同样挂 ref", 'task.usage_ref = str(_ch["ref"])' in core)
+    check("重试/续传重置「已回报」标志（否则新一轮结果永远不写）",
+          "task._usage_reported = False" in core)
+
+    img = (ROOT / "server" / "routers" / "image.py").read_text(encoding="utf-8")
+    check("图片下载也挂 ref/账本", "task.usage_ref = str(_ch['ref'])" in img)
+    idl = (ROOT / "server" / "image_download.py").read_text(encoding="utf-8")
+    check("图片下载有终态回写函数", "def _settle_usage(" in idl)
+    check("图片下载入口包了终态回写（finally 里调用）",
+          "        _settle_usage(task)\n" in idl and "def _run_image_download(" in idl)
 
     app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
     check("前端保留 r 字段", "if (it.r === 0 || it.r === 1) row.r = it.r;" in app_js)
@@ -380,6 +389,24 @@ def test_downloader_marks_result() -> None:
     ref4 = st4.use_daily("download", 1, title="已取消", platform="p")["ref"]
     DL._note_usage_result_by_task(_mk(st4, ref4, "canceled", None))
     check("canceled → r=0", _det(st4)[-1].get("r") == 0, str(_det(st4)))
+
+    # 图片下载：同一套口径，但「已展开 N 张图」的汇总条目不能假装下载成功
+    import image_download as ID
+    st5 = _fresh("img1")
+    ref5 = st5.use_daily("download", 1, title="http://x/a.jpg", platform="图片")["ref"]
+    ID._settle_usage(_mk(st5, ref5, "completed", f))
+    check("图片落盘成功 → r=1", _det(st5)[-1].get("r") == 1, str(_det(st5)))
+
+    st6 = _fresh("img2")
+    ref6 = st6.use_daily("download", 1, title="http://x/share", platform="图片")["ref"]
+    ID._settle_usage(_mk(st6, ref6, "completed", None))
+    check("分享页展开（completed 无 filepath）→ 不回写，保持未上报",
+          "r" not in _det(st6)[-1], str(_det(st6)))
+
+    st7 = _fresh("img3")
+    ref7 = st7.use_daily("download", 1, title="http://x/b.jpg", platform="图片")["ref"]
+    ID._settle_usage(_mk(st7, ref7, "failed", None))
+    check("图片失败 → r=0", _det(st7)[-1].get("r") == 0, str(_det(st7)))
 
 
 def main() -> int:
