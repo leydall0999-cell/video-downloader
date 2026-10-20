@@ -1478,6 +1478,153 @@
     }
   }
 
+  // —— 源站直链保存（2026-10-21，零成本：不碰部署节点带宽、不上传副本、不按量付费）——
+  // 实测矩阵（2026-10-21 晚，各平台真实直链 curl 实测，非推测）：
+  //   快手 kwaicdn.com    不校验防盗链、CORS *、Range ✅、单流 2.7MB/s  ⇒ fetch 可直连
+  //   小红书 xhscdn.com   无 Referer 才放行（fetch referrerPolicy:'no-referrer' 即满足）、
+  //                       CORS *、Range ✅、单流 1.5MB/s                  ⇒ fetch 可直连
+  //   微博 weibocdn.com   无 Referer 才放行、CORS 未开（fetch 读不到 body）、
+  //                       Range ✅、单流 2.2MB/s                          ⇒ 只能新标签导航+用户手动存
+  //   抖音 douyinvod.com  Referer 必须是 douyin.com（浏览器 fetch 禁设 Referer，
+  //                       实测空 Referer/任意 Referer 均 403）              ⇒ 不可用
+  //   B站 upos            Referer 防盗链 + DASH 音视频分离                 ⇒ 不可用
+  // 直链带 sign 时效参数（通常数小时）：过期/被拒一律回退既有链路，不影响可用性。
+  const SRC_DIRECT_FETCH_HOSTS = ['kwaicdn.com', 'xhscdn.com'];
+  const SRC_DIRECT_NAV_HOSTS = ['weibocdn.com', 'video.weibo.com'];
+  const SRC_DIRECT_EXTS = ['mp4', 'm4a', 'mp3', 'flac', 'wav', 'mov', 'm4v'];
+
+  /** 判断 play_url 能否被浏览器直连下载：'fetch'（可分段拉）| 'nav'（只能新标签打开）| ''（不可用）。 */
+  function srcDirectKind(url, isHls) {
+    if (!url || !/^https?:\/\//i.test(url) || isHls) return '';
+    const ext = (url.split('?')[0].split('.').pop() || '').toLowerCase();
+    if (!SRC_DIRECT_EXTS.includes(ext)) return '';
+    let host = '';
+    try { host = new URL(url).hostname.toLowerCase(); } catch (_) { return ''; }
+    if (SRC_DIRECT_FETCH_HOSTS.some((h) => host.endsWith(h))) return 'fetch';
+    if (SRC_DIRECT_NAV_HOSTS.some((h) => host.endsWith(h))) return 'nav';
+    return '';
+  }
+
+  /** 源站直链分段并发落盘。与 concurrentSaveFile 同构，但面向公网 CDN，关键差异：
+   *   credentials:'omit'      —— 平台 CORS 是 *，带 credentials 会被浏览器直接拒；
+   *   referrerPolicy:'no-referrer' —— 小红书/微博防盗链：无 Referer 才放行；
+   *   不带任何自定义请求头    —— X-Device-Id 等会触发 CORS 预检，平台 CDN 未必放行。
+   * 防盗链失效（403）/ 链接过期 / 无 Range 都返回 UNSUPPORTED，由调用方回退既有链路。 */
+  async function concurrentSaveFromSource(url, filename, hooks) {
+    const onProgress = (hooks && hooks.onProgress) || function () {};
+    let total = 0;
+    try {
+      // 1 字节 Range 探测：同时验证防盗链与 Range 支持（403/过期都在这一步现形）
+      const r = await fetch(url, {
+        headers: { Range: 'bytes=0-0' },
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+        cache: 'no-store',
+      });
+      if (r.status !== 206) return 'UNSUPPORTED';
+      const m = /\/(\d+)\s*$/.exec(r.headers.get('Content-Range') || '');
+      total = m ? parseInt(m[1], 10) : 0;
+    } catch (_) {
+      return 'UNSUPPORTED';
+    }
+    if (!total) return 'UNSUPPORTED';
+
+    // 小文件（<8MB）：单流就够快。但直链不能 window.location 跳转（会变成播放器而非下载），
+    // 所以走 fetch → Blob → a.download 的老实路径。
+    if (total < SEG_MIN_BYTES) {
+      try {
+        const r = await fetch(url, {
+          credentials: 'omit',
+          referrerPolicy: 'no-referrer',
+          cache: 'no-store',
+        });
+        if (!r.ok) return 'UNSUPPORTED';
+        const blob = await r.blob();
+        triggerBlobDownload(blob, filename || 'download');
+        return 'OK';
+      } catch (_) {
+        return 'UNSUPPORTED';
+      }
+    }
+
+    if (typeof window.showSaveFilePicker !== 'function') return 'UNSUPPORTED';
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({ suggestedName: filename || 'download' });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return 'CANCELLED';
+      return 'UNSUPPORTED';
+    }
+    const writable = await handle.createWritable();
+
+    const parts = Math.max(1, Math.min(SEG_CONCURRENCY, Math.ceil(total / SEG_CHUNK_MIN)));
+    const segSize = Math.ceil(total / parts);
+    const ctrl = new AbortController();
+    let loaded = 0;
+
+    const pullSegment = async (start, end) => {
+      const r = await fetch(url, {
+        headers: { Range: `bytes=${start}-${end}` },
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+        signal: ctrl.signal,
+      });
+      if (r.status !== 206) throw new Error(`分段请求被拒（HTTP ${r.status}）`);
+      if (!r.body || !r.body.getReader) throw new Error('当前浏览器不支持流式分段');
+      const reader = r.body.getReader();
+      let pos = start;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || !value.length) continue;
+        await writable.write({ type: 'write', position: pos, data: value });
+        pos += value.length;
+        loaded += value.length;
+        onProgress(loaded, total);
+      }
+    };
+
+    try {
+      const jobs = [];
+      for (let i = 0; i < parts; i++) {
+        const start = i * segSize;
+        if (start >= total) break;
+        const end = Math.min(total - 1, start + segSize - 1);
+        jobs.push(pullSegment(start, end));
+      }
+      await Promise.all(jobs);
+      await writable.close();
+      return 'OK';
+    } catch (err) {
+      try { ctrl.abort(); } catch (_) {}
+      try { await writable.abort(); } catch (_) {}
+      throw err;
+    }
+  }
+
+  /** Blob → a.download 落盘（小文件直链专用）。 */
+  function triggerBlobDownload(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename || 'download';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+
+  /** 微博专用：新标签打开原视频（referrerpolicy=no-referrer 过防盗链），用户右键/长按保存。
+   *  微博 CDN 未开 CORS，fetch 读不到 body，这是唯一不经过部署节点的路径。 */
+  function navSaveFromSource(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.referrerPolicy = 'no-referrer';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   // —— 云端直链保存（方案③，2026-10-20）——
   // 背景：浏览器版「保存到本机」= 部署节点单流回传。节点在海外时跨境单连接实测
   // ~120KB/s（418MB ≈ 49 分钟）。这里改成：先问后端要对象存储预签名直链（节点已上传
@@ -1499,6 +1646,70 @@
       e.preventDefault();
       btn.dataset.cloudSaving = '1';
       const label = btn.textContent;
+
+      // 0. 源站直链（2026-10-21，零成本）：平台 CDN 允许浏览器直连的平台（快手/小红书
+      //    实测可用，微博半可用）直接从源站分段拉 —— 不占部署节点带宽、不上传副本、
+      //    不按量付费。抖音/B站防盗链过不去（见 srcDirectKind 上方实测矩阵），
+      //    自动落到下面的既有链路。直链带时效，过期/被拒同样回退。
+      const srcKind = srcDirectKind(task.play_url || '', task.is_hls);
+      if (srcKind === 'nav') {
+        // 微博：CORS 未开，fetch 读不到 body ⇒ 新标签打开原视频，用户右键/长按保存
+        navSaveFromSource(task.play_url);
+        btn.dataset.cloudSaving = '';
+        if (refs.saveHint) {
+          refs.saveHint.hidden = false;
+          refs.saveHint.textContent = '已在新标签页打开原视频（未占用服务器），右键/长按即可存到本机。';
+        }
+        return;
+      }
+      if (srcKind === 'fetch' && userGesture) {
+        const t0 = Date.now();
+        let lastPaint = 0;
+        btn.textContent = '准备下载…';
+        try {
+          if (refs.saveHint) {
+            refs.saveHint.hidden = false;
+            refs.saveHint.textContent = '正在从源站直连下载（不经过服务器，速度取决于你的网络）…';
+          }
+          const ret = await concurrentSaveFromSource(
+            task.play_url,
+            task.filename || btn.dataset.saveName || 'download',
+            {
+              onProgress: (done, totalBytes) => {
+                const now = Date.now();
+                const finished = totalBytes > 0 && done >= totalBytes;
+                if (!finished && now - lastPaint < 250) return;
+                lastPaint = now;
+                const pct = totalBytes ? Math.floor(done * 100 / totalBytes) : 0;
+                const sec = Math.max(0.001, (now - t0) / 1000);
+                btn.textContent = `下载中 ${pct}% · ${fmtSegBytes(done / sec)}/s`;
+                if (refs.saveHint) {
+                  refs.saveHint.textContent = `${fmtSegBytes(done)} / ${fmtSegBytes(totalBytes)} · 源站直连`;
+                }
+              },
+            });
+          if (ret === 'OK') {
+            btn.textContent = '已保存 ✅';
+            if (refs.saveHint) refs.saveHint.textContent = '✅ 已保存到所选位置（源站直连，未占用服务器）';
+            setTimeout(() => { btn.textContent = label; }, 4000);
+            btn.dataset.cloudSaving = '';
+            return;
+          }
+          if (ret === 'CANCELLED') {
+            btn.textContent = label;
+            if (refs.saveHint) refs.saveHint.textContent = '已取消保存，可随时再点「保存到本机」。';
+            btn.dataset.cloudSaving = '';
+            return;
+          }
+          // UNSUPPORTED（防盗链/过期/无 Range）⇒ 静默落到下面既有链路，不打扰用户
+        } catch (_) {
+          // 直链失败不打扰用户，静默回退既有链路
+        } finally {
+          btn.dataset.cloudSaving = '';
+          btn.textContent = label;
+        }
+      }
+
       let direct = '';
       try {
         // 最多等 10 分钟让节点把文件传完（大文件 + 节点出网上传受限，别设太短）
