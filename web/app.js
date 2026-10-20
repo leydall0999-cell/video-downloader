@@ -7595,6 +7595,20 @@
     return nowSec <= fe ? 'active' : 'ended';
   };
 
+  // 秒杀残渣判定（2026-10-20，与桌面端 `_flashBadgeOk` 同口径）：
+  // flash_phase 只覆盖「秒杀档三态」，覆盖不到两类「没落回普通模式」的残渣 ——
+  //   ① 秒杀模式但秒杀价/时间被清空（phase 会算成 'none'，不是 'ended'）；
+  //   ② 已切回普通模式却留着旧秒杀字段（flash_price / flash_start / flash_end）。
+  // 这两种情况价格早已是原价，角标再挂「限时秒杀」等于骗人，一律不显示。
+  const pfFlashResidual = (st) => {
+    const s = st || {};
+    const fp = Number(s.flash_price) || 0;
+    const fs = Number(s.flash_start) || 0;
+    const fe = Number(s.flash_end) || 0;
+    if (s.mode === 'flash_sale') return !(fp > 0 && fs && fe);
+    return fp > 0 || fs > 0 || fe > 0;
+  };
+
   // 会员公告（2026-10-18）：云端下发，管理员在运维控制台「会员公告」编辑。
   // 用 textContent 赋值（公告文案不当作 HTML 解释）；空内容整条隐藏。
   const _renderMemNotice = (notice) => {
@@ -7629,7 +7643,7 @@
       const meta = pl.days ? `${pl.days} 天权益` : '';
       const badge = pl.best ? '<span class="pf-plan-badge">推荐</span>' : '';
       // 窗口已过 → 收起秒杀角标：此时价格早已回原价，挂着「限时秒杀」会误导用户
-      const mkBadge = (st.badge && phase !== 'ended')
+      const mkBadge = (st.badge && phase !== 'ended' && !pfFlashResidual(st))
         ? `<span class="pf-plan-badge is-flash">${escHtml(st.badge)}</span>` : '';
       const offBadge = (!st.buyable && st.reason) ? `<span class="pf-plan-badge is-off">${escHtml(st.reason)}</span>` : '';
       const save = pl.saving ? `<span class="pf-plan-meta">省 ${Math.round(pl.saving * 100)}%</span>` : '';
@@ -7798,7 +7812,7 @@
       ? `<span class="pf-price-orig">¥${orig}</span>` : '';
     const badge = pl.best ? '<span class="pf-plan-badge">推荐</span>' : '';
     // 窗口已过 → 收起秒杀角标（详情见 pfRenderPlans 内注释）
-    const mkBadge = (st.badge && phase !== 'ended')
+    const mkBadge = (st.badge && phase !== 'ended' && !pfFlashResidual(st))
       ? `<span class="pf-plan-badge is-flash">${escHtml(st.badge)}</span>` : '';
     const offBadge = (!st.buyable && st.reason) ? `<span class="pf-plan-badge is-off">${escHtml(st.reason)}</span>` : '';
     const save = pl.saving ? `<span class="pf-plan-meta">省 ${Math.round(pl.saving * 100)}%</span>` : '';

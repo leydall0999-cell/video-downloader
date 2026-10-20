@@ -98,11 +98,13 @@ def test_frontend_wiring() -> None:
     check("两处渲染都取了 phase", src.count("const phase = pfFlashPhase(st)") == 2,
           f"实际 {src.count('const phase = pfFlashPhase(st)')} 处")
 
-    # ended 一律收起伏秒杀角标
-    n_badge = len(re.findall(r"const mkBadge = \(st\.badge && phase !== 'ended'\)", src))
-    check("两处都改成「phase !== 'ended' 才显示角标」", n_badge == 2, f"实际 {n_badge} 处")
+    # ended 一律收起伏秒杀角标；2026-10-20 追加「残渣」防线（pfFlashResidual）
+    n_badge = len(re.findall(
+        r"const mkBadge = \(st\.badge && phase !== 'ended' && !pfFlashResidual\(st\)\)", src))
+    check("两处都改成「phase !== 'ended' 且非残渣 才显示角标」", n_badge == 2, f"实际 {n_badge} 处")
     check("不再有「有 badge 就无脑显示」的旧写法",
           "const mkBadge = st.badge ?" not in src)
+    check("定义 pfFlashResidual（秒杀残渣判定）", "const pfFlashResidual" in src)
 
     # 划线原价 / 秒杀价高亮只在进行中
     n_flash = len(re.findall(r"const flash = phase === 'active'", src))
@@ -185,11 +187,53 @@ def test_boundary_watch_wired() -> None:
           and "memRender();" in src.split("const pfWatchFlashBoundary")[1][:900])
 
 
+def test_residual_behavior() -> None:
+    """2026-10-20：秒杀残渣（活动结束后没落回普通模式）不得再挂「限时秒杀」角标。"""
+    print("\n[E] pfFlashResidual 真实行为（node 实跑）")
+    src = _read_app_js()
+    m = re.search(r"  const pfFlashResidual = \(st\) => \{.*?\n  \};\n", src, re.S)
+    if not m:
+        check("抽取 pfFlashResidual 成功", False)
+        return
+    body = m.group(0)
+    node = os.environ.get("VDL_NODE_BIN") or "node"
+    harness = body + """
+const cases = {
+  normalPlan:    { mode: 'normal',     badge: '限时5折' },
+  residueNormal: { mode: 'normal',     flash_price: 0.1, flash_start: 1791000000, flash_end: 1791003600 },
+  residueNoPrice:{ mode: 'flash_sale', flash_price: 0,   flash_start: 1791000000, flash_end: 1791003600 },
+  residueNoTime: { mode: 'flash_sale', flash_price: 0.5, flash_start: 0, flash_end: 0 },
+  okFlash:       { mode: 'flash_sale', flash_price: 0.5, flash_start: 1791000000, flash_end: 1791003600 },
+  empty:         {},
+};
+const out = {};
+for (const [k, v] of Object.entries(cases)) out[k] = pfFlashResidual(v);
+console.log(JSON.stringify(out));
+"""
+    try:
+        r = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=25)
+    except FileNotFoundError:
+        check("node 可用", False, "未找到 node")
+        return
+    if r.returncode != 0:
+        check("node 跑通 pfFlashResidual", False, r.stderr.strip()[:200])
+        return
+    got = json.loads(r.stdout.strip())
+    check("普通档 + 自定义角标、无秒杀字段 → 不算残渣（角标照常显示）",
+          got["normalPlan"] is False, str(got))
+    check("普通档留着旧秒杀字段 → 残渣", got["residueNormal"] is True, str(got))
+    check("秒杀档秒杀价被清空 → 残渣", got["residueNoPrice"] is True, str(got))
+    check("秒杀档缺时间 → 残渣", got["residueNoTime"] is True, str(got))
+    check("正常秒杀档（窗口内/外由 phase 判）→ 不算残渣", got["okFlash"] is False, str(got))
+    check("空 state 不炸", got["empty"] is False, str(got))
+
+
 if __name__ == "__main__":
     test_backend_phase()
     test_frontend_wiring()
     test_node_behavior()
     test_boundary_watch_wired()
+    test_residual_behavior()
     print()
     if FAILS:
         print(f"失败 {len(FAILS)} 项：")
