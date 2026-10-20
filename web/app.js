@@ -1358,6 +1358,242 @@
     return refs;
   };
 
+  // —— 以下为 2026-10-21 从 app-dev 工作区移植（web-dev 与 app-dev 的 web/app.js 已分叉，
+  // 各自有独有功能，不能整文件互覆；本功能按源码逐字移植 + 符号级回归核对）。
+  // 分段下载用的请求头：与上面 request() 同一套鉴权（bearer + 订阅/API key + 设备号）。
+  // 函数名与 app-dev 侧保持一致 —— web/tests/test_segmented_download.js 按同名桩注入。
+  function authBearerHeaders() {
+    const h = {};
+    const subKey = localStorage.getItem('vdl_sub_key');
+    if (subKey) h['X-Subscription-Key'] = subKey;
+    const apiToken = localStorage.getItem('vdl_api_token');
+    if (apiToken) h['X-Api-Key'] = apiToken;
+    const authToken = localStorage.getItem('vdl_auth_token');
+    if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+    h['X-Device-Id'] = deviceId();
+    return h;
+  }
+
+  // —— 并发分段下载（方案④，2026-10-21）——
+  // 为什么不靠对象存储：方案③要先在阿里云开 OSS、建 bucket、配 AK/SK，还要把成品
+  // 额外上传一份，成本和运维都不小。但慢的根因其实不是「跨境」本身，而是**单连接限速**：
+  // 实测同一条链路（CF → Railway）1 连接 122KB/s、8 连接并行 673KB/s（5.5x，可叠加）。
+  // 而 /api/tasks/{id}/file 用的 Starlette FileResponse **原生支持 Range**（实测 206 +
+  // Content-Range + Accept-Ranges，且 cf-cache-status=BYPASS 走回源），所以浏览器侧
+  // 把文件切成 8 段并发拉、按偏移直接写盘即可，服务端零改动、不花钱。
+  //
+  // 落盘用 File System Access API（Chrome/Edge 86+）：showSaveFilePicker 拿到句柄后
+  // createWritable()，每读到一块就 write({position}) 写到对应偏移 —— 418MB 全程不进内存。
+  // 任何一步不满足（老浏览器 / 非 https / 服务端不支持 Range / 用户取消）都回退原
+  // /file 整页下载，保证「保存」这个动作永远能完成，只是慢一点。
+  const SEG_CONCURRENCY = 8;                       // 实测最佳；再高边际收益很小
+  const SEG_MIN_BYTES = 8 * 1024 * 1024;           // < 8MB 单流就够快，不值得并发
+  const SEG_CHUNK_MIN = 2 * 1024 * 1024;           // 每段至少 2MB，避免小文件切太碎
+
+  function fmtSegBytes(n) {
+    if (!n) return '0 B';
+    const u = ['B', 'KB', 'MB', 'GB'];
+    let i = 0, v = n;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+  }
+
+  /** 用 1 字节 Range 探测总大小；服务端不支持 Range 时返回 0（调用方据此回退）。 */
+  async function probeTotalBytes(url) {
+    try {
+      const r = await fetch(url, {
+        headers: Object.assign({ 'Range': 'bytes=0-0', 'X-Device-Id': deviceId() }, authBearerHeaders()),
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (r.status !== 206) return 0;
+      const cr = r.headers.get('Content-Range') || '';
+      const m = /\/(\d+)\s*$/.exec(cr);
+      return m ? parseInt(m[1], 10) : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /** 分段并发下载并直接落盘。返回 'OK' | 'CANCELLED' | 'UNSUPPORTED' | 'SKIP'。 */
+  async function concurrentSaveFile(url, filename, hooks) {
+    const onProgress = (hooks && hooks.onProgress) || function () {};
+    if (typeof window.showSaveFilePicker !== 'function') return 'UNSUPPORTED';
+    const total = await probeTotalBytes(url);
+    if (!total) return 'UNSUPPORTED';          // 不是 206 → 服务端/中间层不支持 Range
+    if (total < SEG_MIN_BYTES) return 'SKIP';  // 小文件并发反而更慢
+
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({ suggestedName: filename || 'download' });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return 'CANCELLED';
+      return 'UNSUPPORTED';
+    }
+    const writable = await handle.createWritable();
+
+    const parts = Math.max(1, Math.min(SEG_CONCURRENCY, Math.ceil(total / SEG_CHUNK_MIN)));
+    const segSize = Math.ceil(total / parts);
+    const ctrl = new AbortController();
+    let loaded = 0;
+
+    const pullSegment = async (start, end) => {
+      const r = await fetch(url, {
+        headers: Object.assign(
+          { 'Range': `bytes=${start}-${end}`, 'X-Device-Id': deviceId() },
+          authBearerHeaders()),
+        credentials: 'include',
+        signal: ctrl.signal,
+      });
+      if (r.status !== 206) throw new Error(`分段请求被拒（HTTP ${r.status}）`);
+      if (!r.body || !r.body.getReader) throw new Error('当前浏览器不支持流式分段');
+      const reader = r.body.getReader();
+      let pos = start;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || !value.length) continue;
+        await writable.write({ type: 'write', position: pos, data: value });
+        pos += value.length;
+        loaded += value.length;
+        onProgress(loaded, total);
+      }
+    };
+
+    try {
+      const jobs = [];
+      for (let i = 0; i < parts; i++) {
+        const start = i * segSize;
+        if (start >= total) break;
+        const end = Math.min(total - 1, start + segSize - 1);
+        jobs.push(pullSegment(start, end));
+      }
+      await Promise.all(jobs);
+      await writable.close();
+      return 'OK';
+    } catch (err) {
+      try { ctrl.abort(); } catch (_) {}
+      try { await writable.abort(); } catch (_) {}
+      throw err;
+    }
+  }
+
+  // —— 云端直链保存（方案③，2026-10-20）——
+  // 背景：浏览器版「保存到本机」= 部署节点单流回传。节点在海外时跨境单连接实测
+  // ~120KB/s（418MB ≈ 49 分钟）。这里改成：先问后端要对象存储预签名直链（节点已上传
+  // 一次到 OSS/CDN），拿到就整页跳到直链，由浏览器直连 CDN 下载。
+  // 任何一步不可用（未配置 404 / 上传失败 502 / 超时 / 老浏览器）都**回退原 /file**，
+  // 保证「保存」这个动作永远能完成 —— 只是慢一点。
+  function bindTaskCloudSaveBridge(refs, task) {
+    const btn = refs.save;
+    if (btn.dataset.cloudBridge === task.task_id) return;
+    btn.dataset.cloudBridge = task.task_id;
+    const apiBase = refs.base || window.VDL_API_BASE || '';
+    btn.addEventListener('click', async (e) => {
+      if (btn.dataset.cloudSaving === '1') { e.preventDefault(); return; }
+      const fallback = btn.href;
+      if (typeof fetch !== 'function' || !fallback) return;   // 老环境：不拦，走原下载
+      // showSaveFilePicker 需要「用户激活」：自动保存时 refs.save.click() 是程序化点击
+      // （isTrusted=false），此时弹不出保存面板，直接走整页下载，别白试一次。
+      const userGesture = !!(e && e.isTrusted);
+      e.preventDefault();
+      btn.dataset.cloudSaving = '1';
+      const label = btn.textContent;
+      let direct = '';
+      try {
+        // 最多等 10 分钟让节点把文件传完（大文件 + 节点出网上传受限，别设太短）
+        for (let i = 0; i < 200; i++) {
+          const r = await fetch(`${apiBase}/api/tasks/${encodeURIComponent(task.task_id)}/direct_url`,
+            { headers: Object.assign({ 'X-Device-Id': deviceId() }, authBearerHeaders()) });
+          if (r.status === 200) {
+            const d = await r.json().catch(() => ({}));
+            if (d && d.url) { direct = d.url; break; }
+            break;
+          }
+          if (r.status !== 202) break;                       // 404/409/502 → 回退
+          const d = await r.json().catch(() => ({}));
+          const pct = (d && typeof d.percent === 'number') ? Math.floor(d.percent) : 0;
+          btn.textContent = `云端加速准备中 ${pct}%`;
+          if (refs.saveHint) {
+            refs.saveHint.hidden = false;
+            refs.saveHint.textContent = '正在把成品传到云端存储（只传一次，之后下载走 CDN 全速）…';
+          }
+          await new Promise((res) => setTimeout(res, 3000));
+        }
+      } catch (_) {
+        direct = '';
+      } finally {
+        btn.dataset.cloudSaving = '';
+        btn.textContent = label;
+      }
+      if (direct) {
+        if (refs.saveHint) {
+          refs.saveHint.hidden = false;
+          refs.saveHint.textContent = '已切换到云端 CDN 直连下载（比节点单流回传快数倍）';
+        }
+        window.location.href = direct;
+        return;
+      }
+
+      // 方案④：没有对象存储直链 → 并发分段直接落盘。
+      // 为什么值得：跨境单连接被限速在 ~120KB/s，8 连接可叠加到 ~670KB/s；而这条路径
+      // 不额外上传副本、不依赖 OSS，服务端 FileResponse 本来就支持 Range。
+      if (fallback && userGesture && typeof window.showSaveFilePicker === 'function') {
+        const t0 = Date.now();
+        let lastPaint = 0;
+        btn.dataset.cloudSaving = '1';
+        btn.textContent = '准备下载…';
+        try {
+          if (refs.saveHint) {
+            refs.saveHint.hidden = false;
+            refs.saveHint.textContent = '正在用多连接分段下载（跨境单连接被限速，多连接可叠加）…';
+          }
+          const ret = await concurrentSaveFile(
+            fallback,
+            task.filename || btn.dataset.saveName || 'download',
+            {
+              onProgress: (done, totalBytes) => {
+                const now = Date.now();
+                const finished = totalBytes > 0 && done >= totalBytes;
+                if (!finished && now - lastPaint < 250) return;   // 节流，别把主线程刷爆
+                lastPaint = now;
+                const pct = totalBytes ? Math.floor(done * 100 / totalBytes) : 0;
+                const sec = Math.max(0.001, (now - t0) / 1000);
+                btn.textContent = `下载中 ${pct}% · ${fmtSegBytes(done / sec)}/s`;
+                if (refs.saveHint) {
+                  refs.saveHint.textContent = `${fmtSegBytes(done)} / ${fmtSegBytes(totalBytes)} · 多连接分段下载`;
+                }
+              },
+            });
+          if (ret === 'OK') {
+            btn.textContent = '已保存 ✅';
+            if (refs.saveHint) refs.saveHint.textContent = '✅ 已保存到所选位置（多连接分段下载）';
+            setTimeout(() => { btn.textContent = label; }, 4000);
+            btn.dataset.cloudSaving = '';
+            return;
+          }
+          if (ret === 'CANCELLED') {
+            btn.textContent = label;
+            if (refs.saveHint) refs.saveHint.textContent = '已取消保存，可随时再点「保存到本机」。';
+            btn.dataset.cloudSaving = '';
+            return;
+          }
+          // SKIP / UNSUPPORTED → 落到下面整页下载（小文件或老浏览器，慢一点但稳）
+        } catch (err) {
+          btn.textContent = label;
+          if (refs.saveHint) {
+            refs.saveHint.hidden = false;
+            refs.saveHint.textContent = '分段下载失败，已改用普通下载（速度会慢一些）。';
+          }
+        } finally {
+          btn.dataset.cloudSaving = '';
+        }
+      }
+      // 回退：与旧版行为一致（浏览器直接拉 /file）
+      window.location.href = fallback;
+    });
+  }
+
   const paintTask = (refs, task, autoSave) => {
     const active = ACTIVE_STATES.includes(task.status);
     refs.title.textContent = task.title || refs.fallbackTitle || '解析中…';
@@ -1514,6 +1750,9 @@
     refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file?download=1&device=${encodeURIComponent(deviceId())}`;
     refs.save.setAttribute('download', task.filename || '');
     refs.save.textContent = '保存到本机 ⬇';
+    // 云端直链 + 并发分段保存桥（见上方移植块）；自动保存的程序化点击 isTrusted=false，
+    // 桥内会跳过分段直接整页下载，行为与旧版一致。
+    bindTaskCloudSaveBridge(refs, task);
     refs.status.textContent = autoSave
       ? '已完成 · 已自动保存到本机'
       : '已完成 · 点「保存到本机」';
