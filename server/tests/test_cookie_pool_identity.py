@@ -148,6 +148,48 @@ def case_verify_dispatch_prefers_bilibili_probe(tmp: str) -> None:
           m.verify_cookie("youtube.com", "SID=RELAYTEST; HSID=RELAYTEST") is False)
 
 
+def case_structural_check_login_fields(tmp: str) -> None:
+    """守卫 _STRUCTURAL_FIELDS 的新增登录态字段（2026-10-20）。
+
+    抖音/快手/TikTok/小红书没有联网探针，verify_cookie 在旧实现里会落到
+    _verify_generic（yt-dlp 试解析），机房易被风控误判 False，把有效 Cookie
+    拒之池外。改为命中白名单站「登录后才存在」的字段即判结构有效（True）。
+    本用例确保：① 各新增域的登录字段确实命中 True；② 小红书 a1 这类
+    游客也有字段单独出现时仍返回 None（绝不能当登录态）。
+    """
+    m = _load(tmp)
+    # 抖音：任一登录字段命中即 True
+    check("抖音 sessionid 命中结构校验",
+          m._structural_check("douyin.com", "sessionid=abc") is True)
+    check("抖音 sid_tt 命中结构校验",
+          m._structural_check("douyin.com", "sid_tt=abc") is True)
+    check("抖音 passport_csrf_token 命中结构校验",
+          m._structural_check("douyin.com", "passport_csrf_token=abc") is True)
+    check("抖音分享子域 iesdouyin 同样命中",
+          m._structural_check("iesdouyin.com", "sessionid=abc") is True)
+    # 快手
+    check("快手 passToken 命中结构校验",
+          m._structural_check("kuaishou.com", "passToken=abc") is True)
+    check("快手 userId 命中结构校验",
+          m._structural_check("kuaishou.com", "userId=abc") is True)
+    check("快手 chenzhongtech 子域 userId 命中",
+          m._structural_check("chenzhongtech.com", "userId=abc") is True)
+    # TikTok
+    check("TikTok sessionid 命中结构校验",
+          m._structural_check("tiktok.com", "sessionid=abc") is True)
+    # 小红书：web_session 是登录态，a1 只是游客也有
+    check("小红书 web_session 命中结构校验",
+          m._structural_check("xiaohongshu.com", "web_session=abc") is True)
+    check("小红书仅 a1（游客）=> None，不当登录态",
+          m._structural_check("xiaohongshu.com", "a1=guest; webId=xyz") is None)
+    # 非白名单域仍返回 None（交给通用验真）
+    check("非结构白名单域返回 None",
+          m._structural_check("example.com", "foo=bar") is None)
+    # 缺字段的已配置域也返回 None（游客态，不误判 False）
+    check("抖音缺登录字段返回 None（游客态）",
+          m._structural_check("douyin.com", "odin_tt=abc; ttwid=xyz") is None)
+
+
 def main() -> int:
     print("== test_cookie_pool_identity ==")
     tmpdir = tempfile.mkdtemp(prefix="vdl_pool_test_")
@@ -157,7 +199,8 @@ def main() -> int:
 
         for fn in (case_add_rejects_logged_out, case_add_keeps_only_newest_per_account,
                    case_add_keeps_multiple_accounts, case_prune_verifies_once_per_session,
-                   case_verify_dispatch_prefers_bilibili_probe):
+                   case_verify_dispatch_prefers_bilibili_probe,
+                   case_structural_check_login_fields):
             d = tempfile.mkdtemp(prefix="vdl_pool_test_")
             try:
                 fn(d)

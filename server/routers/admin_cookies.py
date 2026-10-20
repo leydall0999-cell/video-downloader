@@ -406,6 +406,12 @@ def _probe(domain: str, header: str) -> dict:
         }
     if ok is False:
         return {"status": "invalid", "detail": "站点判定：无效", "probe": _PROBE_NET}
+    # 有结构校验表但没命中 ⇒ 这条 Cookie 是游客态（无登录字段），不是「没法验」。
+    # 直接告诉运营「该补登录后的 Cookie」，比笼统说「无可用探针」更可执行。
+    if d in cp._STRUCTURAL_FIELDS:
+        return {"status": "unknown",
+                "detail": "无登录态字段（游客/未登录），补注入登录后的 Cookie 再校验",
+                "probe": _PROBE_STRUCT}
     return {"status": "unknown", "detail": "无可用探针（该站未配置验真地址）", "probe": _PROBE_NONE}
 
 

@@ -610,6 +610,16 @@ _STRUCTURAL_FIELDS: dict[str, set[str]] = {
         "__Secure-1PSID", "__Secure-3PSID",
         "__Secure-1PAPISID", "__Secure-3PAPISID",
     },
+    # 抖音 / 快手 / TikTok / 小红书：这些站没有联网探针（yt-dlp 试解析在机房
+    # 易被风控而误判 False，会把有效 Cookie 拒之池外）。改为只校验「是否含
+    # 登录态字段」：命中即「结构有效」，后台标「结构校验」，不冒充站点确认。
+    # 🔴 字段只取「登录后才存在」的：小红书 a1 游客也有，绝不能当登录态。
+    "douyin.com": {"sessionid", "sid_tt", "passport_csrf_token"},
+    "iesdouyin.com": {"sessionid", "sid_tt"},
+    "kuaishou.com": {"passToken", "userId", "kuaishou.webid"},
+    "chenzhongtech.com": {"passToken", "userId"},
+    "tiktok.com": {"sessionid", "sid_tt"},
+    "xiaohongshu.com": {"web_session"},
 }
 
 
