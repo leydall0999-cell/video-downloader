@@ -18,6 +18,14 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.80",
+        "date": "2026-10-20",
+        "items": [
+            "修「后台改每日免费次数后网页版没生效」：免费档与会员档的每日额度现在会"
+            "同步下发到授权中心，网页版和桌面端按同一份次数显示与拦截。",
+        ],
+    },
+    {
         "version": "1.0.79",
         "date": "2026-10-20",
         "items": [
