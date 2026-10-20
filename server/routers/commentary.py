@@ -379,7 +379,12 @@ def get_script(job_id: str) -> dict:
     if not job:
         raise app.HTTPException(status_code=404, detail="任务不存在或已过期")
     if job["status"] != "script_ready" or not job.get("script_path"):
-        raise app.HTTPException(status_code=409, detail="脚本尚未就绪（当前状态: " + job["status"] + "）")
+        # 文案修正（2026-10-21，P2-2）：completed 等已过审核阶段的状态下，
+        # 「脚本尚未就绪」读着别扭——脚本早好了，是任务走远了。说清阶段语义。
+        raise app.HTTPException(
+            status_code=409,
+            detail="脚本审核阶段已过或尚未开始（当前状态: " + job["status"] +
+                   "）；本接口仅在脚本审核阶段（script_ready）可用")
     script_path = app.Path(job["script_path"])
     if not script_path.exists():
         raise app.HTTPException(status_code=410, detail="脚本文件已被清理")
@@ -401,7 +406,11 @@ def update_script(job_id: str, payload: app.ScriptUpdateRequest) -> dict:
     if not job:
         raise app.HTTPException(status_code=404, detail="任务不存在或已过期")
     if job["status"] != "script_ready" or not job.get("script_path"):
-        raise app.HTTPException(status_code=409, detail="脚本尚未就绪，无法修改（当前状态: " + job["status"] + "）")
+        # 文案修正（2026-10-21，P2-2）：同上，completed 时「尚未就绪」不合语义。
+        raise app.HTTPException(
+            status_code=409,
+            detail="脚本审核阶段已过或尚未开始（当前状态: " + job["status"] +
+                   "）；本接口仅在脚本审核阶段（script_ready）可用，无法修改")
     script_path = app.Path(job["script_path"])
 
     # 读现有脚本以保留时间戳
