@@ -91,6 +91,7 @@ run_one test_member_download_quota.py
 run_one test_youtube_unavailable_vs_bot.py
 run_one test_youtube_shortlink_scope.py
 run_one test_yt_warp_proxy.py              # YouTube 专属出口代理：VDL_PROXY_YT(WARP) 分流、googlevideo 同代理、国内站不受影响（2026-10-01）
+run_one test_yt_socks_preflight.py         # YouTube 解析入口 socks5 出口预检：死端口 0.6s 明确报「线路维护中」，杜绝 120s 干等（2026-10-21）
 run_one test_yt_pot_starved.py             # YouTube SABR「PO Token 饥饿」检测 + web_safari/HLS 补救 + 雪碧图假档排除（2026-10-01）
 run_one test_quality_options_direct_video.py  # 清晰度档位归类：直链视频（无 height 但非音频）不得被误标「最佳音质」（2026-10-20）
 run_one test_upload_body_limit.py

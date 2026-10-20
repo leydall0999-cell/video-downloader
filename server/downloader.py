@@ -3539,6 +3539,36 @@ def _pot_usable(proxy: str = "") -> bool:
     _POT_USABLE_CACHE[key] = result
     return result
 
+
+def _local_socks_alive(proxy: str) -> bool:
+    """本机 socks5 出口（如 WARP 的 127.0.0.1:40000）此刻是否真的可建连。
+
+    🔴 2026-10-21 网页版「请求超时（超过 120s）」真根因：warp-svc 进程活着但
+    IPC 卡死 → 40000 无监听，yt-dlp 把每个请求都打到死端口，按 socket_timeout
+    + 重试链逐次撞墙，实测累计 120s+ 才吐错，用户只看到一句无信息红字，
+    白等两分钟。与 _bgutil_reachable 同理：**裸 socket 探测、绝不走代理**。
+    非本机 socks（远端出口）或非 socks 协议一律返回 True——探测无意义，不拦。
+    自愈由 vdl-warp-watchdog.timer（每分钟：connect → restart）负责；
+    本函数只负责「别让用户干等」，因此**不做缓存**（缓存会把已恢复的出口
+    继续判死，直到进程重启）。
+    """
+    key = (proxy or "").strip()
+    if not key.lower().startswith("socks"):
+        return True
+    m = re.match(r"^socks[45]a?h?://(?:[^@/]+@)?([^:/]+):(\d+)", key, re.I)
+    if not m:
+        return True
+    host, port = m.group(1), int(m.group(2))
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        return True  # 远端 socks 出口，本机探不到它是否真的能用
+    import socket as _socket
+    try:
+        with _socket.create_connection((host, port), timeout=0.6):
+            return True
+    except OSError:
+        return False
+
+
 def _yt_real_video_heights(formats: list) -> list[int]:
     """真实视频轨高度（排除纯音频与 mhtml 雪碧图/storyboard）。"""
     out: list[int] = []
@@ -3593,6 +3623,17 @@ def _resolve_youtube(url: str, user_cookie: str = "", proxy: str = "") -> dict[s
     validate_youtube_id(url)  # ID 不完整直接明确报错，别流进 bot/Cookie 兜底
     host = _host_of(url)
     effective_proxy = proxy or _resolve_proxy(host)
+    # 🔴 本机 socks5 出口（WARP）死掉时别让用户干等 120s：0.6s 裸 socket 预检，
+    # 不可达就直接明确报「线路维护中」（前端按 network 类引导「可重试」），
+    # 而不是让 yt-dlp 逐次撞墙攒够两分钟再吐一句「请求超时」。
+    # 出口自愈由 HK 节点的 vdl-warp-watchdog.timer 每分钟负责。
+    if effective_proxy and not _local_socks_alive(effective_proxy):
+        logger.error("[youtube] 本机 socks5 出口不可达（%s），直接返回线路故障，避免 120s 干等", effective_proxy)
+        raise ResolveError(
+            "海外解析线路维护中（预计 1 分钟内自动恢复），请稍后重试",
+            hint="如持续出现，请联系管理员检查香港节点 WARP 出口。",
+            category="network",
+        )
     # 方法一（免 Cookie）先自动拿 visitorData；拿不到则走纯 Cookie 链路
     visitor_data = _fetch_youtube_visitor_data(effective_proxy)
     if visitor_data:
