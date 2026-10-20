@@ -532,7 +532,12 @@ async function testSaveAndCancel() {
 
   // 6.2 取消：再点一次。用一个稍慢的源站让第一次还在跑
   {
-    const slow = makeOrigin(routes, { delayMs: 60 });
+    // 🔴 两点必须同时满足，否则这条用例会假绿/假红：
+    // ① 点击时机要**过 700ms 防误触窗口** —— 窗口内的重复点击按语义是「忽略」，
+    //     download 按钮那一侧已经这么约束过（2026-10-20），HLS 按钮共用同一套窗口；
+    // ② 源站必须慢到点击时仍在下载中 —— 分片是并行的，总耗时 ≈ 2×delay，
+    //     delay 取 500ms ⇒ 总 ~1s，760ms 时清单已回、分片还在飞，取消才落得下去。
+    const slow = makeOrigin(routes, { delayMs: 500 });
     const env = makeEnv(slow.fetch);
     installWatchOptions(env.el, [{ value: 'auto', url: M3U8, hls: true }]);
     const { api } = loadEngine(slow.fetch, {
@@ -541,8 +546,8 @@ async function testSaveAndCancel() {
       envIn: env,
     });
     const first = api.triggerBrowserHlsDownload();
-    await new Promise((r) => setTimeout(r, 90));      // 让它进入下载中
-    await api.triggerBrowserHlsDownload();            // 第二次点击 = 取消
+    await new Promise((r) => setTimeout(r, 760));      // 过 700ms 窗口，且仍在下载中
+    await api.triggerBrowserHlsDownload();             // 第二次点击 = 取消
     await first;
     check('取消：没有落盘', env.clicked.length, 0);
     ok('取消：提示可读', env.el.directHint.textContent.includes('已取消'),

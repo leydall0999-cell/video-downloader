@@ -18,7 +18,7 @@
  *   3. 并发度确实 ≤ 3（实测并发峰值，不是读常量）；
  *   4. 单片失败会重试，且重试后结果仍然正确；
  *   5. 源站不认 Range（回 200 全量）→ 退单流；体积超上限 → 退单流；小文件 → 退单流；
- *   6. 中继整体不可用 → 降级为 `<a download>` 直连源站（不能白屏、不能吞错）；
+ *   6. 中继整体不可用 → 降级为**同源中继 + Content-Disposition 附件下载**（绝不跳转到源站）；
  *   7. 再点一次按钮 = 取消（AbortError 分支可读）；
  *   8. 落盘文件名按 Content-Type / URL 补扩展名，已有扩展名不重复追加；
  *   9. 中继地址带上解析锁定节点的 base（海外站必须打对端）。
@@ -565,15 +565,22 @@ async function testRelayFailureFallsBackToAnchorDownload() {
   const { api, env } = loadEngine(origin.fetch);
   const url = 'https://x.invalid/dir/video.mp4?token=1';
   await api.triggerDirectDownload(url, '某标题', '');
-  ok(env.clicked.length === 1, `中继失败必须降级为 <a download>，实际点击 ${env.clicked.length} 次`);
-  ok(env.clicked[0].href === url, `降级应直连源站，实际 ${env.clicked[0].href}`);
+  ok(env.clicked.length === 1, `中继失败必须降级为一次下载，实际点击 ${env.clicked.length} 次`);
+  // 🔴 2026-10-20：降级**不得**直连源站 —— 跨域 <a download> 会被浏览器忽略，
+  // 点击后整页跳转到源站（用户实测「点一下就跳到 kwaicdn 视频页」）。
+  // 必须走同源中继 + dl= 附件下载：浏览器按普通下载处理，绝不离开当前页。
+  const want = `/api/media/proxy?u=${encodeURIComponent(url)}&dl=${encodeURIComponent('某标题.mp4')}`;
+  ok(env.clicked[0].href === want,
+    `降级必须走同源中继附件下载，实际 ${env.clicked[0].href}`);
+  ok(!env.clicked[0].href.startsWith(url),
+    '降级链接不得是裸源站地址（跨域 <a download> 会被忽略并整页跳走）');
   ok(env.clicked[0].download === '某标题.mp4',
     `降级文件名应从 URL 补扩展名，实际 ${env.clicked[0].download}`);
   ok(/加速下载不可用/.test(env.el.directHint.textContent), `提示应说明已降级：${env.el.directHint.textContent}`);
   ok(env.el.downloadBtn.lastChild.textContent === '直接保存到本机 ⬇', '按钮文案必须复原');
   ok(env.el.serverFallbackBtn.hidden === true || env.el.serverFallbackBtn.hidden === false,
     'serverFallbackBtn 状态需可读');
-  done('中继不可用 → 降级直连源站（带扩展名、有可读提示、按钮复原）');
+  done('中继不可用 → 降级为同源中继附件下载（带扩展名、不跳转源站、按钮复原）');
 }
 
 // --------------------------------------------------------------------------- //

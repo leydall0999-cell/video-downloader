@@ -1203,31 +1203,24 @@
       el.thumb.onerror = () => { el.thumb.hidden = true; };
     }
 
-    const directUrl = video.direct_url;
-    if (directUrl) {
-      // 直链透传：跳过清晰度选择与服务器任务队列，走浏览器侧分片下载引擎
-      el.qualityBlock.hidden = true;
-      el.downloadBtn.lastChild.textContent = '直接保存到本机 ⬇';
-      el.directHint.hidden = false;
-      el.directHint.textContent = '✅ 检测到可直接下载的文件。点上方按钮即分片加速下载（10MB/片 · 3 路并发 · 自动重试），有实时进度、可再点一次取消；加速不可用时自动降级为浏览器直连。';
-      el.serverFallbackBtn.hidden = false;
-      if (el.browserHlsBtn) el.browserHlsBtn.hidden = true;
-    } else {
-      el.qualityBlock.hidden = false;
-      el.downloadBtn.lastChild.textContent = '开始下载';
-      el.directHint.hidden = true;
-      el.directHint.textContent = '';
-      el.serverFallbackBtn.hidden = true;
-      renderQualities(data.qualities);
-      // HLS 源额外给一条「浏览器内合成」：产物 .ts/.mp4，全程走用户带宽，
-      // 省下服务器出口流量与磁盘（HLS 在服务端还要 ffmpeg 合并）。属于可选加速项，
-      // 所以默认收起、只在确认可用时露出。直播没有终点；加密流要取到清单才知道，
-      // 由 triggerBrowserHlsDownload 的报错兜底。
-      // 注意 el 判空：CF 可能仍给出旧的 index.html（没有这个按钮）而 app.js 已是新版。
-      if (el.browserHlsBtn) {
-        const hasHlsUrl = (video.watch_options || []).some((o) => o && o.is_hls && o.url);
-        el.browserHlsBtn.hidden = !(video.is_hls && !video.is_live && hasHlsUrl);
-      }
+    // 统一走「服务器下载任务」（与正常下载一致：任务卡片 + 实时进度 + 暂停 /
+    // 取消 / 重试 / 保存文件）。直链视频过去默认走浏览器侧分片引擎，实测在部分
+    // 站点（如快手 CDN）探测阶段长时间无响应，且降级用的跨域 <a download> 会被
+    // 浏览器忽略、整页跳转到源站 —— 两者都不可接受，因此不再对直链做特殊分支。
+    el.qualityBlock.hidden = false;
+    el.downloadBtn.lastChild.textContent = '开始下载';
+    el.directHint.hidden = true;
+    el.directHint.textContent = '';
+    el.serverFallbackBtn.hidden = true;
+    renderQualities(data.qualities);
+    // HLS 源额外给一条「浏览器内合成」：产物 .ts/.mp4，全程走用户带宽，
+    // 省下服务器出口流量与磁盘（HLS 在服务端还要 ffmpeg 合并）。属于可选加速项，
+    // 所以默认收起、只在确认可用时露出。直播没有终点；加密流要取到清单才知道，
+    // 由 triggerBrowserHlsDownload 的报错兜底。
+    // 注意 el 判空：CF 可能仍给出旧的 index.html（没有这个按钮）而 app.js 已是新版。
+    if (el.browserHlsBtn) {
+      const hasHlsUrl = (video.watch_options || []).some((o) => o && o.is_hls && o.url);
+      el.browserHlsBtn.hidden = !(video.is_hls && !video.is_live && hasHlsUrl);
     }
     // 在线观看：按清晰度生成下拉，默认选最高画质
     const watchOpts = (video.watch_options && video.watch_options.length) ? video.watch_options : null;
@@ -4121,9 +4114,15 @@
   };
 
   const _dlAnchorDownload = (url, title) => {
+    // 跨域 <a download> 会被浏览器忽略：点击后直接「导航到源地址」，整页跳走、
+    // 用户丢失当前页面（2026-10-20 实测：快手 kwaicdn 直链点一下就跳到视频页）。
+    // 改走同源中继 + Content-Disposition: attachment：浏览器按普通下载处理
+    // （存到下载目录、自带进度），绝不离开当前页。
+    const relay = _dlRelayUrl(url, '');
+    const fname = title ? _dlWithExt(title, '', url) : '';
     const a = document.createElement('a');
-    a.href = url;
-    if (title) a.download = _dlWithExt(title, '', url);
+    a.href = fname ? `${relay}&dl=${encodeURIComponent(fname)}` : relay;
+    if (fname) a.download = fname;
     a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
@@ -4523,11 +4522,8 @@
   };
 
   const handleDownload = async () => {
-    if (resolved?.video?.direct_url) {
-      // 直链直存：走分片下载引擎（失败自动降级），锁定解析所在节点
-      triggerDirectDownload(resolved.video.direct_url, resolved.video.title, resolved.base || '');
-      return;
-    }
+    // 统一走服务器下载任务（任务卡片：进度 / 暂停 / 重试 / 保存文件）。
+    // 直链视频不再走浏览器侧分片引擎 —— 原因见 renderVideo 处说明。
     // 服务器下载：loading 态防重复点击（连点会建多个任务）；后端 90s 内命中
     // 解析缓存，「解析视频信息」步骤 <1s，这里反馈也要跟上。
     if (el.downloadBtn.dataset.submitting === '1') return;

@@ -4612,7 +4612,32 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
 
     # 纯音频内容（喜马拉雅/网易云等无视频轨）：不展示 4K/1080P 等视频画质选项
     if not heights:
+        # ⚠️ 「没有 height」≠「没有视频轨」，`formats` 为空更不等于音频。两种真实情形：
+        #   ① **直链文件**：probe() 在 _looks_like_direct_file() 短路，**根本没跑 yt-dlp**
+        #      ⇒ formats 为 0 条（2026-10-20 实测 mov_bbb.mp4：`formats count: 0`）；
+        #   ② yt-dlp 对裸媒体返回 `height=None, vcodec=None, acodec=None`（三项全未知）。
+        # 老判据只看 height ⇒ 直链视频被误判成音频，清晰度面板只剩「最佳音质（自动）」，
+        # 用户点「开始下载」拿到的却是视频，观感上就是坏的（直链改走服务器任务后才暴露）。
+        # 判据改为**显式声明 + 扩展名兜底**：要么「有 format 且全部明确无视频轨、至少一条
+        # 明确声明音频编码」，要么「formats 为空但扩展名是音频」—— 才算纯音频；其余一律
+        # 按视频给单一「最佳画质」档（格式选择器 `ba/b` 对两者都能兜底）。
+        _ext = str(info.get("ext") or "").lower()
+        if not _ext:
+            _m = re.search(r"\.([a-z0-9]{2,5})(?:\?|#|$|&)",
+                           str(info.get("url") or info.get("webpage_url") or ""), re.IGNORECASE)
+            _ext = (_m.group(1) if _m else "").lower()
+        _audio_url = _ext in {"mp3", "m4a", "aac", "ogg", "oga", "wav", "flac", "opus", "wma"}
+        _no_video = all(str(f.get("vcodec") or "none") == "none" for f in formats)
+        _has_audio = any(str(f.get("acodec") or "none") != "none" for f in formats)
+        _is_audio = (_no_video and _has_audio) if formats else _audio_url
+        if not _is_audio:
+            return [
+                {"key": BEST_KEY, "label": "最佳画质（自动）",
+                 "note": "视频+音频自动合并", "approx_size": 0}
+            ]
         audio_ex = {str(f.get("ext") or "").lower() for f in formats}
+        if _ext:
+            audio_ex.add(_ext)
         audio_opts: list[dict[str, Any]] = []
         if "mp3" in audio_ex:
             audio_opts.append({"key": AUDIO_KEY, "label": "仅音频 MP3", "note": "MP3 格式", "approx_size": audio_size})
