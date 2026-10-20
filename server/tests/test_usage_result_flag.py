@@ -326,9 +326,18 @@ def test_wiring() -> None:
 
     app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
     check("前端保留 r 字段", "if (it.r === 0 || it.r === 1) row.r = it.r;" in app_js)
-    check("前端渲染成功标记", "aud-res ok" in app_js and "✅ 已保存" in app_js)
+    check("前端渲染成功标记", "aud-res ok" in app_js and "✅ 已完成" in app_js)
     check("前端渲染失败标记", "aud-res fail" in app_js and "❌ 未完成" in app_js)
     check("前端渲染未上报标记", ">未上报</span>" in app_js)
+    # 2026-10-20 用户口径：一个记录一行，标题缩略，结果放当行最后
+    check("每个平台块内每条记录独占一行",
+          "return order.map((p) => byPlatform[p].slice()" in app_js
+          and "class=\"aud-row\"" in app_js)
+    check("同标题多次不合并（每次下载各一行）", "×" not in app_js.split("const _usageDetailsByPlatform", 1)[1][:1600])
+    check("平台标签 / 标题 / 结果三段成行",
+          "aud-row-plat" in app_js and "aud-row-title" in app_js)
+    check("标题带 title 属性（缩略后仍可看全文）",
+          'class="aud-row-title" title="' + "' + esc(r.t) + '" in app_js)
     check("面板说明写清成功口径",
           "＝这次下载已完成、成品确实存到了用户本机" in app_js)
 

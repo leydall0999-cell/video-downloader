@@ -158,11 +158,15 @@ console.log(JSON.stringify({
           hists[0][1].get("details") == {}, str(hists[0][1]))
 
     dets = data["dets"]
-    check("多平台明细 → 每个平台一块（不堆一起）",
-          dets[0].count('class="aud-plat"') == 2, dets[0])
-    check("同平台多条标题合并到同一块",
+    # 2026-10-20 用户口径：一条记录一行（不再把多条标题挤成一串 chips）
+    check("一条记录一行（抖音 2 条 + B 站 1 条 = 3 行）",
+          dets[0].count('class="aud-row"') == 3, dets[0])
+    check("同平台记录相邻（不混排）",
           dets[0].index("douyin.com") < dets[0].index("bilibili.com")
           and "少帅 第5集" in dets[0] and "第6集" in dets[0], dets[0])
+    check("平台/标题/结果三段成行，结果在行尾",
+          "aud-row-plat" in dets[0] and "aud-row-title" in dets[0]
+          and dets[0].count('class="aud-res') == 3, dets[0])
     check("平台名与标题都转义（防注入）",
           "&lt;" in dets[0] or "&amp;" in dets[0] or "少帅" in dets[0], dets[0])
     check("无标题的明细条目被丢弃 → 空串", dets[1] == "", repr(dets[1]))
@@ -186,12 +190,14 @@ def test_guard_against_regression() -> None:
     check("判空条件也把云端按天历史算进来（跨天不误报为空）",
           "!cu0.total && !cuH0.length" in src)
     check("云端历史只算一次并在下方复用", "const cuHist = cuH0;" in src)
-    # ── 2026-10-19：明细要显示「下载了什么」，并按平台分组 ──
+    # ── 2026-10-19：明细要显示「下载了什么」；2026-10-20：一条记录一行、结果贴行尾 ──
     check("存在明细清洗函数", "const _cleanDetails = (raw) => {" in src)
-    check("存在按平台分组渲染函数", "const _usageDetailsByPlatform = (details) => {" in src)
-    check("分组输出带 aud-plat 结构", 'class="aud-plat"' in src)
-    check("云端历史表用分组明细渲染", "_usageDetailsByPlatform(d.details)" in src)
-    check("本机消耗表也用分组明细渲染", "_usageDetailsByPlatform(d.details)" in src)
+    check("存在明细行渲染函数", "const _usageDetailsByPlatform = (details) => {" in src)
+    check("行结构带 aud-row（平台/标题/结果三段）",
+          'class="aud-row"' in src and "aud-row-plat" in src
+          and "aud-row-title" in src)
+    check("云端历史表用明细行渲染", "_usageDetailsByPlatform(d.details)" in src)
+    check("本机消耗表也用明细行渲染", "_usageDetailsByPlatform(d.details)" in src)
     check("空状态文案仍保留（只是条件更严）", "这个账号还没有任何使用记录" in src)
     check("正常视图渲染「云端用量」区块", "云端用量（桌面 App + 网页版 / 其它设备）" in src)
     check("「本机配额消耗」与云端口径区分", "本机配额消耗" in src)

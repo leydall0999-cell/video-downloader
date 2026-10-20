@@ -7242,19 +7242,25 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .admin-usage-dlg .aud-today { font-size: .82rem; color: var(--text-mute, #6b7280); margin-bottom: 6px; }
 .admin-usage-dlg .aud-table-wrap { max-height: 200px; overflow: auto; border: 1px solid var(--line, #e5e7eb); border-radius: 8px; }
 .admin-usage-dlg .aud-items { color: var(--text-mute, #6b7280); white-space: normal; }
-/* ── 明细按平台分组（2026-10-19）：一个平台一行，避免标题堆成一团 ── */
-.admin-usage-dlg .aud-plat { display: flex; align-items: baseline; gap: .5rem; padding: 2px 0; }
-.admin-usage-dlg .aud-plat + .aud-plat { border-top: 1px dashed var(--line, #e5e7eb); }
-.admin-usage-dlg .aud-plat-name { flex: 0 0 auto; min-width: 5.5rem; font-size: .74rem;
+/* ── 明细一条记录一行（2026-10-20）：平台标签 | 标题（单行缩略） | 结果贴右端 ── */
+.admin-usage-dlg .aud-row { display: flex; align-items: center; gap: .5rem; padding: 4px 0; }
+.admin-usage-dlg .aud-row + .aud-row { border-top: 1px dashed var(--line, #e5e7eb); }
+.admin-usage-dlg .aud-row-plat { flex: 0 0 auto; min-width: 4.2rem; max-width: 6.5rem; font-size: .72rem;
   font-weight: 600; color: var(--text, #1f2937); background: var(--bg-soft, #f3f4f6);
-  border-radius: 4px; padding: 1px 6px; text-align: center; }
-.admin-usage-dlg .aud-plat-titles { flex: 1 1 auto; font-size: .78rem; color: var(--text-mute, #6b7280);
-  word-break: break-word; }
-/* ── 每条明细的「下载成功与否」标记（2026-10-20）──
-   成功＝下载完成且成品已保存到本机；未完成＝失败/取消/被终止；未上报＝结束时没回报结果。 */
-.admin-usage-dlg .aud-item { display: inline-block; margin: 1px 8px 1px 0; }
-.admin-usage-dlg .aud-res { font-size: .7rem; border-radius: 4px; padding: 0 5px;
-  margin-left: 2px; white-space: nowrap; border: 1px solid transparent; }
+  border-radius: 4px; padding: 1px 6px; text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-usage-dlg .aud-row-title { flex: 1 1 auto; min-width: 0; font-size: .78rem;
+  color: var(--text, #1f2937); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 明细表固定列宽：.admin-table 的 td 是 nowrap，不锁宽会把表格撑到横向滚动，
+   结果标记被推出视口 —— 缩略也就失效了。 */
+.admin-usage-dlg .aud-detail-table { table-layout: fixed; }
+.admin-usage-dlg .aud-detail-table th:nth-child(1) { width: 6.5rem; }
+.admin-usage-dlg .aud-detail-table th:nth-child(2) { width: 4rem; }
+.admin-usage-dlg .aud-detail-table td.aud-items { white-space: normal; overflow: hidden; }
+/* ── 每条记录的「下载成功与否」标记（2026-10-20），固定贴在当行最后 ──
+   已完成＝下载完成且成品已保存到本机；未完成＝失败/取消/被终止；未上报＝结束时没回报结果。 */
+.admin-usage-dlg .aud-res { flex: 0 0 auto; margin-left: 2px; font-size: .7rem;
+  border-radius: 4px; padding: 0 5px; white-space: nowrap; border: 1px solid transparent; }
 .admin-usage-dlg .aud-res.ok { color: #0f7b3f; background: #e7f7ee; border-color: #b7e6c9; }
 .admin-usage-dlg .aud-res.fail { color: #b42318; background: #fdeceb; border-color: #f6c9c4; }
 .admin-usage-dlg .aud-res.unk { color: #6b7280; background: #f3f4f6; border-color: #e5e7eb; }
