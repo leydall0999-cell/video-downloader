@@ -557,7 +557,7 @@ def _report_usage(store, items: list[dict]) -> None:
 
 
 def report_usage_async(store, resource: str, n: int = 1, title: str = "",
-                       platform: str = "") -> None:
+                       platform: str = "", ref: str = "") -> None:
     """membership.use_daily 的上云钩子（fire-and-forget，幂等 id 防重复计）。
 
     离线测试环境（pytest / VDL_OFFLINE_TESTS）直接跳过：后台线程会污染全局
@@ -565,6 +565,10 @@ def report_usage_async(store, resource: str, n: int = 1, title: str = "",
 
     title / platform（2026-10-19）：随用量一起上报「具体做了什么」，
     授权中心按天归档，后台「使用详情」据此显示可定位的明细。
+
+    ref（2026-10-20）：本次用量的唯一标识，直接当云端幂等键 —— 下载结束后
+    `report_usage_result_async` 用同一个键回写成功/失败，云端按 id 找到这条
+    明细把结果补上，不会重复计数。
     """
     import os
     if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
@@ -578,7 +582,7 @@ def report_usage_async(store, resource: str, n: int = 1, title: str = "",
         return
     import threading
     import uuid
-    ev = uuid.uuid4().hex[:16]
+    ev = str(ref or "").strip()[:64] or uuid.uuid4().hex[:16]
     it: dict = {"res": res, "n": n, "id": f"{ev}-{res[:16]}"}
     _t = str(title or "").strip()[:120]
     if _t:
@@ -588,6 +592,33 @@ def report_usage_async(store, resource: str, n: int = 1, title: str = "",
     try:
         threading.Thread(target=_report_usage, args=(store, items),
                          daemon=True, name="vdl-usage-report").start()
+    except Exception:
+        _queue_pending_usages(store, items)
+
+
+def report_usage_result_async(store, resource: str, ref: str, r: int) -> None:
+    """把「这次用量到底有没有成功」回写授权中心（2026-10-20）。
+
+    `n=0` + `r` ⇒ 云端**只更新结果、不加计数**：次数在下单那一刻已经扣过，
+    这里补的是「下载完成并保存到本机」这个事实。断网入队，下次心跳补发。
+    """
+    import os
+    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
+        return
+    res = str(resource or "").strip()[:32]
+    key = str(ref or "").strip()[:64]
+    if not res or not key:
+        return
+    try:
+        rv = 1 if int(r) > 0 else 0
+    except (TypeError, ValueError):
+        rv = 0
+    # 幂等键必须与计数时**完全一致**（计数侧带 `-<res>` 后缀），否则云端找不到那条明细
+    items = [{"res": res, "n": 0, "r": rv, "id": f"{key}-{res[:16]}"}]
+    import threading
+    try:
+        threading.Thread(target=_report_usage, args=(store, items),
+                         daemon=True, name="vdl-usage-result").start()
     except Exception:
         _queue_pending_usages(store, items)
 

@@ -1226,6 +1226,13 @@ run_pytest_root test_admin_cookies_panel.py # 后台 Cookie 池：概览/校验/
 #    ④ 上云钩子必须把标题/平台带进 items（授权中心按天归档 details）。
 run_pytest_root test_usage_details_ledger.py
 
+#  test_usage_result_flag.py —— 每次下载「成功了吗」（2026-10-20 用户要求）
+#    ① 后台「使用详情」要能看见每条是否下载成功；成功＝下载完成、成品存到本机；
+#    ② use_daily 返回 ref 并落到明细；任务终态按 ref 回写 r=1/0（幂等、只报最终态）；
+#    ③ 授权中心 n=0 + r 只更新结果、绝不重复计数，跨天归档后也能补上；
+#    ④ 结果缺失显示「未上报」，绝不把老数据/中断当成功或失败。
+run_pytest_root test_usage_result_flag.py
+
 #  补登此前「写了 run_pytest_root 但函数尚未定义」的两个用例（2026-10-19）：它们在
 #  文件前段曾被调用，实际只打了 command not found，从未进过构建自验证。
 run_pytest_root test_license_base.py # 授权中心 base url：云同步配置/环境变量/兜底优先级

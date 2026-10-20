@@ -1284,7 +1284,16 @@ def _usage_bundle(uid: str, ident: str, disabled: bool, is_admin: bool,
                     at = int(it.get("at") or 0)
                 except (TypeError, ValueError):
                     at = 0
-                items.append({"t": t, "p": str(it.get("p") or "")[:64], "at": at})
+                _row = {"t": t, "p": str(it.get("p") or "")[:64], "at": at}
+                # 2026-10-20：把「这次是否下载成功」透传给面板
+                # （r=1 成功＝下载完成并保存到本机 / r=0 未完成 / 无 r＝未上报）。
+                # 老数据没有 r ⇒ 保持缺省，面板显示灰色「未上报」，不假装成功。
+                if it.get("r") is not None:
+                    try:
+                        _row["r"] = 1 if int(it.get("r") or 0) > 0 else 0
+                    except (TypeError, ValueError):
+                        pass
+                items.append(_row)
             if items:
                 out[str(k)[:32]] = items
         return out

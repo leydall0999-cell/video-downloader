@@ -23410,6 +23410,8 @@ el.dwVidPlayer.hidden = true;
     };
 
     // 明细清洗（2026-10-19）：云端/本机同构 {资源: [{t, p, at}]}；无标题的条目丢掉。
+    // 2026-10-20：r = 1 成功（下载完成并保存到本机）/ 0 未完成 / 缺省＝未上报。
+    // 老数据没有 r，必须保留为「undefined」而不是 0，否则会把历史记录误标成失败。
     const _cleanDetails = (raw) => {
       const out = {};
       if (!raw || typeof raw !== 'object') return out;
@@ -23421,7 +23423,9 @@ el.dwVidPlayer.hidden = true;
           if (!it || typeof it !== 'object') return;
           const t = String(it.t || '').slice(0, 120);
           if (!t) return;
-          items.push({ t, p: String(it.p || ''), at: Number(it.at || 0) });
+          const row = { t, p: String(it.p || ''), at: Number(it.at || 0) };
+          if (it.r === 0 || it.r === 1) row.r = it.r;
+          items.push(row);
         });
         if (items.length) out[String(k)] = items;
       });
@@ -23429,25 +23433,42 @@ el.dwVidPlayer.hidden = true;
     };
 
     // 明细按平台分组的 HTML（2026-10-19）：用户要「按平台分类，不要堆一起」。
-    // 输入 {资源: [{t, p, at}]}，输出每个平台一行的 chips 列表；无明细返回空串。
+    // 输入 {资源: [{t, p, at, r}]}，输出每个平台一行的 chips 列表；无明细返回空串。
+    // 2026-10-20：每个 chip 带「是否下载成功」——
+    //   成功＝下载完成且成品已保存到本机（用户口径），未完成＝失败/取消/被终止，
+    //   未上报＝这次下载结束时没能回报结果（老数据、或后台被硬关掉）。
+    //   同一标题出现多种结果时拆成多个 chip（成功 在前），不合并成一句含糊的话。
     const _usageDetailsByPlatform = (details) => {
       const det = _cleanDetails(details);
-      const byPlatform = {};      // 平台 -> {标题: 次数}
+      const byPlatform = {};      // 平台 -> {标题|状态: {t, st, n}}
+      const _st = (it) => (it.r === 1 ? 'ok' : (it.r === 0 ? 'fail' : 'unk'));
       Object.keys(det).forEach((res) => {
         det[res].forEach((it) => {
           const p = it.p || '未知平台';
           if (!byPlatform[p]) byPlatform[p] = {};
-          byPlatform[p][it.t] = (byPlatform[p][it.t] || 0) + 1;
+          const key = it.t + '\u0000' + _st(it);
+          if (!byPlatform[p][key]) byPlatform[p][key] = { t: it.t, st: _st(it), n: 0 };
+          byPlatform[p][key].n += 1;
         });
       });
+      const _order = { ok: 0, fail: 1, unk: 2 };
       const ps = Object.keys(byPlatform);
       if (!ps.length) return '';
       return ps.map((p) => {
-        const titles = Object.keys(byPlatform[p])
-          .map((t) => esc(t) + (byPlatform[p][t] > 1 ? ' ×' + byPlatform[p][t] : ''))
-          .join('、');
+        const chips = Object.keys(byPlatform[p])
+          .sort((a, b) => _order[byPlatform[p][a].st] - _order[byPlatform[p][b].st])
+          .map((k) => {
+            const e = byPlatform[p][k];
+            const badge = e.st === 'ok'
+              ? '<span class="aud-res ok">✅ 已保存</span>'
+              : (e.st === 'fail'
+                ? '<span class="aud-res fail">❌ 未完成</span>'
+                : '<span class="aud-res unk">未上报</span>');
+            return '<span class="aud-item">' + esc(e.t)
+              + (e.n > 1 ? ' ×' + e.n : '') + ' ' + badge + '</span>';
+          }).join('');
         return '<div class="aud-plat"><span class="aud-plat-name">' + esc(p) + '</span>'
-          + '<span class="aud-plat-titles">' + titles + '</span></div>';
+          + '<span class="aud-plat-titles">' + chips + '</span></div>';
       }).join('');
     };
     const _USAGE_VIA_LABELS = { pay: '购买', grant: '后台赠送', admin: '后台操作', test: '测试', activate: '激活' };
@@ -23648,6 +23669,9 @@ el.dwVidPlayer.hidden = true;
           }
           h += '<div class="admin-empty">这部分消耗记在授权中心（账号级：桌面 App 登录后与网页版共用同一份），'
             + '不写入本机记录，所以不会出现在上面的「本机配额消耗」里。<br>'
+            + '明细里每条后面的标记：<b>✅ 已保存</b>＝这次下载已完成、成品确实存到了用户本机；'
+            + '<b>❌ 未完成</b>＝下载失败 / 用户取消 / 被自动终止；<b>未上报</b>＝任务结束时没能回报结果'
+            + '（升级前的旧记录，或后台被强杀）。<br>'
             + (cuHist.length > 1
               ? '历史保留近一年（' + cuHist.length + ' 天有记录），满一年自动截断。'
               : '历史按天累积，满一年自动截断；归档功能上线之前的日期没有存档，无法补录。')

@@ -409,10 +409,54 @@ def _clean_details(raw: Any) -> dict[str, list[dict[str, Any]]]:
                 at = int(it.get("at") or 0)
             except (TypeError, ValueError):
                 at = 0
-            items.append({"t": t, "p": str(it.get("p") or "")[:64], "at": at})
+            item: dict[str, Any] = {"t": t, "p": str(it.get("p") or "")[:64], "at": at}
+            # 2026-10-20：保留 result 回写所需的两个字段
+            #   id = 该次用量的幂等键（下载结束后按它补结果）
+            #   r  = 1 成功（下载完成并保存到本机）/ 0 未完成 / 缺省＝未上报
+            _id = str(it.get("id") or "")[:64]
+            if _id:
+                item["id"] = _id
+            _r = it.get("r")
+            if _r is not None and _r != "":
+                try:
+                    item["r"] = 1 if int(_r) > 0 else 0
+                except (TypeError, ValueError):
+                    pass
+            items.append(item)
         if items:
             out[res] = items
     return out
+
+
+def _apply_usage_result(user: dict[str, Any], daily: dict[str, Any], res: str,
+                        iid: str, r: Any) -> bool:
+    """把「这次用量是否成功」标到对应明细条目上（2026-10-20）。
+
+    先找当天 `daily.details`，再翻 `usage_history`（下载跨天完成时条目已被归档）。
+    🔴 **不增减任何计数** —— 次数在下单时已经计过，这里只补结果。
+    返回是否命中；没命中（例如结果先到、计数还堵在客户端队列里）就静默放弃。
+    """
+    try:
+        rv = 1 if int(r) > 0 else 0
+    except (TypeError, ValueError):
+        return False
+    try:
+        buckets = [((daily.get("details") or {}).get(res) or [])]
+        for row in (user.get("usage_history") or []):
+            if isinstance(row, dict):
+                det = row.get("details")
+                if isinstance(det, dict):
+                    buckets.append(det.get(res) or [])
+        for lst in buckets:
+            if not isinstance(lst, list):
+                continue
+            for it in lst:
+                if isinstance(it, dict) and str(it.get("id") or "") == iid:
+                    it["r"] = rv
+                    return True
+    except Exception:  # noqa: BLE001 — 结果回写失败不允许影响配额判定
+        pass
+    return False
 
 
 def _archive_daily(user: dict[str, Any], daily: Any) -> None:
@@ -568,23 +612,43 @@ def daily_impl(state: dict[str, Any], token: str, items: Any, now: float,
         try:
             n = int(it.get("n") or 0)
         except (TypeError, ValueError):
-            continue
-        if n <= 0:
+            n = 0
+        # 2026-10-20：带 `r` 的条目是「结果回写」（n=0，只标成功/失败，不计数）
+        _has_r = it.get("r") is not None and it.get("r") != ""
+        if n <= 0 and not _has_r:
             continue
         iid = str(it.get("id") or "").strip()[:64]
         if iid and iid in ids:
-            continue                                   # 幂等：重发只计一次
+            # 幂等：次数重发只计一次；但**允许**把结果补上（正常顺序是先计数、后回写结果）
+            if _has_r:
+                _apply_usage_result(user, daily, res, iid, it.get("r"))
+            continue
+        if n <= 0:
+            # 只有结果、没有计数（异常顺序：结果先到，计数还堵在客户端队列里）
+            if _has_r and iid:
+                _apply_usage_result(user, daily, res, iid, it.get("r"))
+            continue
         counts[res] = int(counts.get(res) or 0) + n
         applied += n
         if iid:
             ids.append(iid)
         # 2026-10-19：顺带记录「具体做了什么」（标题 + 平台），供后台使用详情定位。
         # 无标题的条目直接忽略，不占空间；每条最多 120 字符、每资源最多 50 条。
+        # 2026-10-20：条目带上幂等键 id，下载结束后按它回写「是否成功」。
         _t = str(it.get("t") or "").strip()[:120]
         if _t:
             _det = daily.setdefault("details", {})
             _lst = _det.setdefault(res, [])
-            _lst.append({"t": _t, "p": str(it.get("p") or "").strip()[:64], "at": int(now)})
+            _entry: dict[str, Any] = {"t": _t, "p": str(it.get("p") or "").strip()[:64],
+                                      "at": int(now)}
+            if iid:
+                _entry["id"] = iid
+            if _has_r:
+                try:
+                    _entry["r"] = 1 if int(it.get("r")) > 0 else 0
+                except (TypeError, ValueError):
+                    pass
+            _lst.append(_entry)
             _det[res] = _lst[-50:]
     user["daily"] = daily
     user["usage_ids"] = ids[-500:]

@@ -128,14 +128,14 @@ def test_roll_daily_archives_details() -> None:
 def test_report_hook_carries_title() -> None:
     print("\n[D] 上云钩子把标题/平台带进 items（静态断言产品代码）")
     src = (ROOT / "server" / "routers" / "cloud_account.py").read_text(encoding="utf-8")
-    check("report_usage_async 接受 title/platform",
-          'def report_usage_async(store, resource: str, n: int = 1, title: str = "",\n'
-          '                       platform: str = "") -> None:' in src)
+    check("report_usage_async 接受 title/platform（+2026-10-20 的 ref）",
+          'def report_usage_async(store, resource: str, n: int = 1, title: str = "",' in src
+          and 'platform: str = "", ref: str = "") -> None:' in src)
     check("有标题时才带 t（避免无谓负载）", 'if _t:' in src and 'it["t"] = _t' in src)
     check("平台随 p 一起上报", 'it["p"] = str(platform or "").strip()[:64]' in src)
     m_src = (ROOT / "server" / "membership.py").read_text(encoding="utf-8")
     check("use_daily 把标题透传给上云钩子",
-          "report_usage_async(self, resource, n, title=title, platform=platform)" in m_src)
+          "report_usage_async(self, resource, n, title=title, platform=platform" in m_src)
 
 
 @_strict

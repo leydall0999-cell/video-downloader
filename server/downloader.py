@@ -5335,6 +5335,9 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
             time.sleep(min(2 ** attempt, 30))  # 指数退避，最多 30s
     finally:
         stop.set()
+        # 2026-10-20：终态回写「这次到底下载成功没有」——内部重试的中间失败不报，
+        # 只在整条任务收敛后报一次（成功＝completed 且成品文件真实存在且非空）。
+        _note_usage_result_by_task(task)
 
 def _mark_step_error(task: DownloadTask, detail: str) -> None:
     """根据当前进行中的步骤，把对应步骤标记为失败。"""
@@ -5384,6 +5387,61 @@ def _finalize_terminated(task: DownloadTask, store: TaskStore) -> None:
         )
         if not resumable:
             store.clear_files(task.id)
+    # 2026-10-20：停滞/超时/用户取消都不算「保存到本机」，把失败结果补回账本
+    # （幂等：run_download 的 finally 再报一次也不会写歪）
+    _note_usage_result_by_task(task)
+
+def _usage_result_ok(task: DownloadTask) -> tuple[bool, int]:
+    """任务是否算「下载成功」——用户口径：下载完成且成品真实保存在本机。
+
+    只看 status == completed 不够：成品可能被同时清掉/写空（磁盘满、后处理失败）。
+    这里额外要求文件此刻存在且 > 0 字节，避免把「空文件」误报成成功。
+    """
+    try:
+        if task.status != "completed":
+            return False, 0
+        fp = getattr(task, "filepath", None)
+        if not fp:
+            return False, 0
+        p = Path(fp)
+        if not p.exists():
+            return False, 0
+        sz = p.stat().st_size
+        return (sz > 0), (sz if sz > 0 else 0)
+    except OSError:
+        return False, 0
+
+
+def _note_usage_result(task: DownloadTask, ok: bool, size: int = 0) -> None:
+    """把「这次下载到底有没有成功」回写到用量账本（2026-10-20）。
+
+    为什么需要：配额是**下单时**就扣的（那时还不知道能不能下成），所以后台
+    「使用详情」原先只能看到「下载任务 3」，分不清「下了 3 个都成功」还是
+    「点了 3 次全失败」。这里在任务终态把结果按 ref 补回去，管理员就能看到
+    每条的真实成败（成功标准＝下载完成、文件已保存到本机）。
+
+    幂等：同一任务只报一次（内部重试的中间失败不报，只报最终终态）。
+    绝不抛异常 —— 记账问题不能影响下载本身。
+    """
+    if getattr(task, "_usage_reported", False):
+        return
+    ref = str(getattr(task, "usage_ref", "") or "")
+    store = getattr(task, "_usage_store", None)
+    if not ref or store is None:
+        return
+    task._usage_reported = True
+    try:
+        store.mark_usage_result(ref, bool(ok), resource="download",
+                                size=int(size or 0))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _note_usage_result_by_task(task: DownloadTask) -> None:
+    """按任务终态自动判定成功/失败并回写（终态兜底用）。"""
+    ok, sz = _usage_result_ok(task)
+    _note_usage_result(task, ok, sz)
+
 
 def _format_bytes(n: int) -> str:
     if n < 1024:
@@ -5779,11 +5837,13 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
         store.update(task.id, status="failed", error="海外节点不可用",
                      hint="未配置海外节点（VDL_PEER_ENDPOINT），无法下载海外视频",
                      category="network")
+        _note_usage_result(task, False)   # 2026-10-20：失败结果补回账本
         return
 
     def _fail(err: str, hint: str) -> None:
         store.update(task.id, status="failed", error=err, hint=_clean_message(hint)[:300],
                      category="network")
+        _note_usage_result(task, False)   # 2026-10-20：失败结果补回账本
 
     task.add_step("提交到海外节点", "running", peer)
     try:
@@ -5998,6 +6058,8 @@ def run_remote_download(task: DownloadTask, store: TaskStore, quality_key: str =
     task.log("海外节点下载完成：%s" % out.name)
     store.update(task.id, status="completed", progress=100.0, filepath=out,
                  filename=out.name, filesize=out.stat().st_size, speed=0.0, eta=0)
+    # 2026-10-20：海外回传落盘成功 = 这次下载真的成功（成品已在本机）
+    _note_usage_result_by_task(task)
 
 
 def _run_extraction(task: DownloadTask, store: TaskStore, output: Path, info: dict[str, Any],
