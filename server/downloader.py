@@ -2474,6 +2474,9 @@ def _douyin_info(url: str) -> dict[str, Any]:
         "requested_formats": list(formats),
         "formats": formats,
         "http_headers": dict(headers),
+        # 分离轨专用：_detect_play_url 会把纯视频轨挑成 play_url，前端若要做浏览器内
+        # 双轨合并（网页版零成本直连保存）必须同时拿到音频轨 ⇒ 单独透出，不进 formats。
+        "_audio_url": audio_url,
     }
 
 
@@ -6333,6 +6336,7 @@ def summarize(info: dict[str, Any]) -> dict[str, Any]:
         "extractor": info.get("extractor_key") or "",
         "direct_url": _detect_direct_url(info),
         "play_url": play_url,
+        "audio_play_url": info.get("_audio_url") or "",
         "is_hls": is_hls,
         "is_live": bool(info.get("is_live")),
         "watch_options": build_watch_options(info),

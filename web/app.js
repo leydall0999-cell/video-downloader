@@ -1485,14 +1485,16 @@
   //                       CORS *、Range ✅、单流 1.5MB/s                  ⇒ fetch 可直连
   //   微博 weibocdn.com   无 Referer 才放行、CORS 未开（fetch 读不到 body）、
   //                       Range ✅、单流 2.2MB/s                          ⇒ 只能新标签导航+用户手动存
-  //   抖音 douyinvod.com  「拒绝错误 Referer，但不拒绝空 Referer」——网页 fetch 默认带
-  //                       本页 Referer ⇒ 403；referrerPolicy:'no-referrer' ⇒ 200
-  //                       （4 条真实直链实测：空 Referer 206 / douyin Referer 206 / 错 403）。
-  //                       ⚠️ 但抖音 PC 网页给的是**分离轨**：media-video-avc1 纯视频 +
-  //                       media-audio 纯音频（2026-10-21 ffprobe 实测：视频轨 stream=0,h264,
-  //                       1280x720，无音轨）⇒ 单轨直连保存 = 无声残废文件，必须排除，
-  //                       交既有链路（节点下载双轨 + ffmpeg 合并）。混合轨 URL 若出现
-  //                       （历史 v*-web 形态）由下面的域名规则接住。
+  //   抖音 douyinvod.com  ⚠️ 策略**按 CDN host、甚至按轨道**不一致（2026-10-21 实测矩阵）：
+  //                       v95-web-sz：视频 & 音频空 Referer 都 206
+  //                       v11-weba  ：视频空 Referer 206，音频空 Referer 403
+  //                       v26-web   ：视频空 Referer 403，带 douyin Referer 才 200
+  //                       ⇒ 带 Referer 一律 200，空 Referer 看运气。浏览器 fetch 禁设
+  //                       Referer，所以「零成本直连」在抖音只能尽力而为：命中则省带宽，
+  //                       403 就静默回退节点链路（绝不把失误暴露给用户）。
+  //                       抖音 PC 网页给的是**分离轨**：media-video-avc1 纯视频 +
+  //                       media-audio 纯音频（ffprobe 实测视频轨 stream=0,h264,1280x720，
+  //                       无音轨）⇒ 直连必须双轨合并，见 saveFromTwoTracks。
   //   B站 upos            Referer 防盗链 + DASH 音视频分离                 ⇒ 不可用
   //   （附）2026-10-21 spike 实测 MV3 declarativeNetRequest 能改 referer/cookie/
   //   origin/UA（B站 403→200 已闭环验证），但 DNR 只存在于浏览器扩展，桌面端没有
@@ -1502,12 +1504,16 @@
   const SRC_DIRECT_NAV_HOSTS = ['weibocdn.com', 'video.weibo.com'];
   const SRC_DIRECT_EXTS = ['mp4', 'm4a', 'mp3', 'flac', 'wav', 'mov', 'm4v'];
 
-  /** 判断 play_url 能否被浏览器直连下载：'fetch'（可分段拉）| 'nav'（只能新标签打开）| ''（不可用）。 */
-  function srcDirectKind(url, isHls) {
+  /** 判断 play_url 能否被浏览器直连下载：'fetch'（可分段拉）| 'tracks'（双轨合并）| 'nav'（只能新标签打开）| ''（不可用）。 */
+  function srcDirectKind(url, isHls, audioUrl) {
     if (!url || !/^https?:\/\//i.test(url) || isHls) return '';
-    // 分离单轨（抖音 media-video-avc1 / media-audio-und-mp4a）是纯视频或纯音频，
-    // 直连保存只会拿到无声/无画文件 ⇒ 一律不当完整视频保存，交回既有链路合并。
-    if (/media-(video|audio)/i.test(url)) return '';
+    // 抖音分离轨（media-video-avc1 纯视频 / media-audio 纯音频）：play_url 只是视频轨，
+    // 直接拉会得到无声文件。若同时拿到配套音频轨 ⇒ 'tracks'（浏览器内合并，不重编码）；
+    // 拿不到音频轨就一律不直连，交回既有链路（节点下载双轨 + ffmpeg 合并）。
+    if (/media-(video|audio)/i.test(url)) {
+      const audioOk = audioUrl && /^https?:\/\//i.test(audioUrl) && /media-audio/i.test(audioUrl);
+      return (/media-video/i.test(url) && audioOk) ? 'tracks' : '';
+    }
     let host = '';
     try { host = new URL(url).hostname.toLowerCase(); } catch (_) { return ''; }
     // 抖音混合轨（v26-web 等）直链路径没有 .mp4 后缀（…/video/tos/cn/x/?a=6383&ch=26），
@@ -1617,6 +1623,122 @@
     }
   }
 
+  // —— 抖音分离轨：浏览器内双轨合并保存（2026-10-21）——
+  // 抖音 PC 网页只给「纯视频轨 + 纯音频轨」（ffprobe 实测视频轨 stream=0,h264,1280x720、无音轨）。
+  // 两条轨都能被浏览器直连拉取（referrerPolicy:'no-referrer' 放行、CORS `*`、Range OK），
+  // 所以在这里各自拉下来，用 mp4box.js 解复用 + mp4-muxer 重新封装（编码块直通、不重编码、
+  // 画质无损），合成一个完整 mp4 再落盘 —— 全程不经过部署节点，带宽与算力成本都是 0。
+  // 任何一步不满足（库加载失败 / 超内存上限 / 格式不认识）一律 UNSUPPORTED，回退既有链路。
+  const SRC_TRACKS_MAX_BYTES = 200 * 1024 * 1024;   // 内存上限：v+a+产物 ≈ 2.2 倍
+  let _remuxLibs = null;
+
+  /** 懒加载合并所需脚本（首次用到才拉，首页零额外开销）。 */
+  function loadRemuxLibs() {
+    if (_remuxLibs) return _remuxLibs;
+    const files = ['js/vendor_mp4box.min.js', 'js/vendor_mp4muxer.min.js', 'js/video-remux.js'];
+    _remuxLibs = files.reduce((chain, src) => chain.then(() => new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => res();
+      s.onerror = () => rej(new Error('加载失败：' + src));
+      document.head.appendChild(s);
+    })), Promise.resolve()).then(() => {
+      if (!window.VDLRemux || !window.VDLRemux.ready()) throw new Error('合并模块未就绪');
+      return window.VDLRemux;
+    });
+    // 失败要允许重试：把缓存的 promise 清掉，否则一次网络抖动就永久不可用
+    _remuxLibs.catch(() => { _remuxLibs = null; });
+    return _remuxLibs;
+  }
+
+  /** 流式读一条轨的完整字节（带进度回调，失败抛错由调用方回退）。 */
+  async function fetchTrackBytes(url, onBytes, signal) {
+    const r = await fetch(url, {
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      cache: 'no-store',
+      signal: signal,
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.body || !r.body.getReader) {
+      const buf = new Uint8Array(await r.arrayBuffer());
+      onBytes(buf.length);
+      return buf;
+    }
+    const reader = r.body.getReader();
+    const chunks = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || !value.length) continue;
+      chunks.push(value);
+      got += value.length;
+      onBytes(got);
+    }
+    const out = new Uint8Array(got);
+    let p = 0;
+    for (let i = 0; i < chunks.length; i++) { out.set(chunks[i], p); p += chunks[i].length; }
+    return out;
+  }
+
+  /** 抖音双轨保存：探测 → 双轨并发拉取 → 浏览器内合并 → 落盘。 */
+  async function saveFromTwoTracks(videoUrl, audioUrl, filename, hooks) {
+    const onProgress = (hooks && hooks.onProgress) || function () {};
+    const head = { Range: 'bytes=0-0' };
+    const base = { headers: head, credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' };
+    let vsize = 0, asize = 0;
+    try {
+      // 1 字节 Range 探测：同时验证防盗链、Range 支持与总大小（省得拉到一半才发现超限）
+      const rv = await fetch(videoUrl, base);
+      if (rv.status !== 206) return 'UNSUPPORTED';
+      const mv = /\/(\d+)\s*$/.exec(rv.headers.get('Content-Range') || '');
+      vsize = mv ? parseInt(mv[1], 10) : 0;
+      const ra = await fetch(audioUrl, base);
+      if (ra.status !== 206) return 'UNSUPPORTED';
+      const ma = /\/(\d+)\s*$/.exec(ra.headers.get('Content-Range') || '');
+      asize = ma ? parseInt(ma[1], 10) : 0;
+    } catch (_) { return 'UNSUPPORTED'; }
+    const total = vsize + asize;
+    if (!vsize || !asize || total > SRC_TRACKS_MAX_BYTES) return 'UNSUPPORTED';
+
+    let Remux;
+    try { Remux = await loadRemuxLibs(); } catch (_) { return 'UNSUPPORTED'; }
+
+    let vBytes, aBytes;
+    try {
+      let vGot = 0, aGot = 0;
+      const tick = (delta) => onProgress(Math.min(vGot + aGot, total), total);
+      [vBytes, aBytes] = await Promise.all([
+        fetchTrackBytes(videoUrl, (n) => { vGot = n; tick(); }),
+        fetchTrackBytes(audioUrl, (n) => { aGot = n; tick(); }),
+      ]);
+    } catch (_) { return 'UNSUPPORTED'; }
+
+    let res;
+    try { res = await Remux.remux(vBytes, aBytes); } catch (_) { return 'UNSUPPORTED'; }
+    if (!res || !res.blob || res.blob.size < 1024) return 'UNSUPPORTED';
+
+    const name = filename || 'download';
+    if (typeof window.showSaveFilePicker === 'function') {
+      let handle = null;
+      try {
+        handle = await window.showSaveFilePicker({ suggestedName: name });
+      } catch (err) {
+        if (err && err.name === 'AbortError') return 'CANCELLED';
+        handle = null;
+      }
+      if (handle) {
+        const writable = await handle.createWritable();
+        await writable.write(res.blob);
+        await writable.close();
+        return 'OK';
+      }
+    }
+    triggerBlobDownload(res.blob, name);
+    return 'OK';
+  }
+
   /** Blob → a.download 落盘（小文件直链专用）。 */
   function triggerBlobDownload(blob, filename) {
     const a = document.createElement('a');
@@ -1667,7 +1789,7 @@
       //    不按量付费。抖音目前解析产出是**分离单轨**（视频轨无音轨，ffprobe 实测），
       //    直连会存成无声文件 ⇒ 由 srcDirectKind 的单轨闸门挡掉，走下面的既有链路合并。
       //    直链带时效，过期/被拒同样回退。
-      const srcKind = srcDirectKind(task.play_url || '', task.is_hls);
+      const srcKind = srcDirectKind(task.play_url || '', task.is_hls, task.audio_play_url || '');
       if (srcKind === 'nav') {
         // 微博：CORS 未开，fetch 读不到 body ⇒ 新标签打开原视频，用户右键/长按保存
         navSaveFromSource(task.play_url);
@@ -1678,32 +1800,34 @@
         }
         return;
       }
-      if (srcKind === 'fetch' && userGesture) {
+      if ((srcKind === 'fetch' || srcKind === 'tracks') && userGesture) {
         const t0 = Date.now();
+        const isTracks = srcKind === 'tracks';
         let lastPaint = 0;
         btn.textContent = '准备下载…';
         try {
           if (refs.saveHint) {
             refs.saveHint.hidden = false;
-            refs.saveHint.textContent = '正在从源站直连下载（不经过服务器，速度取决于你的网络）…';
+            refs.saveHint.textContent = isTracks
+              ? '正在从源站拉取音视频双轨并在本机合并（不经过服务器，速度取决于你的网络）…'
+              : '正在从源站直连下载（不经过服务器，速度取决于你的网络）…';
           }
-          const ret = await concurrentSaveFromSource(
-            task.play_url,
-            task.filename || btn.dataset.saveName || 'download',
-            {
-              onProgress: (done, totalBytes) => {
-                const now = Date.now();
-                const finished = totalBytes > 0 && done >= totalBytes;
-                if (!finished && now - lastPaint < 250) return;
-                lastPaint = now;
-                const pct = totalBytes ? Math.floor(done * 100 / totalBytes) : 0;
-                const sec = Math.max(0.001, (now - t0) / 1000);
-                btn.textContent = `下载中 ${pct}% · ${fmtSegBytes(done / sec)}/s`;
-                if (refs.saveHint) {
-                  refs.saveHint.textContent = `${fmtSegBytes(done)} / ${fmtSegBytes(totalBytes)} · 源站直连`;
-                }
-              },
-            });
+          const saveName = task.filename || btn.dataset.saveName || 'download';
+          const onProg = (done, totalBytes) => {
+            const now = Date.now();
+            const finished = totalBytes > 0 && done >= totalBytes;
+            if (!finished && now - lastPaint < 250) return;
+            lastPaint = now;
+            const pct = totalBytes ? Math.floor(done * 100 / totalBytes) : 0;
+            const sec = Math.max(0.001, (now - t0) / 1000);
+            btn.textContent = `下载中 ${pct}% · ${fmtSegBytes(done / sec)}/s`;
+            if (refs.saveHint) {
+              refs.saveHint.textContent = `${fmtSegBytes(done)} / ${fmtSegBytes(totalBytes)} · ${isTracks ? '源站双轨合并中' : '源站直连'}`;
+            }
+          };
+          const ret = isTracks
+            ? await saveFromTwoTracks(task.play_url, task.audio_play_url, saveName, { onProgress: onProg })
+            : await concurrentSaveFromSource(task.play_url, saveName, { onProgress: onProg });
           if (ret === 'OK') {
             btn.textContent = '已保存 ✅';
             if (refs.saveHint) refs.saveHint.textContent = '✅ 已保存到所选位置（源站直连，未占用服务器）';
@@ -4306,6 +4430,7 @@
           concurrent_fragments: el.concurrentInput.value ? parseInt(el.concurrentInput.value, 10) || 0 : 0,
           downloader: el.downloaderSelect ? el.downloaderSelect.value || 'native' : 'native',
           play_url: resolved?.video?.play_url || '',
+          audio_play_url: resolved?.video?.audio_play_url || '',
           watch_options: resolved?.video?.watch_options || [],
           is_hls: !!resolved?.video?.is_hls,
         }),

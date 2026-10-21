@@ -2190,6 +2190,8 @@ class DownloadRequest(BaseModel):
     downloader: str = Field(default="native", max_length=16)
     # 在线观看：前端从解析结果传入，存入任务后任务面板可直接打开观看
     play_url: str = Field(default="", max_length=2048)
+    # 分离轨（抖音）配套的纯音频轨直链：网页版据此在浏览器内双轨合并保存（零服务端带宽）
+    audio_play_url: str = Field(default="", max_length=2048)
     watch_options: list[dict] = Field(default_factory=list)
     is_hls: bool = False
 

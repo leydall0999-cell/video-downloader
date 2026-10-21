@@ -98,10 +98,28 @@ ok('抖音混合轨（v26-web，路径无 .mp4 后缀）→ fetch',
   srcDirectKind('https://v26-web.douyinvod.com/a837/video/tos/cn/x/?a=6383&ch=26', false) === 'fetch');
 ok('抖音混合轨（无后缀且无 query）→ fetch',
   srcDirectKind('https://v26-web.douyinvod.com/a837/video/tos/cn/x/', false) === 'fetch');
-ok('抖音分离视频轨 media-video-avc1 → 空（单轨无声，禁止直连）',
+ok('抖音分离视频轨 media-video-avc1 单独 → 空（单轨无声，禁止直连）',
   srcDirectKind('https://v95-web-sz.douyinvod.com/9447fe5/6ad98/video/tos/cn/tos-cn-vd-0026/x/media-video-avc1/?a=2558&mime_type=video_mp4', false) === '');
 ok('抖音分离音频轨 media-audio-und-mp4a → 空（单轨无画，禁止直连）',
   srcDirectKind('https://v95-web-sz.douyinvod.com/da5a4b3/6ad98/video/tos/cn/tos-cn-ve-15/x/media-audio-und-mp4a/?a=2558', false) === '');
+
+// —— 抖音「双轨合并」新分支（2026-10-21）：视频轨 + 配套音频轨 ⇒ tracks ——
+const DY_V = 'https://v95-web-sz.douyinvod.com/9447fe5/6ad98/video/tos/cn/tos-cn-vd-0026/x/media-video-avc1/?a=2558';
+const DY_A = 'https://v95-web-sz.douyinvod.com/da5a4b3/6ad98/video/tos/cn/tos-cn-ve-15/x/media-audio-und-mp4a/?a=2558';
+ok('抖音视频轨 + 配套音频轨 → tracks（浏览器内合并）',
+  srcDirectKind(DY_V, false, DY_A) === 'tracks');
+ok('抖音视频轨 + 缺音频轨 → 空（回退节点合并，绝不存无声文件）',
+  srcDirectKind(DY_V, false, '') === '' && srcDirectKind(DY_V, false) === '');
+ok('抖音视频轨 + 音频 URL 实为另一条视频轨 → 空（防配错轨）',
+  srcDirectKind(DY_V, false, DY_V) === '');
+ok('抖音音频轨当 play_url（即使给了音频轨）→ 空',
+  srcDirectKind(DY_A, false, DY_A) === '');
+ok('抖音双轨 + is_hls=true → 空',
+  srcDirectKind(DY_V, true, DY_A) === '');
+ok('抖音双轨 + 音频 URL 非 http → 空',
+  srcDirectKind(DY_V, false, 'javascript:alert(1)') === '');
+ok('快手带音频参数不影响原判定（非分离轨站点）',
+  srcDirectKind('https://v23-3.kwaicdn.com/a/b.mp4', false, DY_A) === 'fetch');
 ok('抖音相似域名不误放行（douyinvod.com.attacker.com）',
   srcDirectKind('https://douyinvod.com.attacker.com/a/b', false) === '');
 ok('抖音 HLS（is_hls=true）→ 空',
@@ -250,6 +268,20 @@ console.log('=== 2. concurrentSaveFromSource 失败回退 ===');
   });
   ok('每段写到正确偏移', offsetsOk);
   ok('写盘总量 = 文件大小', totalWritten === TOTAL, `实际 ${totalWritten}`);
+
+  // —— 第 3 组：抖音双轨接线守卫（字段/调用链被改断就会静默退化成「存无声文件」）——
+  console.log('=== 3. 抖音双轨接线 ===');
+  ok('srcDirectKind 调用点传入了 audio_play_url',
+    /srcDirectKind\(task\.play_url \|\| '', task\.is_hls, task\.audio_play_url \|\| ''\)/.test(SRC));
+  ok('下载请求体带上 audio_play_url',
+    /audio_play_url: resolved\?\.video\?\.audio_play_url \|\| ''/.test(SRC));
+  ok('tracks 分支调用 saveFromTwoTracks（不是单轨 concurrentSaveFromSource）',
+    /saveFromTwoTracks\(task\.play_url, task\.audio_play_url/.test(SRC));
+  ok('合并所需的三个脚本都在懒加载列表里',
+    /js\/vendor_mp4box\.min\.js/.test(SRC) && /js\/vendor_mp4muxer\.min\.js/.test(SRC) && /js\/video-remux\.js/.test(SRC));
+  ok('合并模块与两个 vendor 库确实存在',
+    ['js/vendor_mp4box.min.js', 'js/vendor_mp4muxer.min.js', 'js/video-remux.js']
+      .every((f) => fs.existsSync(path.join(__dirname, '..', f)) && fs.statSync(path.join(__dirname, '..', f)).size > 1000));
 
   console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
   process.exit(fail ? 1 : 0);

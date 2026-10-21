@@ -39,7 +39,7 @@ _PERSIST_FIELDS = (
     "progress", "downloaded_bytes", "total_bytes", "filename", "filesize",
     "error", "hint", "created_at", "extract_mode",
     "concurrent_fragments", "downloader_type", "cookie", "proxy",
-    "source_url", "play_url", "watch_options", "is_hls", "resumable",
+    "source_url", "play_url", "audio_play_url", "watch_options", "is_hls", "resumable",
     "file_expired",
 )
 
@@ -108,6 +108,9 @@ class DownloadTask:
     cancel_reason: str = ""
     # 在线观看：解析时提取的播放地址与清晰度列表，存入任务后前端可在任务面板直接打开观看
     play_url: str = ""
+    # 分离轨平台（抖音）：play_url 只是纯视频轨，这里存配套的纯音频轨直链。
+    # 网页版拿到两条轨后可在浏览器内直接合并保存（零服务端带宽）；为空表示无分离轨。
+    audio_play_url: str = ""
     watch_options: list[dict] = field(default_factory=list)
     is_hls: bool = False
     # 过程展示：结构化步骤 + 文本日志
@@ -178,6 +181,7 @@ class DownloadTask:
             "resumable": self.resumable,
             "file_expired": self.file_expired,
             "play_url": self.play_url,
+            "audio_play_url": self.audio_play_url,
             "watch_options": self.watch_options,
             "is_hls": self.is_hls,
             "steps": self.steps,
@@ -280,6 +284,7 @@ class TaskStore:
                 cookie=str(row.get("cookie") or ""), proxy=str(row.get("proxy") or ""),
                 source_url=str(row.get("source_url") or ""),
                 play_url=str(row.get("play_url") or ""),
+                audio_play_url=str(row.get("audio_play_url") or ""),
                 watch_options=list(row.get("watch_options") or []),
                 is_hls=bool(row.get("is_hls")), workdir=workdir, filepath=fp,
             )
@@ -315,7 +320,7 @@ class TaskStore:
                 quality_key: str = "best", extract_mode: str = "",
                 concurrent_fragments: int = 0, downloader_type: str = "",
                 cookie: str = "", proxy: str = "",
-                play_url: str = "", watch_options: list[dict] | None = None,
+                play_url: str = "", audio_play_url: str = "", watch_options: list[dict] | None = None,
                 is_hls: bool = False, device_id: str = "") -> DownloadTask:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
@@ -325,7 +330,7 @@ class TaskStore:
             quality_key=quality_key, workdir=workdir, extract_mode=extract_mode,
             concurrent_fragments=concurrent_fragments, downloader_type=downloader_type,
             cookie=cookie, proxy=proxy,
-            play_url=play_url, watch_options=watch_options or [], is_hls=is_hls,
+            play_url=play_url, audio_play_url=audio_play_url, watch_options=watch_options or [], is_hls=is_hls,
             device_id=device_id,
         )
         with self._lock:

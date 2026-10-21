@@ -667,7 +667,7 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
         raise app.HTTPException(status_code=400, detail='不支持的清晰度选项')
     extract_mode = _valid_extract_mode(payload.extract_script)
     gate = _member_quota_gate(request, need=1)
-    task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, device_id=_device_of(request))
+    task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=payload.cookie, proxy=payload.proxy, play_url=payload.play_url, audio_play_url=payload.audio_play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, device_id=_device_of(request))
     app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     # V1：任务成功创建才计费（预检在 store.create 之前，计数在其之后）
     # 2026-10-19：带标题与平台，后台「使用详情」显示「下载了什么」。
