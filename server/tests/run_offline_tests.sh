@@ -100,6 +100,7 @@ run_one test_cookie_probe_static.py        # Cookie 验真·静态兜底：探�
 run_one test_cookie_probe_douyin_kuaishou.py  # Cookie 验真·真探针：抖音 profile_self(免签名) + 快手 GraphQL visionProfile(免签名) 的 31 项判据，含 passToken 交叉验证与离线反向约束
 run_one test_cookie_verify_inherit.py      # Cookie 池「未校验」治理：同会话新快照继承已校验结论、换会话/游客不继承、www. 注入 key 归一（2026-10-21 线上小红书/YouTube 各 3 份全挂未校验）
 run_one test_cookie_share_host_map.py      # 分享域/极速版域→主站登录域：chenzhongtech→kuaishou、iesdouyin→douyin、b23.tv→bilibili，含「主站不得被误映射」与 B站 CDN 回归（2026-10-21 极速版只带 did/didv）
+run_one test_cookie_verify_cooldown.py     # 联网验真冷却：全量 6h/手动 10min 内不重复打平台（云端机房 IP 高频探同一 session 会被风控踢下线，2026-10-21 快手）
 run_one test_upload_body_limit.py
 run_one test_reconvert_source_reuse.py      # 免重传重转：finish 留源 2h / reconvert 复用 / 设备隔离 / 410 回退 / TTL 清理（2026-09-29）
 run_one test_feature_auth_gate.py           # 功能级登录门禁（服务端）：18 个执行类端点未登录 403+引导登录、带 token 放行（2026-09-29）

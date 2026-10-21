@@ -219,6 +219,11 @@ _IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
 _SESSION_FIELDS: dict[str, tuple[str, ...]] = {
     "bilibili.com": ("SESSDATA", "bili_jct"),
     "youtube.com": ("SAPISID", "SSID"),
+    # 快手/抖音：passToken、sessionid 变了才算「重新登录」，否则只是同一会话的
+    # 新快照（ktrace-context 之类的易变字段每次同步都不同，不能当会话标识）。
+    # 验真冷却按这个 key 算：同会话 6 小时只打一次，重新登录立刻放行。
+    "kuaishou.com": ("passToken",),
+    "douyin.com": ("sessionid", "sessionid_ss"),
 }
 
 _MAX_PER_IDENTITY = 3   # 同一账号最多留几条快照

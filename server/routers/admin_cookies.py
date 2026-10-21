@@ -61,10 +61,19 @@ from routers.admin import require_admin
 
 router = APIRouter()
 
-# 验真结果缓存：站点结论变化不快，没必要每次开页面都打一遍。
-# 30 分钟与 Cookie 池自动推送同节奏，够新鲜也不会把平台打到风控。
-_VERIFY_TTL = 30 * 60
+# 验真结果「新鲜期」：跟联网冷却对齐（6 小时）。以前是 30 分钟，但云端校验
+# 会从机房 IP 打扰用户的家宽会话，频率必须降下来——结论继续展示，只是不重打。
+_VERIFY_TTL = 6 * 3600
 _MAX_WORKERS = 6            # 并发探针数：再高容易触发平台风控（B 站 412）
+
+# 🔴🔴 联网验真的最短间隔（2026-10-21 快手事故倒逼）：
+# 云端是**机房 IP**，用户的登录 session 却在家宽浏览器里活着。同一份 session
+# 在「家宽 + 机房」两个 IP 之间高频交替，平台风控会直接作废会话（快手实测：
+# 后台每 5~10 分钟自动全量校验一批，10:22 还能打开自己主页，19:00 已回
+# 「sid 不合法」）。结果就是死循环：用户重新登录 → 后台校验 → 被踢 → 显示无效。
+# 结论：同一份 Cookie 6 小时内只联网验一次，手动点校验也至少隔 10 分钟。
+_VERIFY_MIN_INTERVAL = 6 * 3600      # 自动/全量校验
+_VERIFY_MANUAL_INTERVAL = 10 * 60    # 手动点「校验」
 _STALE_SEC = 7 * 24 * 3600  # 超过 7 天没更新 ⇒ 标「陈旧」，提醒补注入
 
 _VERIFY_LOCK = threading.Lock()
@@ -809,8 +818,12 @@ def _overview() -> dict:
     }
 
 
-def _do_verify(only_domain: str = "") -> dict:
-    """真联网验真（全量或指定域），结果写缓存。"""
+def _do_verify(only_domain: str = "", *, force: bool = False) -> dict:
+    """真联网验真（全量或指定域），结果写缓存。
+
+    `force=True` 跳过冷却（运营明确要求「现在就重新验一次」时用）。默认不强制：
+    云端从机房 IP 反复探同一会话会被平台风控当作盗号，直接作废会话。
+    """
     now = time.time()
     targets = _collect_targets(now)
     if only_domain:
@@ -819,6 +832,28 @@ def _do_verify(only_domain: str = "") -> dict:
 
     cache_items = dict((_load_cache().get("items") or {}))
     started = time.time()
+
+    # 冷却：结论还新鲜就别再打平台（见 _VERIFY_MIN_INTERVAL 注释）。
+    # 🔴 按「会话」(sk) 而不是 entry_id 算：一次登录会被同步成很多份快照，
+    # 每份的 eid 都不同（ktrace-context 之类每次都变），按 eid 算等于没冷却。
+    # 会话变了（重新登录 ⇒ passToken/sessionid 变）⇒ 新 sk ⇒ 立刻放行。
+    sk_ts: dict[str, int] = {}
+    for _v in cache_items.values():
+        if isinstance(_v, dict) and _v.get("sk"):
+            _sk = str(_v["sk"])
+            sk_ts[_sk] = max(sk_ts.get(_sk, 0), int(_v.get("ts") or 0))
+    interval = _VERIFY_MANUAL_INTERVAL if only_domain else _VERIFY_MIN_INTERVAL
+    pending: list[tuple[str, list[str], str]] = []
+    skipped = 0
+    for t in targets:
+        sk = _session_key_safe(t[0], t[2])
+        pts = max(sk_ts.get(sk, 0),
+                  int((cache_items.get(f"{t[0]}|{t[1][0]}") or {}).get("ts") or 0))
+        if not force and pts and (now - pts) < interval:
+            skipped += 1
+            continue
+        pending.append(t)
+    targets = pending
 
     def _run(t: tuple[str, list[str], str]) -> list[tuple[str, dict]]:
         domain, eids, header = t
@@ -829,6 +864,8 @@ def _do_verify(only_domain: str = "") -> dict:
                    "probe": _PROBE_NET}
         res = dict(res)
         res["ts"] = int(now)
+        # 记下会话指纹，下一轮冷却才能按会话命中（而不是按易变的 eid）
+        res["sk"] = _session_key_safe(domain, header)
         # 同一会话的每一份快照都写同一个结论：页面按最新一份展示也能命中
         return [(f"{domain}|{eid}", res) for eid in eids]
 
@@ -851,6 +888,7 @@ def _do_verify(only_domain: str = "") -> dict:
     return {
         "ok": True,
         "checked": len(targets),
+        "skipped": skipped,     # 因冷却跳过（结论仍用缓存，不是失败）
         "elapsed": round(time.time() - started, 1),
         **counted,
     }
@@ -1059,18 +1097,21 @@ def admin_cookies_verify(payload: dict[str, Any] = Body(default={}),
     require_admin(request)
     want = _pick_source(request)
     domain = str((payload or {}).get("domain") or "").strip()
+    # force：运营明确要求「现在就重验」。默认走冷却（6h/10min），
+    # 因为云端机房 IP 反复探同一会话会被平台判盗号并作废。
+    force = bool((payload or {}).get("force"))
 
     if want in ("auto", "cloud"):
         url, tok = _cloud_cfg()
         if url and tok:
             try:
-                r = _cloud_call("verify", {"domain": domain}, timeout=120)
+                r = _cloud_call("verify", {"domain": domain, "force": force}, timeout=120)
                 r["source"] = "cloud"
                 return r
             except Exception as e:
                 if want == "cloud":
                     return {"ok": False, "error": f"云端校验失败：{e}"}
-    r = _do_verify(domain)
+    r = _do_verify(domain, force=force)
     r["source"] = "local"
     return r
 
@@ -1142,7 +1183,8 @@ def cookie_pool_admin(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if action == "overview":
         return _overview()
     if action == "verify":
-        return _do_verify(str((payload or {}).get("domain") or "").strip())
+        return _do_verify(str((payload or {}).get("domain") or "").strip(),
+                          force=bool((payload or {}).get("force")))
     if action == "inject":
         return _do_inject(str((payload or {}).get("domain") or "").strip(),
                           (payload or {}).get("header"))

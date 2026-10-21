@@ -197,7 +197,7 @@ def test_verify_overrides_inherited() -> None:
 
         A._probe = lambda d, h: {"status": "valid", "detail": "站点确认已登录",  # type: ignore[assignment]
                                  "probe": A._PROBE_NET}
-        r = A._do_verify("bilibili.com")
+        r = A._do_verify("bilibili.com", force=True)
         check("校验真的打了 1 个会话", r.get("checked") == 1, r)
         now2 = time.time()
         after = A._read_domain("bilibili.com", now2, A._load_cache()["items"])["items"][0]
