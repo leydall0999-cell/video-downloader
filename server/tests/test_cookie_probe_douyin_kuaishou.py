@@ -134,6 +134,11 @@ def _ks(result, profile=None, http=200):
 
 def test_douyin() -> None:
     print("[1] 抖音：profile_self 的判据")
+    # 🔴 URL 契约：`aid=6383` 必带。2026-10-21 线上事实——同一份真实登录中的
+    # Cookie，裸 URL / 只带 device_platform 一律回 status_code=8「用户未登录」，
+    # 加上 aid 才回 status_code=0 + user。缺了它整个抖音面板会集体假阴性成「无效」。
+    check("探针 URL 带 aid=6383（缺了会全员假阴性）",
+          "aid=6383" in A._DY_PROFILE_SELF, A._DY_PROFILE_SELF)
     r = _with(_Router({"/aweme/v1/web/user/profile/self/": _dy(
         0, {"nickname": "阿甲", "sec_uid": "MS4wLjAB"}),
         "/passport/": _Resp(404, text="")}), lambda: A._probe("douyin.com", LOGIN_DOUYIN))

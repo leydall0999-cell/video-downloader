@@ -111,11 +111,23 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 _XHS_EXPLORE = "https://www.xiaohongshu.com/explore"
 
 # 抖音：`/aweme/v1/web/user/profile/self/` **不需要 a_bogus 签名**（2026-10-21 实测，
-# 裸 GET + Cookie 直接回 JSON）。判定语义：status_code=0 且 user 非空 ⇒ 已登录
+# 带 Cookie 直接回 JSON）。判定语义：status_code=0 且 user 非空 ⇒ 已登录
 # （能读到 nickname / sec_uid，后台直接看到「池里是谁的号」）；status_code=8 且
 # status_msg="用户未登录" ⇒ 这份 Cookie 已被服务端判定失效。
 # 这条接口是抖音唯一免签名的自检入口，别再去找 im/user/info（回 url doesn't match）。
-_DY_PROFILE_SELF = "https://www.douyin.com/aweme/v1/web/user/profile/self/"
+#
+# 🔴 **`aid=6383` 必带，否则恒假阴性**（2026-10-21 线上踩坑）：裸 URL 或只带
+# `device_platform=webapp` 时，同一份**真实登录中**的 Cookie 也回
+# `status_code=8 / 用户未登录`，于是后台把刚同步上来的好 Cookie 全标成「无效」，
+# 运营以为「浏览器明明登着却校验不出」。加 `?aid=6383` 后立刻回 status_code=0 +
+# user{nickname}。实测矩阵（同一 Cookie、同一时刻）：
+#   裸 URL                          → 8
+#   ?device_platform=webapp         → 8
+#   ?aid=6383                       → 0 ✅
+#   ?aid=6383&device_platform=webapp→ 0 ✅
+# 语义上 aid 是抖音的「应用 ID」，缺了等于匿名调用方，服务端不认这份 Cookie。
+_DY_PROFILE_SELF = ("https://www.douyin.com/aweme/v1/web/user/profile/self/"
+                    "?aid=6383&device_platform=webapp")
 
 # 快手：GraphQL `visionProfile` **不校验 __NS_sig3 签名**（实测裸 POST 即返回 data）。
 # 三个语义必须成对看（2026-10-21 同一台机同一时刻实测）：
