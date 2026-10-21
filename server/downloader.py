@@ -1591,6 +1591,15 @@ _CDN_TO_COOKIE_DOMAIN: dict[str, str] = {
     # （2026-09-22 实测：youtu.be 链接按 youtu.be 查 Cookie → 0 命中 → 不带登录态
     # 转发对端 → 误报「需要登录 Cookie」；www.youtube.com 链接则一切正常）
     "youtu.be": "youtube.com",
+    # 分享域 / 极速版域不承载登录态，登录态在主站（2026-10-21 实测浏览器 Cookie 库）：
+    #   .chenzhongtech.com → did,didv            （快手极速版，无 passToken）
+    #   .iesdouyin.com     → ttwid               （抖音分享页，无 sessionid）
+    # 直接拿它们自己的 Cookie 去解析 = 匿名请求（低清晰度 / 会员内容失败）。
+    "chenzhongtech.com": "kuaishou.com",
+    "gifshow.com": "kuaishou.com",
+    "iesdouyin.com": "douyin.com",
+    # B 站短链（云端池只存 bilibili.com，原 _base_options 里是硬编码 if）
+    "b23.tv": "bilibili.com",
 }
 
 def _cookie_domains_for_host(host: str) -> list[str]:
@@ -1604,6 +1613,22 @@ def _cookie_domains_for_host(host: str) -> list[str]:
     if mapped and mapped not in candidates:
         candidates.append(mapped)
     return candidates
+
+def _cookie_login_host(host: str) -> str:
+    """把 URL host 归一成「真正存登录态的那个域」。
+
+    短链 / 分享域 / 极速版域自身不带登录态（只有设备指纹），Cookie 全在主站：
+      b23.tv            → bilibili.com
+      chenzhongtech.com → kuaishou.com （只 did/didv）
+      iesdouyin.com     → douyin.com   （只 ttwid）
+    取 Cookie 必须换到主站域，否则拿到的是匿名设备指纹，等于没登录。
+    映射表单一真源：_CDN_TO_COOKIE_DOMAIN。
+    """
+    h = (host or "").strip().lower()
+    if not h:
+        return host
+    mapped = _CDN_TO_COOKIE_DOMAIN.get(_root_domain(h))
+    return mapped or host
 
 def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
     """探测哪个浏览器的哪个 Profile 含有目标站点的 cookie，返回 (browser, profile)。
@@ -1686,8 +1711,11 @@ def get_browser_cookie_header(host: str, url: str) -> str | None:
         # 映射出的登录域（如 youtu.be → youtube.com）也必须进候选，
         # 否则 add_cookie_header 按短链域匹配拿不到 .youtube.com 的登录 Cookie
         # （merged_names 按 name 去重，候选重复无副作用）
+        # 🔴 `id.` 必带：快手把 passToken 放在 id.kuaishou.com（登录子域），
+        # 只取 www./裸域会漏掉它 ⇒ 服务端回「sid 不合法」，整份 Cookie 白给。
         for d in _cookie_domains_for_host(host):
-            candidates.append(f"https://www.{d}/")
+            for sub in ("www", "id", "m"):
+                candidates.append(f"https://{sub}.{d}/")
             candidates.append(f"https://{d}/")
         if len(parts) >= 2:
             base = ".".join(parts[-2:])  # e.g. kuaishou.com from v.kuaishou.com
@@ -1705,7 +1733,10 @@ def get_browser_cookie_header(host: str, url: str) -> str | None:
                 for pair in hdr.split("; "):
                     if "=" in pair:
                         name, _, val = pair.partition("=")
-                        merged_names[name.strip()] = val.strip()
+                        name = name.strip()
+                        # 空名会拼出 `; =` 这种非法对，平台侧可能整份拒收
+                        if name:
+                            merged_names[name] = val.strip()
 
         return "; ".join(f"{n}={v}" for n, v in merged_names.items()) or None
     except Exception:
@@ -1822,10 +1853,12 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
     if not _is_yt and not cookie_text:
         # 自动登录态：仅当用户未手动粘贴 Cookie 时才尝试（用户粘贴的优先级最高，
         # 避免本机缓存/公共池覆盖用户显式提供的登录态）。
-        # B站 短链 b23.tv 与长链 bilibili.com 同属一个站，云端公共池 Cookie 以
-        # bilibili.com 域存储。用户用 b23.tv 短链时 host=b23.tv，必须回退到
-        # bilibili.com 取 Cookie，否则云端池匹配不到 → web 端无登录态 → B站 412。
-        cookie_host = "bilibili.com" if "b23.tv" in host else host
+        # 短链 / 分享域 / 极速版域 → 主站登录域，统一由映射表决定（单一真源）：
+        #   b23.tv → bilibili.com（云端池只存主站，否则无登录态 → B站 412）
+        #   chenzhongtech.com / gifshow.com → kuaishou.com（极速版域只有 did/didv）
+        #   iesdouyin.com → douyin.com（分享页只有 ttwid）
+        # 不换域的话，拿到的只是设备指纹 Cookie，等于匿名请求。
+        cookie_host = _cookie_login_host(host)
         try:
             from cookie_cache import get_cached_cookie_header
             cached = get_cached_cookie_header(cookie_host)
@@ -1866,7 +1899,9 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
                     # 全站默认尝试从本机浏览器读登录态（不再局限于白名单），
                     # 覆盖更多需要 Cookie 的站点（影视聚合站、会员专享、地区限制等）。
                     # 精确定位「含目标站点 cookie」的具体 Profile（登录态常不在 Default）。
-                    found = _find_host_cookie_profile(host)
+                    # 用登录域（不是 URL host）打分：极速版/分享域自身的 cookie 只有
+                    # 设备指纹，按它打分可能选到游客 Profile。
+                    found = _find_host_cookie_profile(cookie_host)
                     _cookie_diag("find_profile", str(found))
                     if found:
                         options["cookiesfrombrowser"] = found  # (browser, profile)

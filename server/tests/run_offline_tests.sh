@@ -1271,6 +1271,11 @@ run_node test_cloud_data_card_hidden.mjs
 #         不刷它就等于「同步成功但依旧未登录」。
 run_one test_cookie_sync_auto.py
 
+# 分享域 / 极速版域 → 主站登录域（2026-10-21）：chenzhongtech→kuaishou、
+# iesdouyin→douyin、b23.tv→bilibili。这些域自身只有设备指纹（did/didv、ttwid），
+# 不换域取 Cookie = 匿名解析。含「主站不得被误映射」和 B站 CDN 回归。
+run_one test_cookie_share_host_map.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
