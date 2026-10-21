@@ -4688,7 +4688,14 @@ def _video_tracks_at(formats: list[dict], short_h: int) -> list[dict]:
         f for f in formats
         if f.get("vcodec") not in (None, "none") and _short_side(f) == short_h
     ]
-    tracks.sort(key=lambda f: (_codec_rank(f), -(f.get("tbr") or 0)))
+    # 编码优先（与下载链一致）→ 同编码下选**有真实体积**的那条（卡片报价才准）
+    # → 再按码率降序。HLS 混合流(96) 与 DASH(137) 同为 avc1，选 137 才报得出
+    # 398MB；若反过来选 96（无 filesize）卡片就只能报 0。
+    tracks.sort(key=lambda f: (
+        _codec_rank(f),
+        0 if (f.get("filesize") or f.get("filesize_approx")) else 1,
+        -(f.get("tbr") or 0),
+    ))
     return tracks
 
 
@@ -4705,10 +4712,35 @@ def _audio_tracks(formats: list[dict]) -> list[dict]:
     return tracks
 
 
-def _size_of(f: dict | None) -> int:
+def _size_of(f: dict | None, duration: float = 0.0) -> int:
+    """体积：先取真实值；缺失时按 码率×时长 估算。
+
+    🔴 HLS 混合流（m3u8_native，itag 91-96）yt-dlp **一律不给 filesize /
+    filesize_approx** —— 直接读得到 0，卡片上 1080P 就只剩音轨那 14 MiB
+    （2026-10-21 线上实测：卡片「1080P · MP4 · H.264 · 0 MiB + 音轨 14 MiB」）。
+    按 码率(kbps) × 时长(s) / 8 估虽不精确，但报 0 是彻底没用。
+    """
     if not f:
         return 0
-    return int(f.get("filesize") or f.get("filesize_approx") or 0)
+    _s = int(f.get("filesize") or f.get("filesize_approx") or 0)
+    if _s:
+        return _s
+    _tbr = float(f.get("tbr") or 0)
+    if _tbr and duration:
+        return int(_tbr * 1000 * float(duration) / 8)
+    return 0
+
+
+def _is_muxed(f: dict) -> bool:
+    """混合流（视频轨自带音频，如 HLS itag 91-96）：落盘即成品，不能再叠音轨。"""
+    return f.get("acodec") not in (None, "none")
+
+
+def _plan_size(v: dict, a: dict | None, duration: float) -> int:
+    """该档实际会落盘的体积：混合流不叠音轨，纯视频轨才要叠。"""
+    if _is_muxed(v):
+        return _size_of(v, duration)
+    return _size_of(v, duration) + _size_of(a, duration)
 
 
 def _best_audio_size(formats: list[dict]) -> int:
@@ -4743,7 +4775,9 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
         {s for s in (_short_side(f) for f in formats) if s}, reverse=True
     )
     _audio_pick = _audio_tracks(formats)
-    audio_size = _size_of(_audio_pick[0]) if _audio_pick else 0
+    _a0 = _audio_pick[0] if _audio_pick else None
+    _duration = float(info.get("duration") or 0)
+    audio_size = _size_of(_a0, _duration)
 
     # 抖音（VPS 解析）只有单一视频档位，避免展示 480P/360P 等不存在的选项导致下载失败
     if info.get("extractor_key") == "Douyin":
@@ -4807,7 +4841,8 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
                 "key": str(height),
                 "label": label,
                 "note": f"MP4 · {_codec}" if _codec else "MP4",
-                "approx_size": _size_of(_tracks[0]) + audio_size,
+                # 混合流（HLS 96）自带音轨，不能再叠 audio_size，否则虚高
+                "approx_size": _plan_size(_tracks[0], _a0, _duration),
                 # 卡片承诺的短边高度与编码，下载阶段照此精确锁定（说什么就是什么）
                 "exact_height": height,
                 "codec": _codec,

@@ -300,5 +300,76 @@ class ActualQualityCheckTest(unittest.TestCase):
         self.assertEqual(self._note("1080", {}), "音视频下载完成")
 
 
+class HlsSizeEstimationTest(unittest.TestCase):
+    """F. HLS 混合流没有 filesize ⇒ 卡片必须按 码率×时长 估算，不能报 0。
+
+    线上实测（2026-10-21，HK 节点解析该视频只出 7 条 format，全是 m3u8_native）：
+    itag 91-96 的 filesize / filesize_approx **全是 None**，卡片直读只会得到 0，
+    1080P 那一档就显示成「0 MiB + 音轨 14 MiB」= 14 MiB，等于没说。
+    """
+
+    DUR = 911.0
+
+    def _hls(self, fid, h, w, tbr):
+        return {
+            "format_id": fid, "height": h, "width": w,
+            "vcodec": "avc1.640028", "acodec": "mp4a.40.2",
+            "protocol": "m3u8_native", "tbr": tbr,
+        }
+
+    def _hls_only(self):
+        return [
+            self._hls("93", 360, 640, 700),
+            self._hls("94", 480, 854, 1200),
+            self._hls("95", 720, 1280, 2500),
+            self._hls("96", 1080, 1920, 4500),
+        ]
+
+    def _card(self, info, key):
+        for o in D.build_quality_options(info):
+            if o["key"] == key:
+                return o
+        raise AssertionError(f"卡片没有 {key} 档")
+
+    def test_hls_only_estimates_from_bitrate(self):
+        o = self._card({"formats": self._hls_only(), "duration": self.DUR}, "1080")
+        self.assertAlmostEqual(o["approx_size"] / MIB, 488, delta=2)
+        self.assertGreater(o["approx_size"], 0)
+
+    def test_hls_only_never_reports_zero(self):
+        """每一档都必须报得出体积 —— 报 0 等于什么都没说。"""
+        for o in D.build_quality_options(
+                {"formats": self._hls_only(), "duration": self.DUR}):
+            if o["key"] in ("best", "audio", "webm", "m4a"):
+                continue
+            self.assertGreater(o["approx_size"], 0, f"{o['key']} 档体积为 0")
+
+    def test_prefers_track_with_real_filesize(self):
+        """DASH 有真实体积时优先用它 —— 卡片报 398 MiB 而不是估算的 489。"""
+        mixed = self._hls_only() + [
+            _vid("137", 1080, 1920, "avc1.64002", 402242089),
+            _aud("140", "m4a", 15400000),
+        ]
+        o = self._card({"formats": mixed, "duration": self.DUR}, "1080")
+        self.assertEqual(round(o["approx_size"] / MIB), 398)
+        self.assertEqual(o["codec"], "H.264")
+
+    def test_muxed_track_does_not_add_audio(self):
+        """混合流自带音轨，再叠一次音轨体积就虚高了。"""
+        v = self._hls("96", 1080, 1920, 4500)
+        a = _aud("140", "m4a", 15400000)
+        self.assertEqual(D._plan_size(v, a, self.DUR),
+                         int(4500 * 1000 * self.DUR / 8))
+
+    def test_pure_video_track_adds_audio(self):
+        v = _vid("137", 1080, 1920, "avc1.64002", 402242089)
+        a = _aud("140", "m4a", 15400000)
+        self.assertEqual(D._plan_size(v, a, self.DUR), 402242089 + 15400000)
+
+    def test_missing_duration_falls_back_to_zero(self):
+        """没有时长算不出体积，但也不许崩。"""
+        self.assertEqual(D._size_of(self._hls("96", 1080, 1920, 4500), 0.0), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
