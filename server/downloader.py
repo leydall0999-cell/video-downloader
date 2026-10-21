@@ -5898,6 +5898,51 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             speed=0.0,
             eta=0,
         )
+    finally:
+        # 2026-10-21：任务终态回写「这次用量到底成功没有」（后台面板 ✅/❌）。
+        # 放在 finally：成功、失败、取消、被看门狗终止都会走到，且只报一次。
+        _note_usage_result_by_task(task)
+
+
+def _usage_result_ok(task: DownloadTask) -> tuple[bool, int]:
+    """按任务终态判定「这次用量是否真的落到本机」（成功＝completed 且成品还在）。"""
+    try:
+        if str(getattr(task, "status", "") or "") != "completed":
+            return (False, 0)
+        fp = getattr(task, "filepath", None)
+        if not fp:
+            return (False, 0)
+        p = Path(str(fp))
+        if not p.is_file():
+            return (False, 0)          # 完成态但成品已被清理/TTL 到期 ⇒ 不算用户拿到
+        try:
+            size = int(p.stat().st_size)
+        except OSError:
+            size = int(getattr(task, "filesize", 0) or 0)
+        return (True, size)
+    except Exception:  # noqa: BLE001 — 判定失败按未完成处理，绝不抛
+        return (False, 0)
+
+
+def _note_usage_result(task: DownloadTask, ok: bool, size: int = 0) -> None:
+    """把任务终态的成败按 ref 回写账本 + 授权中心（幂等，绝不抛）。"""
+    if getattr(task, "_usage_reported", False):
+        return
+    ref = str(getattr(task, "usage_ref", "") or "")
+    store = getattr(task, "_usage_store", None)
+    if not ref or store is None:
+        return
+    task._usage_reported = True
+    try:
+        store.mark_usage_result(ref, bool(ok), resource="download", size=int(size or 0))
+    except Exception:  # noqa: BLE001 — 记账问题不能影响下载本身
+        pass
+
+
+def _note_usage_result_by_task(task: DownloadTask) -> None:
+    """按任务终态自动判定成功/失败并回写（终态兜底用）。"""
+    ok, sz = _usage_result_ok(task)
+    _note_usage_result(task, ok, sz)
 
 
 def _run_extraction(task: DownloadTask, store: TaskStore, output: Path, info: dict[str, Any],

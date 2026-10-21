@@ -26,6 +26,15 @@ def _require_user(request: Request) -> Optional[str]:
     return app.get_current_user_id(request)
 
 
+def _req_device(request: Request) -> str:
+    """取请求的设备归属标识（与 /api/download 建任务时同一口径）。"""
+    try:
+        from routers.core import _device_of
+        return str(_device_of(request) or "")
+    except Exception:  # noqa: BLE001 — 取不到设备标识按无归属处理（更严格）
+        return ""
+
+
 @router.get("/api/member/plans")
 def member_plans() -> dict[str, Any]:
     """套餐与权益表（供购买中心展示）。"""
@@ -148,3 +157,40 @@ def quota_use(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str
         if _last is not None:
             return _last
     return _store(request).use_daily(resource, n=n)
+
+
+@router.post("/api/usage/result")
+def usage_result(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """前端回报「这次用量到底有没有真的存到用户机器上」（2026-10-21）。
+
+    为什么需要：网页版存在**浏览器直连保存**（源站直链 / 抖音双轨合并），字节
+    压根没经过部署节点，服务端无从判断是否落盘。不回报的话，后台「使用详情」
+    里这类记录永远显示灰色「未上报」，管理员无法区分「下了但失败」和「不知道」。
+
+    payload: {"task_id": "...", "ok": true, "size": 12345}
+      - task_id（推荐）：服务端从任务上取 usage_ref，前端无法伪造别人的 ref；
+        且会按设备归属校验（`_require_task`）。
+      - ref：无任务的场景（理论上不用），仍需登录。
+    幂等：同一 ref 重复回报只覆盖同一结果，不加减配额。
+    """
+    import app
+    ok = bool(payload.get("ok"))
+    try:
+        size = int(payload.get("size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    ref = str(payload.get("ref") or "").strip()[:64]
+    tid = str(payload.get("task_id") or "").strip()
+    store = None
+    if tid:
+        task = app._require_task(tid, _req_device(request))
+        ref = str(getattr(task, "usage_ref", "") or "") or ref
+        store = getattr(task, "_usage_store", None)
+    if store is None:
+        if not _require_user(request):
+            return {"ok": False, "error": "请先登录账号", "code": "NO_AUTH"}
+        store = _store(request)
+    if not ref:
+        return {"ok": False, "error": "没有可回写的用量记录", "code": "NO_REF"}
+    hit = store.mark_usage_result(ref, ok, resource="download", size=size)
+    return {"ok": True, "marked": bool(hit)}

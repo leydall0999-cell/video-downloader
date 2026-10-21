@@ -605,11 +605,16 @@ def _member_quota_gate(request, need: int = 1) -> dict:
 
 
 def _member_quota_count(request, gate: dict, n: int = 1,
-                        details: list | None = None) -> dict | None:
+                        details: list | None = None,
+                        results: list | None = None) -> dict | None:
     """任务成功创建后的计数（V1：成功创建才计费）。失败只记日志，不影响已建任务。
 
     details（2026-10-19）：可选，[{t: 标题, p: 平台}]，长度应与 n 一致。带上后
     按条记账，后台「使用详情」能显示「下载了什么」而不是只有次数。
+
+    results（2026-10-21）：可选，逐条计数时把每次 use_daily 的返回值按顺序追加进去
+    （含 ref）。批量下载据此把「第 N 条明细」与「第 N 个任务」对上号，任务终态
+    才能各自回写成功/失败；只取最后一次返回值的话前 N-1 条永远「未上报」。
 
     匿名（回派收到 NO_AUTH）落本机全局匿名共享池 —— 与 user_membership 的
     「匿名回退 app.member_store」同一份，保证预检与计数落在同一个池。
@@ -632,6 +637,8 @@ def _member_quota_count(request, gate: dict, n: int = 1,
             for d in _details:
                 _last = store.use_daily("download", 1, title=str(d.get("t") or ""),
                                         platform=str(d.get("p") or ""))
+                if isinstance(results, list):
+                    results.append(_last)
             if _last is not None:
                 return _last
         return store.use_daily("download", n=n)
@@ -648,6 +655,27 @@ def _mq_public(mq) -> dict | None:
     if not isinstance(mq, dict) or not mq.get("ok"):
         return None
     return {k: mq[k] for k in ("resource", "used", "remaining") if k in mq}
+
+
+def _attach_usage_ref(task, mq, request=None, gate=None) -> None:
+    """把本次扣量明细的 ref 挂到任务上（2026-10-21）。
+
+    任务终态由下载器按这个 ref 回写「成功/失败」到本机账本与授权中心；
+    没有 ref（无限档 / 未登录 / 回派计数）就不挂，任务结束时自然跳过。
+    """
+    if not isinstance(mq, dict) or not mq.get("ok"):
+        return
+    ref = str(mq.get("ref") or "").strip()
+    if not ref:
+        return
+    try:
+        task.usage_ref = ref
+        _store = (gate or {}).get("store") if isinstance(gate, dict) else None
+        if _store is None and request is not None:
+            _store = app.current_member_store(request)
+        task._usage_store = _store
+    except Exception:  # noqa: BLE001 — 记账挂载失败不影响下载
+        pass
 
 
 def _detail_title(url: str) -> str:
@@ -672,10 +700,12 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     # V1：任务成功创建才计费（预检在 store.create 之前，计数在其之后）
     # 2026-10-19：带标题与平台，后台「使用详情」显示「下载了什么」。
     # 标题优先取前端解析出的真名（payload.title），没有才回落 URL 尾段。
-    member_quota = _mq_public(_member_quota_count(
+    _mq_raw = _member_quota_count(
         request, gate, n=1,
         details=[{"t": (payload.title or "").strip() or _detail_title(url),
-                  "p": platform.name}]))
+                  "p": platform.name}])
+    _attach_usage_ref(task, _mq_raw, request, gate)
+    member_quota = _mq_public(_mq_raw)
     return {'task_id': task.id, 'status': task.status, 'quota': {'subscribed': subscribed, 'free_used': free_used, 'free_daily': free_daily}, 'member_quota': member_quota}
 
 class BatchRequest(app.BaseModel):
@@ -708,6 +738,7 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
     skipped = 0
     quota_exhausted = False
     _batch_details: list[dict] = []      # 2026-10-19：逐条明细（标题 + 平台）
+    _created_tasks: dict = {}            # 2026-10-21：task_id → 任务对象（挂 ref 用）
     for u in urls:
         if member_cap is not None and len(task_ids) >= member_cap:
             quota_exhausted = True
@@ -728,14 +759,23 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
         task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, device_id=_device_of(request))
         app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, retries)
         task_ids.append(task.id)
+        _created_tasks[task.id] = task
     if not task_ids:
         if quota_exhausted:
             raise app.HTTPException(status_code=402, detail='今日免费下载次数已用完，订阅可解锁无限下载')
         raise app.HTTPException(status_code=400, detail='链接均无法识别，请确认是视频播放页链接')
     # V1：任务成功创建才计费（按实际创建数，剩余不足时只计创建的那部分）
     # 2026-10-19：带逐条明细，后台能按平台看到这批下载了什么
+    # 2026-10-21：逐条收集每次计数的返回值，把 ref 按顺序挂到对应任务上
+    _mq_results: list = []
     member_quota = _mq_public(_member_quota_count(
-        request, gate, n=len(task_ids), details=_batch_details or None))
+        request, gate, n=len(task_ids), details=_batch_details or None,
+        results=_mq_results))
+    for _tid, _mqr in zip(task_ids, _mq_results):
+        # 用建任务时拿到的对象引用（不再回查 store，避免测试替身/一致性差异）
+        _btask = _created_tasks.get(_tid)
+        if _btask is not None:
+            _attach_usage_ref(_btask, _mqr, request, gate)
     return {'task_ids': task_ids, 'count': len(task_ids), 'skipped': skipped, 'quota_exhausted': quota_exhausted, 'member_quota': member_quota}
 
 @router.get('/api/tasks')

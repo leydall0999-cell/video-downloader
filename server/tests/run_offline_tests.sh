@@ -319,6 +319,15 @@ run_root test_crypto_routes.py              # crypto 路由（web 适用节，�
 #  进请求体、app.py 路由已注册 + 前端两处登录成功分支都接了自动同步。
 run_one test_userdata_web.py
 
+#  网页版「这次下载到底成功了没有」结果回写（2026-10-21）
+#  实测证据：云端 18 条明细 0 条带结果，其中 7 条 id 是随机 hex（网页版上报），
+#  桌面 App 的 ref 形如 u<16hex> —— 网页版原先压根没有回写链路：use_daily 不接
+#  ref、上云 id 随机、下载完成不回报，所以面板永远显示「未上报」。
+#  守卫钉住：ref 落明细 / mark 只改 r 不改次数 / 跨天归档仍可回写 /
+#  两侧幂等键逐字一致 / 终态才回写且要求成品真实存在 / usage_ref 持久化 /
+#  浏览器直存由前端回报 /api/usage/result。
+run_one test_usage_result_flag_web.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

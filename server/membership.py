@@ -1724,11 +1724,16 @@ class MembershipStore:
                 "free_limit": free_limits.get(resource, 0)}
 
     def use_daily(self, resource: str, n: int = 1, title: str = "",
-                  platform: str = "") -> dict[str, Any]:
+                  platform: str = "", ref: str = "") -> dict[str, Any]:
         """消耗下载类配额（免费档 resolve 10/日；会员档按表）。超限返回 ok=False。
 
         title / platform（2026-10-19）：记录「具体做了什么」，随用量上云，
         后台「使用详情」据此显示可定位的明细（如「少帅 第5集 · 抖音」）。
+
+        ref（2026-10-21）：本次消耗的唯一标识（运行时生成，随返回值下发）。
+        调用方把它挂到下载任务上，等任务真正**落盘完成**时再调
+        `mark_usage_result(ref, ok)` 回写「这次到底下载成功了没有」——
+        后台「使用详情」要能区分「点了下载但没下成」，而不只是次数。
         """
         if n <= 0:
             return {"ok": False, "error": "n 必须为正"}
@@ -1771,15 +1776,18 @@ class MembershipStore:
             return {"ok": False, "error": f"超出 {resource} 日配额上限 {q['limit']}",
                     "resource": resource, "code": "MEMBER_QUOTA"}
         self._state["daily_usage"][resource] = new_used
+        _ref = str(ref or "").strip()[:64] or _new_usage_ref()
         # 2026-10-19：本机也留一份明细（云端才是真源，这里只是本机兜底）
+        # 2026-10-21：条目带幂等键 id —— 任务结束后按它回写成功/失败。
         import time as _t
         _title = str(title or "").strip()[:120]
         if _title:
             try:
                 _det = self._state.setdefault("daily_details", {})
                 _lst = _det.setdefault(str(resource)[:32], [])
-                _lst.append({"t": _title, "p": str(platform or "").strip()[:64],
-                             "at": int(_t.time())})
+                _item = {"t": _title, "p": str(platform or "").strip()[:64],
+                         "at": int(_t.time()), "id": _ref}
+                _lst.append(_item)
                 _det[str(resource)[:32]] = _lst[-50:]
             except Exception:  # noqa: BLE001 — 记账明细绝不能影响配额判定
                 pass
@@ -1787,11 +1795,79 @@ class MembershipStore:
         # 异步上云记账（同一账号 App/网页共用每日配额；失败/离线进队列下次心跳补报）
         try:
             import cloud_link
-            cloud_link.report_usage_async(self, resource, n, title=title, platform=platform)
+            cloud_link.report_usage_async(self, resource, n, title=title,
+                                          platform=platform, ref=_ref)
         except Exception:  # noqa: BLE001 — 上云失败绝不影响本地结果
             pass
         return {"ok": True, "resource": resource, "used": new_used,
-                "remaining": q["limit"] - new_used}
+                "remaining": q["limit"] - new_used, "ref": _ref}
+
+    def mark_usage_result(self, ref: str, ok: bool, resource: str = "download",
+                          size: int = 0) -> bool:
+        """回写「这次用量到底有没有真正落到本机」（成功标准＝下载完成并能保存）。
+
+        成功判据由调用方给（下载器里＝任务状态 completed、成品文件存在），
+        本方法只负责记账：把结果标到当天 / 历史归档里同 id 的明细条目上，
+        再异步上报授权中心 —— 管理员在**别人的**账号上看「使用详情」时读的是
+        云端，所以只写本机不够。
+
+        幂等：同一 ref 重复回写只覆盖为同一结果；不做配额加减（次数早已扣过）。
+        """
+        r = 1 if ok else 0
+        key = str(ref or "").strip()[:64]
+        if not key:
+            return False
+        hit = False
+        try:
+            self._ensure_loaded()
+            for _item in self._iter_detail_items(resource, key):
+                _item["r"] = r
+                if size:
+                    try:
+                        _item["sz"] = int(size)
+                    except (TypeError, ValueError):
+                        pass
+                hit = True
+            if hit:
+                self._persist()
+        except Exception:  # noqa: BLE001 — 回写结果绝不能影响下载本身
+            pass
+        try:
+            import cloud_link
+            cloud_link.report_usage_result_async(self, resource, key, r)
+        except Exception:  # noqa: BLE001
+            pass
+        return hit
+
+    def _iter_detail_items(self, resource: str, ref: str):
+        """遍历当天 + 历史归档里所有同 ref 的明细条目（跨天完成也能标到）。"""
+        res = str(resource)[:32]
+        buckets = []
+        live = self._state.get("daily_details") or {}
+        if isinstance(live, dict):
+            buckets.append((live.get(res) or []))
+        hist = self._state.get("usage_history") or {}
+        if isinstance(hist, dict):
+            for row in hist.values():
+                det = (row or {}).get("details") if isinstance(row, dict) else None
+                if isinstance(det, dict):
+                    buckets.append(det.get(res) or [])
+        for lst in buckets:
+            if not isinstance(lst, list):
+                continue
+            for it in lst:
+                if isinstance(it, dict) and str(it.get("id") or "") == ref:
+                    yield it
+
+
+def _new_usage_ref() -> str:
+    """生成一次用量明细的唯一标识（2026-10-21）。
+
+    用途：把「下单时扣的那 1 次」与「下载结束后回写的成功/失败」对上号。
+    形状 `u<16 hex>`，≤64 字符，天然可作为授权中心的幂等键。
+    """
+    import uuid
+    return "u" + uuid.uuid4().hex[:16]
 
 
 def _date_range_days(period: str, now: float) -> list[str]:

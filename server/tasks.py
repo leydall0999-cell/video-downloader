@@ -40,7 +40,7 @@ _PERSIST_FIELDS = (
     "error", "hint", "created_at", "extract_mode",
     "concurrent_fragments", "downloader_type", "cookie", "proxy",
     "source_url", "play_url", "audio_play_url", "watch_options", "is_hls", "resumable",
-    "file_expired",
+    "file_expired", "usage_ref",
 )
 
 
@@ -113,6 +113,10 @@ class DownloadTask:
     audio_play_url: str = ""
     watch_options: list[dict] = field(default_factory=list)
     is_hls: bool = False
+    # 用量明细幂等键（2026-10-21）：下单扣配额时由 use_daily 返回，任务终态据此
+    # 把「这次到底下载成功没有」回写到本机账本与授权中心（面板显示 ✅/❌）。
+    # 空字符串＝这次消耗没有明细条目（例如无限档/未登录），无需回写。
+    usage_ref: str = ""
     # 过程展示：结构化步骤 + 文本日志
     steps: list[dict] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
@@ -184,6 +188,7 @@ class DownloadTask:
             "audio_play_url": self.audio_play_url,
             "watch_options": self.watch_options,
             "is_hls": self.is_hls,
+            "usage_ref": self.usage_ref,
             "steps": self.steps,
             "logs": self.logs,
         }
@@ -288,6 +293,8 @@ class TaskStore:
                 watch_options=list(row.get("watch_options") or []),
                 is_hls=bool(row.get("is_hls")), workdir=workdir, filepath=fp,
             )
+            # 重启后仍能回写用量结果（任务可能在重启前下单、重启后才下完）
+            task.usage_ref = str(row.get("usage_ref") or "")
             task.steps = []   # 恢复条目不带走历史步骤，__post_init__ 重建初始步骤
             task.__post_init__()
             if status == "completed":

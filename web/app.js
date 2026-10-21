@@ -1800,6 +1800,20 @@
         }
         return;
       }
+      // 2026-10-21：浏览器直存（源站直链 / 双轨合并）字节不经过节点，服务端
+      // 无从判断是否真落盘 —— 不回写的话后台「使用详情」永远灰色「未上报」。
+      // fire-and-forget：失败只影响面板标记，绝不打扰用户。
+      const reportUsageResult = (ok, size) => {
+        try {
+          const tid = task.task_id || task.id;
+          if (!tid) return;
+          fetch(`${apiBase}/api/usage/result`, {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, authBearerHeaders()),
+            body: JSON.stringify({ task_id: tid, ok: !!ok, size: Number(size) || 0 }),
+          }).catch(() => {});
+        } catch (_) { /* 回报失败不影响保存结果 */ }
+      };
       if ((srcKind === 'fetch' || srcKind === 'tracks') && userGesture) {
         const t0 = Date.now();
         const isTracks = srcKind === 'tracks';
@@ -1829,6 +1843,7 @@
             ? await saveFromTwoTracks(task.play_url, task.audio_play_url, saveName, { onProgress: onProg })
             : await concurrentSaveFromSource(task.play_url, saveName, { onProgress: onProg });
           if (ret === 'OK') {
+            reportUsageResult(true, 0);
             btn.textContent = '已保存 ✅';
             if (refs.saveHint) refs.saveHint.textContent = '✅ 已保存到所选位置（源站直连，未占用服务器）';
             setTimeout(() => { btn.textContent = label; }, 4000);
@@ -1836,6 +1851,7 @@
             return;
           }
           if (ret === 'CANCELLED') {
+            reportUsageResult(false, 0);
             btn.textContent = label;
             if (refs.saveHint) refs.saveHint.textContent = '已取消保存，可随时再点「保存到本机」。';
             btn.dataset.cloudSaving = '';
