@@ -3416,6 +3416,12 @@ from routers import auth as _auth_rtr
 app.include_router(_auth_rtr.router)
 from routers import admin as _admin_rtr
 app.include_router(_admin_rtr.router)
+# 云端侧的 Cookie 池管理入口（`POST /api/cookie/pool-admin`）：桌面 App 的后台
+# 「Cookie 池」页靠它代理读「网页版真正在用的那个池」。admin_cookies 的 docstring
+# 写明「同一份代码、两个部署角色（云端节点直接读写 / 桌面 App 代理）」，但 web 端
+# **一直没挂这份路由** ⇒ 桌面后台报「云端不可达 HTTP 405」（2026-10-21 实事故）。
+from routers import admin_cookies as _admin_cookies_rtr
+app.include_router(_admin_cookies_rtr.router)
 from routers import support as _support_rtr
 app.include_router(_support_rtr.router)
 from routers import subtitle as _subtitle_rtr
