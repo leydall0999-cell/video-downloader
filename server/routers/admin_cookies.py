@@ -250,7 +250,7 @@ def _read_domain(domain: str, now: float, cache: dict) -> dict:
                 # 运营点「立即校验」后会被真实结论覆盖。
                 "inherited": False,
                 # 临时字段：第二阶段的同会话继承要用，聚合前 pop 掉，不外泄。
-                "_sk": cp._session_key(host, header),
+                "_sk": _session_key_safe(host, header),
             })
 
     # ─── 新快照继承「同会话」已有结论 ────────────────────────────────────
@@ -349,6 +349,19 @@ def _read_domain(domain: str, now: float, cache: dict) -> dict:
         "stale": bool(last_ts) and (now - last_ts) > _STALE_SEC,
         "items": accounts,
     }
+
+
+def _session_key_safe(host: str, header: str) -> str:
+    """`cp._session_key` 的安全包装。
+
+    概览是「只读展示」入口，一条形态异常的 Cookie 不该让整个后台面板 500。
+    失败时退化成该条目自己的 hash（唯一 ⇒ 谁都不匹配 ⇒ 不继承），
+    绝不能用固定串兜底：那会让所有异常条目共享 key 并互相继承。
+    """
+    try:
+        return cp._session_key(host, header)
+    except Exception:
+        return "?" + _entry_id(header)
 
 
 def _ident_label(ident: str) -> str:

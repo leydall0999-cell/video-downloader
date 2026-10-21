@@ -209,12 +209,40 @@ def test_verify_overrides_inherited() -> None:
         A._probe = orig_probe  # type: ignore[assignment]
 
 
+def test_session_key_failure_is_safe() -> None:
+    print("[6] _session_key 抛异常 ⇒ 概览不 500，且不误继承")
+    orig = cp.verify_cookie
+    orig_sk = cp._session_key
+    cp.verify_cookie = lambda d, h: True  # type: ignore[assignment]
+    try:
+        _seed({f"bilibili.com|{A._entry_id(_OLD)}": {
+            "status": "valid", "detail": "站点确认已登录",
+            "probe": A._PROBE_NET, "ts": int(time.time()) - 60,
+        }})
+        assert cp.add_cookie("bilibili.com", _NEW, source="sync")
+
+        def _boom(host, header):  # noqa: ANN001
+            raise ValueError("bad cookie")
+
+        cp._session_key = _boom  # type: ignore[assignment]
+        now = time.time()
+        row = A._read_domain("bilibili.com", now, A._load_cache()["items"])
+        item = row["items"][0]
+        check("概览没抛异常", isinstance(row, dict) and "items" in row, type(row))
+        check("异常条目不继承", item["inherited"] is False, item.get("inherited"))
+        check("退化状态仍是 unknown", item["status"] == "unknown", item["status"])
+    finally:
+        cp.verify_cookie = orig  # type: ignore[assignment]
+        cp._session_key = orig_sk  # type: ignore[assignment]
+
+
 def main() -> int:
     test_inherit_same_session()
     test_no_inherit_other_session()
     test_no_inherit_guest()
     test_inject_key_normalized()
     test_verify_overrides_inherited()
+    test_session_key_failure_is_safe()
     print()
     if _FAILED:
         print(f"❌ {len(_FAILED)} 项失败：" + "；".join(_FAILED))
