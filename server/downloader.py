@@ -4998,6 +4998,77 @@ def _youtube_hls_selector(quality_key: str) -> str:
     )
 
 
+def _pick_youtube_tracks(info: dict[str, Any], quality_key: str) -> tuple[dict | None, dict | None]:
+    """按用户选的清晰度，从**已解析的 formats** 里挑出真正要落盘的轨。
+
+    🔴🔴 2026-10-21 线上事故（别把这段退化成「只设 options['format']」）：
+    下载是**两阶段**的 —— `_resolve_youtube()` 用 `format=None` 解析，yt-dlp 默认
+    选 `bestvideo*+bestaudio`；随后 `process_info(info)` 直接照 info 里的
+    `requested_formats` 落盘。`_download_options()` 里那条精确选择器只在
+    「解析后当场下载」的路径生效，**YouTube 这条两阶段路径从来没用过它**。
+    实测任务 533e250dab2147e5：用户选 480P（卡片 138.7 MiB → 145,461,651 B），
+    实际下到 401(2160p AV1)+251(opus) = 2,039,288,742 B（1.9 GiB）；
+    360P 任务同样 2,017 MB —— 所有清晰度都被下成了 4K。
+    故必须在 `process_info` 之前重选轨，且**与卡片用同一套分档函数**
+    （`_video_tracks_at` / `_audio_tracks` / `_is_muxed`），
+    否则「卡片报价 = 实际落盘」永远对不上。
+
+    返回 (视频轨, 音频轨)；音频轨为 None 表示该视频轨已自带音频（HLS 混合流）。
+    返回 (None, None) 表示这个档在 formats 里找不到 —— 调用方保持原样，不擅自换档。
+    """
+    fmts = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+    # 排除 mhtml 雪碧图（其 180/90/45 高度会被误当清晰度档）
+    fmts = [f for f in fmts if not str(f.get("protocol") or "").startswith("mhtml")]
+    if not fmts:
+        return None, None
+    _auds = _audio_tracks(fmts)
+    a = _auds[0] if _auds else None
+
+    if quality_key in (AUDIO_KEY, M4A_KEY):
+        return None, a
+
+    def _videos() -> list[dict]:
+        return [f for f in fmts if f.get("vcodec") not in (None, "none")]
+
+    if quality_key == BEST_KEY:
+        # 自动档：语义就是「≤1080 里最好的」，avc1 优先（macOS/Safari 解不了 AV1/VP9）
+        vids = _videos()
+        if not vids:
+            return None, a
+        capped = [f for f in vids if (_short_side(f) or 0) <= 1080] or vids
+        avc = [f for f in capped if str(f.get("vcodec") or "").startswith("avc")]
+        pool = avc or capped
+        pool.sort(key=lambda f: (-(_short_side(f) or 0), -(f.get("tbr") or 0)))
+        v = pool[0]
+        return v, (None if _is_muxed(v) else a)
+
+    if quality_key == WEBM_KEY:
+        # WebM 档：容器优先，挑 vp9/av01 且 ≤1080 的最高轨；音频优先 webm(opus)
+        vids = [f for f in _videos()
+                if str(f.get("vcodec") or "").startswith(("vp9", "vp09", "av01"))
+                and (_short_side(f) or 0) <= 1080]
+        if not vids:
+            return None, None
+        vids.sort(key=lambda f: (-(_short_side(f) or 0), -(f.get("tbr") or 0)))
+        v = vids[0]
+        if _is_muxed(v):
+            return v, None
+        _opus = [f for f in _auds if str(f.get("ext") or "").lower() == "webm"] or _auds
+        return v, (_opus[0] if _opus else None)
+
+    try:
+        tier = int(quality_key)
+    except (TypeError, ValueError):
+        return None, None
+    # 与卡片同源：`_video_tracks_at` 已按「编码优先 → 有真实体积 → 码率」排序，
+    # [0] 就是卡片报价的那一条（容差 ±3%，横竖屏都按短边分档）。
+    tracks = _video_tracks_at(fmts, tier)
+    if not tracks:
+        return None, None
+    v = tracks[0]
+    return v, (None if _is_muxed(v) else a)
+
+
 def _quality_cap(quality_key: str) -> int:
     """把质量档映射成「最高允许高度」。非数字档（best/audio/webm/m4a）一律 1080。
 
@@ -5637,6 +5708,34 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif _is_youtube_host(_task_host):
                 # YouTube：自动降级（免 Cookie + PO Token → Cookie 源自动切换）
                 info = _resolve_youtube(task.url, user_cookie=cookie, proxy=effective_proxy)
+                # 🔴 清晰度必须在 process_info 之前就地锁定：解析阶段 format=None，
+                # yt-dlp 默认选 bestvideo*+bestaudio（实测 4K AV1），
+                # 不在这里重选，就是「所有档位都下 4K」。见 _pick_youtube_tracks 注解。
+                if not format_id:
+                    _qv, _qa = _pick_youtube_tracks(info, quality_key)
+                    if _qv is not None:
+                        info["requested_formats"] = [_qv] if _qa is None else [_qv, _qa]
+                        # 解析阶段算好的 requested_downloads 是「默认选 4K」的产物，
+                        # 留着会被 process_info 误用
+                        info.pop("requested_downloads", None)
+                        info["ext"] = str(_qv.get("ext") or "mp4")
+                        _picked = [
+                            str(f.get("format_id"))
+                            for f in ([_qv] + ([_qa] if _qa else []))
+                        ]
+                        task.log(
+                            "已锁定清晰度：%s（格式 %s，%sx%s%s）" % (
+                                quality_label(quality_key),
+                                "+".join(_picked),
+                                _qv.get("width"), _qv.get("height"),
+                                "" if _qa is None else " + 音轨",
+                            )
+                        )
+                    else:
+                        task.log(
+                            "警告：%s 档在解析结果里没有对应轨道，保持解析阶段的默认选择"
+                            % quality_label(quality_key)
+                        )
             else:
                 try:
                     info = ydl.extract_info(task.url, download=False) or {}
