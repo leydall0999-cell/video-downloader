@@ -4419,7 +4419,7 @@ def _sync_domains_to_cloud(url: str, token: str) -> list[dict]:
         except Exception:
             header = None
         if not header:
-            results.append({"domain": domain, "pushed": False, "reason": "本机未登录"})
+            results.append({"domain": domain, "pushed": False, "reason": _COOKIE_NO_LOGIN})
             continue
         # 顺手把刚解密出来的新鲜值刷进本机快照。为什么必须做：cookie_cache 的 TTL
         # 是 30 天且「命中就直接用、不与浏览器比对」，用户重新登录后旧快照会一直
@@ -4448,6 +4448,11 @@ def _sync_domains_to_cloud(url: str, token: str) -> list[dict]:
 # 浏览器登录态变更检测：登录任何站点都会写 Cookies 库，所以「库文件 mtime/size 变了」
 # 就是「用户刚登录过」最廉价可靠的信号（stat 级，毫秒；不需要解密、不碰钥匙串）。
 _COOKIE_WATCH_STATE = Path.home() / ".videodownloader" / "cookie_sync_state.json"
+
+# 推送结果的 reason 常量：只有「本机压根没登录这个站」才算「无需推送」，
+# 其余（429 / 超时 / 网络错误）都算失败，必须留在下一轮重试。
+# 必须两侧共用同一常量：曾用字面量比较，改字就静默失配、失败判定失效。
+_COOKIE_NO_LOGIN = "本机未登录"
 
 def _cookie_db_signature() -> dict[str, str]:
     """各浏览器 Cookies 库的 (mtime, size) 快照，key 为库绝对路径。"""
@@ -4498,8 +4503,17 @@ def cookie_sync_auto(request: Request) -> dict:
 
     results = _sync_domains_to_cloud(url, token)
     pushed = sum(1 for r in results if r.get("pushed"))
-    # 只有「确实推到过东西」才记签名：全站都推失败时保留旧签名，下一轮重试。
-    if pushed or not prev:
+    # 「本机未登录」是正常状态，不算失败；429/超时/网络错误才算。
+    failed = sum(
+        1 for r in results
+        if not r.get("pushed") and r.get("reason") != _COOKIE_NO_LOGIN
+    )
+    # 只有「确实推到过东西，且这一轮没有失败站点」才记签名。
+    # 🔴 为什么必须把 failed 也算进来（2026-10-21 连推压测实测踩到）：
+    # 签名一旦写上，只要浏览器库不再变化就不会再进这个函数，本轮撞 429/超时的域
+    # 就永远不会补推——实测 10 站有登录态、7 站 429，写签名后它们被静默跳过。
+    # 反过来，若全站都失败（pushed=0）也保留旧签名，下一轮重试。
+    if (pushed or not prev) and not failed:
         try:
             _COOKIE_WATCH_STATE.parent.mkdir(parents=True, exist_ok=True)
             # 必须走 atomic_write_json：本仓禁止裸 Path.write_text 写状态文件
@@ -4507,7 +4521,15 @@ def cookie_sync_auto(request: Request) -> dict:
             atomic_io.atomic_write_json(_COOKIE_WATCH_STATE, sig, indent=None)
         except Exception:
             pass
-    return {"ok": True, "skipped": False, "pushed": pushed, "total": len(results), "results": results}
+    return {
+        "ok": True,
+        "skipped": False,
+        "pushed": pushed,
+        "failed": failed,
+        "retry_next": bool(failed),
+        "total": len(results),
+        "results": results,
+    }
 
 @app.post("/api/cookie/sync/to-cloud")
 def cookie_sync_to_cloud(request: Request) -> dict:

@@ -131,6 +131,65 @@ def test_push_failure_keeps_state() -> None:
               state.read_text(encoding="utf-8") == before)
 
 
+def test_partial_failure_keeps_state() -> None:
+    """部分成功 + 部分失败 ⇒ 不写签名（2026-10-21 连推压测实测踩到的坑）。
+
+    原判定是 `if pushed or not prev`，只要有一个站推成功就写签名。实测一轮里
+    10 站有登录态、7 站撞 429，pushed=3 就把签名写了 ⇒ 库不再变化时那 7 站
+    永远不会补推。这里的断言就是「有失败就必须留待重试」。
+    """
+    print("[5b] 部分失败不落盘签名（失败的域下一轮要能补推）")
+    c = _client()
+
+    def mixed(url, token):
+        return [
+            {"domain": "bilibili.com", "pushed": True},
+            {"domain": "kuaishou.com", "pushed": False, "reason": "HTTP Error 429: Too Many Requests"},
+        ]
+
+    with tempfile.TemporaryDirectory() as td:
+        state = Path(td) / "cookie_sync_state.json"
+        state.write_text(json.dumps({"old": "1:1"}), encoding="utf-8")
+        before = state.read_text(encoding="utf-8")
+        with patch.object(server_app, "_COOKIE_WATCH_STATE", state), \
+             patch.object(server_app, "_cloud_sync_config", return_value=("http://x", "t")), \
+             patch.object(server_app, "_sync_domains_to_cloud", side_effect=mixed):
+            r = c.post("/api/cookie/sync/auto", json={})
+        b = r.json()
+        check("pushed=1 且 failed=1", b.get("pushed") == 1 and b.get("failed") == 1, b)
+        check("retry_next=True（告诉前端这轮没推全）", b.get("retry_next") is True, b)
+        check("签名快照未被覆盖（失败域下轮还能补推）",
+              state.read_text(encoding="utf-8") == before)
+
+
+def test_no_login_is_not_failure() -> None:
+    """「本机未登录」是正常状态，不得让签名永远写不上（否则每轮全量解密）。
+
+    必须和 [5b] 成对：只堵失败、不误伤「没登录这个站」，否则用户没登录
+    instagram 这种站就会让 auto 每 2 分钟白跑一次 14 站解密。
+    """
+    print("[5c] 「本机未登录」不算失败 ⇒ 照常写签名（避免每轮白跑）")
+    c = _client()
+
+    def with_absent(url, token):
+        return [
+            {"domain": "bilibili.com", "pushed": True},
+            {"domain": "gifshow.com", "pushed": False, "reason": server_app._COOKIE_NO_LOGIN},
+        ]
+
+    with tempfile.TemporaryDirectory() as td:
+        state = Path(td) / "cookie_sync_state.json"
+        with patch.object(server_app, "_COOKIE_WATCH_STATE", state), \
+             patch.object(server_app, "_cloud_sync_config", return_value=("http://x", "t")), \
+             patch.object(server_app, "_sync_domains_to_cloud", side_effect=with_absent):
+            r = c.post("/api/cookie/sync/auto", json={})
+            b = r.json()
+            check("failed=0（未登录不计入失败）", b.get("failed") == 0, b)
+            check("写入了签名快照", state.exists())
+            r2 = c.post("/api/cookie/sync/auto", json={})
+            check("下一轮即 skipped", r2.json().get("skipped") is True, r2.json())
+
+
 def test_from_local_pushes_to_cloud() -> None:
     print("[6] from-local 写本机池后同时上云（原缺陷：只写本机却自称已上报）")
     c = _client()
@@ -228,6 +287,8 @@ if __name__ == "__main__":
     test_signature_detects_change()
     test_skip_when_unchanged()
     test_push_failure_keeps_state()
+    test_partial_failure_keeps_state()
+    test_no_login_is_not_failure()
     test_from_local_pushes_to_cloud()
     test_from_local_cloud_failure_not_fatal()
     test_from_local_no_cloud_config()
