@@ -6,7 +6,8 @@
   用于网页版公共服务复用，让访客无需手动粘贴 Cookie。两者存储目录与用途完全分离。
 
 安全 / 合规：
-- 仅允许白名单域（目前 chrqj 系列），绝不收其他网站 Cookie。
+- 仅允许白名单域（金牌影院 chrqj/nmwchxx、B 站、优酷、腾讯系、YouTube 等），
+  绝不收其他网站 Cookie。
 - 存储加密（VDL_COOKIE_ENC_KEY；未配则降级为 600 权限明文），不落明文日志。
 - 入池前用该 Cookie 试一次目标站验真（确认有效才收，垃圾 / 失效直接拒）。
 - 后台定时探测（verify_and_prune）剔除失效项，避免公共池静默失效。
@@ -74,8 +75,7 @@ _POOL_EXTRA_DOMAINS = {"youtube.com"}
 
 logger = logging.getLogger(__name__)
 
-# chrqj 验真用的签名参数（与 yt_dlp_plugins/extractor/chrqj.py 保持一致）
-_CHRQJ_API = "https://www.chrqj.com/mw-movie/anonymous/v2/video/episode/url"
+# 金牌影院验真用的签名参数（chrqj.com / nmwchxx.com 同一站，共用密钥与视频 ID）
 _CHRQJ_SIGN_KEY = "cb808529bae6b6be45ecfab29a4889bc"
 _CHRQJ_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -437,11 +437,18 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
         return ok
 
 
-def verify_chrqj(header: str) -> bool | None:
-    """用 Cookie 试一次 chrqj 签名接口。True=有效, False=明确无效, None=无法判定(网络不可达)。"""
+def verify_chrqj(header: str, domain: str = "chrqj.com") -> bool | None:
+    """用 Cookie 试一次金牌影院签名接口。True=有效, False=明确无效, None=无法判定(网络不可达)。
+
+    domain 传实际站域（chrqj.com / nmwchxx.com）：两者是同一站（老域名首页
+    302 → 新域名），API/签名密钥/视频 ID 全共用，但 API 主机与 Referer 要跟着
+    域走，跨域 Referer 有被拒的风险（2026-10-21 实测同对 ID 两边都能出片）。
+    """
     if requests is None:
         return None
     try:
+        d = _strip_sub(domain) or "chrqj.com"
+        base = f"https://www.{d}"
         vid, nid = _CHRQJ_TEST
         params = {"clientType": "1", "id": vid, "nid": nid}
         t = str(int(time.time() * 1000))
@@ -450,18 +457,19 @@ def verify_chrqj(header: str) -> bool | None:
         sign = hashlib.sha1(hashlib.md5(h.encode()).hexdigest().encode()).hexdigest()
         headers = {
             "User-Agent": _CHRQJ_UA,
-            "Referer": "https://www.chrqj.com/",
+            "Referer": f"{base}/",
             "sign": sign,
             "t": t,
             "deviceId": str(uuid.uuid4()),
             "authorization": "",
             "Cookie": header,
         }
-        r = requests.get(_CHRQJ_API, params=params, headers=headers, timeout=10)
+        r = requests.get(f"{base}/mw-movie/anonymous/v2/video/episode/url",
+                         params=params, headers=headers, timeout=10)
         if r.status_code != 200:
             return False
-        d = r.json()
-        if d.get("code") == 200 and (d.get("data") or {}).get("list"):
+        dd = r.json()
+        if dd.get("code") == 200 and (dd.get("data") or {}).get("list"):
             return True
         return False
     except Exception:
@@ -509,6 +517,8 @@ def verify_bilibili(header: str) -> bool | None:
 #   "domain=url;domain2=url2"
 _TEST_URLS = {
     "chrqj.com": "https://www.chrqj.com/vod/play/116537/1/877419",
+    # 金牌影院新域名（同一站）：站内标准形态，供 yt-dlp 通用验真兜底
+    "nmwchxx.com": "https://nmwchxx.com/vod/play/116537/sid/877419",
 }
 
 
@@ -655,15 +665,16 @@ def get_ckey(domain: str) -> str | None:
 
 
 def verify_cookie(domain: str, header: str) -> bool | None:
-    """按域分发验真：chrqj 走专属签名验真，其余优先结构校验、再 yt-dlp 通用验真。
+    """按域分发验真：金牌影院一族（chrqj/nmwchxx）走专属签名验真，其余优先结构校验、再 yt-dlp 通用验真。
 
     口径统一为「仅明确无效(False)才拒，无法判定(None)放行」，与
     verify_and_prune 对 None 保留的语义一致。这样 yt-dlp 试解析不稳定的站
     （如优酷 -3007）不会因误判 False 而被拒之池外。
     """
     d = _strip_sub(domain)
-    if d == "chrqj.com":
-        return verify_chrqj(header)
+    # 金牌影院一族（老域名 chrqj.com + 新域名 nmwchxx.com，同一站）走签名验真
+    if d in ("chrqj.com", "nmwchxx.com"):
+        return verify_chrqj(header, d)
     # B 站：游客态 Cookie 与登录态「长得一样」（都有 DedeUserID/buvid），
     # 只能问站点本身；这是唯一能区分两者的判据。
     if d == "bilibili.com":

@@ -1567,9 +1567,13 @@ _COOKIE_HARDENED_DOMAINS: tuple[str, ...] = (
     # 优酷：会员/受限视频需要登录态 Cookie，yt-dlp 解析时会报 -3007"请先登录"。
     # 加入 hardened 后桌面端自动读取浏览器 Cookie，云端可经公共池共享。
     "youku.com",
-    # chrqj 影视聚合站：视频流（m3u8/ts CDN）校验播放页会话 Cookie，缺则拒绝。
+    # chrqj 影视聚合站（= 金牌影院老域名，首页 302 → nmwchxx.com，同一套
+    # mw-movie API）：视频流（m3u8/ts CDN）校验播放页会话 Cookie，缺则拒绝。
     # 加入后自动从本机浏览器读该站 Cookie 并注入视频流请求头（无需手动粘贴）。
+    # 🔴 两个域名都要列：站点已迁到 nmwchxx.com，只认老域名等于新域名的登录态
+    # 既进不了公共池、桌面端也不会自动读（2026-10-21 收编时补）。
     "chrqj.com",
+    "nmwchxx.com",
 )
 # 注意：YouTube **故意不列入** hardened —— hardened 会把 403 文案改写成
 # 「该站需要登录 Cookie」，从而盖掉 YouTube 403 真正该排查的代理/地区线索
