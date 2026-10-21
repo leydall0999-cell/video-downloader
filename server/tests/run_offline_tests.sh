@@ -1060,7 +1060,8 @@ run_one test_extension_browser_precision.py
 #     只认 App 的 VDL-Update/ UA、HEAD 预检不计数、路径穿越/缺文件 404、by_day 90 天上限。
 run_one test_update_server_counting.py
 
-# 63.9 test_nmw_extractor.py —— 金牌影院（nmwchxx.com）解析器守卫（2026-10-14）。
+# 63.9 test_nmw_extractor.py —— 金牌影院（nmwchxx.com）解析器守卫（2026-10-14 建，
+#     2026-10-21 扩容：域名族 nmw* 识别 + 四种链接写法全兼容 + API 域名跟随源站）。
 #     平台条目 + CHINA_DOMAINS、probe/任务段两处分发、签名公式
 #     sign=SHA1(MD5("排序参数&key=<key>&t=<毫秒>")) 逐位锁定、标题/清晰度/best 装配
 #     （AST 抽函数 + sys.modules 注入假 requests/uuid，离线跑，不发真实请求）。
