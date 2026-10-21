@@ -4618,6 +4618,19 @@ def probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
 # 清晰度选项
 # --------------------------------------------------------------------------- #
 
+def _tier_tolerance(tier: int) -> int:
+    """清晰度档位的高度容差（±3%，至少 4 像素）。
+
+    🔴 非标准高度真实存在：1912x1072（1.85:1 电影裁掉黑边）、1082、1062……
+       这些在 yt-dlp 里 height 就是 1072，**既不等于 1080 也不等于 720**。
+    若按等值匹配，1080P 这一档根本匹配不到 ⇒ 卡片列不出来（用户选不到），
+    下载链也匹配不到。app-dev 从 2026-09 起就在体积估算里用 ±3% 容差
+    （见 `_video_size_at` 的「容差匹配」注释），本轮把容差一并提到
+    「分档」与「下载链」两处，否则非标准高度的视频会整档消失。
+    """
+    return max(4, int(tier * 0.03))
+
+
 def _short_side(f: dict) -> int | None:
     """视频轨的「短边高度」——用户认知里的那个清晰度数字。
 
@@ -4684,10 +4697,14 @@ def _video_tracks_at(formats: list[dict], short_h: int) -> list[dict]:
 
     排序即优先级：卡片取 [0] 作为「实际会下载的那一条」，下载链也按此顺序回落。
     """
-    tracks = [
-        f for f in formats
-        if f.get("vcodec") not in (None, "none") and _short_side(f) == short_h
-    ]
+    _tol = _tier_tolerance(short_h)
+    tracks = []
+    for f in formats:
+        if f.get("vcodec") in (None, "none"):
+            continue
+        _s = _short_side(f)
+        if _s and abs(_s - short_h) <= _tol:
+            tracks.append(f)
     # 编码优先（与下载链一致）→ 同编码下选**有真实体积**的那条（卡片报价才准）
     # → 再按码率降序。HLS 混合流(96) 与 DASH(137) 同为 avc1，选 137 才报得出
     # 398MB；若反过来选 96（无 filesize）卡片就只能报 0。
@@ -4771,8 +4788,14 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     # 平铺成「180P/90P/45P/27P」怪档（2026-10-01 SABR 实测踩坑）
     formats = [f for f in formats if not str(f.get("protocol") or "").startswith("mhtml")]
     # 一律按**短边**分档（竖屏 1080x1920 的 height 是 1920，见 _short_side）
+    _shorts = sorted({s for s in (_short_side(f) for f in formats) if s},
+                     reverse=True)
+    # 短边 → 标准档位：容差内归档（1072 → 1080 档，见 _tier_tolerance）。
+    # 不做这层归档的话，非标准高度的视频会整档从卡片上消失，用户选不到。
     heights = sorted(
-        {s for s in (_short_side(f) for f in formats) if s}, reverse=True
+        (t for t, _ in QUALITY_PRESETS
+         if any(abs(s - t) <= _tier_tolerance(t) for s in _shorts)),
+        reverse=True,
     )
     _audio_pick = _audio_tracks(formats)
     _a0 = _audio_pick[0] if _audio_pick else None
@@ -4786,7 +4809,9 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
         ]
 
     # 纯音频内容（喜马拉雅/网易云等无视频轨）：不展示 4K/1080P 等视频画质选项
-    if not heights:
+    # 判据用 _shorts（有没有视频轨）而不是 heights（有没有匹配上标准档）：
+    # 只有 900 这种非标准高度的视频不该被误判成纯音频，只是列不出档而已。
+    if not _shorts:
         # ⚠️ 「没有 height」≠「没有视频轨」，`formats` 为空更不等于音频。两种真实情形：
         #   ① **直链文件**：probe() 在 _looks_like_direct_file() 短路，**根本没跑 yt-dlp**
         #      ⇒ formats 为 0 条（2026-10-20 实测 mov_bbb.mp4：`formats count: 0`）；
@@ -4866,25 +4891,29 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
 def _exact_height_chains(short_h: int) -> list[str]:
     """短边高度**精确锁定**的格式链 —— 只许命中这一档，不升档也不降档。
 
-    🔴 每条链都用 `=N` 而不是 `<=N`：匹配不到就整条失败、落到下一条，
-    绝不会静默挑一个别的清晰度。这是「选什么就下什么」的硬底座。
-    （`height<=1080` 既能升也能降：无 1080 时它拿 720，403 时旧链拿 1440。）
+    🔴 每条链都把高度锁在**窄区间** `[>=lo][<=hi]`（lo/hi 由 ±3% 容差算出），
+    而不是单边的 `<=N`。单边上界既能升也能降：无 1080 时它拿 720，403 时
+    旧链直接拿 1440；双边区间则把「这一档」和「隔壁档」彻底隔开
+    （1080 档 1047~1113，720 档 698~742，互不重叠）。
+    留容差是为了容纳 1072 这类非标准高度（见 _tier_tolerance）。
 
-    两条一组是为了横竖屏通吃：
-      `[height=N]` 命中横屏（1920x1080 的 height=1080）
-      `[width=N]`  命中竖屏（1080x1920 的 width=1080）
+    两条一组是为了横竖屏通吃：横屏 1920x1080 锁 height、竖屏 1080x1920 锁 width。
     组内顺序：先锁 H.264（macOS WKWebView/Safari 解不了 AV1/VP9，
     否则「下载成功但播不了」），再放开编码让 VP9/AV1 顶上。
     """
+    _tol = _tier_tolerance(short_h)
+    _lo, _hi = short_h - _tol, short_h + _tol
+    _h = f"height>={_lo}][height<={_hi}"
+    _w = f"width>={_lo}][width<={_hi}"
     return [
-        f"bv[height={short_h}][vcodec^=avc1]+ba[ext=m4a]",
-        f"bv[width={short_h}][vcodec^=avc1]+ba[ext=m4a]",
-        f"bv[height={short_h}][vcodec^=avc1]+ba",
-        f"bv[width={short_h}][vcodec^=avc1]+ba",
-        f"bv[height={short_h}]+ba[ext=m4a]",
-        f"bv[width={short_h}]+ba[ext=m4a]",
-        f"bv[height={short_h}]+ba/bv[width={short_h}]+ba",
-        f"b[height={short_h}]/b[width={short_h}]",
+        f"bv[{_h}][vcodec^=avc1]+ba[ext=m4a]",
+        f"bv[{_w}][vcodec^=avc1]+ba[ext=m4a]",
+        f"bv[{_h}][vcodec^=avc1]+ba",
+        f"bv[{_w}][vcodec^=avc1]+ba",
+        f"bv[{_h}]+ba[ext=m4a]",
+        f"bv[{_w}]+ba[ext=m4a]",
+        f"bv[{_h}]+ba/bv[{_w}]+ba",
+        f"b[{_h}]/b[{_w}]",
     ]
 
 
@@ -4955,11 +4984,13 @@ def _youtube_hls_selector(quality_key: str) -> str:
             "best[protocol^=m3u8][height<=1080]/"
             f"{_format_selector(quality_key)}"
         )
-    # 具体档位：HLS 混合流同样精确命中这一档（横/竖屏各一条），
-    # 拿不到就落回 DASH 精确链，不许顺手换个清晰度。
+    # 具体档位：HLS 混合流同样锁死这一档（横/竖屏各一条，±3% 容差），
+    # 拿不到就落回 DASH 链，不许顺手换个清晰度。
+    _tol = _tier_tolerance(cap)
+    _lo, _hi = cap - _tol, cap + _tol
     return (
-        f"b[protocol^=m3u8][height={cap}]/"
-        f"b[protocol^=m3u8][width={cap}]/"
+        f"b[protocol^=m3u8][height>={_lo}][height<={_hi}]/"
+        f"b[protocol^=m3u8][width>={_lo}][width<={_hi}]/"
         f"{_format_selector(quality_key)}"
     )
 
@@ -5011,9 +5042,12 @@ def _yt_fallback_chains(quality_key: str) -> list[str]:
     # 具体档位 → 精确锁定。整条链内部已含「换编码 / 换协议 / 横竖屏」的退让，
     # 交给一轮即可；外层再靠 client 轮换重试。
     cap = _quality_cap(quality_key)
+    _tol = _tier_tolerance(cap)
+    _lo, _hi = cap - _tol, cap + _tol
     return [
         "/".join(_exact_height_chains(cap)),
-        f"b[protocol^=m3u8][height={cap}]/b[protocol^=m3u8][width={cap}]",
+        f"b[protocol^=m3u8][height>={_lo}][height<={_hi}]/"
+        f"b[protocol^=m3u8][width>={_lo}][width<={_hi}]",
     ]
 
 

@@ -20,6 +20,7 @@
 """
 
 import os
+import re
 import sys
 import types
 import unittest
@@ -174,10 +175,30 @@ class ExactSelectorTest(unittest.TestCase):
     """C. 具体档位的选择器一律 `=N` 精确锁定。"""
 
     def _assert_exact(self, selector, n, what):
-        self.assertNotIn("<=", selector, f"{what} 出现 <=（会跨档）")
-        self.assertNotIn("bv*", selector, f"{what} 出现 bv*（无上限）")
-        self.assertIn(f"height={n}", selector, f"{what} 没有锁 height={n}")
-        self.assertIn(f"width={n}", selector, f"{what} 没有锁 width={n}（竖屏会失效）")
+        """锁死在 [n±tol] 的窄区间内，且**每个上界都必须配一个下界**。
+
+        单边上界 `[height<=1080]` 正是会静默跨档的写法（无 1080 拿 720），
+        所以除了检查区间存在，还要检查上界不是孤立的。
+        """
+        tol = max(4, int(n * 0.03))
+        lo, hi = n - tol, n + tol
+        self.assertNotIn("bv*", selector, f"{what} 出现 bv*（无区间约束）")
+        self.assertIn(f"height>={lo}", selector, f"{what} 缺下界 height>={lo}")
+        self.assertIn(f"height<={hi}", selector, f"{what} 缺上界 height<={hi}")
+        self.assertIn(f"width>={lo}", selector, f"{what} 缺竖屏下界 width>={lo}")
+        self.assertIn(f"width<={hi}", selector, f"{what} 缺竖屏上界 width<={hi}")
+        for m in re.finditer(r"\[height<=(\d+)\]", selector):
+            seg = selector[max(0, m.start() - 24):m.start()]
+            self.assertIn(
+                "[height>=", seg,
+                f"{what} 出现单边上界 [height<={m.group(1)}]（会跨档）",
+            )
+        for m in re.finditer(r"\[width<=(\d+)\]", selector):
+            seg = selector[max(0, m.start() - 24):m.start()]
+            self.assertIn(
+                "[width>=", seg,
+                f"{what} 出现单边上界 [width<={m.group(1)}]（会跨档）",
+            )
 
     def test_format_selector_1080_is_exact(self):
         self._assert_exact(D._format_selector("1080"), 1080, "_format_selector(1080)")
@@ -191,7 +212,7 @@ class ExactSelectorTest(unittest.TestCase):
     def test_hls_selector_is_exact(self):
         s = D._youtube_hls_selector("1080")
         self._assert_exact(s, 1080, "_youtube_hls_selector(1080)")
-        self.assertIn("protocol^=m3u8][height=1080]", s)
+        self.assertIn("protocol^=m3u8][height>=1048]", s)
 
     def test_fallback_chains_are_exact(self):
         for chain in D._yt_fallback_chains("1080"):
@@ -369,6 +390,49 @@ class HlsSizeEstimationTest(unittest.TestCase):
     def test_missing_duration_falls_back_to_zero(self):
         """没有时长算不出体积，但也不许崩。"""
         self.assertEqual(D._size_of(self._hls("96", 1080, 1920, 4500), 0.0), 0)
+
+
+class NonStandardHeightTest(unittest.TestCase):
+    """G. 非标准高度（1072 等）必须能归到 1080P 档，不能整档消失。
+
+    1912x1072（1.85:1 电影裁掉黑边）这类在 yt-dlp 里 height 就是 1072，
+    既不等于 1080 也不等于 720。等值匹配下 1080P 这一档会匹配不到 ⇒
+    卡片列不出、下载链也选不中，用户直接少一档可用的清晰度。
+    """
+
+    ODD = [
+        _vid("o1", 1072, 1912, "avc1.64002", 380000000, 3300),
+        _vid("o2", 716, 1272, "avc1.64001", 200000000, 1800),
+        _aud("a1", "m4a", 15000000),
+    ]
+
+    def test_odd_height_maps_to_1080p(self):
+        keys = [o["key"] for o in D.build_quality_options({"formats": self.ODD})]
+        self.assertIn("1080", keys, "1072 高的视频必须能选到 1080P")
+        self.assertIn("720", keys)
+
+    def test_odd_height_has_video_tracks(self):
+        self.assertTrue(D._video_tracks_at(self.ODD, 1080))
+        self.assertTrue(D._video_tracks_at(self.ODD, 720))
+
+    def test_tier_tolerance_values(self):
+        self.assertEqual(D._tier_tolerance(1080), 32)
+        self.assertEqual(D._tier_tolerance(360), 10)
+        self.assertEqual(D._tier_tolerance(144), 4)
+
+    def test_selector_range_covers_odd_height(self):
+        s = D._format_selector("1080")
+        self.assertIn("height>=1048", s)
+        self.assertIn("height<=1112", s)
+
+    def test_out_of_tolerance_not_forced_into_tier(self):
+        """900 这种谁都不挨着的高度不该被硬塞进 1080/720 档。"""
+        keys = [o["key"] for o in D.build_quality_options(
+            {"formats": [_vid("x", 900, 1600, "avc1", 100000000)]})]
+        self.assertNotIn("1080", keys)
+        self.assertNotIn("720", keys)
+        # 但也不能因此被误判成纯音频（否则卡片只剩音频档）
+        self.assertIn("best", keys)
 
 
 if __name__ == "__main__":
