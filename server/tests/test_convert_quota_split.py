@@ -148,6 +148,44 @@ def test_all_convert_gates_use_dispatch():
     assert 'cloud_quota_gate(request, resource="cloud_convert")' not in src
 
 
+# --------------------------------------------------------------------------- #
+# 6. 中心没有这个键 ≠ 余量 0（2026-10-21 实测踩到）
+# --------------------------------------------------------------------------- #
+def test_center_missing_key_falls_back_to_daily() -> None:
+    """音乐 / 图片转换按目标格式拆键后，中心的终身池里根本没有这两个键。
+
+    `_cloud_quota_remaining` 旧写法 `int(rem.get(resource) or 0)` 会把「键不存在」
+    当成「余量 0」⇒ 免费用户第一次点音乐转换就被 402「终身 3 次已用完」，而这两项
+    按配额表本该是免费 5 次/日。缺失键必须返回 None，让 gate 退回每日配额。
+    """
+    import license_client
+
+    class _Store:
+        def cloud_session(self):
+            return {"token": "test-token"}
+
+    view = {
+        "ok": True,
+        "cloud_quota": {
+            "lifetime_remaining": {"cloud_convert": 2, "cloud_concat": 3},
+            "lifetime_limits": {"cloud_convert": 2, "cloud_concat": 3},
+        },
+    }
+    orig = license_client.cloud_quota_remote
+    license_client.cloud_quota_remote = lambda *a, **k: view  # type: ignore[assignment]
+    try:
+        # 中心不管的键 → None（调用方退回每日 5 次/日）
+        assert _app_mod._cloud_quota_remaining(_Store(), "convert_audio") is None
+        assert _app_mod._cloud_quota_remaining(_Store(), "convert_image") is None
+        # 中心管的键 → 照常返回 (余量, 生效上限)
+        assert _app_mod._cloud_quota_remaining(_Store(), "cloud_convert") == (2, 2)
+        # 反方向：余量真的是 0 时必须返回 0（不能被当成「键缺失」而 fail-open）
+        view["cloud_quota"]["lifetime_remaining"]["cloud_convert"] = 0
+        assert _app_mod._cloud_quota_remaining(_Store(), "cloud_convert") == (0, 2)
+    finally:
+        license_client.cloud_quota_remote = orig  # type: ignore[assignment]
+
+
 if __name__ == "__main__":
     import tempfile
     import traceback

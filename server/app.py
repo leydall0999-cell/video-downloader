@@ -870,6 +870,14 @@ def _cloud_quota_remaining(store, resource: str = "cloud_commentary"):
                 _lim = None
         rem = cq.get("lifetime_remaining")
         if isinstance(rem, dict):
+            # 🔴 2026-10-21：字典里**没有这个键** ≠ 余量为 0。中心的终身池只有 8 个
+            #   「云端算力」键（_CLOUD_RESOURCES），而 2026-10-19 起音乐转换 / 图片
+            #   转换拆出了 convert_audio / convert_image —— 中心压根不管这两个键。
+            #   旧写法 rem.get(resource) or 0 → 0 ⇒ 免费用户第一次点音乐/图片转换就被
+            #   判「终身额度已用完」（402），而这两项按表本该是免费 5 次/日。
+            #   缺失键必须返回 None（=「中心不管这个功能」），让调用方退回每日配额。
+            if resource not in rem:
+                return None
             try:
                 return max(0, int(rem.get(resource) or 0)), _lim
             except (TypeError, ValueError):
