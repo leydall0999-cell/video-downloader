@@ -1,0 +1,122 @@
+#!/usr/bin/env python
+"""YouTube 403 降级链「不许超过用户选的清晰度」守卫（web-dev，2026-10-21）
+
+事故（用户提问「上方选 1080P 显示 398M，下方下载 641M，为什么差这么多」）：
+  视频 Fcyih0Z4G2k，用户选「1080P 高清」，卡片按 `_video_size_at(1080)`
+  = itag 137(403MB, H.264 1080p) + 140(14.7MB) 算得 **398 MiB**。
+  该视频的 1080P H.264 分片被 googlevideo 403 拒绝（逐视频 IP 门禁，偶发），
+  于是进入 `_run_once` 的 403 降级链；前几环全是 avc1/137 → 同样 403，
+  最后落到旧末环 `bv*+ba/best[height<=1080]/best` —— 它**没有 height 上限**，
+  直接选了 itag 400(AV1 2560×1440) + 251：
+    任务记录 downloaded_bytes = 671874532
+    与 `bv*+ba` 选出的 400+251 filesize 之和 671874532 **完全一致**（实测闭环）。
+  后果：① 用户多花 1.6 倍流量；② UI 上 1440P 标着「PRO·原画需会员」，
+  免费用户被降级链白送了一个会员档位。
+
+修法：把降级链抽成 `_yt_fallback_chains(quality_key)`，**每一条都受
+`_quality_cap()` 约束**；硬编码 itag 链（299/248/137 都是 1080p）也按档裁剪。
+
+本文件离线守卫（不发任何网络请求）：
+1. `_quality_cap()` 语义（数字档取数字；best/audio/webm/m4a ⇒ 1080）；
+2. 任一档位下，**所有**降级链的通用选择器都带 `[height<=cap]`；
+3. 显式 itag 链里不得出现高于 cap 的 itag（720 档不许有 299/248/137）；
+4. 源码级接线：`_run_once` 必须调 `_yt_fallback_chains(quality_key)`，
+   且源码里不得再出现无上限的 `bv*+ba/best[height<=1080]/best`。
+"""
+import os
+import re
+import sys
+import unittest
+
+SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if SERVER_DIR not in sys.path:
+    sys.path.insert(0, SERVER_DIR)
+
+import downloader  # noqa: E402
+
+
+def _alternatives(chain: str) -> list[str]:
+    """把一条链按顶层 `/` 拆成备选（链里不含带 `/` 的过滤器，可直接 split）。"""
+    return [p for p in chain.split("/") if p.strip()]
+
+
+GENERIC = ("bv*", "bv", "best", "b[", "b ")
+
+
+def _is_explicit_itags(alt: str) -> bool:
+    return bool(re.fullmatch(r"\d+(\+\d+)+", alt.strip()))
+
+
+class QualityCapTest(unittest.TestCase):
+    def test_numeric(self):
+        self.assertEqual(downloader._quality_cap("1080"), 1080)
+        self.assertEqual(downloader._quality_cap("720"), 720)
+        self.assertEqual(downloader._quality_cap("2160"), 2160)
+
+    def test_non_numeric_defaults_to_1080(self):
+        for key in ("best", "audio", "webm", "m4a", "", "?"):
+            self.assertEqual(downloader._quality_cap(key), 1080, key)
+
+
+class FallbackChainCapTest(unittest.TestCase):
+    def test_every_generic_selector_is_height_capped(self):
+        """任何一个档位，通用选择器都必须写 [height<=cap]，不许裸 bv*/best。"""
+        for key in ("360", "480", "720", "1080", "1440", "2160", "best"):
+            cap = downloader._quality_cap(key)
+            for chain in downloader._yt_fallback_chains(key):
+                for alt in _alternatives(chain):
+                    if _is_explicit_itags(alt):
+                        continue
+                    if not any(alt.startswith(g) or g in alt for g in GENERIC):
+                        continue
+                    self.assertIn(
+                        f"height<={cap}", alt,
+                        f"{key} 档出现无上限选择器：{alt}（chain={chain}）",
+                    )
+
+    def test_no_height_above_cap_in_filter(self):
+        """过滤器里出现的所有 height<=N 都必须 ≤ cap（防止手抄错数字）。"""
+        for key in ("360", "720", "1080"):
+            cap = downloader._quality_cap(key)
+            for chain in downloader._yt_fallback_chains(key):
+                for n in re.findall(r"height<=(\d+)", chain):
+                    self.assertLessEqual(int(n), cap, f"{key} 档链里出现 height<={n}")
+
+    def test_explicit_itag_chain_trimmed_by_cap(self):
+        """显式 itag 链：299/248/137(1080) 在 720 及以下必须被裁掉。"""
+        top = downloader._yt_fallback_chains("1080")
+        self.assertTrue(any("137+140" in c for c in top), "1080 档应保留 137+140")
+
+        for key in ("720", "480", "360"):
+            joined = "|".join(downloader._yt_fallback_chains(key))
+            for itag in ("299", "248", "137"):
+                self.assertNotIn(f"{itag}+140", joined,
+                                 f"{key} 档不该出现 1080p 的 {itag}+140")
+            if key == "720":
+                self.assertIn("136+140", joined, "720 档应保留 136+140")
+            else:
+                self.assertNotIn("136+140", joined, f"{key} 档不该出现 720p 的 136+140")
+
+    def test_upscale_never_requested(self):
+        """末环必须是最小兜底，且不得出现裸 bv*+ba（本次事故的根因）。"""
+        for key in ("720", "1080"):
+            chains = downloader._yt_fallback_chains(key)
+            self.assertFalse(any("bv*+ba" in c for c in chains),
+                             f"{key} 档仍存在无上限的 bv*+ba")
+
+
+class SourceWiringTest(unittest.TestCase):
+    def test_run_once_uses_helper(self):
+        src = open(os.path.join(SERVER_DIR, "downloader.py"), encoding="utf-8").read()
+        self.assertIn("_fallback_chains = _yt_fallback_chains(quality_key)", src)
+
+    def test_old_unbounded_chain_gone(self):
+        src = open(os.path.join(SERVER_DIR, "downloader.py"), encoding="utf-8").read()
+        # 只允许出现在 _yt_fallback_chains 的注释里（说明事故），代码里不许有
+        code = re.sub(r'""".*?"""', "", src, flags=re.S)
+        code = re.sub(r"#.*", "", code)
+        self.assertNotIn('"bv*+ba/best[height<=1080]/best"', code)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
