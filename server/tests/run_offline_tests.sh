@@ -97,6 +97,7 @@ run_one test_quality_options_direct_video.py  # 清晰度档位归类：直链�
 run_one test_yt_quality_lock.py            # YouTube「选什么下什么」：解析阶段 format=None 会选 4K，process_info 前必须按卡片同源重选轨（2026-10-21 事故：选 480P 实下 1.9G 4K AV1）
 run_one test_cookie_pool_admin_cloud.py    # 云端 Cookie 池管理入口 POST /api/cookie/pool-admin：令牌门禁/概览口径/脱敏/坏输入/路由已挂载（2026-10-21 桌面后台报「云端不可达 HTTP 405」事故）
 run_one test_cookie_probe_static.py        # Cookie 验真：抖音/快手/小红书/TikTok 无联网接口 ⇒ 缺登录字段必须判 invalid，有字段才保持 unknown（2026-10-21 实测 17 条全挂「未校验」事故）
+run_one test_cookie_verify_inherit.py      # Cookie 池「未校验」治理：同会话新快照继承已校验结论、换会话/游客不继承、www. 注入 key 归一（2026-10-21 线上小红书/YouTube 各 3 份全挂未校验）
 run_one test_upload_body_limit.py
 run_one test_reconvert_source_reuse.py      # 免重传重转：finish 留源 2h / reconvert 复用 / 设备隔离 / 410 回退 / TTL 清理（2026-09-29）
 run_one test_feature_auth_gate.py           # 功能级登录门禁（服务端）：18 个执行类端点未登录 403+引导登录、带 token 放行（2026-09-29）

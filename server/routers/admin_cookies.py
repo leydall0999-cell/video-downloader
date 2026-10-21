@@ -246,7 +246,47 @@ def _read_domain(domain: str, now: float, cache: dict) -> dict:
                 "verified_ts": verified_ts,
                 "expired": expired,
                 "suspect": suspect,
+                # 「结论是从同会话的旧快照继承来的」——前端可据此显示更淡的徽标，
+                # 运营点「立即校验」后会被真实结论覆盖。
+                "inherited": False,
+                # 临时字段：第二阶段的同会话继承要用，聚合前 pop 掉，不外泄。
+                "_sk": cp._session_key(host, header),
             })
+
+    # ─── 新快照继承「同会话」已有结论 ────────────────────────────────────
+    # 浏览器每同步上来一次就多一份快照（内容/时间不同、会话相同），而校验缓存
+    # 按 entry_id 存 ⇒ 新快照必然 miss，页面把它显示成「未校验」——哪怕它所属
+    # 的会话 2 分钟前刚被验成「有效」。2026-10-21 线上实测：小红书 3 份里 2 份
+    # valid、最新那份 unknown；YouTube 3 份全 unknown 且都诞生于上次校验之后。
+    # 运营看到「1 个账号 · 3 份（未校验 3）」只会以为整批都废了。
+    #
+    # 继承的边界（缺一不可）：
+    #   · 只认同一个 `_session_key`（身份 + 会话字段哈希）。换账号或重新登录 ⇒
+    #     会话字段变 ⇒ key 变 ⇒ 不会把新登录误标成「有效」。
+    #   · 只继承有真实校验结论（verified_ts>0）的条目，不继承静态猜测。
+    #   · 本地静态已判 invalid（缺登录字段）的不继承：那种 Cookie 不会是同一会话。
+    donors: dict[str, dict] = {}
+    for e in entries:
+        if not e["verified_ts"] or e["status"] not in ("valid", "invalid"):
+            continue
+        cur = donors.get(e["_sk"])
+        if cur is None or e["ts"] >= cur["ts"]:
+            donors[e["_sk"]] = e
+    for e in entries:
+        if e["verified_ts"] or e["status"] != "unknown":
+            continue
+        d0 = donors.get(e["_sk"])
+        if not d0:
+            continue
+        mins = max(0, int((now - d0["verified_ts"]) / 60))
+        when = "刚刚" if mins < 1 else f"{mins} 分钟前"
+        e["status"] = d0["status"]
+        e["detail"] = f"同会话{when}已校验：{d0['detail'] or d0['status']}"
+        e["probe"] = d0["probe"]
+        e["verified_ts"] = d0["verified_ts"]
+        e["inherited"] = True
+    for e in entries:
+        e.pop("_sk", None)
 
     # 按账号聚合：管理员关心「这个号还能用吗、存了几份、多少项」
     groups: dict[str, list[dict]] = {}
@@ -277,11 +317,12 @@ def _read_domain(domain: str, now: float, cache: dict) -> dict:
             "probe": latest["probe"],
             "verified_ts": latest["verified_ts"],
             "suspect": bool(latest.get("suspect")),
+            "inherited": bool(latest.get("inherited")),
             "entries": [
                 {k: it[k] for k in ("id", "host", "parts", "ts", "age_sec",
                                     "used_ts", "used_age_sec",
                                     "source", "status", "detail", "probe",
-                                    "verified_ts", "suspect")}
+                                    "verified_ts", "suspect", "inherited")}
                 for it in items
             ],
         })
@@ -695,7 +736,9 @@ def _do_inject(domain: str, raw_header: Any) -> dict:
         try:
             eid = _entry_id(header)
             items = dict((_load_cache().get("items") or {}))
-            items[f"{domain}|{eid}"] = {
+            # key 必须与 `_read_domain` 一致（根域）：管理员粘贴时常带 www./m.，
+            # 若按原样入 key，概览永远命中不到这份结论，刚注入就显示「未校验」。
+            items[f"{cp._strip_sub(domain)}|{eid}"] = {
                 "status": probe.get("status") or "unknown",
                 "detail": probe.get("detail") or "",
                 "probe": probe.get("probe") or _PROBE_NONE,
