@@ -85,9 +85,13 @@ class TestYoutubeHlsSelector(unittest.TestCase):
 
     def test_numeric_quality(self):
         s = D._youtube_hls_selector("1080")
-        self.assertTrue(s.startswith("b[protocol^=m3u8][height<=1080]/"), s)
-        self.assertIn("best[protocol^=m3u8][height<=1080]/", s)
-        # 回落段必须是原 DASH 选择器（vcodec^=avc1 链），保证拿不到 HLS 时行为不变
+        # HLS 段同样锁在 1080 档的窄区间内（横屏 height / 竖屏 width），
+        # 且不许出现单边上界 —— 单边上界正是会静默跨档的写法
+        self.assertTrue(
+            s.startswith("b[protocol^=m3u8][height>=1048][height<=1112]/"), s)
+        self.assertIn("b[protocol^=m3u8][width>=1048][width<=1112]/", s)
+        self.assertNotIn("[height<=1080]", s, "HLS 段出现单边上界 1080（会跨档）")
+        # 回落段必须是原 DASH 选择器（精确 avc1 链），保证拿不到 HLS 时行为不变
         self.assertIn(D._format_selector("1080"), s)
 
     def test_best_key_caps_1080(self):
@@ -97,7 +101,10 @@ class TestYoutubeHlsSelector(unittest.TestCase):
 
     def test_other_quality(self):
         s = D._youtube_hls_selector("720")
-        self.assertIn("height<=720", s)
+        self.assertIn("height>=699", s)
+        self.assertIn("width>=699", s)
+        self.assertIn("height<=741", s)
+        self.assertNotIn("[height<=720]", s)
         self.assertIn(D._format_selector("720"), s)
 
 
@@ -113,7 +120,8 @@ class TestDownloadOptionsWiring(unittest.TestCase):
 
     def test_youtube_no_pot_uses_hls(self):
         fmt = self._fmt(self.URL, "1080", pot_ok=False)
-        self.assertTrue(fmt.startswith("b[protocol^=m3u8][height<=1080]"), fmt)
+        self.assertTrue(
+            fmt.startswith("b[protocol^=m3u8][height>=1048][height<=1112]"), fmt)
 
     def test_youtube_pot_ok_keeps_dash(self):
         fmt = self._fmt(self.URL, "1080", pot_ok=True)

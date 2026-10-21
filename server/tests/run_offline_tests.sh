@@ -148,6 +148,7 @@ run_one test_quality_member_ui_wiring.py     # 清晰度门槛三端接线：后
 run_one test_yt_pot_starved.py
 run_one test_youtube_hls_prefer.py         # YouTube 无 POT ⇒ ≤1080p 优先 HLS 混合流（2026-10-19 用户「下载速度慢」）：DASH 无 POT 被 googlevideo 按连接限速（16 连接聚合 ~600KB/s + 硬阻断超时），HLS 单连接 1.5MB/s；含 _pot_usable 代理感知判定 + VDL_YT_JS_RUNTIME=off 开关
 run_one test_yt_fallback_cap.py            # 403 降级链不许超过用户选的清晰度（2026-10-21：选 1080P 显示 398MB、实际下到 641MiB 的 1440P AV1，末环 bv*+ba 无 height 上限）
+run_one test_quality_exact.py              # 「选什么清晰度就下什么清晰度」：下载/降级/HLS 三处选择器锁在 [n±3%] 窄区间（上下界成对）、分档按短边（竖屏 1080x1920 不能整档消失）、自动档保留 <=1080
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py
 run_one test_dewatermark_core.py

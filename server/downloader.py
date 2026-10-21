@@ -4732,6 +4732,148 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
 # 清晰度选项
 # --------------------------------------------------------------------------- #
 
+def _tier_tolerance(tier: int) -> int:
+    """清晰度档位的高度容差（±3%，至少 4 像素）。
+
+    🔴 非标准高度真实存在：1912x1072（1.85:1 电影裁掉黑边）、1082、1062……
+       这些在 yt-dlp 里 height 就是 1072，**既不等于 1080 也不等于 720**。
+    若按等值匹配，1080P 这一档根本匹配不到 ⇒ 卡片列不出来（用户选不到），
+    下载链也匹配不到。app-dev 从 2026-09 起就在体积估算里用 ±3% 容差
+    （见 `_video_size_at` 的「容差匹配」注释），本轮把容差一并提到
+    「分档」与「下载链」两处，否则非标准高度的视频会整档消失。
+    """
+    return max(4, int(tier * 0.03))
+
+
+def _short_side(f: dict) -> int | None:
+    """视频轨的「短边高度」——用户认知里的那个清晰度数字。
+
+    横屏 1920x1080 → 1080（height 就是短边）；竖屏 1080x1920 → 1080（width 才是短边）。
+
+    🔴 短视频（抖音/快手/TikTok/Shorts）大量竖屏，只按 height 分档会两头错：
+      ① 卡片：竖屏 1080P 的 height 是 1920，「1080P」这一档匹配不到，
+         卡片只能列出 720P 以下，用户根本选不到 1080P；
+      ② 下载：`bv*[height<=1080]` 在竖屏上会命中 height=720 的那条
+         （720 是 ≤1080 里最大的）⇒ **选 1080P 实得 720P**，跟横屏那个
+         「选 1080P 实得 1440P」是同一类病。
+    故分档与选择一律按短边，横竖屏共用一套判据。
+    """
+    h = f.get("height")
+    w = f.get("width")
+    if not h:
+        return None
+    if not w:
+        return int(h)
+    return int(min(int(w), int(h)))
+
+
+def _info_short_side(info: dict) -> int | None:
+    """从 yt-dlp 的 info_dict 取**实际选中**的短边高度。
+
+    DASH 双流下 info 描述的是合并结果，真正的视频轨在 requested_formats 里
+    （音轨 height 为 None，不区分就会取到 None）；HLS 混合流则 info 自带
+    width/height，直接按短边算即可。
+    """
+    for f in info.get("requested_formats") or []:
+        if isinstance(f, dict) and f.get("vcodec") not in (None, "none"):
+            _s = _short_side(f)
+            if _s:
+                return _s
+    return _short_side(info)
+
+
+# 视频编码偏好：H.264 第一（macOS WKWebView/Safari 不支持 AV1/VP9 解码，
+# 选了会「下载成功但播不了」），VP9 次之，AV1 最后。卡片显示的名字也来自这里。
+_VIDEO_CODEC_PREF: tuple[tuple[str, str], ...] = (
+    ("avc1", "H.264"),
+    ("vp9", "VP9"),
+    ("av01", "AV1"),
+)
+
+
+def _codec_rank(f: dict) -> int:
+    v = str(f.get("vcodec") or "")
+    for i, (prefix, _label) in enumerate(_VIDEO_CODEC_PREF):
+        if v.startswith(prefix):
+            return i
+    return len(_VIDEO_CODEC_PREF)
+
+
+def _codec_label(f: dict) -> str:
+    rank = _codec_rank(f)
+    if rank < len(_VIDEO_CODEC_PREF):
+        return _VIDEO_CODEC_PREF[rank][1]
+    return ""
+
+
+def _video_tracks_at(formats: list[dict], short_h: int) -> list[dict]:
+    """该短边档下的视频轨，按「H.264 → VP9 → AV1 → 其他」+ 码率降序排列。
+
+    排序即优先级：卡片取 [0] 作为「实际会下载的那一条」，下载链也按此顺序回落。
+    """
+    _tol = _tier_tolerance(short_h)
+    tracks = []
+    for f in formats:
+        if f.get("vcodec") in (None, "none"):
+            continue
+        _s = _short_side(f)
+        if _s and abs(_s - short_h) <= _tol:
+            tracks.append(f)
+    # 编码优先（与下载链一致）→ 同编码下选**有真实体积**的那条（卡片报价才准）
+    # → 再按码率降序。HLS 混合流(96) 与 DASH(137) 同为 avc1，选 137 才报得出
+    # 398MB；若反过来选 96（无 filesize）卡片就只能报 0。
+    tracks.sort(key=lambda f: (
+        _codec_rank(f),
+        0 if (f.get("filesize") or f.get("filesize_approx")) else 1,
+        -(f.get("tbr") or 0),
+    ))
+    return tracks
+
+
+def _audio_tracks(formats: list[dict]) -> list[dict]:
+    """纯音轨，按「m4a 优先（合成 mp4 不必重编码）→ 码率降序」排列。"""
+    tracks = [
+        f for f in formats
+        if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
+    ]
+    tracks.sort(
+        key=lambda f: (0 if str(f.get("ext") or "").lower() == "m4a" else 1,
+                       -(f.get("abr") or 0))
+    )
+    return tracks
+
+
+def _size_of(f: dict | None, duration: float = 0.0) -> int:
+    """体积：先取真实值；缺失时按 码率×时长 估算。
+
+    🔴 HLS 混合流（m3u8_native，itag 91-96）yt-dlp **一律不给 filesize /
+    filesize_approx** —— 直接读得到 0，卡片上 1080P 就只剩音轨那 14 MiB
+    （2026-10-21 线上实测：卡片「1080P · MP4 · H.264 · 0 MiB + 音轨 14 MiB」）。
+    按 码率(kbps) × 时长(s) / 8 估虽不精确，但报 0 是彻底没用。
+    """
+    if not f:
+        return 0
+    _s = int(f.get("filesize") or f.get("filesize_approx") or 0)
+    if _s:
+        return _s
+    _tbr = float(f.get("tbr") or 0)
+    if _tbr and duration:
+        return int(_tbr * 1000 * float(duration) / 8)
+    return 0
+
+
+def _is_muxed(f: dict) -> bool:
+    """混合流（视频轨自带音频，如 HLS itag 91-96）：落盘即成品，不能再叠音轨。"""
+    return f.get("acodec") not in (None, "none")
+
+
+def _plan_size(v: dict, a: dict | None, duration: float) -> int:
+    """该档实际会落盘的体积：混合流不叠音轨，纯视频轨才要叠。"""
+    if _is_muxed(v):
+        return _size_of(v, duration)
+    return _size_of(v, duration) + _size_of(a, duration)
+
+
 def _best_audio_size(formats: list[dict]) -> int:
     sizes = [
         f.get("filesize") or f.get("filesize_approx") or 0
@@ -4757,15 +4899,16 @@ def _bucket_height(height: int) -> int:
 
 
 def _video_size_at(formats: list[dict], height: int) -> int:
-    # 容差匹配：非标准高度（1072 等）归到 1080 档后，按 ±3% 找真实 stream 估算体积
-    tol = max(4, int(height * 0.03))
-    sizes = [
-        f.get("filesize") or f.get("filesize_approx") or 0
-        for f in formats
-        if f.get("height") and abs(int(f["height"]) - height) <= tol
-        and f.get("vcodec") not in (None, "none")
-    ]
-    return max(sizes, default=0)
+    """该短边档「实际会下载」的视频轨体积 —— 取首选编码那条，不是该档最大的那条。
+
+    🔴 老口径是 `max(该档所有视频轨体积)`。1080P 档里 H.264(137) 通常最大
+    （本例 402MB），卡片就显示「约 398 MiB」，而下载链真正选中并落盘的
+    可能是 VP9(248, 252MB) ⇒ 显示 398、实得 279，仍是「卡片说得不算数」。
+    卡片必须显示**首选组合**的体积，否则用户看到的和拿到的永远对不上。
+    """
+    tracks = _video_tracks_at(formats, height)
+    return _size_of(tracks[0]) if tracks else 0
+
 
 def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     """把 yt-dlp 的 format 列表压缩成用户可选的清晰度档（2026-09-06 优化）。
@@ -4775,19 +4918,54 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     只列 formats 中实际存在的高度（视频只有 720 就不再虚构 480/360 假档）。
     """
     formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
-    # 非标准高度（YouTube 偶见 1072/714/476）先归到标准档，避免「1072P」怪标签
-    # 和「1080 > 1072 被判超最高画质 → 1080 档整档消失」（2026-09-22 实测踩坑）
-    # 🔴 2026-10-01：再排除 mhtml 雪碧图/storyboard——它们的高度（180/90/45/27）
-    # 之前被当成真实清晰度平铺，用户会看到一排「180P/90P/45P/27P」假档。
-    heights = sorted({
-        _bucket_height(int(f["height"])) for f in formats
-        if f.get("height") and 0 < int(f["height"]) <= 4320
-        and not str(f.get("protocol") or "").startswith("mhtml")
-    }, reverse=True)
-    audio_size = _best_audio_size(formats)
+    # 排除 mhtml 雪碧图/storyboard：其高度（180/90/45/27 等）会被当成真实清晰度
+    # 平铺成「180P/90P/45P/27P」怪档（2026-10-01 SABR 实测踩坑）
+    formats = [f for f in formats if not str(f.get("protocol") or "").startswith("mhtml")]
+    # 一律按**短边**分档（竖屏 1080x1920 的 height 是 1920），
+    # 非标准高度（1072/714/476）再由 _bucket_height 归到标准档（2026-09-22 实测）
+    _shorts = sorted(
+        (s for s in (_short_side(f) for f in formats) if s and 0 < s <= 4320),
+        reverse=True,
+    )
+    heights = sorted({_bucket_height(s) for s in _shorts}, reverse=True)
+    _audio_pick = _audio_tracks(formats)
+    _a0 = _audio_pick[0] if _audio_pick else None
+    _duration = float(info.get("duration") or 0)
+    audio_size = _size_of(_a0, _duration)
 
-    # 纯音频内容（喜马拉雅/网易云等无视频轨）：不展示画质档
-    if not heights:
+    # 抖音（VPS 解析）只有单一视频档位 —— 本分支（app-dev）不需要为它开特例：
+    # 卡片本身就「按真实短边平铺 + 附加格式」，只有一档就只显示一档，
+    # 自然不会平铺出不存在的 480P/360P。相反，若在这里返回 web-dev 那个
+    # 「最佳画质（自动）」单档特例，就与本分支「去掉 best 聚合项」的设计冲突。
+
+    # 纯音频内容（喜马拉雅/网易云等无视频轨）：不展示 4K/1080P 等视频画质选项
+    # 判据用 _shorts（有没有视频轨）而不是 heights（有没有匹配上标准档）：
+    # 只有 900 这种非标准高度的视频不该被误判成纯音频，只是列不出档而已。
+    if not _shorts:
+        # ⚠️ 「没有 height」≠「没有视频轨」，`formats` 为空更不等于音频。两种真实情形：
+        #   ① **直链文件**：probe() 在 _looks_like_direct_file() 短路，**根本没跑 yt-dlp**
+        #      ⇒ formats 为 0 条（2026-10-20 实测 mov_bbb.mp4：`formats count: 0`）；
+        #   ② yt-dlp 对裸媒体返回 `height=None, vcodec=None, acodec=None`（三项全未知）。
+        # 老判据只看 height ⇒ 直链视频被误判成音频，清晰度面板只剩「最佳音质（自动）」，
+        # 用户点「开始下载」拿到的却是视频，观感上就是坏的（直链改走服务器任务后才暴露）。
+        # 判据改为**显式声明 + 扩展名兜底**：要么「有 format 且全部明确无视频轨、至少一条
+        # 明确声明音频编码」，要么「formats 为空但扩展名是音频」—— 才算纯音频；其余一律
+        # 按视频给单一「最佳画质」档（格式选择器 `ba/b` 对两者都能兜底）。
+        _ext = str(info.get("ext") or "").lower()
+        if not _ext:
+            _m = re.search(r"\.([a-z0-9]{2,5})(?:\?|#|$|&)",
+                           str(info.get("url") or info.get("webpage_url") or ""), re.IGNORECASE)
+            _ext = (_m.group(1) if _m else "").lower()
+        _audio_url = _ext in {"mp3", "m4a", "aac", "ogg", "oga", "wav", "flac", "opus", "wma"}
+        _no_video = all(str(f.get("vcodec") or "none") == "none" for f in formats)
+        _has_audio = any(str(f.get("acodec") or "none") != "none" for f in formats)
+        _is_audio = (_no_video and _has_audio) if formats else _audio_url
+        if not _is_audio:
+            return [
+                {"key": BEST_KEY, "label": "最佳画质（自动）",
+                 "note": "视频+音频自动合并", "approx_size": 0}
+            ]
+
         audio_ex = {str(f.get("ext") or "").lower() for f in formats}
         audio_opts: list[dict[str, Any]] = []
         if "mp3" in audio_ex:
@@ -4801,13 +4979,22 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
     preset = dict(QUALITY_PRESETS)
     options: list[dict[str, Any]] = []
     for height in heights:
-        video_size = _video_size_at(formats, height)
+        _tracks = _video_tracks_at(formats, height)
+        if not _tracks:
+            continue
+        _v0 = _tracks[0]
+        _codec = _codec_label(_v0)
         options.append(
             {
                 "key": str(height),
                 "label": preset.get(height, f"{height}P"),
-                "note": "MP4",
-                "approx_size": (video_size + audio_size) if video_size else 0,
+                "note": f"MP4 · {_codec}" if _codec else "MP4",
+                # 混合流（HLS 96）自带音轨，不能再叠 audio_size，否则虚高
+                "approx_size": _plan_size(_v0, _a0, _duration),
+                # 卡片承诺的高度与编码，下载阶段照此精确锁定（说什么就是什么）
+                "exact_height": height,
+                "codec": _codec,
+
             }
         )
     options.append(
@@ -4820,6 +5007,37 @@ def build_quality_options(info: dict[str, Any]) -> list[dict[str, Any]]:
         {"key": M4A_KEY, "label": "仅音频 M4A", "note": "无损音轨", "approx_size": audio_size}
     )
     return options
+
+
+def _exact_height_chains(short_h: int) -> list[str]:
+    """短边高度**精确锁定**的格式链 —— 只许命中这一档，不升档也不降档。
+
+    🔴 每条链都把高度锁在**窄区间** `[>=lo][<=hi]`（lo/hi 由 ±3% 容差算出），
+    而不是单边的 `<=N`。单边上界既能升也能降：无 1080 时它拿 720，403 时
+    旧链直接拿 1440；双边区间则把「这一档」和「隔壁档」彻底隔开
+    （1080 档 1047~1113，720 档 698~742，互不重叠）。
+    留容差是为了容纳 1072 这类非标准高度（见 _tier_tolerance）。
+
+    两条一组是为了横竖屏通吃：横屏 1920x1080 锁 height、竖屏 1080x1920 锁 width。
+    组内顺序：先锁 H.264（macOS WKWebView/Safari 解不了 AV1/VP9，
+    否则「下载成功但播不了」），再放开编码让 VP9/AV1 顶上。
+    """
+    _tol = _tier_tolerance(short_h)
+    _lo, _hi = short_h - _tol, short_h + _tol
+    _h = f"height>={_lo}][height<={_hi}"
+    _w = f"width>={_lo}][width<={_hi}"
+    return [
+        f"bv[{_h}][vcodec^=avc1]+ba[ext=m4a]",
+        f"bv[{_w}][vcodec^=avc1]+ba[ext=m4a]",
+        f"bv[{_h}][vcodec^=avc1]+ba",
+        f"bv[{_w}][vcodec^=avc1]+ba",
+        f"bv[{_h}]+ba[ext=m4a]",
+        f"bv[{_w}]+ba[ext=m4a]",
+        f"bv[{_h}]+ba/bv[{_w}]+ba",
+        f"b[{_h}]/b[{_w}]",
+    ]
+
+
 
 def _format_selector(quality_key: str) -> str:
     if quality_key == BEST_KEY:
@@ -4839,12 +5057,8 @@ def _format_selector(quality_key: str) -> str:
     if quality_key == WEBM_KEY:
         return "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b"
     height = int(quality_key)
-    return (
-        f"bv*[vcodec^=avc1][height<={height}]+ba[ext=m4a]/"
-        f"bv*[vcodec^=avc1][height<={height}]+ba/"
-        f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/"
-        f"bv*[height<={height}]+ba/b[height<={height}]/b[height<={height}]"
-    )
+    # 精确锁定该档：卡片承诺 1080P 就只拿 1080P，拿不到就报错，不许换档。
+    return "/".join(_exact_height_chains(height))
 
 def _yt_prefer_hls(quality_key: str) -> bool:
     """无 PO Token 时，YouTube 该清晰度档是否优先走 HLS 混合流。
@@ -4884,9 +5098,20 @@ def _youtube_hls_selector(quality_key: str) -> str:
             cap = int(quality_key)
         except (TypeError, ValueError):
             return _format_selector(quality_key)
+    if quality_key == BEST_KEY:
+        # 自动档保留 `<=`：720P 的视频也要能下出东西
+        return (
+            "b[protocol^=m3u8][height<=1080]/"
+            "best[protocol^=m3u8][height<=1080]/"
+            f"{_format_selector(quality_key)}"
+        )
+    # 具体档位：HLS 混合流同样锁死这一档（横/竖屏各一条，±3% 容差），
+    # 拿不到就落回 DASH 链，不许顺手换个清晰度。
+    _tol = _tier_tolerance(cap)
+    _lo, _hi = cap - _tol, cap + _tol
     return (
-        f"b[protocol^=m3u8][height<={cap}]/"
-        f"best[protocol^=m3u8][height<={cap}]/"
+        f"b[protocol^=m3u8][height>={_lo}][height<={_hi}]/"
+        f"b[protocol^=m3u8][width>={_lo}][width<={_hi}]/"
         f"{_format_selector(quality_key)}"
     )
 
@@ -4914,26 +5139,37 @@ def _yt_fallback_chains(quality_key: str) -> list[str]:
     实测证据：任务 357fc472af3b405b，`downloaded_bytes=671874532`，
     与 `bv*+ba` 选出的 400+251 的 filesize 之和 671874532 完全一致。
 
-    所以末环改成 `b[height<=cap]`：宁可降清晰度、宁可失败让用户重试，
-    也不许静默升级到用户没选（且可能是会员档）的分辨率。
+    2026-10-21 第二轮：末环再改成**精确锁定** `height=cap`。
+    `<=cap` 固然堵死了升档，但还留着降档的口子 —— 1080P 被 403 时会悄悄
+    退到 720P，用户以为拿了 1080P，文件却是 720P 的。同样是「说得不算数」。
+    从此 403 重试只许**在同档内**换编码（avc1→vp9→av01）、换协议
+    （DASH→HLS）、换 client，**清晰度这个数一个像素都不许动**。
+    全部拿不到 ⇒ 明确报错让用户重试或改选，绝不代他决定。
     """
+    if quality_key == BEST_KEY:
+        # 「最佳画质（自动）」语义本就是自动 —— 用户没有指定具体档位，
+        # 自动档保留 `<=1080` 才有意义（720P 的视频也能下出东西）。
+        _ITAG_HEIGHT = [
+            ("299", 1080), ("248", 1080), ("137", 1080), ("136", 720),
+            ("135", 480), ("134", 360), ("133", 240), ("160", 144),
+        ]
+        explicit = [f"{itag}+140" for itag, _h in _ITAG_HEIGHT]
+        return [
+            "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4][height<=1080]",
+            "bv*[vcodec^=avc1][height<=1080]+ba/bv*[height<=1080]+ba/b[height<=1080]",
+            "/".join(explicit),
+            "bv*[height<=1080]+ba/best[height<=1080]/b[height<=1080]",
+        ]
+    # 具体档位 → 精确锁定。整条链内部已含「换编码 / 换协议 / 横竖屏」的退让，
+    # 交给一轮即可；外层再靠 client 轮换重试。
     cap = _quality_cap(quality_key)
-    # 显式 itag 链同样要按档位裁剪：299/248/137 都是 1080p，
-    # 选 720P 时若原样保留，403 降级同样会把它升成 1080P。
-    # （YouTube 常见 itag → 高度，够用即可，不求穷举）
-    _ITAG_HEIGHT = [
-        ("299", 1080), ("248", 1080), ("137", 1080), ("136", 720),
-        ("135", 480), ("134", 360), ("133", 240), ("160", 144),
+    _tol = _tier_tolerance(cap)
+    _lo, _hi = cap - _tol, cap + _tol
+    return [
+        "/".join(_exact_height_chains(cap)),
+        f"b[protocol^=m3u8][height>={_lo}][height<={_hi}]/"
+        f"b[protocol^=m3u8][width>={_lo}][width<={_hi}]",
     ]
-    explicit = [f"{itag}+140" for itag, h in _ITAG_HEIGHT if h <= cap]
-    chains = [
-        f"bv*[vcodec^=avc1][height<={cap}]+ba[ext=m4a]/b[ext=mp4][height<={cap}]",
-        f"bv*[vcodec^=avc1][height<={cap}]+ba/bv*[height<={cap}]+ba/b[height<={cap}]",
-    ]
-    if explicit:
-        chains.append("/".join(explicit))
-    chains.append(f"bv*[height<={cap}]+ba/best[height<={cap}]/b[height<={cap}]")
-    return chains
 
 
 def is_valid_quality(quality_key: str) -> bool:
@@ -4970,6 +5206,7 @@ class _ProgressReporter:
         self._streams: dict[str, tuple[int, int]] = {}
         self._last_progress = 0.0
         self._has_download_step = False
+        self._actual_short = 0  # 实际落盘的短边高度，用于完成后核对清晰度
 
     def __call__(self, payload: dict[str, Any]) -> None:
         if self._task.cancel_requested:
@@ -4979,6 +5216,7 @@ class _ProgressReporter:
         if payload.get("status") != "downloading":
             return
         self._ensure_title(payload)
+        self._capture_actual(payload)
         if not self._has_download_step:
             self._task.add_step("下载音视频", "running", f"已选清晰度：{self._task.quality}")
             self._task.log(f"开始下载：{self._task.quality}")
@@ -4988,6 +5226,30 @@ class _ProgressReporter:
         total = int(payload.get("total_bytes") or payload.get("total_bytes_estimate") or 0)
         self._streams[key] = (downloaded, max(total, downloaded))
         self._push(payload)
+
+    def _capture_actual(self, payload: dict[str, Any]) -> None:
+        """首次进度回调就记下实际选中的清晰度，供完成后核对。"""
+        if self._actual_short:
+            return
+        _s = _info_short_side(payload.get("info_dict") or {})
+        if _s:
+            self._actual_short = _s
+
+    def _actual_note(self) -> str:
+        """下载完成文案：把「请求档 vs 实得档」摆到用户眼前。
+
+        精确锁定后两者必然相等；一旦不相等，说明代码里又混进了 `<=` 或 `bv*`，
+        宁可让用户看见这句 ⚠️ 去反馈，也不要再静默换档。
+        """
+        got = self._actual_short
+        if not got:
+            return "音视频下载完成"
+        want = self._task.quality_key
+        if want in (BEST_KEY, AUDIO_KEY, M4A_KEY, WEBM_KEY):
+            return f"音视频下载完成 · 实际 {got}P"
+        if str(got) != str(want):
+            return f"音视频下载完成 · ⚠️ 请求 {want}P 实得 {got}P（清晰度不符）"
+        return f"音视频下载完成 · 实际 {got}P"
 
     def _ensure_title(self, payload: dict[str, Any]) -> None:
         """首个进度回调就把标题回填，避免任务卡片长时间显示"解析中"。"""
@@ -5015,7 +5277,7 @@ class _ProgressReporter:
 
     def on_postprocess(self, payload: dict[str, Any]) -> None:
         if payload.get("status") == "started":
-            self._task.add_step("下载音视频", "done", "音视频下载完成")
+            self._task.add_step("下载音视频", "done", self._actual_note())
             self._task.add_step("合并与后处理", "running", "正在合并音视频…")
             self._store.update(self._task.id, status="merging", progress=98.0)
 

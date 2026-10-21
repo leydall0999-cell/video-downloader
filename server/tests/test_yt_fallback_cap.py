@@ -60,42 +60,62 @@ class QualityCapTest(unittest.TestCase):
 
 class FallbackChainCapTest(unittest.TestCase):
     def test_every_generic_selector_is_height_capped(self):
-        """任何一个档位，通用选择器都必须写 [height<=cap]，不许裸 bv*/best。"""
-        for key in ("360", "480", "720", "1080", "1440", "2160", "best"):
+        """具体档位的通用选择器必须锁在 [cap±3%] 的窄区间内。
+
+        2026-10-21 第二轮：单边的 `<=cap` 只堵住升档，还留着降档的口子 ——
+        1080P 被 403 时会悄悄退到 720P，用户以为拿了 1080P 实际是 720P。
+        改成双边区间才叫「选什么下什么」；留 ±3% 是为了 1072 这类非标准高度
+        （见 _tier_tolerance）。竖屏那半（1080x1920，短边在 width 上）同理。
+
+        自动档 best 不在此列：它保留 `<=1080` 的自动语义（用户没指定档位，
+        锁死反而拿不到东西），由 test_quality_exact.py 的 BestKeyStaysAutomatic 守。
+        """
+        for key in ("360", "480", "720", "1080", "1440", "2160"):
             cap = downloader._quality_cap(key)
+            lo = cap - max(4, int(cap * 0.03))
             for chain in downloader._yt_fallback_chains(key):
                 for alt in _alternatives(chain):
                     if _is_explicit_itags(alt):
                         continue
                     if not any(alt.startswith(g) or g in alt for g in GENERIC):
                         continue
-                    self.assertIn(
-                        f"height<={cap}", alt,
-                        f"{key} 档出现无上限选择器：{alt}（chain={chain}）",
+                    self.assertTrue(
+                        f"height>={lo}" in alt or f"width>={lo}" in alt,
+                        f"{key} 档出现非精确选择器：{alt}（chain={chain}）",
                     )
 
     def test_no_height_above_cap_in_filter(self):
-        """过滤器里出现的所有 height<=N 都必须 ≤ cap（防止手抄错数字）。"""
+        """过滤器里出现的所有 height<=N 都必须 ≤ 档位上界（cap + 容差）。
+
+        上界允许放宽到 cap+3%（容纳 1072 这类非标准高度），但**不许再宽** ——
+        把手抄错的数字（比如 1080 档写成 <=1440）挡在外面。
+        """
         for key in ("360", "720", "1080"):
             cap = downloader._quality_cap(key)
+            hi = cap + max(4, int(cap * 0.03))
             for chain in downloader._yt_fallback_chains(key):
                 for n in re.findall(r"height<=(\d+)", chain):
-                    self.assertLessEqual(int(n), cap, f"{key} 档链里出现 height<={n}")
+                    self.assertLessEqual(int(n), hi,
+                                         f"{key} 档链里出现 height<={n}（越档）")
 
-    def test_explicit_itag_chain_trimmed_by_cap(self):
-        """显式 itag 链：299/248/137(1080) 在 720 及以下必须被裁掉。"""
-        top = downloader._yt_fallback_chains("1080")
-        self.assertTrue(any("137+140" in c for c in top), "1080 档应保留 137+140")
+    def test_explicit_itag_chain_only_for_best(self):
+        """显式 itag 链只属于「最佳画质（自动）」，具体档位一律走精确链。
 
-        for key in ("720", "480", "360"):
+        2026-10-21 第二轮：itag 链（299/248/137…）是按高度拼的，本身就隐含
+        「≤cap 里挑一个」，做不到精确锁定。具体档位改用 `[height=N]` 精确链后
+        自然不再需要它；它只留在自动档，那里 `<=1080` 才是正确语义。
+        """
+        best_joined = "|".join(downloader._yt_fallback_chains("best"))
+        self.assertIn("137+140", best_joined, "自动档应保留 itag 链 137+140")
+        self.assertIn("136+140", best_joined, "自动档应保留 itag 链 136+140")
+
+        for key in ("360", "480", "720", "1080", "1440", "2160"):
             joined = "|".join(downloader._yt_fallback_chains(key))
-            for itag in ("299", "248", "137"):
-                self.assertNotIn(f"{itag}+140", joined,
-                                 f"{key} 档不该出现 1080p 的 {itag}+140")
-            if key == "720":
-                self.assertIn("136+140", joined, "720 档应保留 136+140")
-            else:
-                self.assertNotIn("136+140", joined, f"{key} 档不该出现 720p 的 136+140")
+            for itag in ("299", "248", "137", "136", "135", "134"):
+                self.assertNotIn(
+                    f"{itag}+140", joined,
+                    f"{key} 档不该再出现 itag 链 {itag}+140（应走精确链）",
+                )
 
     def test_upscale_never_requested(self):
         """末环必须是最小兜底，且不得出现裸 bv*+ba（本次事故的根因）。"""
