@@ -1259,6 +1259,17 @@ run_pytest_root test_membership_device.py # 设备绑定：激活记账/换机�
 #      /api/userdata/sync 三条后台链路一个都不能少。开关在 app.js 的 CLOUD_DATA_CARD_VISIBLE。
 run_node test_cloud_data_card_hidden.mjs
 
+# 65. test_cookie_sync_auto.py —— 登录态「自动」同步的两个失点（2026-10-21 用户
+#      「浏览器登录了快手，怎么没自动获取」）：
+#      ① from-local 只写本机池却自称「上报到公共池」⇒ 加 cloud 字段如实回报，
+#         且云端失败不得把本机成功判成失败；
+#      ② 上云原本只有 30min 定时器、每轮要逐域实时解密（14 站 16.7s）⇒ 新增
+#         /api/cookie/sync/auto：先比对浏览器 Cookies 库 mtime/size，没变化毫秒
+#         skipped、有变化才推送；推送全失败不落盘签名（下轮必须能重试）。
+#      ③ 拿到新鲜 header 时刷本机快照：30 天 TTL 的旧快照优先级高于本机池，
+#         不刷它就等于「同步成功但依旧未登录」。
+run_one test_cookie_sync_auto.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"

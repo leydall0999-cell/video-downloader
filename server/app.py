@@ -4268,7 +4268,28 @@ def cookie_sync_from_local(payload: dict, request: Request) -> dict:
     if ok is False:
         raise HTTPException(status_code=400, detail="本机 Cookie 无效，未能通过目标站验真")
     added = add_cookie(domain, header, source="local")
-    return {"ok": True, "added": added, "verified": (ok is True)}
+    # 只写本机池不够：解析时的取用顺序是 本机快照(cookie_cache) > 本机池 > 云端池，
+    # 而快照 TTL 有 30 天且命中就不比对浏览器 —— 不刷新它，用户重新登录后
+    # 旧快照仍会生效，表现为「明明同步成功了却还是未登录」。这里 header 已在手，
+    # 写快照是零成本。
+    try:
+        from cookie_cache import _save as _cache_save
+        _cache_save(domain, header)
+    except Exception:
+        pass
+    # 2026-10-21：此前这里只写本机池就返回，但函数名与 docstring 都写着「上报到公共池」，
+    # 调用方看到 added/verified 全 true 会以为已上云（实测云端池毫无变化，白等）。
+    # 现改为：有云端配置就顺手推一次，让「登录后立刻生效」不必等前端 30 分钟定时器。
+    # 边界：本机池写入才是主线，云端失败只降级进 cloud 字段，绝不把本机成功判成失败。
+    cloud: dict | None = None
+    url, token = _cloud_sync_config()
+    if url and token:
+        try:
+            resp = _push_cookie_to_cloud(domain, header, url, token)
+            cloud = {"pushed": bool((resp or {}).get("ok")), "verified": (resp or {}).get("verified")}
+        except Exception as e:  # 网络/限流/云端未就绪：本机已生效，不影响主流程
+            cloud = {"pushed": False, "reason": str(e)[:120]}
+    return {"ok": True, "added": added, "verified": (ok is True), "cloud": cloud}
 
 def _cloud_sync_config() -> tuple[str, str]:
     """返回 (sync_url, token)。优先读 env，其次读本机配置文件。
@@ -4381,6 +4402,113 @@ def _push_cookie_to_cloud(domain: str, header: str, url: str, token: str) -> dic
             raise
     raise last_err or RuntimeError("推送 Cookie 到云端失败")
 
+def _sync_domains_to_cloud(url: str, token: str) -> list[dict]:
+    """按域读取本机浏览器登录态并推送云端池，返回逐域结果。
+
+    to-cloud（定时/超管手动）与 auto（登录态变更触发）共用这一份实现，
+    避免两条入口各写一份循环而漂移（站间 1s 间隔是为避开 Cloudflare 限流）。
+    """
+    import time
+    from cookie_pool import _root_domains
+
+    results: list[dict] = []
+    domains = [d for d in sorted(_root_domains()) if d != "chrqj.com"]
+    for idx, domain in enumerate(domains):
+        try:
+            header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")
+        except Exception:
+            header = None
+        if not header:
+            results.append({"domain": domain, "pushed": False, "reason": "本机未登录"})
+            continue
+        # 顺手把刚解密出来的新鲜值刷进本机快照。为什么必须做：cookie_cache 的 TTL
+        # 是 30 天且「命中就直接用、不与浏览器比对」，用户重新登录后旧快照会一直
+        # 挡在新鲜值前面（YouTube 独立链路 2026-09-27 已为此单修过：
+        # SIDCC/__Secure-*PSIDTS 是滚动字段，快照落后即被判未登录）。
+        # 这里 header 本来就已经解密好了，写快照是零成本，不会多一次解密。
+        try:
+            from cookie_cache import _save as _cache_save
+            _cache_save(domain, header)
+        except Exception:
+            pass
+        try:
+            resp = _push_cookie_to_cloud(domain, header, url, token)
+            results.append({
+                "domain": domain,
+                "pushed": bool(resp.get("ok")),
+                "verified": resp.get("verified"),
+            })
+        except Exception as e:
+            results.append({"domain": domain, "pushed": False, "reason": str(e)[:120]})
+        # 连发易触发 Cloudflare 限流，站间间隔 1s（最后一站除外）
+        if idx < len(domains) - 1:
+            time.sleep(1.0)
+    return results
+
+# 浏览器登录态变更检测：登录任何站点都会写 Cookies 库，所以「库文件 mtime/size 变了」
+# 就是「用户刚登录过」最廉价可靠的信号（stat 级，毫秒；不需要解密、不碰钥匙串）。
+_COOKIE_WATCH_STATE = Path.home() / ".videodownloader" / "cookie_sync_state.json"
+
+def _cookie_db_signature() -> dict[str, str]:
+    """各浏览器 Cookies 库的 (mtime, size) 快照，key 为库绝对路径。"""
+    import glob
+
+    sig: dict[str, str] = {}
+    for _name, pattern in downloader._BROWSER_COOKIE_PROFILES:
+        for db in glob.glob(os.path.expanduser(pattern)):
+            try:
+                st = os.stat(db)
+            except OSError:
+                continue
+            sig[db] = f"{int(st.st_mtime)}:{st.st_size}"
+    return sig
+
+@app.post("/api/cookie/sync/auto")
+def cookie_sync_auto(request: Request) -> dict:
+    """仅本机(App 端)调用：**登录态有变化才**推送云端池。
+
+    为什么需要这条：to-cloud 每次都要逐域实时解密浏览器（14 站实测 16.7s），
+    所以前端只能 30 分钟跑一轮 —— 用户登录完要干等。而「是否有变化」用
+    Cookies 库的 mtime/size 就能判断（毫秒级），所以前端可以高频调用本接口：
+    没变化立刻返回 skipped，有变化才真解密+推送。
+
+    失败不落盘签名：下次调用会重试，避免一次网络抖动把这一轮变更永久跳过。
+    """
+    ip = (request.client.host if request.client else "") or ""
+    if ip not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="仅允许本机调用")
+    url, token = _cloud_sync_config()
+    if not url or not token:
+        # 与 to-cloud 保持同一句指引：只说「未配置」等于让用户去猜。
+        raise HTTPException(
+            status_code=400,
+            detail="未配置云端同步地址/令牌。请在桌面版环境设置 VDL_COOKIE_SYNC_URL 与 "
+                   "VDL_COOKIE_SYNC_TOKEN，或写入 ~/.videodownloader/cloud_sync.json",
+        )
+
+    sig = _cookie_db_signature()
+    prev: dict[str, str] = {}
+    try:
+        if _COOKIE_WATCH_STATE.exists():
+            prev = json.loads(_COOKIE_WATCH_STATE.read_text(encoding="utf-8")) or {}
+    except Exception:
+        prev = {}
+    if sig and prev == sig:
+        return {"ok": True, "skipped": True, "reason": "浏览器登录态未变化"}
+
+    results = _sync_domains_to_cloud(url, token)
+    pushed = sum(1 for r in results if r.get("pushed"))
+    # 只有「确实推到过东西」才记签名：全站都推失败时保留旧签名，下一轮重试。
+    if pushed or not prev:
+        try:
+            _COOKIE_WATCH_STATE.parent.mkdir(parents=True, exist_ok=True)
+            # 必须走 atomic_write_json：本仓禁止裸 Path.write_text 写状态文件
+            # （截断/并发会留下半截 JSON，解析失败会被当成「无变化」而反复全量推）。
+            atomic_io.atomic_write_json(_COOKIE_WATCH_STATE, sig, indent=None)
+        except Exception:
+            pass
+    return {"ok": True, "skipped": False, "pushed": pushed, "total": len(results), "results": results}
+
 @app.post("/api/cookie/sync/to-cloud")
 def cookie_sync_to_cloud(request: Request) -> dict:
     """仅本机(App 端)调用：读取本机浏览器各强反爬站的登录态并推送到网页版公共池。
@@ -4391,8 +4519,6 @@ def cookie_sync_to_cloud(request: Request) -> dict:
     ip = (request.client.host if request.client else "") or ""
     if ip not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="仅允许本机调用")
-    from cookie_pool import _root_domains, is_allowed, _norm_domain
-    import time
     url, token = _cloud_sync_config()
     if not url or not token:
         raise HTTPException(
@@ -4400,28 +4526,7 @@ def cookie_sync_to_cloud(request: Request) -> dict:
             detail="未配置云端同步地址/令牌。请在桌面版环境设置 VDL_COOKIE_SYNC_URL 与 "
                    "VDL_COOKIE_SYNC_TOKEN，或写入 ~/.videodownloader/cloud_sync.json",
         )
-    results = []
-    domains = [d for d in sorted(_root_domains()) if d != "chrqj.com"]
-    for idx, domain in enumerate(domains):
-        try:
-            header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")
-        except Exception:
-            header = None
-        if not header:
-            results.append({"domain": domain, "pushed": False, "reason": "本机未登录"})
-            continue
-        try:
-            resp = _push_cookie_to_cloud(domain, header, url, token)
-            results.append({
-                "domain": domain,
-                "pushed": bool(resp.get("ok")),
-                "verified": resp.get("verified"),
-            })
-        except Exception as e:
-            results.append({"domain": domain, "pushed": False, "reason": str(e)[:120]})
-        # 连发易触发 Cloudflare/Railway 限流，站间间隔 1s（最后一站除外）
-        if idx < len(domains) - 1:
-            time.sleep(1.0)
+    results = _sync_domains_to_cloud(url, token)
     pushed = sum(1 for r in results if r.get("pushed"))
     return {"ok": True, "pushed": pushed, "total": len(results), "results": results}
 
