@@ -105,6 +105,11 @@ _PROBE_NONE = "none"
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
+# 小红书首页：页面 __INITIAL_STATE__ 里直接带 `"loggedIn": true|false`，
+# 不需要 x-s 签名（edith 那套要签名，实测 406）。2026-10-21 实测：
+# 游客页 36KB / loggedIn=false；带登录 Cookie 206KB / loggedIn=true + nickname + redId。
+_XHS_EXPLORE = "https://www.xiaohongshu.com/explore"
+
 
 # ─── 基础工具 ────────────────────────────────────────────────────────────────
 
@@ -320,11 +325,15 @@ def _ident_label(ident: str) -> str:
 _LOGIN_FIELDS_HINT: dict[str, tuple[str, ...]] = {
     "bilibili.com": ("SESSDATA",),
     "youtube.com": ("SID", "APISID", "SAPISID", "__Secure-1PSID", "__Secure-3PSID"),
-    "douyin.com": ("sessionid", "sid_tt", "passport_csrf_token"),
-    "iesdouyin.com": ("sessionid", "sid_tt"),
+    # 🔴 只认「登录后才下发」的会话凭证。passport_csrf_token 是 CSRF 令牌，
+    # **游客态同样会下发**——拿它当登录判据，游客 Cookie 会被判成「含登录字段」
+    # 从而永远停在 unknown（2026-10-21 实测抖音游客 Cookie 里就带着它）。
+    "douyin.com": ("sessionid", "sessionid_ss", "sid_tt", "uid_tt", "sid_guard"),
+    "iesdouyin.com": ("sessionid", "sessionid_ss", "sid_tt", "uid_tt"),
     "kuaishou.com": ("passToken", "userId", "kuaishou.webid"),
     "chenzhongtech.com": ("passToken", "userId"),
-    "xiaohongshu.com": ("web_session", "a1"),
+    # 同理：a1 是设备指纹（游客也发），只有 web_session 才是登录会话
+    "xiaohongshu.com": ("web_session",),
     "youku.com": ("P__yk__uck", "yktk", "unb"),
     "qq.com": ("vus_session", "uin", "wxuin", "skey", "wap_sid2"),
     "tiktok.com": ("sessionid", "sid_tt"),
@@ -391,6 +400,49 @@ def _probe(domain: str, header: str) -> dict:
             return {"status": "unknown", "detail": f"网络不可达（{type(e).__name__}）",
                     "probe": _PROBE_NET}
 
+    # 小红书：首页「探索页」的 __INITIAL_STATE__ 里带 `"loggedIn": true|false`，
+    # 纯 HTTP 就能取，不需要 x-s 签名（edith 的 user/me 要签名，实测 406）。
+    # 实测判据极干净：游客页 36KB + loggedIn=false；带登录 Cookie 206KB +
+    # loggedIn=true 且能读到 nickname / redId。这是除 B 站 nav 之外唯一
+    # 「能直接看到池里是谁的号」的探针，比字段猜测可靠得多。
+    if d == "xiaohongshu.com" and cp.requests is not None:
+        try:
+            r = cp.requests.get(
+                _XHS_EXPLORE,
+                headers={
+                    "Cookie": header,
+                    "User-Agent": _UA,
+                    "Accept": "text/html,application/xhtml+xml",
+                },
+                timeout=12,
+            )
+            if r.status_code != 200:
+                return {"status": "unknown",
+                        "detail": f"站点返回 HTTP {r.status_code}（可能风控）",
+                        "probe": _PROBE_NET}
+            m = re.search(r'"loggedIn"\s*:\s*(true|false)', r.text)
+            if not m:
+                return {"status": "unknown",
+                        "detail": "页面无 loggedIn 标记（小红书前端结构可能已变）",
+                        "probe": _PROBE_NET}
+            if m.group(1) == "true":
+                nk = re.search(r'"nickname"\s*:\s*"([^"]{1,30})"', r.text)
+                rid = re.search(r'"redId"\s*:\s*"([^"]{2,30})"', r.text)
+                bits = [b for b in (
+                    (nk.group(1) if nk else ""),
+                    (f"小红书号 {rid.group(1)}" if rid else ""),
+                ) if b]
+                return {"status": "valid",
+                        "detail": " · ".join(bits) or "已登录",
+                        "probe": _PROBE_NET}
+            return {"status": "invalid",
+                    "detail": "站点判定：未登录（loggedIn=false）",
+                    "probe": _PROBE_NET}
+        except Exception as e:
+            return {"status": "unknown",
+                    "detail": f"网络不可达（{type(e).__name__}）",
+                    "probe": _PROBE_NET}
+
     try:
         ok = cp.verify_cookie(domain, header)
     except Exception as e:
@@ -406,13 +458,21 @@ def _probe(domain: str, header: str) -> dict:
         }
     if ok is False:
         return {"status": "invalid", "detail": "站点判定：无效", "probe": _PROBE_NET}
-    # 有结构校验表但没命中 ⇒ 这条 Cookie 是游客态（无登录字段），不是「没法验」。
-    # 直接告诉运营「该补登录后的 Cookie」，比笼统说「无可用探针」更可执行。
-    if d in cp._STRUCTURAL_FIELDS:
-        return {"status": "unknown",
-                "detail": "无登录态字段（游客/未登录），补注入登录后的 Cookie 再校验",
+    # 走到这里 = 该站没有可用的联网探针。2026-10-21 实测确认这不是「待补」而是
+    # 客观限制：抖音/快手登录态接口需 a_bogus/X-Bogus 签名（直连一律 403 或
+    # 「url doesn't match」）；小红书 edith 接口 406（需 x-s）；腾讯
+    # access.video.qq.com 回 35004；TikTok 在国内机房根本连不上。
+    # 所以此时唯一可靠的判据是**静态登录字段**——登录后必然带
+    # sessionid / web_session / uin / skey，一个都没有即可确定是游客态。
+    # 这类结论不需要联网，也不该继续挂着「未校验」误导运营。
+    st, why = _static_status(domain, header)
+    if st == "invalid":
+        return {"status": "invalid",
+                "detail": "Cookie 内无任何登录态字段（可确定未登录）；请在该站登录后重新注入",
                 "probe": _PROBE_STRUCT}
-    return {"status": "unknown", "detail": "无可用探针（该站未配置验真地址）", "probe": _PROBE_NONE}
+    return {"status": "unknown",
+            "detail": "含登录态字段，但该站无公开验真接口（需签名/需真实浏览器），无法联网确认",
+            "probe": _PROBE_NONE}
 
 
 def _collect_targets(now: float) -> list[tuple[str, list[str], str]]:
