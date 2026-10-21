@@ -1538,9 +1538,13 @@ _COOKIE_HARDENED_DOMAINS: tuple[str, ...] = (
     # 优酷：会员/受限视频需要登录态 Cookie，yt-dlp 解析时会报 -3007"请先登录"。
     # 加入 hardened 后桌面端自动读取浏览器 Cookie，云端可经公共池共享。
     "youku.com",
-    # chrqj 影视聚合站：视频流（m3u8/ts CDN）校验播放页会话 Cookie，缺则拒绝。
+    # chrqj 影视聚合站（= 金牌影院老域名，首页 302 → nmwchxx.com，同一套
+    # mw-movie API）：视频流（m3u8/ts CDN）校验播放页会话 Cookie，缺则拒绝。
     # 加入后自动从本机浏览器读该站 Cookie 并注入视频流请求头（无需手动粘贴）。
+    # 🔴 两个域名都要列：站点已迁到 nmwchxx.com，只认老域名等于新域名的登录态
+    # 桌面端不会自动读（2026-10-21 收编时补）。
     "chrqj.com",
+    "nmwchxx.com",
 )
 # 注意：YouTube **故意不列入** hardened —— hardened 会把 403 文案改写成
 # 「该站需要登录 Cookie」，从而盖掉 YouTube 403 真正该排查的代理/地区线索
@@ -4064,7 +4068,11 @@ _NMW_UA = (
 
 # 这类聚合站会周期性换域名（同一套 API 跟着域名漂移）。只认一个死域名
 # ⇒ 对方换一次域，整站解析全挂，而接口其实没变。已知域名 + nmw 前缀兜底。
-_NMW_KNOWN_HOSTS = ("nmwchxx.com",)
+# chrqj.com 是老域名：2026-10-21 实测首页 302 → nmwchxx.com，同一套
+# mw-movie API、同一个签名密钥、同一对视频 ID 都能出《少帅》第5集。
+# 早期还给它单写过一套 yt-dlp 插件（yt_dlp_plugins/extractor/chrqj.py），
+# 链接形态也不同（三段式 /vod/play/{id}/{源}/{集}），在此一并收编。
+_NMW_KNOWN_HOSTS = ("nmwchxx.com", "chrqj.com")
 _NMW_HOST_RE = re.compile(
     r"^nmw[a-z0-9]{1,8}\.(?:com|net|cc|tv|top|xyz|vip|site|club|info|pro)$"
 )
@@ -4097,25 +4105,32 @@ def _nmw_parse_ids(url: str) -> tuple[str, str, str]:
 
       /vod/play/116537/sid/877419     站内标准（页面 200）
       /vod/play/116537/877419         分享/外链常见（站内 404，但两个 ID 有效）
+      /vod/play/116537/1/877419       老域名 chrqj.com 外链：中间是「源序号」，不是集号
       /vod/play/116537-1-1.html       maccms 老模板（源序号-集序号）
       /vod/detail/116537              详情页：只有视频 ID，集号返回空
 
     两个 ID 是接口唯一需要的输入，与页面是否 200 无关 ⇒ 只要能取出数字就解析。
+    三段式必须排在两段式**之前**：否则 /vod/play/116537/1/877419 会被
+    两段式正则吃掉，把「源序号 1」当成集号，解析出错误的集。
     """
     u = url or ""
     # ① maccms 老模板：最后一组数字是集序号（1 起）
     m = re.search(r"/vod/play[/-](\d+)[-_]\d+[-_](\d+)\.html", u)
     if m:
         return m.group(1), "", m.group(2)
-    # ② 播放页：/sid/ 可有可无
+    # ② 三段式（老域名外链）：/vod/play/{影片id}/{源序号}/{集id}，取首尾两组
+    m = re.search(r"/vod/play/(\d+)/\d+/(\d+)", u)
+    if m:
+        return m.group(1), m.group(2), ""
+    # ③ 播放页：/sid/ 可有可无
     m = re.search(r"/vod/play/(\d+)/(?:sid/)?(\d+)", u)
     if m:
         return m.group(1), m.group(2), ""
-    # ③ 详情页
+    # ④ 详情页
     m = re.search(r"/vod/(?:detail|info)/(\d+)", u)
     if m:
         return m.group(1), "", ""
-    # ④ 纯 query 形态（?id=116537&nid=877419 / ?vodId=…）
+    # ⑤ 纯 query 形态（?id=116537&nid=877419 / ?vodId=…）
     qv = re.search(r"[?&](?:id|vodId|vod_id|movieId)=(\d+)", u)
     if qv:
         qn = re.search(r"[?&](?:nid|sid|episodeId|episode)=(\d+)", u)

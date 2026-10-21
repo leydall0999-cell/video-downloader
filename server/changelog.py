@@ -18,6 +18,15 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.83",
+        "date": "2026-10-21",
+        "items": [
+            "金牌影院的老域名 chrqj.com 现在也能解析了（它和 nmwchxx.com 是同一个站，"
+            "老域名的链接中间多一段「源序号」，以前会被认错集数）。",
+            "金牌影院两个域名现在都会自动带上浏览器登录态，需要登录的清晰度不再失败。",
+        ],
+    },
+    {
         "version": "1.0.82",
         "date": "2026-10-21",
         "items": [

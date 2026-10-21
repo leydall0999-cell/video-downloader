@@ -1066,6 +1066,7 @@ run_one test_update_server_counting.py
 #     sign=SHA1(MD5("排序参数&key=<key>&t=<毫秒>")) 逐位锁定、标题/清晰度/best 装配
 #     （AST 抽函数 + sys.modules 注入假 requests/uuid，离线跑，不发真实请求）。
 run_one test_nmw_extractor.py
+run_one test_cookie_pool_nmw_family.py     # 金牌影院一族 Cookie 池链路：hardened 双域名/白名单派生/验真派发按域/测试 URL（2026-10-21 收编 chrqj.com 时发现只认老域名）
 
 # 63.10 test_resolve_demand.py —— 解析需求登记守卫（2026-10-17，Downie 机制本土化
 #     第一环）：解析失败（白名单空白站点/未知域名）自动落库 → 管理端「解析需求榜」

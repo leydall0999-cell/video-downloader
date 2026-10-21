@@ -85,14 +85,19 @@ def test_link_forms() -> None:
         exec(compile(ast.Module([fn], []), "nmw_parse", "exec"), ns)
 
     is_nmw, parse, host_of = ns["_is_nmw_host"], ns["_nmw_parse_ids"], ns["_nmw_host"]
-    for h in ("nmwchxx.com", "www.nmwchxx.com", "nmwcchx.com", "nmwchx.com"):
+    for h in ("nmwchxx.com", "www.nmwchxx.com", "nmwcchx.com", "nmwchx.com",
+              "chrqj.com", "www.chrqj.com", "m.chrqj.com"):
         check(f"域名族识别：{h}", is_nmw(h) is True)
-    for h in ("kuaishou.com", "www.douyin.com", "", "nmw"):
+    for h in ("kuaishou.com", "www.douyin.com", "chrqj.net", "", "nmw"):
         check(f"非本站不误判：{h or '(空)'}", is_nmw(h) is False)
 
     cases = {
         "https://nmwchxx.com/vod/play/116537/sid/877419": ("116537", "877419", ""),
         "https://nmwchxx.com/vod/play/116537/877419": ("116537", "877419", ""),
+        # 老域名 chrqj.com 外链是三段式，中间是「源序号」不是集号：
+        # 若被两段式正则先吃掉，会把 1 当成 nid 解析出错误的集（2026-10-21 补）
+        "https://www.chrqj.com/vod/play/116537/1/877419": ("116537", "877419", ""),
+        "https://chrqj.com/vod/play/116537/sid/877419": ("116537", "877419", ""),
         "https://nmwchxx.com/vod/play/116537-1-1.html": ("116537", "", "1"),
         "https://nmwchxx.com/vod/detail/116537": ("116537", "", ""),
         "https://nmwchxx.com/play?id=116537&nid=877419": ("116537", "877419", ""),
@@ -179,11 +184,14 @@ def test_assembly_offline() -> None:
         for fn in fns.values():
             exec(compile(ast.Module([fn], []), "nmw_fragment", "exec"), ns)
 
-        # ① 链接形态：四种写法都要能解析。用户 2026-10-21 第三次报「又不行了」，
+        # ① 链接形态：五种写法都要能解析。用户 2026-10-21 第三次报「又不行了」，
         #    起因就是站点这次给的是 /vod/play/{id}/{nid}（没有 /sid/）。
+        #    chrqj.com 是同一站的老域名（首页 302 → nmwchxx.com），外链是三段式，
+        #    中间那组是「源序号」不是集号 —— 正则顺序错了就会解析出错误的集。
         forms = [
             ("/vod/play/116537/sid/877399", "877399"),  # 站内标准
             ("/vod/play/116537/877399", "877399"),      # 分享/外链（站内 404）
+            ("/vod/play/116537/1/877399", "877399"),    # 老域名三段式（源序号=1）
             ("/vod/play/116537-1-1.html", "877399"),    # maccms 老模板（集序号=1）
             ("/vod/detail/116537", "877399"),           # 详情页 → 自动取第一集
         ]
@@ -192,6 +200,13 @@ def test_assembly_offline() -> None:
             info = ns["_nmw_info"]("https://nmwchxx.com" + path)
             check(f"{path} → 集 ID {want}", f"nid={want}" in captured.get("url", ""))
             check(f"{path} → 标题可用", info["title"].startswith("少帅"))
+
+        # ①b 老域名链接：API/Referer 都跟着源站走，不写死 nmwchxx.com
+        captured.clear()
+        info = ns["_nmw_info"]("https://www.chrqj.com/vod/play/116537/1/877399")
+        check("chrqj 三段式 → 集 ID 877399", "nid=877399" in captured.get("url", ""))
+        check("chrqj → API 打在源站上", "www.chrqj.com" in captured.get("url", ""))
+        check("chrqj → Referer 用源站", info["http_headers"]["Referer"] == "https://www.chrqj.com/")
 
         # ② 真取不到任何 ID 才报错（引导文案在 hint 里）
         try:
