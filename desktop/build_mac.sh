@@ -792,7 +792,18 @@ else
   _VERIFY_FAIL=1
 fi
 
-
+# 2) 包内必备二进制（deno / ffmpeg / ffprobe）
+#    deno 缺 ⇒ YouTube >1080P（DASH）解不了 nsig，高码率静默降级；
+#    ffmpeg/ffprobe 缺 ⇒ 音视频合并与解说管线不可用。
+#    构建期只打一句 ⚠️ 不构成防线，这里做硬断言。判据含 `--version` 冒烟执行，
+#    能抓出「体积正常但动态库缺失/架构不匹配」这类只在运行期才暴露的坏包。
+echo "   ▶ 包内必备二进制核查（deno / ffmpeg / ffprobe）..."
+if "$VENV/bin/python" "$REPO/desktop/ci_assert_bundle_binaries.py" "$REPO/dist/VideoDownloader.app"; then
+  echo "   ✔ 必备二进制齐备"
+else
+  echo "   ❌ 包内缺少可用二进制（详见上方输出）"
+  _VERIFY_FAIL=1
+fi
 
 # 3) 离线测试（不依赖外部网络）：扫码登录 Mock 全链路 + 后端路由冒烟
 if [ -f "$REPO/server/tests/run_offline_tests.sh" ]; then

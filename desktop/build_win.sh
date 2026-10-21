@@ -319,6 +319,20 @@ echo "$BUILD_TAG" > "$RUN_ROOT/server/build_version.txt"
 echo "   版本：${APP_VERSION}"
 echo "   构建：${BUILD_TAG}"
 
+# ── 必备二进制硬核查（2026-10-21）──
+# 上面 deno / ffmpeg / ffprobe 段落找不到时只打一句 ⚠️ 就继续，历史形态下可能发出
+# 「YouTube 高码率静默降级」的包而构建日志全绿。这里改成硬断言：缺任一项或跑不起来
+# 就中止，绝不把残包交给 Inno 打安装程序（判据含 --version 冒烟执行，能抓动态库缺失）。
+echo "▶ 核查包内必备二进制（deno / ffmpeg / ffprobe）"
+if "$VENV/Scripts/python.exe" "$REPO/desktop/ci_assert_bundle_binaries.py" "$DIST_APP"; then
+  echo "   ✔ 必备二进制齐备"
+else
+  echo "❌ 包内缺少可用二进制（deno / ffmpeg / ffprobe 之一），已中止打包。" >&2
+  echo "   修法：① 确认 requirements.txt 的 deno==2.9.7 已装进 venv（$VENV/Scripts/deno.exe）；" >&2
+  echo "         ② ffmpeg.exe / ffprobe.exe 需在 PATH 或仓库根目录；然后重跑构建。" >&2
+  exit 1
+fi
+
 echo "▶ 打包安装程序（Inno Setup → dist/VideoDownloader-Setup-${APP_VERSION}.exe）"
 # iscc 查找顺序：PATH → 常见安装路径（Git Bash 的 /c/ 路径，MSYS 会转成 Windows 风格传给原生 exe）
 _ISCC=""
