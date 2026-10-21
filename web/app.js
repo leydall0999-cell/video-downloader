@@ -2323,53 +2323,182 @@
   // ------------------------------------------------------------------ 上传视频直接转码（多文件批量：每个文件独立一行 + 独立输出格式）
   // 设计：前端模拟批量，后端复用单文件 /api/upload-convert。状态用 pending/uploading/running/completed/failed。
   // 并发：最大 2 个同时转码（普通 ffmpeg 重任务，避免 CPU/带宽占满）。
-  // 2026-08-24 上传提速：单文件分片并发（32MB/片 × 4 路，单片失败重试 2 次），
-  // 文件级并发 2（避免多文件抢占带宽），大文件总连接数 = 2×4 = 8，HTTP/1.1 排队 HTTP/2 全并发。
+  // 文件级并发 2（避免多文件抢占带宽）。单文件的分片并发见下方 UC_CHUNK_CONCURRENCY。
   const UC_MAX_CONCURRENT = 2; // 文件级上传并发
-  const UC_CHUNK_SIZE = 32 * 1024 * 1024;       // 单片 32MB（默认）
-  const UC_BIG_CHUNK_SIZE = 64 * 1024 * 1024;   // >2GB 文件单片 64MB（减少请求数，后端上限 64MB）
-  const UC_CHUNK_CONCURRENCY = 2;               // 单文件分片并发路数（2026-08-28：CF 免费方案对 8 路并发大文件 POST 触发 Heavy Upload Limiter，每路降速到 ~200KB/s；降到 2 路绕过限流，单条 32MB 可跑 1.3MB/s）
-  const UC_CHUNK_RETRIES = 2;                   // 单片失败重试次数（网络抖动自动重传）
+  // 2026-10-22 实测重标定（本机 → hanyuxz.top，同一条宽带）：
+  //   · 用户宽带纯上行上限 ≈ 873 KB/s（nc 直传 HK 节点，不经任何 Web 服务）
+  //   · 现状 32MB×2 路同源：浏览器实测 100 KB/s（用户报 93 KB/s，同量级）——
+  //     浏览器对同一 origin 复用一条 HTTP/2 连接，并行分片是抢同一条管子，CF 按连接限速
+  //   · 32MB 单片在 CF 链路 169s 必被掐断（524 源站超时，CF 阈值约 100s）⇒ 大分片不只是慢，是会失败
+  //   · curl 标定：2MB×4 路 579KB/s、2MB×6 路 886KB/s、2MB×8 路全 502（源站被打爆）、
+  //     4MB 聚合 308KB/s、1MB 聚合 171KB/s ⇒ 2MB 是甜点，6 路是拐点
+  //   · 浏览器内同会话 A/B（18MB）：单 origin 100 KB/s → 6 端口 227 KB/s（2.3×）
+  //     （headless 页面有节流，真实前台 tab 应高于此；但两者的倍数关系才是可信结论）
+  const UC_CHUNK_SIZE = 2 * 1024 * 1024;        // 单片 2MB（默认）
+  const UC_BIG_CHUNK_SIZE = 4 * 1024 * 1024;    // >2GB 文件单片 4MB（控请求数；后端单片上限 64MB，分片文件名 %04d 到 9999 片 ⇒ 4MB 可覆盖 ~39GB）
+  const UC_CHUNK_CONCURRENCY = 6;               // 单文件分片并发路数（每路落在不同端口 origin 上，各自独立限速桶）
+  const UC_CHUNK_RETRIES = 3;                   // 单片失败重试次数（路数变多 ⇒ 抖动暴露面变大，放宽一档）
   const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
-  // 上传端点：只保留同源一个（2026-09-29）。
-  // 历史：曾用 `[location.origin, 'https://web-production-b9993.up.railway.app']` 做
-  // 「双端点混合上传」——Railway 原生域无 CF 限速层，且与 CF 域**指向同一后端、同一份
-  // 分片存储**，所以按通道吞吐动态选路是安全的。
-  // 但该 Railway 应用自 2026-09-11 起已不存在（边缘 Application not found / 连接直接失败），
-  // 而选路在「样本不足（<4 片）」阶段按奇偶分流 ⇒ **每个奇数下标分片都被发到死主机**：
-  // 用户看到的就是「分片 2/8 上传失败」（2、4、6… 必失败，重试还会再撞一次死主机）。
-  // 🔴 红线：任何新增端点必须与主站**同后端、同分片存储**，否则分片会落到另一个节点的
-  //    磁盘上，finish 时必然报「分片不完整」——宁可不加，也不要加一个不同源的端点。
-  const UC_UPLOAD_ENDPOINTS = [location.origin];
-  // 通道质量统计（每文件独立）：最近成功分片的平均吞吐 bytes/ms，用于动态选路
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 上传端点池：绕开「CF 按 HTTP 连接限速」的唯一手段。
+  //
+  // 根因（2026-10-22 实测）：浏览器对同一 origin 复用**一条** HTTP/2 连接，所有并行
+  // 分片其实是抢这一条管子；CF 按连接限速 ⇒ 加到 6 路也是 93 KB/s。
+  // 解法：**同一个主机换 HTTPS 端口** —— 不同端口在浏览器里是不同 origin ⇒ 独立连接池
+  // ⇒ 独立限速桶。实测：真实浏览器同会话 18MB —— 单 origin 100 KB/s → 6 端口 227 KB/s；
+  // curl（无 tab 节流）2MB×6 路 886 KB/s ≈ 宽带上行上限 873 KB/s。
+  //
+  // 🔴 红线（继承 2026-09-11 Railway 事故教训）：当年加了一个**不同后端**的端点，分片落到
+  //    别的节点磁盘上，finish 必报「分片不完整」。所以这里每个候选都必须满足
+  //    「分片不完整」。所以这里的每个候选都必须满足「同隧道 → 同 nginx → 同 worker → 同
+  //    分片目录」。已实测：hanyuxz.top / vdl-check.hanyuxz.top 的 6 个 HTTPS 端口的分片
+  //    全部落在 ECS 的 /opt/vdl-worker/downloads/uploads 同一目录下。
+  // 因此：**候选写死 CF 边缘端口，且先探测可达再用**，宁可退回单一同源也不要猜。
+  // ═══════════════════════════════════════════════════════════════════════════
+  let UC_UPLOAD_ENDPOINTS = [location.origin];
+  const UC_EP_FAIL_LIMIT = 3;                    // 单端点连续失败多少次后暂时摘除
+  const ucEpFail = Object.create(null);          // 端点 → 连续失败计数（成功即清零）
+
+  // 候选清单：只在 https + 主站域名下生成。本机/localhost/IP/其它部署一律只用同源，
+  // 避免在本地环境发出一堆必然失败的跨域请求。
+  const ucEndpointCandidates = () => {
+    const out = [location.origin];
+    try {
+      if (location.protocol !== 'https:') return out;
+      // 只在这一个主机名上启用（已端到端验证：分片落在同一 worker 的同一目录）。
+      // 🔴 不要放宽到 hk.hanyuxz.top —— 那台是**另一个物理节点**（香港 47.82.101.79），
+      //    一旦它的端口也能通，分片就会落到另一个节点的磁盘上，finish 必报「分片不完整」。
+      //    （2026-10-22 实测：hanyuxz.top 与 vdl-check.hanyuxz.top 的 6 个 HTTPS 端口，
+      //     分片全部落在 cn ECS 的 /opt/vdl-worker/downloads/uploads 同一目录。）
+      if (location.hostname !== 'hanyuxz.top') return out;
+      const host = location.hostname;
+      const secondHost = 'vdl-check.hanyuxz.top';   // 备用 hostname（同隧道同存储，已实测）
+      // CF 边缘开放的 HTTPS 端口（全部指向同一条命名隧道）
+      for (const p of [443, 2053, 2083, 2087, 2096, 8443]) {
+        if (p === 443) continue;                 // 443 就是当前 origin，不重复加
+        const ep = `https://${host}:${p}`;
+        if (!out.includes(ep)) out.push(ep);
+      }
+      if (secondHost) for (const p of [443, 2053, 2083, 2087, 2096, 8443]) {
+        const ep = `https://${secondHost}${p === 443 ? '' : ':' + p}`;
+        if (!out.includes(ep)) out.push(ep);
+      }
+    } catch (e) { /* location 不可用时保守退回 */ }
+    return out;
+  };
+
+  // 可达性探测：只把真正能用的端点放进池子。
+  // 为什么必须探测：企业/校园网常只放行 443，其余端口会被防火墙静默丢包；若不做探测，
+  // 这些端口会以「每片超时 5 分钟」的形式出现，直接把上传拖垮（比不加端口还糟）。
+  // 另外：分片 POST 自带 X-Device-Id ⇒ 必然触发 CORS 预检；这里用不带自定义头的
+  // GET 探测最省事（省掉一轮 OPTIONS），也更接近浏览器真实建连成本。
+  let _ucEpProbe = null;
+  const ucProbeEndpoints = () => {
+    if (_ucEpProbe) return _ucEpProbe;
+    const cands = ucEndpointCandidates();
+    if (cands.length <= 1 || typeof window === 'undefined' || !window.AbortController) {
+      _ucEpProbe = Promise.resolve(UC_UPLOAD_ENDPOINTS);
+      return _ucEpProbe;
+    }
+    _ucEpProbe = Promise.all(cands.map((ep) => new Promise((res) => {
+      if (ep === location.origin) { res(ep); return; }
+      let done = false;
+      const fin = (ok) => { if (done) return; done = true; res(ok ? ep : null); };
+      const t = setTimeout(() => fin(false), 6000);
+      // credentials:'omit' —— 服务端 CORS 白名单回显 Origin，不带凭据最稳
+      fetch(ep + '/api/version', { cache: 'no-store', credentials: 'omit' })
+        .then((r) => { clearTimeout(t); fin(r && r.ok); })
+        .catch(() => { clearTimeout(t); fin(false); });
+    }))).then((oks) => {
+      const good = oks.filter(Boolean);
+      // 同主机优先（少一次 DNS/TLS 不确定性），最多 6 条（略多于 worker 路数，留冗余）
+      const sameHost = good.filter((ep) => {
+        try { return new URL(ep).hostname === location.hostname; } catch (e) { return false; }
+      });
+      const rest = good.filter((ep) => sameHost.indexOf(ep) < 0);
+      const final = [location.origin].concat(sameHost.filter((ep) => ep !== location.origin), rest).slice(0, 6);
+      UC_UPLOAD_ENDPOINTS = final.length ? final : [location.origin];
+      return UC_UPLOAD_ENDPOINTS;
+    });
+    return _ucEpProbe;
+  };
+  // 页面加载即开始探测（不阻塞），首次上传时若已就绪就直接用上多通道
+  if (typeof window !== 'undefined' && !window.__vdl_ucEpProbeKicked) {
+    window.__vdl_ucEpProbeKicked = true;
+    try { ucProbeEndpoints(); } catch (e) { /* ignore */ }
+  }
+
+  // 通道质量统计（每文件独立）：最近成功分片的平均吞吐 bytes/ms，用于剔除明显慢的通道
   const ucChStats = () => ({
-    samples: [[], []],
+    samples: Object.create(null),
     total: 0,
-    add(ci, bytes, ms) {
-      const arr = this.samples[ci];
+    add(ep, bytes, ms) {
+      const arr = (this.samples[ep] = this.samples[ep] || []);
       arr.push({ bytes, ms });
       if (arr.length > 3) arr.shift();
       this.total++;
     },
-    avg(ci) {
-      const arr = this.samples[ci];
-      if (!arr.length) return 0;
+    avg(ep) {
+      const arr = this.samples[ep];
+      if (!arr || !arr.length) return 0;
       let sb = 0, sm = 0;
       for (const s of arr) { sb += s.bytes; sm += s.ms; }
       return sm > 0 ? sb / sm : 0;
     },
   });
-  // 动态选路：样本不足（<4 片）先按奇偶分流顺便采集；样本充足后 80% 走更快通道、
-  // 20% 探索另一条（防抖动瞬间误判后锁死慢通道，让其有机会恢复并被重新采样）。
-  // 重试（attempt>0）固定切到另一条通道（故障转移，不重试同一条坏链路）。
-  const ucPickEndpoint = (item, i, attempt) => {
-    const n = UC_UPLOAD_ENDPOINTS.length;
-    if (attempt > 0) return UC_UPLOAD_ENDPOINTS[(i + 1) % n];
-    const st = item._chStats;
-    if (!st || st.total < 4) return UC_UPLOAD_ENDPOINTS[i % n];
-    const faster = st.avg(0) >= st.avg(1) ? 0 : 1;
-    if (Math.random() < 0.8) return UC_UPLOAD_ENDPOINTS[faster];
-    return UC_UPLOAD_ENDPOINTS[1 - faster];
+  // 选路：**轮询为主**（保证 6 路 worker 分散到 6 个独立连接池，这是提速的命门），
+  // 再叠加两道兜底：① 剔除明显慢的通道（吞吐 < 最快通道 25%，至少保留 2 条）；
+  // ② 剔除连续失败的端点（网络策略/端口被封）。重试（attempt>0）必换一条，不重试坏链路。
+  // lane = worker 路号（绑定固定端点用）；见函数内注释：不能按分片轮换端口。
+  const ucPickEndpoint = (item, i, attempt, lane) => {
+    let list = UC_UPLOAD_ENDPOINTS;
+    if (list.length > 1) {
+      let pool = list.filter((ep) => (ucEpFail[ep] || 0) < UC_EP_FAIL_LIMIT);
+      const st = item && item._chStats;
+      if (st && st.total >= 12) {
+        let best = 0;
+        for (const ep of pool) best = Math.max(best, st.avg(ep));
+        if (best > 0) {
+          const keep = pool.filter((ep) => st.avg(ep) >= best * 0.25);
+          if (keep.length >= 2) pool = keep;
+        }
+      }
+      if (pool.length) list = pool;
+    }
+    const n = list.length;
+    if (n === 1) return list[0];
+    if (attempt > 0) {
+      // 故障转移：跳过上一次用的那条，顺延到池里的下一个（不重试同一条坏链路）
+      const prev = item && item._lastEp;
+      const base = prev && list.indexOf(prev) >= 0 ? list.indexOf(prev) + 1 : i;
+      return list[((base % n) + n) % n];
+    }
+    // 🔴 按 worker 路号**绑死**端点，不按分片轮换。
+    //    2026-10-22 同一浏览器会话内的 A/B（各 6 路 × 3 片 × 1MB = 18MB）：
+    //      单 origin（改造前的行为）100 KB/s ｜ 6 端口绑路 227 KB/s ｜ 6 端口轮换 224 KB/s
+    //    结论：绑路和轮换**吞吐没有差别**（不必为了「轮换更好」去改它）；真正决定性的
+    //    变量是「用几个独立连接池」（100 → 227 KB/s）。仍然选择绑路的理由是：
+    //    ① 并发 socket 数固定在 N 条（每路一条），而不是 N 路 × M 个端点；
+    //    ② 某路慢时该路自动少取分片（这里靠外层共享 idx 队列实现），慢.conn 不会拖垮整体。
+    //    ⚠️ 别拿「浏览器里一片一定慢」当轮换的锅：那是 TLS 握手 + CORS 预检的固定开销
+    //       摊到单片上，每路多传几片就摊薄了（实测已证伪）。
+    if (lane !== undefined) {
+      if (!item._laneEp) item._laneEp = [];
+      const pinned = item._laneEp[lane];
+      // pin 还在可用池里就继续用；被剔除了（连续失败）自动换新
+      if (pinned && list.indexOf(pinned) >= 0) return pinned;
+      const picked = list[lane % n];
+      item._laneEp[lane] = picked;
+      return picked;
+    }
+    // 没有 lane 信息的旧调用点：退回轮询（多文件各自轮转，互不干扰）
+    const rr = item._epRR === undefined ? 0 : (item._epRR + 1) % n;
+    item._epRR = rr;
+    return list[rr];
+  };
+  const ucNoteEpResult = (ep, ok) => {
+    if (!ep) return;
+    ucEpFail[ep] = ok ? 0 : (ucEpFail[ep] || 0) + 1;
   };
   const ucState = { list: [], nextId: 1, active: 0, polling: null };
 
@@ -2688,7 +2817,7 @@
     // 分片并发 worker 池：每片失败重试 UC_CHUNK_RETRIES 次，耗尽则整个文件失败
     let idx = 0;
     const workers = [];
-    const worker = async () => {
+    const worker = async (lane) => {
       while (idx < totalChunks) {
         if (item._removed || item.status === 'failed') return;
         const i = idx++;
@@ -2698,7 +2827,8 @@
         let attempts = 0;
         for (;;) {
           try {
-            const ep = ucPickEndpoint(item, i, attempts);   // 动态选路（快通道优先，重试换端）
+            const ep = ucPickEndpoint(item, i, attempts, lane);  // 该路绑定的端点（重试时换）
+            item._lastEp = ep;
             const stT = performance.now();
             await ucUploadChunk(uploadId, i, totalChunks, blob, (loaded) => {
               inFlight.set(i, loaded);  // 单片实时进度反馈
@@ -2707,10 +2837,12 @@
             const elT = performance.now();
             // 记录该通道最近一次成功分片的吞吐样本（bytes/ms），供后续分片选路
             item._chStats.total++;
-            item._chStats.add(UC_UPLOAD_ENDPOINTS.indexOf(ep), end - start, elT - stT);
+            item._chStats.add(ep, end - start, elT - stT);
+            ucNoteEpResult(ep, true);
             break;
           } catch (e) {
             if (item._removed) return;  // 用户已删除：直接退出，不重试不报错
+            ucNoteEpResult(item._lastEp, false);
             attempts++;
             if (attempts > UC_CHUNK_RETRIES) {
               item.status = 'failed';
@@ -2729,18 +2861,27 @@
         updateProgress();
       }
     };
-    for (let w = 0; w < UC_CHUNK_CONCURRENCY; w++) workers.push(worker());
-
-    // 全部分片上传完成 → 停在「已上传·待转码」，等用户点开始转码（单行或批量）
-    Promise.allSettled(workers).then(() => {
-      if (item._removed || item.status === 'failed') return;
-      item.status = 'uploaded';       // 已上传·待转码（新状态）
-      item.progress = 30;
-      item.speedText = ''; item.uploadedText = '';
-      item._totalChunks = totalChunks; // 供 ucFinishOne 提交转码时使用
-      renderUcList();
-      resolve({ status: 'uploaded' });
-    });
+    // 端点探测完成（最多等 6.5s）后再起 worker —— 保证 6 条路从一开始就落在 6 个独立
+    // 连接池上。页面加载时已并发发起探测，正常情况这里立刻返回。
+    const ucStartWorkers = () => {
+      if (item._kicked) return;
+      item._kicked = true;
+      for (let w = 0; w < UC_CHUNK_CONCURRENCY; w++) workers.push(worker(w));
+      // 全部分片上传完成 → 停在「已上传·待转码」，等用户点开始转码（单行或批量）
+      Promise.allSettled(workers).then(() => {
+        if (item._removed || item.status === 'failed') return;
+        item.status = 'uploaded';       // 已上传·待转码（新状态）
+        item.progress = 30;
+        item.speedText = ''; item.uploadedText = '';
+        item._totalChunks = totalChunks; // 供 ucFinishOne 提交转码时使用
+        renderUcList();
+        resolve({ status: 'uploaded' });
+      });
+    };
+    let probeP;
+    try { probeP = ucProbeEndpoints(); } catch (e) { probeP = Promise.resolve(); }
+    Promise.race([probeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))])
+      .then(ucStartWorkers, ucStartWorkers);
   });
 
   // 提交转码：调 finish 合并分片 + 启动 job（用该行最新设置的格式/参数；finish 一次性，失败需重传）
@@ -3016,7 +3157,7 @@
       ucLastProgressByItem.set(item, Date.now());  // visibilitychange 自动续传判据（与单文件转码共用）
     };
     let idx = 0; const workers = [];
-    const worker = async () => {
+    const worker = async (lane) => {
       while (idx < totalChunks) {
         if (item._removed || item.status === 'failed') return;
         const i = idx++;
@@ -3026,15 +3167,18 @@
         let attempts = 0;
         for (;;) {
           try {
-            const ep = ucPickEndpoint(item, i, attempts);
+            const ep = ucPickEndpoint(item, i, attempts, lane);
+            item._lastEp = ep;
             const stT = performance.now();
             await ucUploadChunk(uploadId, i, totalChunks, blob, (loaded) => { inFlight.set(i, loaded); updateProgress(); }, item._xhrs, ep);
             const elT = performance.now();
             item._chStats.total++;
-            item._chStats.add(UC_UPLOAD_ENDPOINTS.indexOf(ep), end - start, elT - stT);
+            item._chStats.add(ep, end - start, elT - stT);
+            ucNoteEpResult(ep, true);
             break;
           } catch (e) {
             if (item._removed) return;
+            ucNoteEpResult(item._lastEp, false);
             attempts++;
             if (attempts > UC_CHUNK_RETRIES) {
               item.status = 'failed';
@@ -3050,10 +3194,14 @@
         updateProgress();
       }
     };
-    for (let w = 0; w < UC_CHUNK_CONCURRENCY; w++) workers.push(worker());
-    Promise.allSettled(workers).then(() => {
-      if (item._removed || item.status === 'failed') return;
-      const form = new FormData();
+    // 等端点池就绪再起 worker（同 ucUploadOne：保证多路分散到独立连接池）
+    const mcStartWorkers = () => {
+      if (item._kicked) return;
+      item._kicked = true;
+      for (let w = 0; w < UC_CHUNK_CONCURRENCY; w++) workers.push(worker(w));
+      Promise.allSettled(workers).then(() => {
+        if (item._removed || item.status === 'failed') return;
+        const form = new FormData();
       form.append('upload_id', uploadId);
       form.append('total', totalChunks);
       form.append('filename', item.file.name);
@@ -3102,6 +3250,11 @@
       xhr.addEventListener('timeout', () => { item.status = 'failed'; item.errorMsg = '上传超时，请移除后重新添加'; mcRender(); resolve(); });
       xhr.send(form);
     });
+    };
+    let mcProbeP;
+    try { mcProbeP = ucProbeEndpoints(); } catch (e) { mcProbeP = Promise.resolve(); }
+    Promise.race([mcProbeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))])
+      .then(mcStartWorkers, mcStartWorkers);
   });
 
   const mcPoll = async () => {
@@ -7043,8 +7196,11 @@
 
   // ===== 音乐格式转换（独立 tab，复用音频转码后端 /api/upload-chunk + /api/convert）=====
   const MUS_AUDIO_FMTS = ['mp3', 'm4a', 'wav', 'flac', 'aac', 'opus', 'wma', 'mp2'];
-  const MUS_CHUNK_SIZE = 32 * 1024 * 1024;
-  const MUS_BIG_CHUNK_SIZE = 64 * 1024 * 1024;
+  // 2026-10-22：与 UC_* 同步重标定（2MB 甜点 × 6 路跨端口）；此前这里**完全串行**上传，
+  // 32MB 单片既慢又会在 CF 链路被 524 掐断。
+  const MUS_CHUNK_SIZE = 2 * 1024 * 1024;
+  const MUS_BIG_CHUNK_SIZE = 4 * 1024 * 1024;
+  const MUS_CHUNK_CONCURRENCY = 4;   // 音频通常比视频小，4 路足够跑满（原理同 UC_CHUNK_CONCURRENCY）
   const musState = { list: [], nextId: 1, pollTimer: null };
 
   const musDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
@@ -7157,28 +7313,51 @@
     const done = new Set();
     const xhrs = item._xhrs;
     let uploadedBytes = 0;
-    const pump = async () => {
-      for (let idx = 0; idx < totalChunks; idx++) {
-        if (done.has(idx) || item._removed) continue;
+    // 并发 worker 池（此前是串行 for 循环：一次只传一片，多路端口根本用不上）
+    let musIdx = 0;
+    const musWorker = async (lane) => {
+      for (;;) {
+        if (item._removed) return;
+        const idx = musIdx++;
+        if (idx >= totalChunks) return;
         const start = idx * chunkSize, end = Math.min(start + chunkSize, file.size);
         const blob = file.slice(start, end);
-        try {
-          await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs);
-        } catch (e1) {
-          if (item._removed) { reject(new Error('已取消')); return; }
-          try { await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs); }
-          catch (e2) { item.status = 'failed'; item.errorMsg = '上传失败：' + (e2 && e2.message || '网络错误'); musRender(); reject(e2); return; }
+        let attempts = 0;
+        for (;;) {
+          try {
+            const ep = ucPickEndpoint(item, idx, attempts, lane);
+            item._lastEp = ep;
+            await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs, ep);
+            ucNoteEpResult(ep, true);
+            break;
+          } catch (e1) {
+            if (item._removed) { reject(new Error('已取消')); return; }
+            ucNoteEpResult(item._lastEp, false);
+            if (++attempts > UC_CHUNK_RETRIES) {
+              item.status = 'failed'; item.errorMsg = '上传失败：' + ((e1 && e1.message) || '网络错误');
+              musRender(); reject(e1); return;
+            }
+          }
         }
-        done.add(idx);
-        uploadedBytes += (end - start);
+        if (!done.has(idx)) { done.add(idx); uploadedBytes += (end - start); }
         item.progress = Math.min(99, Math.round(uploadedBytes / file.size * 100));
         item.uploadedText = `${done.size}/${totalChunks}`;
         musRender();
       }
-      if (item._removed) { reject(new Error('已取消')); return; }
-      item.status = 'uploaded'; item.progress = 30; item.stage = '已上传'; item.uploadedText = ''; musRender(); resolve();
     };
-    pump();
+    const musStart = () => {
+      if (item._kicked) return;
+      item._kicked = true;
+      const ws = [];
+      for (let w = 0; w < MUS_CHUNK_CONCURRENCY; w++) ws.push(musWorker(w));
+      Promise.allSettled(ws).then(() => {
+        if (item._removed || item.status === 'failed') return;
+        item.status = 'uploaded'; item.progress = 30; item.stage = '已上传'; item.uploadedText = ''; musRender(); resolve();
+      });
+    };
+    let musProbeP;
+    try { musProbeP = ucProbeEndpoints(); } catch (e) { musProbeP = Promise.resolve(); }
+    Promise.race([musProbeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))]).then(musStart, musStart);
   });
 
   // 提交转码：finish 合并分片 + 启动 job（音乐转换强制 audio=true + audio_bitrate）
@@ -7413,7 +7592,9 @@
 
   // ===== 图片格式转换（独立 tab，LGPL ffmpeg 单帧转码 PNG/JPG/WebP/BMP/TIFF/GIF）=====
   const IMG_FMTS = ['png', 'jpg', 'webp', 'bmp', 'tiff', 'gif'];
-  const IMG_CHUNK_SIZE = 32 * 1024 * 1024;
+  // 2026-10-22：与 UC_* 同步重标定
+  const IMG_CHUNK_SIZE = 2 * 1024 * 1024;
+  const IMG_CHUNK_CONCURRENCY = 4;
   const imgState = { list: [], nextId: 1, pollTimer: null };
 
   const imgDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
@@ -7531,28 +7712,51 @@
     const done = new Set();
     const xhrs = item._xhrs;
     let uploadedBytes = 0;
-    const pump = async () => {
-      for (let idx = 0; idx < totalChunks; idx++) {
-        if (done.has(idx) || item._removed) continue;
+    // 并发 worker 池（此前串行 for 循环，一次只传一片）
+    let imgIdx = 0;
+    const imgWorker = async (lane) => {
+      for (;;) {
+        if (item._removed) return;
+        const idx = imgIdx++;
+        if (idx >= totalChunks) return;
         const start = idx * chunkSize, end = Math.min(start + chunkSize, file.size);
         const blob = file.slice(start, end);
-        try {
-          await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs);
-        } catch (e1) {
-          if (item._removed) { reject(new Error('已取消')); return; }
-          try { await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs); }
-          catch (e2) { item.status = 'failed'; item.errorMsg = '上传失败：' + (e2 && e2.message || '网络错误'); imgRender(); reject(e2); return; }
+        let attempts = 0;
+        for (;;) {
+          try {
+            const ep = ucPickEndpoint(item, idx, attempts, lane);
+            item._lastEp = ep;
+            await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs, ep);
+            ucNoteEpResult(ep, true);
+            break;
+          } catch (e1) {
+            if (item._removed) { reject(new Error('已取消')); return; }
+            ucNoteEpResult(item._lastEp, false);
+            if (++attempts > UC_CHUNK_RETRIES) {
+              item.status = 'failed'; item.errorMsg = '上传失败：' + ((e1 && e1.message) || '网络错误');
+              imgRender(); reject(e1); return;
+            }
+          }
         }
-        done.add(idx);
-        uploadedBytes += (end - start);
+        if (!done.has(idx)) { done.add(idx); uploadedBytes += (end - start); }
         item.progress = Math.min(99, Math.round(uploadedBytes / file.size * 100));
         item.uploadedText = `${done.size}/${totalChunks}`;
         imgRender();
       }
-      if (item._removed) { reject(new Error('已取消')); return; }
-      item.status = 'uploaded'; item.progress = 30; item.stage = '已上传'; item.uploadedText = ''; imgRender(); resolve();
     };
-    pump();
+    const imgStart = () => {
+      if (item._kicked) return;
+      item._kicked = true;
+      const ws = [];
+      for (let w = 0; w < IMG_CHUNK_CONCURRENCY; w++) ws.push(imgWorker(w));
+      Promise.allSettled(ws).then(() => {
+        if (item._removed || item.status === 'failed') return;
+        item.status = 'uploaded'; item.progress = 30; item.stage = '已上传'; item.uploadedText = ''; imgRender(); resolve();
+      });
+    };
+    let imgProbeP;
+    try { imgProbeP = ucProbeEndpoints(); } catch (e) { imgProbeP = Promise.resolve(); }
+    Promise.race([imgProbeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))]).then(imgStart, imgStart);
   });
 
   // 提交转换：本地文件走 /api/convert/local（is_image=true），网页文件走分片 finish（is_image=true）。
@@ -7784,27 +7988,50 @@
     el.sbProgressWrap.hidden = false;
     el.sbProgressFill.style.width = '0%';
     sbSetStatus('上传中…');
-    const chunkSize = 32 * 1024 * 1024;
+    const chunkSize = 2 * 1024 * 1024;   // 2026-10-22：与 UC_* 同步重标定（原 32MB 串行）
     const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
     const uploadId = 'sb' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     const xhrs = new Set();
     const done = new Set();
     let uploadedBytes = 0;
-    const pump = async () => {
-      for (let idx = 0; idx < totalChunks; idx++) {
-        if (done.has(idx)) continue;
+    // 并发 worker 池（此前串行 for 循环）：原理同 musUploadOne —— 多路分散到不同端口连接池
+    let sbFailed = false;
+    let sbIdx = 0;
+    const _sbItem = { _chStats: ucChStats() };
+    const sbWorker = async (lane) => {
+      for (;;) {
+        const idx = sbIdx++;
+        if (idx >= totalChunks || sbFailed) return;
         const start = idx * chunkSize, end = Math.min(start + chunkSize, file.size);
         const blob = file.slice(start, end);
-        try { await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs); }
-        catch (e1) {
-          try { await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs); }
-          catch (e2) { sbSetStatus('上传失败：' + (e2 && e2.message || '网络错误')); return; }
+        let attempts = 0;
+        for (;;) {
+          try {
+            const ep = ucPickEndpoint(_sbItem, idx, attempts, lane);
+            _sbItem._lastEp = ep;
+            await ucUploadChunk(uploadId, idx, totalChunks, blob, null, xhrs, ep);
+            ucNoteEpResult(ep, true);
+            break;
+          } catch (e1) {
+            ucNoteEpResult(_sbItem._lastEp, false);
+            if (++attempts > UC_CHUNK_RETRIES) { sbFailed = true; sbSetStatus('上传失败：' + ((e1 && e1.message) || '网络错误')); return; }
+          }
         }
         done.add(idx);
         uploadedBytes += (end - start);
         el.sbProgressFill.style.width = Math.min(9, Math.round(uploadedBytes / file.size * 9)) + '%';
         sbSetStatus(`上传中 ${done.size}/${totalChunks} 片`);
       }
+    };
+    const pump = async () => {
+      let sbProbeP;
+      try { sbProbeP = ucProbeEndpoints(); } catch (e) { sbProbeP = Promise.resolve(); }
+      await Promise.race([sbProbeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))]);
+      const ws = [];
+      for (let w = 0; w < 4; w++) ws.push(sbWorker(w));
+      await Promise.allSettled(ws);
+      // 有片没传完就别提交 finish —— 否则后端必报「分片不完整」，用户看到的却是下一步的错
+      if (sbFailed || done.size < totalChunks) return;
       sbSetStatus('提交识别任务…');
       const fd = new FormData();
       fd.append('upload_id', uploadId);
