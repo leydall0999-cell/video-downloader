@@ -17,8 +17,23 @@
 | 快手 | `rest/wd/common/user/info` | **404** |
 | TikTok | `passport/web/account/info` | 国内机房直接连不上（ConnectionError）|
 
-所以「加个探针」这条路的结论是：**不可行**，除非上 Playwright（30~50s/条，
+所以当时「加个探针」这条路的结论是：**不可行**，除非上 Playwright（30~50s/条，
 不适合做常规校验）。
+
+## 🔴 2026-10-21 后续更正：换对接口就能验（上表只证明「那些接口不行」）
+
+上表的失败**不等于这两个站验不了**。当天晚些时候找到两个**免签名**入口：
+
+| 站 | 可用接口 | 判据 |
+|---|---|---|
+| 抖音 | `GET /aweme/v1/web/user/profile/self/` | `status_code=8` +「用户未登录」⇒ 失效；`0` + `user` ⇒ 已登录（带 nickname）|
+| 快手 | `POST /graphql` `visionProfile` | `userProfile.profile.user_name` 有值 ⇒ 已登录；`result=21` ⇒ 凭据失效 |
+
+线上池实测：抖音 3 份、快手 5 份全部从「未校验」落成「无效」，说明列写明
+「需重新登录」。**所以本文件的静态判据现在只是离线兜底**（`cp.requests` 不可用
+时才会走到），联网路径由 `test_cookie_probe_douyin_kuaishou.py` 单独锁死。
+
+别再拿本文件的旧结论去回答「抖音/快手验不了」——那已经被证伪了。
 
 ## 但「unknown」不等于没结论
 

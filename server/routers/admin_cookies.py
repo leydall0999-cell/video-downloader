@@ -110,6 +110,29 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 # 游客页 36KB / loggedIn=false；带登录 Cookie 206KB / loggedIn=true + nickname + redId。
 _XHS_EXPLORE = "https://www.xiaohongshu.com/explore"
 
+# 抖音：`/aweme/v1/web/user/profile/self/` **不需要 a_bogus 签名**（2026-10-21 实测，
+# 裸 GET + Cookie 直接回 JSON）。判定语义：status_code=0 且 user 非空 ⇒ 已登录
+# （能读到 nickname / sec_uid，后台直接看到「池里是谁的号」）；status_code=8 且
+# status_msg="用户未登录" ⇒ 这份 Cookie 已被服务端判定失效。
+# 这条接口是抖音唯一免签名的自检入口，别再去找 im/user/info（回 url doesn't match）。
+_DY_PROFILE_SELF = "https://www.douyin.com/aweme/v1/web/user/profile/self/"
+
+# 快手：GraphQL `visionProfile` **不校验 __NS_sig3 签名**（实测裸 POST 即返回 data）。
+# 三个语义必须成对看（2026-10-21 同一台机同一时刻实测）：
+#   空 Cookie（真匿名） → result=2,  userProfile=null
+#   带失效 Cookie       → result=21, userProfile=null   ← 与匿名不同
+#   已登录              → userProfile.profile.user_name 有值
+# 21 是快手的「凭据不合法」码，不是「探针没生效」。独立通道
+# /pass/kuaishou/login/passToken 回 {"result":100110085,"error_msg":"sid不合法"}
+# 交叉印证。两者互为对照，才能排除「服务端压根没认这份 Cookie」的假阴性。
+_KS_GRAPHQL = "https://www.kuaishou.com/graphql"
+_KS_VISION_PROFILE = (
+    "query visionProfile { visionProfile { result hostName"
+    " userProfile { ownerCount { fan follow photo photo_public }"
+    " profile { gender user_name user_id headurl user_text } } } }"
+)
+_KS_PASS_CHECK = "https://id.kuaishou.com/pass/kuaishou/login/passToken"
+
 
 # ─── 基础工具 ────────────────────────────────────────────────────────────────
 
@@ -491,6 +514,106 @@ def _probe(domain: str, header: str) -> dict:
                         "probe": _PROBE_NET}
             return {"status": "invalid",
                     "detail": "站点判定：未登录（loggedIn=false）",
+                    "probe": _PROBE_NET}
+        except Exception as e:
+            return {"status": "unknown",
+                    "detail": f"网络不可达（{type(e).__name__}）",
+                    "probe": _PROBE_NET}
+
+    # 抖音：唯一免签名的自检入口。/aweme/v1/web/user/profile/self/ 直接回
+    # status_code=8 +「用户未登录」或 status_code=0 + user{nickname,sec_uid}。
+    # 注意这个结论**不能**由静态字段推出：抖音游客态也发 sessionid 之外的一堆
+    # 反爬 Cookie，而 8 月登录留下的 sessionid 会一直躺在浏览器里（2026-10-21
+    # 实测那份 login_time 已 66 天，接口明确回「用户未登录」）。
+    if d == "douyin.com" and cp.requests is not None:
+        try:
+            r = cp.requests.get(
+                _DY_PROFILE_SELF,
+                headers={
+                    "Cookie": header,
+                    "User-Agent": _UA,
+                    "Referer": "https://www.douyin.com/",
+                    "Accept": "application/json, text/plain, */*",
+                },
+                timeout=12,
+            )
+            if r.status_code != 200:
+                return {"status": "unknown",
+                        "detail": f"站点返回 HTTP {r.status_code}（可能风控）",
+                        "probe": _PROBE_NET}
+            data = r.json()
+            code = data.get("status_code")
+            msg = str(data.get("status_msg") or "")
+            user = data.get("user") or {}
+            if code == 0 and user:
+                nk = str(user.get("nickname") or "").strip()
+                return {"status": "valid",
+                        "detail": nk or "已登录",
+                        "probe": _PROBE_NET}
+            if code == 8 or "未登录" in msg:
+                return {"status": "invalid",
+                        "detail": "站点判定：未登录（Cookie 已失效，需在抖音重新登录）",
+                        "probe": _PROBE_NET}
+            return {"status": "unknown",
+                    "detail": f"站点返回 status_code={code}",
+                    "probe": _PROBE_NET}
+        except Exception as e:
+            return {"status": "unknown",
+                    "detail": f"网络不可达（{type(e).__name__}）",
+                    "probe": _PROBE_NET}
+
+    # 快手：GraphQL visionProfile 免签名。判据必须成对看 result：
+    # 2 = 真匿名（服务端没认到凭据）；21 = 认到了但凭据不合法。
+    # 单看 21 会把「服务端压根没认 Cookie」误读成「失效」，所以再用
+    # /pass/kuaishou/login/passToken 交叉验证一次（回 error_msg 含「sid不合法」）。
+    if d == "kuaishou.com" and cp.requests is not None:
+        try:
+            r = cp.requests.post(
+                _KS_GRAPHQL,
+                data=json.dumps({"query": _KS_VISION_PROFILE}),
+                headers={
+                    "Cookie": header,
+                    "User-Agent": _UA,
+                    "Referer": "https://www.kuaishou.com/",
+                    "Origin": "https://www.kuaishou.com",
+                    "Content-Type": "application/json",
+                    "Accept": "*/*",
+                },
+                timeout=15,
+            )
+            if r.status_code != 200:
+                return {"status": "unknown",
+                        "detail": f"站点返回 HTTP {r.status_code}（可能风控）",
+                        "probe": _PROBE_NET}
+            data = r.json()
+            vp = ((data.get("data") or {}).get("visionProfile") or {})
+            prof = ((vp.get("userProfile") or {}).get("profile") or {})
+            name = str(prof.get("user_name") or "").strip()
+            result = vp.get("result")
+            if name:
+                return {"status": "valid", "detail": name, "probe": _PROBE_NET}
+            if result in (21, 2):
+                # 21 = 服务端认了凭据但失效；2 = 完全匿名。两者差异说明探针真的
+                # 把 Cookie 发出去了（同一时刻空 Cookie 只会回 2）。
+                why = ("凭据已失效" if result == 21 else "匿名请求（未带有效登录凭据）")
+                # 交叉验证：排除「服务端没认到 Cookie」被误判成失效。
+                try:
+                    rc = cp.requests.get(
+                        _KS_PASS_CHECK,
+                        headers={"Cookie": header, "User-Agent": _UA,
+                                 "Accept": "application/json"},
+                        timeout=10,
+                    )
+                    cj = rc.json() if rc.status_code == 200 else {}
+                    if str(cj.get("error_msg") or "").find("sid不合法") >= 0:
+                        why += "（passToken 检查：sid 不合法）"
+                except Exception:
+                    pass
+                return {"status": "invalid",
+                        "detail": f"站点判定：{why}，需在快手重新登录",
+                        "probe": _PROBE_NET}
+            return {"status": "unknown",
+                    "detail": f"站点返回 result={result}",
                     "probe": _PROBE_NET}
         except Exception as e:
             return {"status": "unknown",
