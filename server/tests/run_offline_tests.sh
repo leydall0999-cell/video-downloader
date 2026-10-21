@@ -306,6 +306,10 @@ run_root test_youtube_player_skip.py
 #  档位矩阵 / HLS 选择器回落 / _download_options 接线 / _pot_usable 代理感知 /
 #  off 必须写空 js_runtimes（yt-dlp 库默认 deno，不写=没关）/ fetch_pot 源码接线。
 run_pytest_root test_youtube_hls_prefer.py
+#  YouTube 403 降级链「不许超过用户选的清晰度」守卫（2026-10-21 事故：
+#  选 1080P 显示 398MB、实际下到 641MiB 的 1440P AV1 —— 末环 bv*+ba 无 height 上限，
+#  还把「PRO·原画需会员」档白送出去。详见 test_yt_fallback_cap.py 头部说明）。
+run_pytest_root test_yt_fallback_cap.py
 run_root test_crypto_routes.py              # crypto 路由（web 适用节，自设开关）
 #  用户信息类数据云备份 · 网页版接入（2026-10-17）：与桌面端同一账号资料包通道但
 #  scope="web" 分文件（互不覆盖）、无登录/无云端身份必拒、parts 空必拒、scope 必须

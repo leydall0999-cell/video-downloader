@@ -4790,6 +4790,51 @@ def _youtube_hls_selector(quality_key: str) -> str:
     )
 
 
+def _quality_cap(quality_key: str) -> int:
+    """把质量档映射成「最高允许高度」。非数字档（best/audio/webm/m4a）一律 1080。
+
+    BEST_KEY 沿用既有约定：自动档封顶 1080（avc1 兼容性优先，见 _format_selector）。
+    """
+    try:
+        return int(quality_key)
+    except (TypeError, ValueError):
+        return 1080
+
+
+def _yt_fallback_chains(quality_key: str) -> list[str]:
+    """YouTube 403 降级时依次尝试的格式链，**每一条都受请求档高度上限约束**。
+
+    🔴 2026-10-21 事故（必须保留这条注解，别再把无上限的链加回来）：
+    末环曾是 `bv*+ba/best[height<=1080]/best`。当用户选 1080P、而 1080P 的 H.264(DASH)
+    被 googlevideo 403 拒绝时，前几环（全是 avc1/137）同样 403，最后落到 `bv*+ba` ——
+    它**没有 height 上限**，直接选了 itag 400（AV1 2560×1440）+ 251：
+    用户看到卡片「1080P · 约 398 MB」，实际下到 641 MiB 的 1440P，
+    既多花 1.6 倍流量，又把 UI 上标着「PRO·原画需会员」的档位白给了出去。
+    实测证据：任务 357fc472af3b405b，`downloaded_bytes=671874532`，
+    与 `bv*+ba` 选出的 400+251 的 filesize 之和 671874532 完全一致。
+
+    所以末环改成 `b[height<=cap]`：宁可降清晰度、宁可失败让用户重试，
+    也不许静默升级到用户没选（且可能是会员档）的分辨率。
+    """
+    cap = _quality_cap(quality_key)
+    # 显式 itag 链同样要按档位裁剪：299/248/137 都是 1080p，
+    # 选 720P 时若原样保留，403 降级同样会把它升成 1080P。
+    # （YouTube 常见 itag → 高度，够用即可，不求穷举）
+    _ITAG_HEIGHT = [
+        ("299", 1080), ("248", 1080), ("137", 1080), ("136", 720),
+        ("135", 480), ("134", 360), ("133", 240), ("160", 144),
+    ]
+    explicit = [f"{itag}+140" for itag, h in _ITAG_HEIGHT if h <= cap]
+    chains = [
+        f"bv*[vcodec^=avc1][height<={cap}]+ba[ext=m4a]/b[ext=mp4][height<={cap}]",
+        f"bv*[vcodec^=avc1][height<={cap}]+ba/bv*[height<={cap}]+ba/b[height<={cap}]",
+    ]
+    if explicit:
+        chains.append("/".join(explicit))
+    chains.append(f"bv*[height<={cap}]+ba/best[height<={cap}]/b[height<={cap}]")
+    return chains
+
+
 def is_valid_quality(quality_key: str) -> bool:
     return quality_key in (BEST_KEY, AUDIO_KEY, WEBM_KEY, M4A_KEY) or quality_key in {
         str(h) for h, _ in QUALITY_PRESETS
@@ -5441,18 +5486,15 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                     )
                     # 多轮降级：依次尝试不同格式链，优先 H.264(avc1) 编码
                     # （最不易被 CDN 拒绝），再放宽到 VP9/AV1、降低分辨率，
-                    # 最终兜底 best。每一轮独立 try，直到成功或穷尽所有链。
+                    # 但**始终不许超过用户选的清晰度**。每一轮独立 try，直到成功或穷尽所有链。
                     _fb_base = _download_options(
                         task, quality_key, reporter, cookie=cookie, proxy=proxy,
                         format_id=format_id, concurrent_fragments=concurrent_fragments,
                         downloader_type=downloader_type, resume=resume,
                     )
-                    _fallback_chains = [
-                        "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4]",
-                        "bv*[vcodec^=avc1]+ba/bv*[height<=720]+ba/b[height<=720]",
-                        "299+140/248+140/137+140/136+140/135+140/134+140/133+140/160+140",
-                        "bv*+ba/best[height<=1080]/best",
-                    ]
+                    # 全部受请求档封顶（末环曾是无上限的 `bv*+ba`，会把 1080P 请求
+                    # 静默升级成 1440P/4K —— 2026-10-21 实事故，见 _yt_fallback_chains）
+                    _fallback_chains = _yt_fallback_chains(quality_key)
                     # 2026-08-22 实测（task logs 确认）：数据中心 IP 下
                     #   ios    → Requested format is not available（SABR 无格式）
                     #   tv     → The page needs to be reloaded
