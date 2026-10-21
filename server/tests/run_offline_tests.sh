@@ -310,6 +310,9 @@ run_pytest_root test_youtube_hls_prefer.py
 #  选 1080P 显示 398MB、实际下到 641MiB 的 1440P AV1 —— 末环 bv*+ba 无 height 上限，
 #  还把「PRO·原画需会员」档白送出去。详见 test_yt_fallback_cap.py 头部说明）。
 run_pytest_root test_yt_fallback_cap.py
+# 2026-10-21「选什么清晰度就下什么清晰度」：卡片只列真实档位 + 体积取首选编码组合、
+# 下载/降级/HLS 对具体档一律 `=N` 精确锁定、完成后核对请求档 vs 实得档（详见文件头）。
+run_pytest_root test_quality_exact.py
 run_root test_crypto_routes.py              # crypto 路由（web 适用节，自设开关）
 #  用户信息类数据云备份 · 网页版接入（2026-10-17）：与桌面端同一账号资料包通道但
 #  scope="web" 分文件（互不覆盖）、无登录/无云端身份必拒、parts 空必拒、scope 必须
