@@ -4,10 +4,12 @@
  *   1. srcDirectKind —— 平台白名单判断（域名/后缀/HLS），纯函数全分支；
  *   2. concurrentSaveFromSource —— 防盗链失效（403）/非 206/网络错时必须安静
  *      返回 UNSUPPORTED（调用方据此回退既有链路，用户无感）。
- * 依据是 2026-10-21 晚各平台真实直链实测矩阵：
+ * 依据是 2026-10-21 各平台真实直链实测矩阵（curl + 浏览器 fetch 双端）：
  *   快手 kwaicdn.com / 小红书 xhscdn.com = fetch 可直连；
+ *   抖音 douyinvod.com 混合轨            = fetch 可直连（无 Referer 放行）；
+ *   抖音 media-video/media-audio 分离单轨 = 不可直连（会存成无声/无画残废文件）；
  *   微博 weibocdn.com / video.weibo.com   = nav（新标签导航）；
- *   抖音 douyinvod.com / B站 upos         = 防盗链或 DASH，不可用。
+ *   B站 upos                             = 防盗链 + DASH，不可用。
  */
 const fs = require('fs');
 const http = require('http');
@@ -92,10 +94,18 @@ ok('微博 f.video.weibocdn.com → nav',
   srcDirectKind('https://f.video.weibocdn.com/o0/evo9.mp4?label=mp4_1080p', false) === 'nav');
 ok('微博 video.weibo.com（带 mp4 路径）→ nav',
   srcDirectKind('https://video.weibo.com/media/play/abc.mp4?vid=123', false) === 'nav');
-ok('抖音 v26-web.douyinvod.com → 空（Referer 防盗链过不去）',
-  srcDirectKind('https://v26-web.douyinvod.com/a837/video/tos/cn/x/?a=6383&ch=26', false) === '');
-ok('抖音无后缀路径 → 空',
-  srcDirectKind('https://v26-web.douyinvod.com/a837/video/tos/cn/x/', false) === '');
+ok('抖音混合轨（v26-web，路径无 .mp4 后缀）→ fetch',
+  srcDirectKind('https://v26-web.douyinvod.com/a837/video/tos/cn/x/?a=6383&ch=26', false) === 'fetch');
+ok('抖音混合轨（无后缀且无 query）→ fetch',
+  srcDirectKind('https://v26-web.douyinvod.com/a837/video/tos/cn/x/', false) === 'fetch');
+ok('抖音分离视频轨 media-video-avc1 → 空（单轨无声，禁止直连）',
+  srcDirectKind('https://v95-web-sz.douyinvod.com/9447fe5/6ad98/video/tos/cn/tos-cn-vd-0026/x/media-video-avc1/?a=2558&mime_type=video_mp4', false) === '');
+ok('抖音分离音频轨 media-audio-und-mp4a → 空（单轨无画，禁止直连）',
+  srcDirectKind('https://v95-web-sz.douyinvod.com/da5a4b3/6ad98/video/tos/cn/tos-cn-ve-15/x/media-audio-und-mp4a/?a=2558', false) === '');
+ok('抖音相似域名不误放行（douyinvod.com.attacker.com）',
+  srcDirectKind('https://douyinvod.com.attacker.com/a/b', false) === '');
+ok('抖音 HLS（is_hls=true）→ 空',
+  srcDirectKind('https://v26-web.douyinvod.com/a/b.m3u8', true) === '');
 ok('B站 upos-sz-mirrorcos.bilivideo.com → 空（防盗链+DASH）',
   srcDirectKind('https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/12/34/5678.m4s?sign=x', false) === '');
 ok('HLS（is_hls=true）一律空，即使域名在白名单',
@@ -141,9 +151,9 @@ function runSaveWith(fetchImpl) {
 console.log('=== 2. concurrentSaveFromSource 失败回退 ===');
 
 (async () => {
-  // 2a. 防盗链 403（抖音式）：探测就 403 → UNSUPPORTED，绝不抛
+  // 2a. 防盗链 403（B站式）/ 直链失效：探测就 403 → UNSUPPORTED，绝不抛
   const save403 = runSaveWith(async () => ({ status: 403, headers: { get: () => '' } }));
-  ok('403（防盗链）→ UNSUPPORTED', await save403('https://v26-web.douyinvod.com/x/', 'a.mp4', {}) === 'UNSUPPORTED');
+  ok('403（防盗链）→ UNSUPPORTED', await save403('https://upos-sz-mirrorcos.bilivideo.com/x.m4s', 'a.mp4', {}) === 'UNSUPPORTED');
 
   // 2b. 链接过期 404 → UNSUPPORTED
   const save404 = runSaveWith(async () => ({ status: 404, headers: { get: () => '' } }));

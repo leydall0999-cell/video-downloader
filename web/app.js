@@ -1485,21 +1485,36 @@
   //                       CORS *、Range ✅、单流 1.5MB/s                  ⇒ fetch 可直连
   //   微博 weibocdn.com   无 Referer 才放行、CORS 未开（fetch 读不到 body）、
   //                       Range ✅、单流 2.2MB/s                          ⇒ 只能新标签导航+用户手动存
-  //   抖音 douyinvod.com  Referer 必须是 douyin.com（浏览器 fetch 禁设 Referer，
-  //                       实测空 Referer/任意 Referer 均 403）              ⇒ 不可用
+  //   抖音 douyinvod.com  「拒绝错误 Referer，但不拒绝空 Referer」——网页 fetch 默认带
+  //                       本页 Referer ⇒ 403；referrerPolicy:'no-referrer' ⇒ 200
+  //                       （4 条真实直链实测：空 Referer 206 / douyin Referer 206 / 错 403）。
+  //                       ⚠️ 但抖音 PC 网页给的是**分离轨**：media-video-avc1 纯视频 +
+  //                       media-audio 纯音频（2026-10-21 ffprobe 实测：视频轨 stream=0,h264,
+  //                       1280x720，无音轨）⇒ 单轨直连保存 = 无声残废文件，必须排除，
+  //                       交既有链路（节点下载双轨 + ffmpeg 合并）。混合轨 URL 若出现
+  //                       （历史 v*-web 形态）由下面的域名规则接住。
   //   B站 upos            Referer 防盗链 + DASH 音视频分离                 ⇒ 不可用
+  //   （附）2026-10-21 spike 实测 MV3 declarativeNetRequest 能改 referer/cookie/
+  //   origin/UA（B站 403→200 已闭环验证），但 DNR 只存在于浏览器扩展，桌面端没有
+  //   扩展机制 ⇒ 不作为本路径的前提，此处仍只走「无 Referer」这一条零成本路线。
   // 直链带 sign 时效参数（通常数小时）：过期/被拒一律回退既有链路，不影响可用性。
-  const SRC_DIRECT_FETCH_HOSTS = ['kwaicdn.com', 'xhscdn.com'];
+  const SRC_DIRECT_FETCH_HOSTS = ['kwaicdn.com', 'xhscdn.com'];   // 抖音单独判定，见 srcDirectKind
   const SRC_DIRECT_NAV_HOSTS = ['weibocdn.com', 'video.weibo.com'];
   const SRC_DIRECT_EXTS = ['mp4', 'm4a', 'mp3', 'flac', 'wav', 'mov', 'm4v'];
 
   /** 判断 play_url 能否被浏览器直连下载：'fetch'（可分段拉）| 'nav'（只能新标签打开）| ''（不可用）。 */
   function srcDirectKind(url, isHls) {
     if (!url || !/^https?:\/\//i.test(url) || isHls) return '';
-    const ext = (url.split('?')[0].split('.').pop() || '').toLowerCase();
-    if (!SRC_DIRECT_EXTS.includes(ext)) return '';
+    // 分离单轨（抖音 media-video-avc1 / media-audio-und-mp4a）是纯视频或纯音频，
+    // 直连保存只会拿到无声/无画文件 ⇒ 一律不当完整视频保存，交回既有链路合并。
+    if (/media-(video|audio)/i.test(url)) return '';
     let host = '';
     try { host = new URL(url).hostname.toLowerCase(); } catch (_) { return ''; }
+    // 抖音混合轨（v26-web 等）直链路径没有 .mp4 后缀（…/video/tos/cn/x/?a=6383&ch=26），
+    // 扩展名规则兜不住，改用域名单独判定；是否完整已由上面的单轨闸门保证。
+    if (host === 'douyinvod.com' || host.endsWith('.douyinvod.com')) return 'fetch';
+    const ext = (url.split('?')[0].split('.').pop() || '').toLowerCase();
+    if (!SRC_DIRECT_EXTS.includes(ext)) return '';
     if (SRC_DIRECT_FETCH_HOSTS.some((h) => host.endsWith(h))) return 'fetch';
     if (SRC_DIRECT_NAV_HOSTS.some((h) => host.endsWith(h))) return 'nav';
     return '';
@@ -1649,8 +1664,9 @@
 
       // 0. 源站直链（2026-10-21，零成本）：平台 CDN 允许浏览器直连的平台（快手/小红书
       //    实测可用，微博半可用）直接从源站分段拉 —— 不占部署节点带宽、不上传副本、
-      //    不按量付费。抖音/B站防盗链过不去（见 srcDirectKind 上方实测矩阵），
-      //    自动落到下面的既有链路。直链带时效，过期/被拒同样回退。
+      //    不按量付费。抖音目前解析产出是**分离单轨**（视频轨无音轨，ffprobe 实测），
+      //    直连会存成无声文件 ⇒ 由 srcDirectKind 的单轨闸门挡掉，走下面的既有链路合并。
+      //    直链带时效，过期/被拒同样回退。
       const srcKind = srcDirectKind(task.play_url || '', task.is_hls);
       if (srcKind === 'nav') {
         // 微博：CORS 未开，fetch 读不到 body ⇒ 新标签打开原视频，用户右键/长按保存
