@@ -18,6 +18,14 @@ from typing import Any
 # 版本降序。每项：version / date / items（面向用户的白话说明，一条一件事）
 CHANGELOG: list[dict[str, Any]] = [
     {
+        "version": "1.0.82",
+        "date": "2026-10-21",
+        "items": [
+            "金牌影院链接现在四种写法都能解析：带 sid、不带 sid、老式 maccms 写法、"
+            "以及直接粘详情页链接（会自动取第一集），换域名也认。",
+        ],
+    },
+    {
         "version": "1.0.81",
         "date": "2026-10-21",
         "items": [

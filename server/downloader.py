@@ -4062,9 +4062,72 @@ _NMW_UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
+# 这类聚合站会周期性换域名（同一套 API 跟着域名漂移）。只认一个死域名
+# ⇒ 对方换一次域，整站解析全挂，而接口其实没变。已知域名 + nmw 前缀兜底。
+_NMW_KNOWN_HOSTS = ("nmwchxx.com",)
+_NMW_HOST_RE = re.compile(
+    r"^nmw[a-z0-9]{1,8}\.(?:com|net|cc|tv|top|xyz|vip|site|club|info|pro)$"
+)
 
-def _nmw_api(path: str, params: dict, referer: str, proxy: str = "") -> dict:
-    """调用 nmwchxx 自签 API，返回 JSON dict；网络/解析异常抛 ResolveError。"""
+
+def _nmw_host(url: str) -> str:
+    """从 URL 取小写 host（去端口），取不到返回空串。"""
+    m = re.match(r"^https?://([^/?#]+)", url or "", re.I)
+    if not m:
+        return ""
+    return m.group(1).split("@")[-1].split(":")[0].lower()
+
+
+def _is_nmw_host(host: str) -> bool:
+    """是否金牌影院这一族域名（含换过的域）。"""
+    h = (host or "").lower()
+    if not h:
+        return False
+    for d in _NMW_KNOWN_HOSTS:
+        if h == d or h.endswith("." + d):
+            return True
+    return bool(_NMW_HOST_RE.match(h))
+
+
+def _nmw_parse_ids(url: str) -> tuple[str, str, str]:
+    """从播放/详情链接里取 (视频 ID, 集 ID, 集序号)。
+
+    站点同一集有好几种链接写法，只认一种就会「今天能解析、明天又不行」
+    （2026-10-21 用户第三次报错，粘的就是 /vod/play/116537/877419）：
+
+      /vod/play/116537/sid/877419     站内标准（页面 200）
+      /vod/play/116537/877419         分享/外链常见（站内 404，但两个 ID 有效）
+      /vod/play/116537-1-1.html       maccms 老模板（源序号-集序号）
+      /vod/detail/116537              详情页：只有视频 ID，集号返回空
+
+    两个 ID 是接口唯一需要的输入，与页面是否 200 无关 ⇒ 只要能取出数字就解析。
+    """
+    u = url or ""
+    # ① maccms 老模板：最后一组数字是集序号（1 起）
+    m = re.search(r"/vod/play[/-](\d+)[-_]\d+[-_](\d+)\.html", u)
+    if m:
+        return m.group(1), "", m.group(2)
+    # ② 播放页：/sid/ 可有可无
+    m = re.search(r"/vod/play/(\d+)/(?:sid/)?(\d+)", u)
+    if m:
+        return m.group(1), m.group(2), ""
+    # ③ 详情页
+    m = re.search(r"/vod/(?:detail|info)/(\d+)", u)
+    if m:
+        return m.group(1), "", ""
+    # ④ 纯 query 形态（?id=116537&nid=877419 / ?vodId=…）
+    qv = re.search(r"[?&](?:id|vodId|vod_id|movieId)=(\d+)", u)
+    if qv:
+        qn = re.search(r"[?&](?:nid|sid|episodeId|episode)=(\d+)", u)
+        return qv.group(1), (qn.group(1) if qn else ""), ""
+    return "", "", ""
+
+
+def _nmw_api(path: str, params: dict, referer: str, proxy: str = "", host: str = "") -> dict:
+    """调用金牌影院自签 API，返回 JSON dict；网络/解析异常抛 ResolveError。
+
+    host 传入用户实际访问的域：域名漂移时先打它，失败再回落已知域名。
+    """
     import hashlib
     import uuid
 
@@ -4074,52 +4137,69 @@ def _nmw_api(path: str, params: dict, referer: str, proxy: str = "") -> dict:
     qs = "&".join(f"{k}={params[k]}" for k in sorted(params))
     x = f"{qs}&key={_NMW_SIGN_KEY}&t={t}"
     sign = hashlib.sha1(hashlib.md5(x.encode()).hexdigest().encode()).hexdigest()
-    try:
-        r = _req.get(
-            f"https://nmwchxx.com/api{path}?{qs}",
-            headers={
-                "sign": sign,
-                "t": t,
-                "client-type": "1",
-                "deviceId": str(uuid.uuid4()),
-                "authorization": "",
-                "Referer": referer,
-                "User-Agent": _NMW_UA,
-                "Accept": "application/json, text/plain, */*",
-            },
-            proxies={"http": proxy, "https": proxy} if proxy else None,
-            timeout=20,
-        )
-        return r.json()
-    except Exception as e:
-        raise ResolveError(
-            "金牌影院解析失败", f"请求接口异常：{type(e).__name__} {e}", category="parse_failed"
-        ) from None
+
+    bases: list[str] = []
+    h = (host or "").strip().lower()
+    if h and _is_nmw_host(h) and h not in _NMW_KNOWN_HOSTS:
+        bases.append(h)
+    for d in _NMW_KNOWN_HOSTS:
+        if d not in bases:
+            bases.append(d)
+
+    last: Exception | None = None
+    for base in bases:
+        try:
+            r = _req.get(
+                f"https://{base}/api{path}?{qs}",
+                headers={
+                    "sign": sign,
+                    "t": t,
+                    "client-type": "1",
+                    "deviceId": str(uuid.uuid4()),
+                    "authorization": "",
+                    "Referer": referer or f"https://{base}/",
+                    "User-Agent": _NMW_UA,
+                    "Accept": "application/json, text/plain, */*",
+                },
+                proxies={"http": proxy, "https": proxy} if proxy else None,
+                timeout=20,
+            )
+            return r.json()
+        except Exception as e:  # 换域/单个域名不通：继续试下一个
+            last = e
+            continue
+    raise ResolveError(
+        "金牌影院解析失败",
+        f"请求接口异常：{type(last).__name__} {last}",
+        category="parse_failed",
+    ) from None
 
 
 def _nmw_info(url: str, proxy: str = "") -> dict[str, Any]:
-    """金牌影院解析（nmwchxx.com/vod/play/{id}/sid/{nid}）。
+    """金牌影院解析（/vod/play/{id}/sid/{nid}，也接受 {id}/{nid} 与详情页）。
 
     链路：detail 接口拿片名/集名（失败不阻断）→ episode/url 接口拿多清晰度
     m3u8（蓝光/高清/标清；auth_key 带时效，解析后应尽快下载）。
     """
-    m = re.search(r"/vod/play/(\d+)/sid/(\d+)", url)
-    if not m:
+    vid, nid, ep_idx = _nmw_parse_ids(url)
+    if not vid:
         raise ResolveError(
             "金牌影院解析失败",
-            "无法从链接中识别视频 ID。请粘贴播放页链接（形如 "
-            "nmwchxx.com/vod/play/数字/sid/数字）；详情页请先点开某一集再复制地址栏链接。",
+            "无法从链接中识别视频 ID。请粘贴某一集的播放页链接，"
+            "形如 nmwchxx.com/vod/play/数字/sid/数字 或 nmwchxx.com/vod/play/数字/数字。",
             category="parse_failed",
         )
-    vid, nid = m.group(1), m.group(2)
+    host = _nmw_host(url)
 
     # 片名 + 集名（detail 失败不阻断：拿不到标题就用 ID 兜底）
-    title = f"金牌影院视频 {nid}"
+    title = f"金牌影院视频 {nid or vid}"
+    eps: list[dict[str, Any]] = []
     try:
-        d = _nmw_api("/mw-movie/anonymous/video/detail", {"id": vid}, url, proxy=proxy)
+        d = _nmw_api("/mw-movie/anonymous/video/detail", {"id": vid}, url,
+                     proxy=proxy, host=host)
         data = d.get("data") or {}
         vod_name = str(data.get("vodName") or "").strip()
-        eps = data.get("episodeList") or []
+        eps = [e for e in (data.get("episodeList") or []) if isinstance(e, dict)]
         ep = next((e for e in eps if str(e.get("nid")) == nid), None)
         ep_name = str((ep or {}).get("name") or "").strip()
         if vod_name:
@@ -4127,9 +4207,31 @@ def _nmw_info(url: str, proxy: str = "") -> dict[str, Any]:
     except ResolveError:
         pass
 
+    # 链接里没集 ID（详情页 / maccms 模板）时，用 detail 的集列表补齐：
+    # 给的是集序号就取对应那集，什么都没给就取第一集（站内默认行为）。
+    if not nid:
+        pick: dict[str, Any] | None = None
+        if ep_idx and ep_idx.isdigit():
+            i = int(ep_idx) - 1
+            if 0 <= i < len(eps):
+                pick = eps[i]
+        if pick is None and eps:
+            pick = eps[0]
+        if pick is not None and pick.get("nid"):
+            nid = str(pick.get("nid"))
+            ep_name = str(pick.get("name") or "").strip()
+            if len(eps) > 1 and ep_name and ep_name not in title:
+                title = f"{title} 第{ep_name}集"
+    if not nid:
+        raise ResolveError(
+            "金牌影院解析失败",
+            "链接里没有剧集 ID，且详情接口也没返回剧集列表（该剧可能已下架）。",
+            category="parse_failed",
+        )
+
     r = _nmw_api(
         "/mw-movie/anonymous/v2/video/episode/url",
-        {"clientType": "1", "id": vid, "nid": nid}, url, proxy=proxy,
+        {"clientType": "1", "id": vid, "nid": nid}, url, proxy=proxy, host=host,
     )
     if r.get("code") != 200:
         raise ResolveError(
@@ -4146,6 +4248,7 @@ def _nmw_info(url: str, proxy: str = "") -> dict[str, Any]:
         )
     entries.sort(key=lambda e: int(e.get("resolution") or 0), reverse=True)
     best = entries[0]
+    ref = f"https://{host}/" if (host and _is_nmw_host(host)) else f"https://{_NMW_KNOWN_HOSTS[0]}/"
     formats = [
         {
             "format_id": f"nmw-{e.get('resolution') or 'sd'}",
@@ -4154,7 +4257,7 @@ def _nmw_info(url: str, proxy: str = "") -> dict[str, Any]:
             "height": int(e.get("resolution") or 0) or None,
             "format": str(e.get("resolutionName") or ""),
             "protocol": "m3u8_native",
-            "http_headers": {"User-Agent": _NMW_UA, "Referer": "https://nmwchxx.com/"},
+            "http_headers": {"User-Agent": _NMW_UA, "Referer": ref},
         }
         for e in entries
     ]
@@ -4169,7 +4272,7 @@ def _nmw_info(url: str, proxy: str = "") -> dict[str, Any]:
         "url": best["url"],
         "protocol": "m3u8_native",
         "formats": formats,
-        "http_headers": {"User-Agent": _NMW_UA, "Referer": "https://nmwchxx.com/"},
+        "http_headers": {"User-Agent": _NMW_UA, "Referer": ref},
         # 标记 m3u8 直连（下载时用 ffmpeg/yt-dlp 带 header 拉流）
         "_nmw_m3u8": True,
     }
@@ -4470,8 +4573,8 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 百视TV：web 端播放地址需 wasm 签名（makepreviewquery），走 VPS Playwright 解析
     if "bestv.com.cn" in (host or ""):
         return _bestv_info(url)
-    # 金牌影院（nmwchxx.com）：第三方影视聚合站，自签 API（SHA1(MD5)）拿 m3u8
-    if "nmwchxx.com" in (host or ""):
+    # 金牌影院（nmwchxx.com 及换过的同族域名）：自签 API（SHA1(MD5)）拿 m3u8
+    if _is_nmw_host(host):
         return _nmw_info(url, proxy=effective_proxy)
     # 红果短剧：字节系 CDN 流需真实浏览器点开播放器捕获，走 VPS Playwright 解析
     if ("hongguoduanju.com" in (host or "")) or ("novelquickapp.com" in (host or "")):
@@ -5880,7 +5983,7 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             elif "bestv.com.cn" in (_task_host or ""):
                 # 百视TV：wasm 签名，VPS Playwright 解析出 m3u8 直链
                 info = _bestv_info(task.url)
-            elif "nmwchxx.com" in (_task_host or ""):
+            elif _is_nmw_host(_task_host):
                 # 金牌影院：自签 API（SHA1(MD5)）拿多清晰度 m3u8
                 info = _nmw_info(task.url, proxy=effective_proxy)
             elif ("hongguoduanju.com" in (_task_host or "")) or ("novelquickapp.com" in (_task_host or "")):
