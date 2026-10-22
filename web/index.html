@@ -31,7 +31,10 @@
         <span>不止是下载工具，更懂视频精修加工</span>
       </div>
     </div>
-    <nav class="tabs" id="tabs" hidden aria-label="功能导航">
+    <!-- 2026-10-22：不再初始 hidden——此前导航栏要等 565KB 的 app.js 动态加载并执行到
+         applyWebTabs() 才解开 hidden，表现为刷新后主体先渲染、导航栏晚一拍才插入。
+         app.js 的 applyWebTabs 保留为幂等兜底（只隐藏桌面专属 tab，从不反向隐藏本导航）。 -->
+    <nav class="tabs" id="tabs" aria-label="功能导航">
       <div class="tabs-inner">
         <button type="button" class="tab is-active" data-view="download" id="tabDownload">下载视频</button>
         <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">视频处理</button>
