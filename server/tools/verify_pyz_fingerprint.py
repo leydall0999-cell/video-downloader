@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
 """包内核验：把 PYZ 里的字节码与本地源码编译结果做递归结构指纹比对。
 
-用法：.build_venv/bin/python tools/verify_pyz_fingerprint.py <app可执行文件> <源码根>
+用法：.build_venv/bin/python tools/verify_pyz_fingerprint.py <app可执行文件> <源码根> [模块1=相对路径1 ...]
 判定：指纹一致 = 包内代码与源码树同代；不一致 = 包是旧代码或源码有未构建改动。
+
+默认只验一组与图像/Applet 相关的模块；要验别的模块在后面追加 `模块名=源码相对路径`
+（模块名须是 PYZ 里的登记名，路径相对源码根）：
+    tools/verify_pyz_fingerprint.py dist/…/VideoDownloader.app "$(pwd)" \
+        routers.admin=server/routers/admin.py auth_store=server/auth_store.py
+⚠️ 符号抽检那一组是硬编码给默认模块清单的：传了自定义模块时会自动跳过（不再打印✅/❌），
+   别误以为核验没跑——指纹行仍在。
 """
 import marshal
 import struct
@@ -60,13 +67,16 @@ def main():
     import pathlib
     get, names = load_pyz(exe)
     print(f"PYZ 条目总数：{len(names)}")
-    checks = [
+    default_checks = [
         ("image_download", f"{src_root}/server/image_download.py"),
         ("routers.image", f"{src_root}/server/routers/image.py"),
         ("tasks", f"{src_root}/server/tasks.py"),
         ("routers.core", f"{src_root}/server/routers/core.py"),
         ("app", f"{src_root}/server/app.py"),
     ]
+    extra = [a.split("=", 1) for a in sys.argv[3:] if "=" in a]
+    checks = default_checks if not extra else [(m, f"{src_root}/{p.lstrip('/')}") for m, p in extra]
+    custom = bool(extra)
     bad = 0
     for mod, src in checks:
         if mod not in names:
@@ -82,7 +92,10 @@ def main():
               f"{'' if ok else '  ← 不一致'}")
         if not ok:
             bad += 1
-    # 新功能符号抽检（防「指纹算法太粗」）
+    # 新功能符号抽检（防「指纹算法太粗」）—— 只针对默认清单，自定义模块请自己写符号断言
+    if custom:
+        print("ℹ️  自定义模块模式：已跳过默认模块的符号抽检")
+        return _check_entry_script(exe, src_root)
     for sym in ("_SafeRedirectHandler", "normalize_image_url", "run_image_download",
                 "sniff_image_ext", "derive_filename"):
         code = get("image_download")
