@@ -22261,14 +22261,15 @@ el.dwVidPlayer.hidden = true;
     };
     // ---- 解析需求榜（2026-10-17，Downie「用户报一个写一个」机制第一环）----
     // 解析失败（白名单空白站点 / 未知域名）自动落库后的站点热度视图。
-    // 口径「站点×天」：同一站点同一天多次失败只计 1 次需求，重试免疫；
-    // 不同天重复出现照计（持续有人要的站排前面）。用途：开发排期输入。
+    // 口径「站点×周」（2026-10-23 起，原按天）：同一站点同一自然周（周一为界）
+    // 多次失败只计 1 次需求，重试免疫；不同周重复出现照计（持续有人要的站排前面）。
+    // 窗口 12 周：按周计数窗口太短会全是 1 分，看不出持续性。
     const loadResolveDemand = async () => {
       const box = $('adminDemandBody');
       if (!box) return;
       box.innerHTML = '<div class="admin-empty">加载中…</div>';
       try {
-        const d = await adminRequest('/api/admin/resolve-demand?days=30');
+        const d = await adminRequest('/api/admin/resolve-demand?days=84');
         const rows = (d && d.demand) || [];
         if (!rows.length) {
           box.innerHTML = '<div class="admin-empty">暂无需求登记——出现「暂不支持」类解析失败后自动累计</div>';
@@ -22277,11 +22278,13 @@ el.dwVidPlayer.hidden = true;
         const catName = (c) => (c === 'pending_extractor' ? '已收录缺提取器'
           : c === 'unsupported_platform' ? '未收录新站' : (c || '-'));
         box.innerHTML =
-          '<table><thead><tr><th>站点</th><th>需求天数</th><th>记录数</th><th>分类</th><th>最近一次</th><th>样例链接</th></tr></thead><tbody>' +
+          '<table><thead><tr><th>站点</th><th>需求周数</th><th>记录数</th><th>分类</th><th>最近一次</th><th>样例链接</th></tr></thead><tbody>' +
           rows.slice(0, 50).map((x) => {
             const cats = Object.entries(x.categories || {}).map(([c, n]) => `${catName(c)}×${n}`).join('，') || '-';
             const last = x.last_ts ? new Date(x.last_ts * 1000).toLocaleDateString() : '-';
-            return `<tr><td><b>${esc(x.host)}</b></td><td>${x.days_count}</td><td>${x.total}</td>` +
+            const wc = (x.weeks_count != null ? x.weeks_count : x.days_count) || 0;
+            const wkTip = (x.weeks || []).length ? `命中周（周一）：${(x.weeks || []).join('、')}` : '';
+            return `<tr><td><b>${esc(x.host)}</b></td><td title="${esc(wkTip)}">${wc}</td><td>${x.total}</td>` +
               `<td>${esc(cats)}</td><td>${last}</td>` +
               `<td title="${esc(x.last_url || '')}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((x.last_url || '-').slice(0, 60))}</td></tr>`;
           }).join('') + '</tbody></table>';
