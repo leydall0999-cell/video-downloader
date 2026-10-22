@@ -23268,12 +23268,12 @@ el.dwVidPlayer.hidden = true;
       const q = (userSearch && userSearch.value || '').trim().toLowerCase();
       const fv = (userStatusFilter && userStatusFilter.value) || '';
       const _isMember = (u) => !!(u.membership && (u.membership.download_active || u.membership.ai_active));
-      // 最近使用 = 登录时间与各设备心跳（last_seen）取最新。App 心跳定期刷新
-      // 设备 last_seen，云端行两字段都有；本机兜底行可能两者皆缺 → 显示 —。
+      // 最近使用 = 云端算好的 last_active（登录 / 设备心跳 / 每日用量明细 / 历史用量
+      // 取最大，含历史数据）；旧云端没有该字段时退回 last_login 与设备 last_seen 取最新。
       const _lastUsed = (u) => {
         let t = parseFloat(u.last_login) || 0;
         for (const d of (u.devices || [])) t = Math.max(t, parseFloat(d.last_seen) || 0);
-        return t;
+        return Math.max(t, parseFloat(u.last_active) || 0);
       };
       // 顶部统计卡（对齐设计稿：总用户 / 免费会员 / 异常状态）
       if (userStatCards) {

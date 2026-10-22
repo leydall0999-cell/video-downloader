@@ -275,6 +275,56 @@ def _touch_active(state: dict[str, Any], uid: str, now: float) -> None:
         pass
 
 
+def _last_active_ts(user: dict[str, Any]) -> float:
+    """「最近使用」真值：由**所有真实使用痕迹**取最大，不只看 last_login。
+
+    背景（2026-10-23 用户实测）：last_login 在 2026-10-22 之前只在密码登录时更新，
+    桌面端又从不发心跳 ⇒ 历史账号的「最近使用」停在注册时刻，而后台「使用详情」
+    里明明有 10-22 的用量记录，两边对不上。
+    touch 只能覆盖「修复之后」的请求，历史数据仍是错的；所以这里改成**算出来**：
+      · last_login（登录 / 已鉴权的使用请求，见 _touch_active）
+      · devices[].last_seen（绑定 / 心跳）
+      · daily.details[*][].at（当天用量明细，最细粒度）
+      · usage_history[].details[*][].at（近一年归档的用量明细）
+    任一缺失都跳过，异常一律忽略（算不出来就退回 last_login，绝不让接口 500）。
+    """
+    best = 0.0
+
+    def _bump(v: Any) -> None:
+        nonlocal best
+        try:
+            f = float(v or 0)
+        except (TypeError, ValueError):
+            return
+        if f > best:
+            best = f
+
+    def _scan_details(container: Any) -> None:
+        if not isinstance(container, dict):
+            return
+        for lst in container.values():
+            if not isinstance(lst, list):
+                continue
+            for e in lst:
+                if isinstance(e, dict):
+                    _bump(e.get("at"))
+
+    try:
+        _bump(user.get("last_login"))
+        for d in (user.get("devices") or []):
+            if isinstance(d, dict):
+                _bump(d.get("last_seen"))
+        daily = user.get("daily")
+        if isinstance(daily, dict):
+            _scan_details(daily.get("details"))
+        for h in (user.get("usage_history") or []):
+            if isinstance(h, dict):
+                _scan_details(h.get("details"))
+    except Exception:
+        return best
+    return best
+
+
 def _public_user(user: dict[str, Any], fp: str = "") -> dict[str, Any]:
     devs = []
     for d in (user.get("devices") or []):
@@ -1816,13 +1866,16 @@ def users_impl(state: dict[str, Any]) -> dict[str, Any]:
     for uid, u in users.items():
         item = _public_user(u)
         item["last_login"] = float(u.get("last_login", 0))
+        # 2026-10-23：后台「最近使用」用真实使用痕迹算出来（含历史用量明细），
+        # 避免 last_login 停在注册时刻导致「有用量记录却显示很久没用」。
+        item["last_active"] = _last_active_ts(u)
         item["created_at"] = float(u.get("created_at", 0))
         item["purchases"] = [
             {"id": p.get("id"), "plan_code": p.get("plan_code"), "at": p.get("at")}
             for p in (u.get("purchases") or [])
         ]
         out.append(item)
-    out.sort(key=lambda x: x["last_login"], reverse=True)
+    out.sort(key=lambda x: x["last_active"], reverse=True)
     return {"ok": True, "users": out, "count": len(out)}
 
 
