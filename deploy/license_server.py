@@ -1865,10 +1865,16 @@ def users_impl(state: dict[str, Any]) -> dict[str, Any]:
     out = []
     for uid, u in users.items():
         item = _public_user(u)
-        item["last_login"] = float(u.get("last_login", 0))
-        # 2026-10-23：后台「最近使用」用真实使用痕迹算出来（含历史用量明细），
-        # 避免 last_login 停在注册时刻导致「有用量记录却显示很久没用」。
-        item["last_active"] = _last_active_ts(u)
+        # 2026-10-23：后台「最近使用」的真值由真实使用痕迹算出来（含历史用量明细）。
+        # 除了新增字段，还把结果**回填 last_login**（单调取最大，只前进不后退）——
+        # 桌面端后台行是白名单透传（admin_store._cloud_user_row 只认 last_login），
+        # 回填后历史账号立刻显示正确，且不需要重编桌面包。
+        act = _last_active_ts(u)
+        cur = float(u.get("last_login") or 0)
+        if act > cur:
+            u["last_login"] = act
+        item["last_login"] = max(cur, act)
+        item["last_active"] = act
         item["created_at"] = float(u.get("created_at", 0))
         item["purchases"] = [
             {"id": p.get("id"), "plan_code": p.get("plan_code"), "at": p.get("at")}
