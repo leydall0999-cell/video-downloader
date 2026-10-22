@@ -257,6 +257,24 @@ def _users(state: dict[str, Any]) -> dict[str, Any]:
     return state.setdefault("users", {})
 
 
+def _touch_active(state: dict[str, Any], uid: str, now: float) -> None:
+    """已鉴权的功能使用请求统一刷新「最近活跃」（2026-10-22）。
+
+    背景：last_login 原本只在密码登录时更新，而桌面端从不下发心跳
+    （heartbeat_remote 零调用点）⇒ 后台「最近使用」长期停在登录时刻，
+    「App 开着天天用」也看不出来。语义扩展：last_login = 最近登录或最近
+    一次功能使用（spend/daily/cloud_quota/redeem/trial_claim/plan_usage/
+    userdata 云同步）。只改内存，外层分发器 impl 返回后 _save_state 统一
+    落盘（全部分支持 _LOCK 串行），零额外 IO；登录/心跳自身的更新不受影响。
+    """
+    try:
+        u = _users(state).get(uid)
+        if u is not None:
+            u["last_login"] = float(now)
+    except Exception:
+        pass
+
+
 def _public_user(user: dict[str, Any], fp: str = "") -> dict[str, Any]:
     devs = []
     for d in (user.get("devices") or []):
@@ -535,6 +553,7 @@ def spend_impl(state: dict[str, Any], token: str, items: Any, now: float,
     余额允许扣成负数——正常客户端本地已做不足拒绝，负数即篡改/并发信号，供审计。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -588,6 +607,7 @@ def daily_impl(state: dict[str, Any], token: str, items: Any, now: float,
     客户端上报成功后立即校准本地计数。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -678,6 +698,7 @@ def trial_claim_impl(state: dict[str, Any], token: str, op: str, mode: str,
     额度领取是幂等的：同一 key 重复上报只记一次（无需客户端 id）。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -837,6 +858,7 @@ def cloud_quota_impl(state: dict[str, Any], token: str, now: float, secret: str,
       断网时由调用方按 fail-open 处理（沿用本机计数），故本端点只在能连通时调用。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -1274,6 +1296,7 @@ def userdata_meta(blob: dict[str, Any]) -> Optional[dict[str, Any]]:
 def _userdata_uid(state: dict[str, Any], token: str, now: float, secret: str) -> str:
     """校验 token → 返回账号主键（本人才能读写自己那一份，账号隔离）。"""
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     if uid not in _users(state):
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
     return uid
@@ -1587,6 +1610,7 @@ def redeem_impl(state: dict[str, Any], token: str, code: str, now: float,
         _scan_redeem_fail_anomalies(state, now, ip)
         raise ApiError(410, "REDEEM_DISABLED", "卡密充值已下线，请在会员中心使用支付宝/微信扫码充值")
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -1768,6 +1792,7 @@ def plan_usage_impl(state: dict[str, Any], token: str, secret: str, now: float,
     plan_code 非空时额外回该档的限购上限与是否仍可购买（供收款前拦截）。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
