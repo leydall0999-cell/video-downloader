@@ -1418,7 +1418,7 @@ def app_ops_visits(request: app.Request, limit: int = 100, range: str = ""):
     """
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     if not _ops_admin_key():
         raise app.HTTPException(status_code=401, detail="未配置运维密钥：请在「关于本应用」设置中填写超级管理员密钥")
     try:
@@ -1438,7 +1438,7 @@ def app_ops_events(request: app.Request, limit: int = 200, level: str = "", rang
     """App 内看板代理：本机放行，带密钥去 ECS 拉「错误/异常事件」并转发前端。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     if not _ops_admin_key():
         raise app.HTTPException(status_code=401, detail="未配置运维密钥：请在「关于本应用」设置中填写超级管理员密钥")
     try:
@@ -1495,7 +1495,7 @@ def app_ops_key_verify(payload: dict, request: app.Request):
     """
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     key = (payload.get("key") or "").strip()
     if not key:
         raise app.HTTPException(status_code=400, detail="密钥为空")
@@ -1522,7 +1522,7 @@ def app_license_alerts(request: app.Request, since: float = 0.0,
     """拉取授权中心异常告警（超管账号 + 本机双门禁）。前端 60s 轮询用。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.get(
             f"{_OPS_ECS_BASE}/api/license-alerts",
@@ -1541,7 +1541,7 @@ def app_license_alerts_ack(payload: dict, request: app.Request):
     """确认（已读）告警。ids 为空数组 = 全部确认。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.post(
             f"{_OPS_ECS_BASE}/api/license-alerts/ack",
@@ -1559,7 +1559,7 @@ def app_license_alerts_notify(payload: dict, request: app.Request):
     """macOS 系统通知桥：前端轮询发现新告警时调用，弹系统级通知（免解锁也可见）。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     import subprocess
     title = str(payload.get("title") or "视频工坊·异常告警")[:60]
     body = str(payload.get("body") or "")[:200]
@@ -1582,7 +1582,7 @@ def app_license_risk_top(request: app.Request, limit: int = 50, min_score: int =
     """风险最高的账号列表（看板「风险复核队列」数据源）。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.get(
             f"{_OPS_ECS_BASE}/api/license-risk/top",
@@ -1601,7 +1601,7 @@ def app_license_risk_query(payload: dict, request: app.Request):
     """单账号风险画像（命中信号明细）。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.post(
             f"{_OPS_ECS_BASE}/api/license-risk/query",
@@ -1619,7 +1619,7 @@ def app_license_risk_clear(payload: dict, request: app.Request):
     """人工抹平（确认误报）：清空该账号风险摘要，并写 risk_clear 审计事件。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.post(
             f"{_OPS_ECS_BASE}/api/license-risk/clear",
@@ -1655,7 +1655,7 @@ def app_license_recon(payload: dict, request: app.Request):
     """
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         days = int(payload.get("days") or _RECON_DAYS_DEFAULT)
     except (TypeError, ValueError):

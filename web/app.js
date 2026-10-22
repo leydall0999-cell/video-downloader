@@ -1532,7 +1532,9 @@
     });
 
   // 轻量 toast 提示
-  const showToast = (msg, ms = 2600) => {
+  // 2026-10-22：加第三个参数 kind（'err' 用红底）——后台面板的操作反馈要区分
+  // 成功/失败；既有调用只传 (msg, ms)，行为完全不变。
+  const showToast = (msg, ms = 2600, kind = '') => {
     let t = document.getElementById('vdl-toast');
     if (!t) {
       t = document.createElement('div');
@@ -1542,6 +1544,7 @@
       document.body.appendChild(t);
     }
     t.textContent = msg;
+    t.style.background = kind === 'err' ? '#8a2b2b' : '#222a38';
     t.style.display = 'block';
     clearTimeout(t._timer);
     t._timer = setTimeout(() => {
@@ -19672,9 +19675,14 @@ el.dwVidPlayer.hidden = true;
     _renderAvatar(prof && prof.avatar_url);
     _renderAuthHeader();
     // 角色标签（顶部 tag 唯一展示角色，不再单独一行）
+    // 2026-10-22 拆两级：超管（唯一）/ 管理员（后台只读）/ 普通用户。
+    // 🔴 老后端没有 role 字段时按 is_admin 兜底成「管理员」——
+    // 宁可把超管显示成只读管理员，也不要把管理员误显示成超管。
     const isAdmin = !!me.is_admin;
+    const _role = me.role || (isAdmin ? 'admin' : '');
     if (el.userMenuTag) {
-      el.userMenuTag.textContent = isAdmin ? '👑 超级管理员' : '普通用户';
+      el.userMenuTag.textContent = _role === 'super' ? '👑 超级管理员'
+        : (_role === 'admin' ? '管理员（只读）' : '普通用户');
       el.userMenuTag.classList.toggle('is-admin', isAdmin);
     }
     // 注册时间
@@ -19953,7 +19961,11 @@ el.dwVidPlayer.hidden = true;
       return;
     }
     setTxt(el.profName, me.identifier || '已登录');
-    setTxt(el.profTag, me.is_admin ? '👑 超级管理员' : '普通用户');
+    // 2026-10-22 拆两级：超管（唯一）/ 管理员（后台只读）/ 普通用户。
+    // 老后端没有 role 字段时按 is_admin 兜底成「管理员」，绝不反向误标。
+    const _profRole = me.role || (me.is_admin ? 'admin' : '');
+    setTxt(el.profTag, _profRole === 'super' ? '👑 超级管理员'
+      : (_profRole === 'admin' ? '管理员（只读）' : '普通用户'));
     _vdlAvatarUrl = (prof && prof.avatar_url) || '';
     _renderAvatar(prof && prof.avatar_url);
     _renderAuthHeader();
@@ -22040,6 +22052,28 @@ el.dwVidPlayer.hidden = true;
       el.textContent = text || '';
       el.className = 'admin-msg' + (isErr ? ' is-err' : (text ? ' is-ok' : ''));
     };
+    // 后台操作反馈（2026-10-22）：此前写操作**成功时完全没有任何提示**，
+    // 失败时用 alert()（pywebview 走 NSAlert 模态，阻塞且样式突兀）。
+    // 用户反馈「点击设为管理员没有任何反应」——真因是：后端把「本次仅本机生效」
+    // 这类 notice 放在响应里，而前端只判 r.ok 就静默 loadUsers()，把 notice 丢了；
+    // 面板列表读的是**云端**数据，云端没同步成功 ⇒ 列表纹丝不动 ⇒ 看起来没反应。
+    // 现在：成功/失败/notice 一律用轻量 toast 显式说出来。
+    const _adminToast = (text, isErr) => {
+      if (!text) return;
+      try { showToast(String(text), isErr ? 4600 : 2800, isErr ? 'err' : ''); }
+      catch (_e) { /* ignore */ }
+    };
+    // 把后端响应整理成一句话：成功时把 notice 一并带出来（notice ≠ 空即意味着
+    // 「这次只改了一半 / 没同步到云端」，必须让用户看见）。
+    const _adminResult = (r, okText) => {
+      const notice = r && r.notice ? String(r.notice).replace(/^（|）$/g, '') : '';
+      if (r && r.ok) {
+        _adminToast(notice ? (okText + '（' + notice + '）') : okText, false);
+        return true;
+      }
+      _adminToast((r && (r.error || r.detail)) || '操作失败', true);
+      return false;
+    };
     const adminRequest = async (path, opts = {}) => {
       const tok = authToken();
       const headers = Object.assign({}, opts.headers || {}, tok ? { Authorization: 'Bearer ' + tok } : {});
@@ -22599,9 +22633,9 @@ el.dwVidPlayer.hidden = true;
           body: JSON.stringify({ domain: domain, ids: ids }),
         });
         if (r && r.ok) await loadCookies('已删除 ' + r.removed + ' 份');
-        else if (typeof alert === 'function') alert((r && r.error) || '删除失败');
+        else _adminToast((r && r.error) || '删除失败', true);
       } catch (err) {
-        if (typeof alert === 'function') alert('删除失败：' + (err && err.message || err));
+        _adminToast('删除失败：' + (err && err.message || err), true);
       }
     };
 
@@ -23408,7 +23442,11 @@ el.dwVidPlayer.hidden = true;
       const rows = lastMembers.map((m) => {
         const dl = m.download_active ? `✅ ${esc(m.download_plan || '')}` : '—';
         const ai = m.ai_active ? `✅ ${esc(m.ai_plan || '')}` : '—';
-        const ops = `<button class="admin-btn admin-btn-sm" data-uid="${esc(m.user_id)}" data-act="credit">调整积分</button>`;
+        // 管理员（只读）看得到全部记录，但不能改 —— 写按钮直接置为不可用并说明原因，
+        // 免得点了才弹 403（用户反馈「点了没反应」）。
+        const ops = _vdlIsSuper
+          ? `<button class="admin-btn admin-btn-sm" data-uid="${esc(m.user_id)}" data-act="credit">调整积分</button>`
+          : '<span class="admin-readonly" title="仅超级管理员可调整积分">只读</span>';
         return `<tr>
           <td>${esc(m.identifier)}</td>
           <td><code class="admin-uid" data-copy="${esc(m.user_id || '')}" title="点击复制">${esc(m.user_id || '—')}</code></td>
@@ -24686,7 +24724,8 @@ el.dwVidPlayer.hidden = true;
 
     const _needLogin = (msg) => {
       closeAdmin();
-      if (msg) alert(msg);
+      // 2026-10-22：改用轻量 toast（alert 在 pywebview 里是 NSAlert 模态，阻塞且突兀）
+      if (msg) _adminToast(String(msg).replace(/^未授权：/, ''), true);
     };
 
     // 表格操作（事件委托）
@@ -24718,23 +24757,22 @@ el.dwVidPlayer.hidden = true;
       try {
         if (act === 'disable' || act === 'enable') {
           const r = await adminRequest(`/api/admin/users/${uid}/${act}`, { method: 'POST' });
-          if (r && r.ok) { loadUsers(); }
-          else alert((r && r.error) || '操作失败');
+          if (_adminResult(r, act === 'disable' ? '已禁用该账号' : '已启用该账号')) loadUsers();
         } else if (act === 'reset') {
           const npw = (typeof prompt === 'function') ? prompt('为该用户设置新密码（≥6位）：') : null;
           if (!npw) return;
           const r = await adminRequest(`/api/admin/users/${uid}/reset-password`, {
             method: 'POST', body: JSON.stringify({ new_password: npw }),
           });
-          if (r && r.ok) { loadUsers(); }
-          else alert((r && r.error) || '重置失败');
+          if (_adminResult(r, '已重置密码')) loadUsers();
         } else if (act === 'admin' || act === 'unadmin') {
           const flag = act === 'admin';
           const r = await adminRequest(`/api/admin/users/${uid}/set-admin`, {
             method: 'POST', body: JSON.stringify({ is_admin: flag }),
           });
-          if (r && r.ok) { loadUsers(); }
-          else alert((r && r.error) || '操作失败');
+          // 提权/撤权必须**有明确反馈**：此前成功时只静默刷新列表，
+          // 而列表读的是云端数据 —— 云端没同步上就完全看不出变化。
+          if (_adminResult(r, flag ? '已设为管理员' : '已取消管理员')) loadUsers();
         } else if (act === 'usage') {
           openUserUsage(uid);
         } else if (act === 'del') {
@@ -24742,14 +24780,13 @@ el.dwVidPlayer.hidden = true;
           const label = u0.identifier || uid;
           if (!(typeof confirm === 'function') || !confirm(`确定删除账号「${label}」？\n\n删除后该账号立即失效、无法登录，且该手机号/邮箱不能再注册。此操作不可恢复。`)) return;
           const r = await adminRequest(`/api/admin/users/${uid}/delete`, { method: 'POST' });
-          if (r && r.ok) { loadUsers(); loadMembers(); }
-          else alert((r && r.error) || '删除失败');
+          if (_adminResult(r, '已删除账号')) { loadUsers(); loadMembers(); }
         } else if (act === 'credit') {
           const m = (lastMembers || []).find((x) => x.user_id === uid) || { user_id: uid };
           openCreditDlg(m);
         }
       } catch (err) {
-        alert('操作失败：' + (err && err.message ? err.message : '网络错误'));
+        _adminToast('操作失败：' + (err && err.message ? err.message : '网络错误'), true);
       }
     };
     if (userTable) userTable.addEventListener('click', onTableClick);
@@ -24800,9 +24837,8 @@ el.dwVidPlayer.hidden = true;
         const r = await adminRequest('/api/admin/memberships/grant', {
           method: 'POST', body: JSON.stringify({ user_id: uid, code }),
         });
-        if (r && r.ok) { loadMembers(); }
-        else alert((r && r.error) || '赠送失败');
-      } catch (e) { alert('赠送失败：' + (e && e.message ? e.message : '网络错误')); }
+        if (_adminResult(r, '已赠送会员')) loadMembers();
+      } catch (e) { _adminToast('赠送失败：' + (e && e.message ? e.message : '网络错误'), true); }
     });
 
     // 重置统计

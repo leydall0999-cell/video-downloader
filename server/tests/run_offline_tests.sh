@@ -695,6 +695,7 @@ run_one test_admin_user_usage.py
 run_one test_admin_roles.py
 run_one test_admin_roles_api.py
 run_one test_admin_roles_e2e.py
+run_one test_admin_promote_effect.py   # 提权「点了没反应」的根因：手机号账号的标识解析必须命中（否则云端同步被跳过 + 云端权威回写把本机打回）＋权限文案两级口径（2026-10-22）
 
 #  37. test_plan_mkt_matrix.py —— 营销面板「模式×分组」联动（2026-10-03）：
 #      直接解析 web/app.js 的 PLAN_MODES / _MKT_BY_MODE / data-mkt 三处命名做交叉核对，
