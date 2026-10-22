@@ -3868,11 +3868,13 @@
         <!-- 当前会员状态：下载 / AI 双轨 + 积分余额 -->
         <div class="member-status" id="memberStatus" hidden data-page-node-id="uXft3OfhHVG1EmyRN6vk39"></div>
 
-        <!-- 三轨切换 -->
-        <div class="member-tabs" role="tablist" aria-label="会员类型" data-page-node-id="TTMtaUW5cfR7C3L5UBFMKz">
-          <button type="button" class="member-tab is-active" id="memberTabDl" role="tab" data-page-node-id="k3Ti7dHZZ7gc8yfBXwsFiZ">VIP会员</button>
-          <button type="button" class="member-tab" id="memberTabAi" role="tab" data-page-node-id="pPHWXRYPstCgFhYMHqaxLj">AI 会员</button>
-          <button type="button" class="member-tab" id="memberTabPacks" role="tab" data-page-node-id="ye8RKaAySpWGJ8TvJ9cvFQ">积分包</button>
+        <!-- 三轨切换（外层 wrap 吸顶：弹窗内容下滚时标签栏固定，2026-10-22） -->
+        <div class="member-tabs-wrap">
+          <div class="member-tabs" role="tablist" aria-label="会员类型" data-page-node-id="TTMtaUW5cfR7C3L5UBFMKz">
+            <button type="button" class="member-tab is-active" id="memberTabDl" role="tab" data-page-node-id="k3Ti7dHZZ7gc8yfBXwsFiZ">VIP会员</button>
+            <button type="button" class="member-tab" id="memberTabAi" role="tab" data-page-node-id="pPHWXRYPstCgFhYMHqaxLj">AI 会员</button>
+            <button type="button" class="member-tab" id="memberTabPacks" role="tab" data-page-node-id="ye8RKaAySpWGJ8TvJ9cvFQ">积分包</button>
+          </div>
         </div>
         <!-- 会员公告（2026-10-18）：管理员在后台「会员公告」编辑，云端下发到所有端。
              无内容时整条 hidden —— 不留空白边框，也不占位。 -->

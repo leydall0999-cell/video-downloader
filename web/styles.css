@@ -4800,6 +4800,15 @@ html.theme-dark .pf-pool-note.is-warn { color: #fbbf24; }
 .member-notice[hidden] { display: none; }
 .member-notice-icon { flex: none; line-height: 1.5; }
 .member-notice-text { flex: 1 1 auto; }
+/* 标签栏吸顶（2026-10-22）：滚动容器是 <dialog> 自身（UA 默认 overflow:auto）。
+   wrap 铺满行宽并垫同色底板 ⇒ 内容从标签栏下方穿过时不穿帮；negative margin
+   抵消 .modal-card 左右 padding（1.25rem），静止时与原布局视觉一致。 */
+.member-tabs-wrap {
+  position: sticky; top: 0; z-index: 6;
+  margin: 0 -1.25rem;
+  padding: .5rem 1.25rem .45rem;
+  background: var(--surface);
+}
 .member-tabs {
   display: flex; gap: .35rem; margin-bottom: .8rem; padding: .25rem;
   background: #f1f2f7; border-radius: var(--radius-md); width: fit-content;
