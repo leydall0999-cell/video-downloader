@@ -827,17 +827,17 @@
   <div class="howto-body">
     <ol class="howto-steps">
       <li>点「<b>添加文件</b>」把要展示的图片 / 视频加进来（可拖拽排序）。</li>
-      <li>填好标题后，点「<b>生成本机网页文件</b>」得到单文件 HTML，或点「<b>生成在线链接</b>」得到可分享的网址。</li>
-      <li>完成后点「<b>保存 .html 到本机</b>」存盘，或点「<b>复制链接</b>」分享。</li>
+      <li>填好标题后，点「<b>生成在线链接</b>」得到可分享的网址和二维码。</li>
+      <li>点「<b>复制链接</b>」分享给对方，或让对方直接扫二维码。</li>
       <li>点「<b>打开</b>」可预览成品。</li>
     </ol>
-    <p class="howto-note">本机网页文件适合直接发给别人（无需联网）；在线链接方便随时更新与回收。</p>
+    <p class="howto-note">在线链接渲染在独立域名（share.hanyuxz.top），有效期到自动回收。</p>
     <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
   </div>
 </details>
     <h2 id="pgTitle" class="guide-title">生成网页<button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
     <p class="uc-tip">把多个文件（图片 / PDF / 音视频 / 文本）合并成<b>一个自包含的网页</b>：
-      内容全部内嵌，把 .html 发给对方双击就能看；也可一键转成在线链接 + 二维码。
+      一键生成在线链接 + 二维码，发链接或扫码即看。
       网页版限额：合计 ≤ <b id="pgLimitText">60MB</b>。</p>
     <div class="uc-toolbar">
       <button type="button" class="btn btn-primary" id="pgPickBtn">添加文件</button>
@@ -863,19 +863,16 @@
         </label>
       </div>
       <div class="uc-bulk-actions">
-        <button type="button" class="btn btn-primary" id="pgBuildBtn" disabled>生成本机网页文件</button>
-        <button type="button" class="btn btn-ghost" id="pgLinkBtn" disabled>生成在线链接</button>
+        <button type="button" class="btn btn-primary" id="pgLinkBtn" disabled>生成在线链接</button>
       </div>
     </div>
     <div class="uc-bulk" id="pgResult" hidden>
       <h3 class="card-title" id="pgResultTitle">已生成</h3>
       <div class="share-row">
-        <img id="pgQrImg" class="share-qr-img" alt="在线链接二维码" hidden />
         <div class="share-meta">
           <input type="text" id="pgUrl" readonly onclick="this.select()" hidden />
           <div class="uc-bulk-actions">
-            <button type="button" class="btn btn-primary" id="pgSaveBtn">保存 .html 到本机</button>
-            <button type="button" class="btn btn-ghost" id="pgCopyBtn" hidden>复制链接</button>
+            <button type="button" class="btn btn-primary" id="pgCopyBtn" hidden>复制链接</button>
             <button type="button" class="btn btn-ghost" id="pgOpenBtn" hidden>打开</button>
           </div>
           <p class="uc-tip" id="pgMeta"></p>

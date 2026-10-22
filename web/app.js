@@ -469,9 +469,9 @@
     sqrStatus: $('sqrStatus'), sqrMeta: $('sqrMeta'),
     pageGenView: $('pageGenView'), pgPickBtn: $('pgPickBtn'),
     pgFileInput: $('pgFileInput'), pgClearBtn: $('pgClearBtn'), pgCount: $('pgCount'), pgExpire: $('pgExpire'),
-    pgList: $('pgList'), pgTitleInput: $('pgTitleInput'), pgBuildBtn: $('pgBuildBtn'), pgLinkBtn: $('pgLinkBtn'),
-    pgResult: $('pgResult'), pgResultTitle: $('pgResultTitle'), pgQrImg: $('pgQrImg'), pgUrl: $('pgUrl'),
-    pgSaveBtn: $('pgSaveBtn'), pgCopyBtn: $('pgCopyBtn'), pgOpenBtn: $('pgOpenBtn'),
+    pgList: $('pgList'), pgTitleInput: $('pgTitleInput'), pgLinkBtn: $('pgLinkBtn'),
+    pgResult: $('pgResult'), pgResultTitle: $('pgResultTitle'), pgUrl: $('pgUrl'),
+    pgCopyBtn: $('pgCopyBtn'), pgOpenBtn: $('pgOpenBtn'),
     pgStatus: $('pgStatus'), pgMeta: $('pgMeta'),
     // —— 登录强制（2026-09-28 对齐 App）：右上角账号按钮 + 登录弹窗 ——
     authHeaderBtn: $('authHeaderBtn'),
@@ -9177,14 +9177,12 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       el.pgList.innerHTML = '';
       el.pgCount.textContent = '尚未添加文件';
       el.pgClearBtn.hidden = true;
-      el.pgBuildBtn.disabled = true;
       el.pgLinkBtn.disabled = true;
       return;
     }
     const total = _pgFiles.reduce((s, f) => s + f.size, 0);
     el.pgCount.textContent = `${_pgFiles.length} 个文件 · 合计 ${shareFmtSize(total)}`;
     el.pgClearBtn.hidden = false;
-    el.pgBuildBtn.disabled = false;
     el.pgLinkBtn.disabled = false;
     el.pgList.innerHTML = _pgFiles.map((f, i) =>
       `<li class="uc-item"><div class="uc-item-main">` +
@@ -9237,29 +9235,14 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       const page = pgBuildPage(items, title);
       _pgBlob = new Blob([page], { type: 'text/html;charset=utf-8' });
       _pgName = (title.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60) || '页面') + PG_PAGE_SUFFIX;
-      el.pgResult.hidden = false;
-      el.pgResultTitle.textContent = '已生成本机网页文件';
-      el.pgQrImg.hidden = true; el.pgQrImg.removeAttribute('src');
-      el.pgUrl.hidden = true; el.pgUrl.value = '';
-      el.pgCopyBtn.hidden = true; el.pgOpenBtn.hidden = true;
-      el.pgSaveBtn.hidden = false;
-      el.pgMeta.textContent = `源文件 ${shareFmtSize(pgTotalBytes())} → 页面 ${shareFmtSize(_pgBlob.size)}（内嵌膨胀约 ${(_pgBlob.size / pgTotalBytes()).toFixed(2)} 倍），双击或发给别人都能直接打开。`;
       pgSay('');
     } catch (e) {
       pgSay('合成失败：' + (e && e.message ? e.message : e));
     }
   };
-  const pgSave = () => {
-    if (!_pgBlob) return;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(_pgBlob);
-    a.download = _pgName;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  };
   const pgToLink = async () => {
     if (!_pgFiles.length) { pgSay('请先添加文件'); return; }
-    if (!_pgBlob) { await pgBuild(); if (!_pgBlob) return; }  // 没先点「生成本机网页文件」就自动合成，别让按钮像没反应
+    if (!_pgBlob) { await pgBuild(); if (!_pgBlob) return; }  // 直接点「生成在线链接」时自动先合成
     const tok = await shareEnsureToken(pgSay, 'pagegen');
     if (!tok) return;
     const days = parseInt(el.pgExpire && el.pgExpire.value, 10)
@@ -9274,8 +9257,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       el.pgResultTitle.textContent = '在线链接已生成';
       el.pgUrl.hidden = false; el.pgUrl.value = r.url;
       el.pgCopyBtn.hidden = false; el.pgOpenBtn.hidden = false;
-      shareShowResult(el.pgResult, r.url, el.pgQrImg, el.pgMeta, r.expire_at);
-      el.pgMeta.textContent = '链接：' + r.url + ' · 有效期至 ' + pfFmtDate(r.expire_at) + ' · 在线页与 App「生成网页」一样渲染在独立域名（share.hanyuxz.top）';
+      el.pgMeta.textContent = '链接：' + r.url + ' · 有效期至 ' + pfFmtDate(r.expire_at) + ' · 在线页渲染在独立域名（share.hanyuxz.top）';
       pgSay('');
     } catch (e) {
       pgSay(e && e.message ? e.message : '上传失败');
@@ -9296,9 +9278,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   if (el.pgPickBtn) el.pgPickBtn.addEventListener('click', pgPick);
   if (el.pgFileInput) el.pgFileInput.addEventListener('change', pgOnFiles);
   if (el.pgClearBtn) el.pgClearBtn.addEventListener('click', () => { _pgFiles = []; pgRenderList(); pgSay(''); });
-  if (el.pgBuildBtn) el.pgBuildBtn.addEventListener('click', () => { try { pgBuild(); } catch (e) { pgSay('合成失败：' + (e && e.message ? e.message : e)); } });
-  if (el.pgLinkBtn) el.pgLinkBtn.addEventListener('click', () => { try { pgToLink(); } catch (e) { pgSay('失败：' + (e && e.message ? e.message : e)); } });
-  if (el.pgSaveBtn) el.pgSaveBtn.addEventListener('click', pgSave);
+  if (el.pgLinkBtn) el.pgLinkBtn.addEventListener('click', () => { pgToLink().catch((e) => pgSay('生成失败：' + (e && e.message ? e.message : e))); });
   if (el.pgCopyBtn) el.pgCopyBtn.addEventListener('click', pgCopyUrl);
   if (el.pgOpenBtn) el.pgOpenBtn.addEventListener('click', pgOpen);
 
