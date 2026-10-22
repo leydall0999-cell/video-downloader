@@ -830,15 +830,9 @@
     pageBuildBtn: $('pageBuildBtn'),
     pageHint: $('pageHint'),
     pageResult: $('pageResult'),
-    pagePathInput: $('pagePathInput'),
-    pageCopyPathBtn: $('pageCopyPathBtn'),
-    pageOpenBtn: $('pageOpenBtn'),
     pageLinkInput: $('pageLinkInput'),
     pageCopyLinkBtn: $('pageCopyLinkBtn'),
     pageOpenLinkBtn: $('pageOpenLinkBtn'),
-    pageQrWrap: $('pageQrWrap'),
-    pageQrImg: $('pageQrImg'),
-    pageLocalTag: $('pageLocalTag'),
     pageResultHint: $('pageResultHint'),
 
     // 高清修复（sr* 前缀，独立 tab；2026-09-12 新增：快速档 + AI 档，全程本地）
@@ -5524,11 +5518,10 @@
     wait.forEach(it => srStartOne(it).catch(() => {}));
   });
 
-  // ===== 生成网页（2026-09-30 新增）：本机文件 → 一个自包含 HTML 页面 =====
-  // 与「生成二维码」互补，不是替代：那边给的是**链接**（对方要联网、文件留在分享节点上），
-  // 这边给的是一个**文件**（离线也能看，发出去就归对方）。因此刻意放在同级入口。
-  // 接入方式也保持一致：桌面端走原生框拿路径（免上传），网页端走上传
-  // （服务端把页面内容回传，浏览器直接下载——服务端的磁盘路径对访客没有意义）。
+  // ===== 生成网页（2026-09-30 新增）：多文件 → 一个自包含 HTML 页面 → 在线链接 =====
+  // 2026-10-23 起只保留在线链接产出（本机文件与二维码已按用户要求移除）：
+  // 本机生成仍是链路的必要中间步（桌面走原生路径 / 浏览器走上传），但不再展示与下载。
+  // 上传复用「生成二维码」那套通道（/api/share/upload_path + /api/share/task），不新增后端接口。
   const pgDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const PG_MAX_ITEM = 80 * 1024 * 1024;
   const PG_MAX_TOTAL = 200 * 1024 * 1024;
@@ -5607,10 +5600,7 @@
     pgState.paths = []; pgState.files = []; pgState.pageHtml = ''; pgState.outName = '';
     pgState.outPath = ''; pgState.link = ''; pgState.sid = ''; pgState.warn = '';
     if (el.pageResult) el.pageResult.hidden = true;
-    if (el.pagePathInput) el.pagePathInput.value = '';
     if (el.pageLinkInput) { el.pageLinkInput.value = ''; el.pageLinkInput.placeholder = '正在生成在线链接…'; }
-    if (el.pageQrWrap) el.pageQrWrap.hidden = true;
-    if (el.pageQrImg) el.pageQrImg.removeAttribute('src');
     pgRenderLink(-1, '');
     if (el.pageResultHint) el.pageResultHint.textContent = '';
     pgSetHint('');
@@ -5635,22 +5625,11 @@
     pgState.outPath = data.out_path || '';
     pgState.link = ''; pgState.sid = '';
     if (el.pageResult) el.pageResult.hidden = false;
-    if (el.pagePathInput) {
-      el.pagePathInput.value = isUpload ? (data.out_name || '') : (data.out_path || '');
-    }
-    if (el.pageCopyPathBtn) el.pageCopyPathBtn.hidden = !!isUpload;
-    if (el.pageOpenBtn) el.pageOpenBtn.textContent = isUpload ? '下载网页（HTML）' : '用浏览器打开';
-    if (el.pageLocalTag) {
-      el.pageLocalTag.textContent = '本地文件 · ' + pgHuman(data.html_size || 0)
-        + '（源 ' + pgHuman(data.source_size || 0) + '，膨胀 ' + (data.inflated || 1) + ' 倍）';
-    }
     const kinds = (data.items || []).map((x) => PG_KIND_LABEL[x.kind] || '文件');
     pgState.warn = kinds.indexOf('视频') >= 0
       ? ' ⚠️ 页面里的视频需为 H.264 / VP9 / AV1 编码，否则浏览器无法播放（MKV、MPEG-4 Visual 等都不行）。'
       : '';
-    // 主产出 = 在线链接：生成完立即上传分享节点换链接 + 二维码
-    if (el.pageQrWrap) el.pageQrWrap.hidden = true;
-    if (el.pageQrImg) el.pageQrImg.removeAttribute('src');
+    // 主产出 = 在线链接：生成完立即上传分享节点换链接
     pgRenderLink(0);
     pgSetHint('生成完成', '#16a34a');
     pgPublishLink(pgState.outPath);
@@ -5662,10 +5641,8 @@
     if (!inp) return;
     if (st === 1) {
       inp.value = pgState.link;
-      if (el.pageQrWrap) el.pageQrWrap.hidden = false;
-      if (el.pageQrImg) el.pageQrImg.src = '/api/share/qr?text=' + encodeURIComponent(pgState.link) + '&size=640';
       if (el.pageResultHint) {
-        el.pageResultHint.textContent = '在线链接已就绪 —— 把链接或二维码发给别人，手机 / 电脑点开就能看。'
+        el.pageResultHint.textContent = '在线链接已就绪 —— 把链接发给别人，手机 / 电脑点开就能看。'
           + (pgState.warn || '');
       }
     } else if (st === 0) {
@@ -5680,8 +5657,7 @@
         const needLogin = !!(arg && arg.indexOf('登录') >= 0);
         el.pageResultHint.textContent = (needLogin
           ? '登录 / 注册后重新点「生成网页」，即可拿到在线链接。'
-          : ((arg ? '未能生成在线链接（' + arg + '）。' : '')
-             + '本地 HTML 文件仍可用，可点下方「复制路径 / 用浏览器打开」。'))
+          : ((arg ? '未能生成在线链接（' + arg + '）。' : '') + '请重试。'))
           + (pgState.warn || '');
       }
     }
@@ -5736,22 +5712,6 @@
       pgRenderLink(2, t.sent || 0);
     }
     pgRenderLink(-1, '上传超时，请重试');
-  }
-
-  // 网页端：页面内容随响应回来，用 Blob 存到访客本机。
-  // ⚠️ 这条兜底只在**真浏览器**里用；桌面壳 WKWebView 不支持 <a download>（会把主框架
-  //    导航到 blob:，整个界面被页面替换，2026-09-21 生成二维码踩过），所以桌面端不给这个按钮。
-  function pgDownloadHtml() {
-    if (!pgState.pageHtml) return;
-    const blob = new Blob([pgState.pageHtml], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = pgState.outName || '页面.html';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
 
   async function pgBuild() {
@@ -5827,34 +5787,6 @@
   }
   if (el.pageClearBtn) el.pageClearBtn.addEventListener('click', pgReset);
   if (el.pageBuildBtn) el.pageBuildBtn.addEventListener('click', () => { pgBuild(); });
-  if (el.pageCopyPathBtn) {
-    el.pageCopyPathBtn.addEventListener('click', () => {
-      const v = el.pagePathInput ? el.pagePathInput.value : '';
-      if (!v) return;
-      el.pagePathInput.select();
-      try { document.execCommand('copy'); } catch (e2) {}
-      const btn = el.pageCopyPathBtn;
-      btn.textContent = '已复制';
-      setTimeout(() => { btn.textContent = '复制路径'; }, 1600);
-    });
-  }
-  if (el.pageOpenBtn) {
-    el.pageOpenBtn.addEventListener('click', () => {
-      // 网页端：没有本机路径，改为把页面内容存到访客本机
-      if (!pgState.paths.length) { pgDownloadHtml(); return; }
-      const p = el.pagePathInput ? el.pagePathInput.value : '';
-      if (!p) return;
-      // file:// 交给系统默认浏览器打开；桌面壳里 window.open 会被静默拦截（见 desktop_launcher.open_external）
-      const fileUrl = 'file://' + p.split('/').map(encodeURIComponent).join('/');
-      const openExt = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal;
-      if (typeof openExt === 'function') {
-        Promise.resolve(openExt(fileUrl)).then((ok) => { if (!ok) window.open(fileUrl, '_blank'); })
-          .catch(() => { window.open(fileUrl, '_blank'); });
-        return;
-      }
-      window.open(fileUrl, '_blank');
-    });
-  }
   if (el.pageCopyLinkBtn) {
     el.pageCopyLinkBtn.addEventListener('click', () => {
       const v = pgState.link || (el.pageLinkInput ? el.pageLinkInput.value : '');

@@ -1121,8 +1121,8 @@
     <h2 id="pageTitle" class="guide-title"><span class="guide-title-text">🌐 生成网页</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
 
     <p class="uc-tip" style="color:var(--text-mute,#6b7280);font-size:12.5px;">
-      把<b>多个文件合成一个网页</b>（图片 / PDF / 视频 / 音乐…可多选）→ 给出<b>一条在线链接</b> + 二维码。
-      对方<b>点开链接或扫码就能在浏览器里直接看</b>，不用下载、手机也行；本机同时留一份可离线打开的单文件。
+      把<b>多个文件合成一个网页</b>（图片 / PDF / 视频 / 音乐…可多选）→ 给出<b>一条在线链接</b>。
+      对方<b>点开链接就能在浏览器里直接看</b>，不用下载、手机也行。
       <br>代价：内容内嵌进页面会<b>变大约 1/3</b>，单文件限 80MB、合计 200MB，且<b>无有效期</b>（生成后不能设失效时间）。
       <br><span style="color:var(--brand,#2563eb);">提示：图片 / PDF / 音频效果最好；视频需是 H.264 / VP9 / AV1 编码（MKV、MPEG-4 Visual 等在浏览器里播不了）。</span>
       <br><span style="color:var(--brand,#2563eb);">只发<b>一个</b>文件（尤其视频、PDF）？用「📲 生成二维码」更快更保真。</span>
@@ -1134,7 +1134,7 @@
     <ol class="howto-steps">
       <li>点「选择文件」选多个文件（图片 / PDF / 视频 / 音乐）。</li>
       <li>（可选）填「页面标题」，留空用第一个文件名。</li>
-      <li>点「<b>生成网页</b>」，得到一条在线链接 + 二维码，另存一份可离线打开的本地文件。</li>
+      <li>点「<b>生成网页</b>」，得到一条在线链接。</li>
     </ol>
     <p class="howto-note">单文件限 80MB、合计 200MB；内容内嵌会变大约 1/3，且无有效期。只发一个文件用「生成二维码」更保真。</p>
     <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
@@ -1160,32 +1160,17 @@
     </div>
 
     <div id="pageResult" hidden>
-      <div class="share-qr-wrap" id="pageQrWrap" hidden><img id="pageQrImg" alt="网页二维码" /></div>
       <div class="share-url-row" style="margin-top:14px;">
         <input type="text" id="pageLinkInput" readonly placeholder="正在生成在线链接…" />
         <button type="button" class="btn btn-ghost" id="pageCopyLinkBtn">复制链接</button>
         <button type="button" class="btn btn-ghost" id="pageOpenLinkBtn">打开</button>
       </div>
       <div class="share-hint" id="pageResultHint"></div>
-      <div class="pg-local" id="pageLocalRow">
-        <span class="pg-local-tag" id="pageLocalTag">本地文件</span>
-        <input type="text" id="pagePathInput" readonly />
-        <button type="button" class="btn btn-ghost" id="pageCopyPathBtn">复制路径</button>
-        <button type="button" class="btn btn-ghost" id="pageOpenBtn">用浏览器打开</button>
-      </div>
     </div>
 
     <style>
       #pageQueue { margin-top: 10px; }
       .page-tip { color: var(--text-mute,#6b7280); font-size: 12.5px; padding: 6px 2px; }
-      /* 本地文件是次要信息（在线链接才是主产出），所以压成一行小字 */
-      .pg-local { display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center;
-        margin-top:12px; padding-top:11px; border-top:1px dashed var(--border,#e5e7eb); }
-      .pg-local-tag { color:var(--text-mute,#6b7280); font-size:12px; white-space:nowrap; }
-      .pg-local input { flex:1; min-width:210px; max-width:440px; padding:6px 10px;
-        border:1px solid var(--border,#d1d5db); border-radius:8px; font-size:12px;
-        background:transparent; color:inherit; }
-      .pg-local .btn { font-size:12px; padding:5px 11px; }
     </style>
   </section>
 
