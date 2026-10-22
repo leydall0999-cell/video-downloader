@@ -98,6 +98,26 @@ def _cloud_users() -> Optional[list[dict[str, Any]]]:
     return users if isinstance(users, list) else None
 
 
+def _role_of(identifier: str, is_admin: bool) -> str:
+    """角色标签：super（唯一超管）/ admin（管理员·只读后台）/ ""（普通用户）。
+
+    2026-10-22 起后台拆两级权限（自桌面端同口径移植）。is_admin 仍是「能进后台」
+    的布尔（云端真源不变），但**只有匹配唯一超管标识**的那一个才是 super，
+    其余全部是只读的管理员。判定规则集中在 auth_store.super_admin_identifier()，
+    这里只做标签映射。延迟 import 避免 auth_store ↔ admin_store 循环依赖。
+
+    ⚠️ 网页版是公网部署：判定异常时按最小权限处理（宁可标成只读管理员，
+    也绝不误判成超管）——误判成 super 等于把所有写接口开放出去。
+    """
+    if not is_admin:
+        return ""
+    try:
+        from auth_store import is_super_identifier
+        return "super" if is_super_identifier(identifier) else "admin"
+    except Exception:
+        return "admin"
+
+
 def _cloud_user_row(u: dict[str, Any]) -> dict[str, Any]:
     """云端账号 → 后台行（保持既有字段键名不变，前端无感；新增端维度字段）。"""
     import time as _t
@@ -111,6 +131,7 @@ def _cloud_user_row(u: dict[str, Any]) -> dict[str, Any]:
         "last_login": u.get("last_login"),
         "disabled": bool(u.get("banned")),
         "is_admin": bool(u.get("is_admin")),
+        "role": _role_of(str(u.get("email") or ""), bool(u.get("is_admin"))),
         "source": "cloud",
         "device_count": len(devs),
         "devices": [
@@ -161,6 +182,7 @@ def list_users() -> list[dict[str, Any]]:
             "created_at": u.get("created_at"),
             "disabled": bool(u.get("disabled", False)),
             "is_admin": bool(u.get("is_admin", False)),
+            "role": _role_of(ident, bool(u.get("is_admin", False))),
             "source": "local",
         }
         try:

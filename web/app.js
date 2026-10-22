@@ -2350,9 +2350,9 @@
   //
   // 🔴 红线（继承 2026-09-11 Railway 事故教训）：当年加了一个**不同后端**的端点，分片落到
   //    别的节点磁盘上，finish 必报「分片不完整」。所以这里每个候选都必须满足
-  //    「分片不完整」。所以这里的每个候选都必须满足「同隧道 → 同 nginx → 同 worker → 同
-  //    分片目录」。已实测：hanyuxz.top / vdl-check.hanyuxz.top 的 6 个 HTTPS 端口的分片
-  //    全部落在 ECS 的 /opt/vdl-worker/downloads/uploads 同一目录下。
+  //    「同隧道 → 同 nginx → 同 worker → 同分片目录」。已实测：hanyuxz.top /
+  //    vdl-check.hanyuxz.top 的 6 个 HTTPS 端口的分片全部落在 ECS 的
+  //    /opt/vdl-worker/downloads/uploads 同一目录下。
   // 因此：**候选写死 CF 边缘端口，且先探测可达再用**，宁可退回单一同源也不要猜。
   // ═══════════════════════════════════════════════════════════════════════════
   let UC_UPLOAD_ENDPOINTS = [location.origin];
@@ -8359,7 +8359,13 @@
     // 总览头
     if (el.pfName) el.pfName.textContent = me.identifier || me.user_id || '已登录';
     if (el.pfTag) {
-      el.pfTag.textContent = me.is_admin ? '👑 超级管理员' : '普通用户';
+      // 角色三分（2026-10-22 权限拆两级，与桌面端口径一致）：
+      //   super = 唯一超管（能改后台数据）/ admin = 管理员（后台只读）/ 其他 = 普通用户。
+      // 后端 /api/auth/me 已带 role 字段；老后端没有该字段时按 is_admin 兜底成
+      // 「管理员」—— 宁可把超管显示成只读管理员，也不要反向误标。
+      const _role = me.role || (me.is_admin ? 'admin' : '');
+      el.pfTag.textContent = _role === 'super' ? '👑 超级管理员'
+        : (_role === 'admin' ? '管理员（只读）' : '普通用户');
       el.pfTag.classList.toggle('is-admin', !!me.is_admin);
     }
     const ct = (prof && prof.created_at) || me.created_at || 0;

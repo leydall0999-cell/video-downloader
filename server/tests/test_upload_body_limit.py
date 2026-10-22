@@ -254,20 +254,63 @@ def test_server_level_limit_and_gateway_stays_tight():
 # 测试 4：前端上传端点必须同源（死端点 + 奇偶分流 = 一半分片必失败）
 # --------------------------------------------------------------------------- #
 def test_frontend_upload_endpoints_same_origin_only():
+    """前端上传端点必须**同后端**（死端点 / 跨节点端点 = 一半分片必失败）。
+
+    🔴 2026-10-22 契约已变更：上传提速改造后 `UC_UPLOAD_ENDPOINTS` 从 `const`
+    改成 `let`（多端口探测结果会回填），候选由 `ucEndpointCandidates()` 动态生成。
+    原断言写死 `const UC_UPLOAD_ENDPOINTS = [...]` 已失效 —— 留着就是永远红的
+    陈旧测试。**不变量没变**，变的是形态，所以这里按新结构重写：
+
+      旧：端点数组里每一项都必须是 location.origin（只能单同源）
+      新：① 池子初值仍是 [location.origin]；
+          ② 动态候选必须全部满足「同协议 + 同主机名或白名单备用主机名」，只允许换端口；
+          ③ 绝不能出现**另一个物理节点**（hk.hanyuxz.top）或裸 IP ——
+             那会把分片写到别的机器磁盘上，finish 必报「分片不完整」
+             （2026-09-11 Railway 事故的根因）。
+    """
     with open(APP_JS, encoding="utf-8") as fh:
         src = fh.read()
-    m = re.search(r"const UC_UPLOAD_ENDPOINTS = \[([^\]]*)\]", src)
-    assert m, "web/app.js 里找不到 UC_UPLOAD_ENDPOINTS"
+
+    # ① 池子初值仍是单一同源
+    m = re.search(r"let UC_UPLOAD_ENDPOINTS = \[([^\]]*)\]", src)
+    assert m, "web/app.js 里找不到 let UC_UPLOAD_ENDPOINTS（多端口改造后应为 let）"
     entries = [e.strip() for e in m.group(1).split(",") if e.strip()]
     assert entries, "UC_UPLOAD_ENDPOINTS 为空，分片没有可用的上传端点"
     for e in entries:
         assert e == "location.origin", (
-            "上传端点出现了非同源项 %r。\n"
-            "非同源端点只有在「与主站同一后端、同一份分片存储」时才成立（CF 域 + Railway 域"
-            "当年就是这种关系）；一旦它不可用，选路在样本不足时按奇偶分流会让**每个奇数"
-            "下标分片**都发过去，用户看到的就是「分片 2/8 上传失败」。新增端点前先确认"
-            "分片存储是同一份，否则宁可不加。" % e)
-    print("✅ 前端上传端点仅同源，无死主机的奇偶分流")
+            "端点池初值出现了非同源项 %r。初值必须只有同源，其余端点由探测后回填。" % e)
+
+    # ② 取候选生成函数体，逐个校验它产出的端点形态
+    fn = re.search(r"const ucEndpointCandidates = \(\) => \{(.*?)\n  \};", src, re.S)
+    assert fn, "web/app.js 里找不到 ucEndpointCandidates()（多端口提速的核心）"
+    body = fn.group(1)
+    # 注释里恰恰写着「🔴 不要放宽到 hk.hanyuxz.top」这类禁令，若不剥掉行注释，
+    # 禁令本身会被当成违规命中。先剥注释，再校验真实代码。
+    code = "\n".join(re.sub(r"//.*$", "", ln) for ln in body.split("\n"))
+
+    # 主机白名单：只能是同主机名或显式声明的备用主机名
+    allowed = set(re.findall(r"const (?:host|secondHost) = '([^']+)'", code))
+    allowed.add(re.findall(r"location\.hostname !== '([^']+)'", code)[0])
+    assert allowed, "解析不出主机白名单，无法校验候选端点"
+
+    # 🔴 跨物理节点禁令
+    for banned in ("hk.hanyuxz.top", "hk_", "47.82.101.79"):
+        assert banned not in code, (
+            "候选端点里出现了 %r —— 那是**另一个物理节点**，分片会落到另一台机器的"
+            "磁盘上，finish 必报「分片不完整」（2026-09-11 Railway 事故同款）。" % banned)
+
+    # 候选端口必须来自写死的 CF 边缘 HTTPS 端口表，不得出现任意端口
+    ports = re.search(r"for \(const p of \[([0-9,\s]+)\]\)", code)
+    assert ports, "候选端点没有走写死的端口表（不得随意拼端口）"
+    port_list = {int(x) for x in ports.group(1).replace(" ", "").split(",") if x}
+    assert port_list and port_list <= {443, 2053, 2083, 2087, 2096, 8443}, (
+        "候选端口 %s 不在 CF 边缘已验证的 HTTPS 端口集合内" % sorted(port_list))
+
+    # 协议必须是 https（明文端口会让分片裸奔，且 CF 不转发）
+    assert "location.protocol !== 'https:'" in code, (
+        "候选端点没有 https 前置判断 —— 非 https 环境也去试非 443 端口会必然失败")
+
+    print("✅ 前端上传端点仅同后端（初值单同源 + 候选同主机换端口，无跨节点端点）")
 
 
 if __name__ == "__main__":

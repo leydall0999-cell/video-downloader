@@ -120,6 +120,23 @@ def _cloud_login_or_register(request: Request, response: Response, ident: str,
     return res, fp, name
 
 
+def _role_for_user(uid: str, is_admin: bool) -> str:
+    """后台角色标签：super（唯一超管）/ admin（管理员·只读）/ ""（普通用户）。
+
+    2026-10-22 权限拆两级（与桌面端 app-dev 同口径）。
+    🔴 网页版特有两难：is_admin 的真源可能是**云端**（登录时同步过来），而超管
+    判定 `auth_store.super_admin_identifier()` 只看本机。两者不一致时按最小权限：
+    有管理身份但本机判不出 super ⇒ 一律标 admin（只读），绝不因判定缺口放成超管。
+    """
+    if not is_admin:
+        return ""
+    try:
+        from auth_store import user_role
+        return user_role(uid) or "admin"
+    except Exception:  # noqa: BLE001 — 判定异常不该让登录 500
+        return "admin"
+
+
 def _finish_login(request: Request, uid: str, ident: str, cloud: Optional[dict],
                   fp: str, name: str, *, registered: bool = False) -> dict[str, Any]:
     """登录收尾：签发本机 bearer + 落地云端登录态与权益快照。"""
@@ -158,6 +175,7 @@ def _finish_login(request: Request, uid: str, ident: str, cloud: Optional[dict],
     is_admin = cloud_is_admin if cloud_is_admin is not None else bool(user_is_admin(uid))
     return {"ok": True, "token": token, "user_id": uid, "identifier": ident,
             "is_admin": bool(is_admin),
+            "role": _role_for_user(uid, bool(is_admin)),
             "registered": bool(registered),
             "cloud_synced": synced,
             "cloud_notice": notice}
@@ -262,7 +280,8 @@ def auth_me(request: Request) -> dict[str, Any]:
     from auth_store import user_identifier, user_is_admin
     out: dict[str, Any] = {"ok": True, "user_id": uid,
                            "identifier": user_identifier(uid) or uid,
-                           "is_admin": bool(user_is_admin(uid))}
+                           "is_admin": bool(user_is_admin(uid)),
+                           "role": _role_for_user(uid, bool(user_is_admin(uid)))}
     # 云端账号快照（设备/被挤/封禁状态）——前端据此提示「已在其他设备登录」
     try:
         import user_membership
@@ -334,6 +353,7 @@ def account_profile(request: Request, usage_period: str = "today") -> dict[str, 
         "user_id": uid,
         "identifier": ident,
         "is_admin": bool(user_is_admin(uid)),
+        "role": _role_for_user(uid, bool(user_is_admin(uid))),
         "created_at": created_at,
         "avatar_url": user_avatar_url(uid),
         "membership": st,

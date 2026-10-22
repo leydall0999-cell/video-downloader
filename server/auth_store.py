@@ -594,6 +594,79 @@ def user_is_admin(user_id: str) -> bool:
     return bool(user.get("is_admin", False)) if user else False
 
 
+def _admin_identifiers() -> list[str]:
+    """显式超管名单：环境变量 VDL_ADMIN_IDENTIFIER + admin.json 的 admin_identifiers。
+
+    2026-10-22 从 ensure_superusers() 里抽出来复用：判断「谁是那唯一的超管」
+    与本函数必须读同一份名单，否则会出现「按名单提了权、却判定成只读管理员」。
+    """
+    idents: list[str] = []
+    import json as _json
+    for x in (os.environ.get("VDL_ADMIN_IDENTIFIER", "") or "").split(","):
+        x = x.strip().lower()
+        if x:
+            idents.append(x)
+    try:
+        p = _base_dir() / "admin.json"
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                cfg = _json.load(f)
+            if isinstance(cfg, dict):
+                for x in (cfg.get("admin_identifiers") or []):
+                    x = str(x).strip().lower()
+                    if x:
+                        idents.append(x)
+    except Exception:
+        pass
+    return idents
+
+
+def super_admin_identifier() -> str:
+    """**唯一**超级管理员的账号标识（小写）。空串＝当前没有任何超管（仅全新空库才可能）。
+
+    🔴 产品硬约束（2026-10-22）：「超管永远只有一个，管理员可以有多个」。
+    在此之前的实现只有一个 is_admin 布尔 ⇒ 所有被提权的人都顶着「超管」标签、
+    都能改数据。现在拆成两级，判定规则就落在这一个函数里：
+
+      优先级 1：显式名单（VDL_ADMIN_IDENTIFIER / admin.json 的 admin_identifiers）
+                的**第一项**。名单即便配了多个也只认第一个 —— 其余账号
+                自动降级为「管理员」（只读），这是"唯一性"的硬保证。
+      优先级 2：名单为空时兜底取 is_admin 账号里**注册最早**的那个。与
+                ensure_superusers 的 bootstrap 语义一致（最早注册＝机主本人），
+                也保证桌面端没配名单时后台不会变成"人人只读、谁都改不了"。
+
+    ⚠️ 不要改成「名单里所有账号都是超管」——那就退回多超管了。
+    """
+    idents = _admin_identifiers()
+    if idents:
+        return idents[0]
+    data = _load_users()
+    admins = [u for u in data["users"] if u.get("is_admin")]
+    if not admins:
+        return ""
+    earliest = min(admins, key=lambda u: u.get("created_at", 0))
+    return str(earliest.get("identifier") or "").strip().lower()
+
+
+def is_super_identifier(identifier: str) -> bool:
+    """该账号标识是否为那唯一的超级管理员。"""
+    ident = (identifier or "").strip().lower()
+    if not ident:
+        return False
+    return ident == super_admin_identifier()
+
+
+def user_role(user_id: str) -> str:
+    """角色三分：super（唯一超管）/ admin（管理员·只读后台）/ ""（普通用户）。
+
+    前端据此渲染「超管 / 管理员」标签并决定写操作按钮是否可用。
+    """
+    if not user_is_admin(user_id):
+        return ""
+    ident = user_identifier(user_id) or ""
+    return "super" if is_super_identifier(ident) else "admin"
+
+
 def set_user_admin(user_id: str, flag: bool) -> dict[str, Any]:
     """后台面板提权/降权。成功返回 ok=True 与当前 is_admin。"""
     with users_mutation():
@@ -631,25 +704,9 @@ def ensure_superusers(allow_bootstrap: bool = False) -> None:
         if has_admin and (now - _SUPERUSER_CACHE["ts"] < 60):
             return
 
-        idents: list[str] = []
-        env_ids = os.environ.get("VDL_ADMIN_IDENTIFIER", "")
-        if env_ids:
-            for x in env_ids.split(","):
-                x = x.strip().lower()
-                if x:
-                    idents.append(x)
-        try:
-            p = _base_dir() / "admin.json"
-            if p.exists():
-                with open(p, "r", encoding="utf-8") as f:
-                    cfg = _json.load(f)
-                if isinstance(cfg, dict):
-                    for x in (cfg.get("admin_identifiers") or []):
-                        x = str(x).strip().lower()
-                        if x:
-                            idents.append(x)
-        except Exception:
-            pass
+        # 2026-10-22：名单读取抽到 _admin_identifiers()，本函数与 super_admin_identifier()
+        # 共用同一份实现，避免「这里配了多个、那里只认第一个」的口径漂移。
+        idents: list[str] = _admin_identifiers()
 
         explicit = bool(idents)
         changed = False

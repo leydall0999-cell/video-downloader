@@ -127,17 +127,26 @@ async function runScenario({ uploadMs, finishMs }) {
     setInterval: clock.setInterval, clearInterval: clock.clearInterval,
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
     localStorage: { getItem: () => null },  // 2026-09-29 app.js 的 finish XHR 会读登录 token
+    // 2026-10-22 多端口提速改造后，音乐上传路径新增了三个**区块外**依赖。
+    // 本测试把 app.js 按注释锚点切片后用 new Function 执行，切片外的符号必须显式注入，
+    // 否则运行时 ReferenceError —— 上传 worker 直接炸掉、Promise 永不落定，
+    // 表现为「首次轮询提前到上传那一刻」这种看不懂的时序失败（本测试 2026-10-22 实测）。
+    UC_CHUNK_RETRIES: 3,
+    ucPickEndpoint: (item, idx) => (item._eps && item._eps[idx % item._eps.length]) || '',
+    ucNoteEpResult: () => {},
     console,
   };
 
   // eslint-disable-next-line no-new-func
   new Function('el', 'UC_POLL_INTERVAL', 'deviceId', 'window', 'FormData', 'fetch',
     'XMLHttpRequest', 'ucUploadChunk', 'request', 'setInterval', 'clearInterval',
-    'setTimeout', 'clearTimeout', 'localStorage', 'console', `"use strict";\n${musBlock}`)(
+    'setTimeout', 'clearTimeout', 'localStorage', 'UC_CHUNK_RETRIES',
+    'ucPickEndpoint', 'ucNoteEpResult', 'console', `"use strict";\n${musBlock}`)(
     sandbox.el, sandbox.UC_POLL_INTERVAL, sandbox.deviceId, sandbox.window, sandbox.FormData,
     sandbox.fetch, sandbox.XMLHttpRequest, sandbox.ucUploadChunk, sandbox.request,
     sandbox.setInterval, sandbox.clearInterval, sandbox.setTimeout, sandbox.clearTimeout,
-    sandbox.localStorage, sandbox.console);
+    sandbox.localStorage, sandbox.UC_CHUNK_RETRIES, sandbox.ucPickEndpoint,
+    sandbox.ucNoteEpResult, sandbox.console);
 
   // ① 加一个 5.8MB 的网页文件（走真实 change 处理器 → musAddFiles）
   elProxy.musFileInput.files = [{ name: '阿刁-赵雷-16827758.mp3', size: 5.8 * 1024 * 1024,

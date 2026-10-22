@@ -35,6 +35,12 @@
   .policy { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin-bottom:14px; }
   .empty { color:var(--muted); padding:14px 0; }
   .err { color:var(--red); }
+  /* 管理员只读态（2026-10-22 权限拆两级）：超管能改，管理员只能看 */
+  .readonly-bar { background:rgba(255,184,77,.12); border:1px solid var(--amber);
+    border-radius:10px; padding:10px 14px; margin-bottom:14px; color:var(--amber); font-size:13px; display:none; }
+  .readonly-bar b { color:var(--txt); }
+  body.readonly input, body.readonly select { opacity:.55; cursor:not-allowed; }
+  body.readonly button { opacity:.5; cursor:not-allowed; }
   #toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); background:var(--panel2); border:1px solid var(--line); padding:10px 16px; border-radius:10px; display:none; z-index:9; }
 </style>
 </head>
@@ -62,6 +68,10 @@
 
   <section class="panel" id="main" style="display:none">
     <h2><span class="dot"></span>AI 积分单价</h2>
+    <div class="readonly-bar" id="readonlyBar">
+      👀 你以 <b>管理员</b> 身份查看：数据全部可见，但 <b>不能修改</b>。
+      保存改动仅超级管理员可操作（后端对写接口一律返回 403）。
+    </div>
     <div class="policy">
       <div class="note" id="policyTxt"></div>
     </div>
@@ -107,6 +117,29 @@
   let ROWS = [];
   let BASE = {};      // op -> 代码默认积分
   let POLICY0 = {};   // 服务端返回的原始策略快照，用于只提交改动项
+  // 角色（2026-10-22 权限拆两级）：super=唯一超管（能改）/ admin=管理员（只读）/ ""=普通用户。
+  // 🔴 这里只是**视觉闸门**（少一次让人白点的报错）；真正的数据安全在后端 require_super。
+  let IS_SUPER = false;
+
+  // 只读态：管理员进来能看全部数据，但输入框与按钮一律冻结。
+  // <body class="readonly"> 用 CSS 统一降透明度，避免逐个控件置灰漏掉。
+  function applyRole(role) {
+    IS_SUPER = role === 'super';
+    document.body.classList.toggle('readonly', !IS_SUPER);
+    $('readonlyBar').style.display = IS_SUPER ? 'none' : '';
+    $('save').disabled = !IS_SUPER;
+    $('who').textContent = IS_SUPER ? '已登录：超级管理员'
+      : (role === 'admin' ? '已登录：管理员（只读）' : '已登录：无后台权限');
+  }
+
+  // 登录后先问身份再拉数据。/api/auth/me 是最轻的身份接口（不含敏感配置）。
+  async function fetchRole() {
+    const me = await api('/api/auth/me');
+    if (!me || me.ok === false) throw new Error('登录态无效');
+    // 老后端没有 role 字段时按 is_admin 兜底成「管理员」——
+    // 宁可把超管显示成只读，也不要把管理员误显示成超管。
+    return me.role || (me.is_admin ? 'admin' : '');
+  }
 
   function toast(msg, ms) {
     const t = $('toast');
@@ -156,6 +189,7 @@
   }
 
   async function load() {
+    applyRole(await fetchRole());
     const d = await api('/api/admin/ai/credit-costs');
     ROWS = d.costs || [];
     BASE = {};
@@ -180,6 +214,9 @@
   }
 
   async function save() {
+    // 管理员（只读）直接拦在前端第一道：不给「点了才报 403」的挫败感。
+    // 后端 require_super 是最终防线，这里只是提前告知。
+    if (!IS_SUPER) { toast('仅超级管理员可修改（当前为管理员·只读）'); return; }
     // 只提交改动项：不覆盖别人可能刚改的其它单价
     const costs = {};
     document.querySelectorAll('#costBody tr[data-op]').forEach((tr) => {
@@ -214,7 +251,8 @@
     if (!TOKEN) { toast('请先在前台登录超管账号，或手填 token'); return; }
     try {
       await load();
-      $('who').textContent = '已登录超级管理员';
+      // 身份文案由 load() 内的 applyRole() 统一设置（超管/管理员/无权限三种），
+      // 这里不要再来一句「已登录超级管理员」把它盖掉。
     } catch (e) {
       $('who').textContent = '登录失败';
       $('who').className = 'who err';
