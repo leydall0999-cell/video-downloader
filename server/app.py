@@ -2060,6 +2060,7 @@ async def _no_cache_frontend(request: Request, call_next):
             body = body.replace(b"__BUILD_FP__", _static_fp().encode())
             headers = dict(resp.headers)
             headers["content-length"] = str(len(body))
+            headers["cache-control"] = "no-store, max-age=0"   # HTML 必须每次新鲜，否则指纹不刷新
             return Response(content=body, status_code=resp.status_code,
                             headers=headers, media_type=ctype)
         resp.headers["Cache-Control"] = "no-store, max-age=0"
