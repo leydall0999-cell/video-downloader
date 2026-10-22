@@ -1137,7 +1137,7 @@
     <ol class="howto-steps">
       <li>在「<b>图片文件</b>」里选择本地图片。</li>
       <li>在预览图上框出要去的区域，可切换 🆕新选区 / ➕加选 / ➖减选，点「<b>放大编辑</b>」能精修边缘。</li>
-      <li>在侧栏选「<b>修复引擎</b>」（OpenCV 经典快 / AI 无痕修复）与「<b>修复方法</b>」。</li>
+      <li>在侧栏选「<b>修复方法</b>」（TELEA 快 / 边缘自然，NS 纹理更细）与「<b>半径</b>」。</li>
       <li>点「<b>开始去水印</b>」，完成后点「<b>下载结果</b>」取回。</li>
     </ol>
     <p class="howto-note">仅处理你自有或已授权的内容，不应用于去除他人版权标识。效果不满意可点「<b>重新加工</b>」回编辑器调整选区后重跑。</p>
@@ -1183,13 +1183,9 @@
           <div class="dw-card">
             <h3 class="dw-card-title">处理参数</h3>
             <div class="uc-form">
-              <label class="uc-field">
-                <span class="uc-label">修复引擎</span>
-                <select id="dwImgEngine">
-                  <option value="opencv">OpenCV 经典（快 / 轻量）</option>
-                  <option value="ai">🤖 AI 无痕修复（LaMa，像素级）</option>
-                </select>
-              </label>
+              <!-- 2026-10-22：网页版移除 AI 修复引擎（LaMa 需 ~2.6GB 内存，本实例 1.6GB 永不满足，
+                   保留只会让用户选中后必然报错）。app.js 对缺失的 dwImgEngine 有 'opencv' 兜底；
+                   服务端 dewatermark_ai 的内存闸门保留作兜底。桌面端不受影响（本机推理）。 -->
               <label class="uc-field" id="dwImgCvField">
                 <span class="uc-label">修复方法</span>
                 <select id="dwImgMethod">
@@ -1416,7 +1412,7 @@
         <div class="app-intro-grid">
           <div class="app-intro-card" data-cap="dw">
             <div class="app-intro-title-row"><div class="app-intro-ico" aria-hidden="true">🧽</div><h3>图片去水印</h3><span class="app-intro-tag tag-web">网页可用</span></div>
-            <p>框选水印区域，AI 智能消除并重建纹理；支持捏合缩放精细框选。</p>
+            <p>框选水印区域，经典修复算法快速消除水印；支持放大编辑精细框选。</p>
           </div>
           <div class="app-intro-card" data-cap="dwpdf">
             <div class="app-intro-title-row"><div class="app-intro-ico" aria-hidden="true">📄</div><h3>PDF 去水印</h3><span class="app-intro-tag tag-web">网页可用</span></div>
