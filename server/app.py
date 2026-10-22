@@ -788,6 +788,17 @@ def cloud_quota_gate(request, need: int = 1, resource: str = "cloud_commentary")
                       f"明天再来，或开通会员解锁无限使用。")
             raise HTTPException(status_code=402, detail=detail)
         if rem > 0:
+            # 🔴 2026-10-22：每日额度与中心额度**双闸**。个人中心「使用统计」承诺的是
+            # 「每日 N 次」（feature_usage_status 读本地 daily_usage），此前这里只拦
+            # 中心额度 → 统计页数字永远不动（用户反馈「图片去水印为什么不扣次数」）。
+            # 放行前先查本地每日账（管理员可在后台把每日额度改小），用尽同样 402，
+            # 文案与 legacy 路径保持一致。
+            _q = store.quota_state(resource)
+            if not (_q.get("unlimited") or _q.get("unknown") or _q.get("allowed", True)):
+                _res_name = _CLOUD_RESOURCE_NAMES.get(resource, "该功能")
+                raise HTTPException(status_code=402, detail=(
+                    f"「{_res_name}」今日免费额度已用完（每日 {_q['limit']} 次），"
+                    f"明天再来，或开通会员解锁无限使用。"))
             return {"mode": "local", "store": store, "remaining": rem,
                     "resource": resource}
         _res_name = _CLOUD_RESOURCE_NAMES.get(resource, "该功能")
@@ -890,6 +901,23 @@ def _cloud_quota_remaining(store, resource: str = "cloud_commentary"):
         return None
 
 
+def _record_daily(store, resource: str, n: int) -> None:
+    """中心额度扣减成功后，同步记本地每日账（**只能在条件分支内调用**，见统一守卫）。
+
+    个人中心「使用统计」与后台「使用详情」读的都是 daily_usage —— 此前正常路径
+    只扣中心终身额度、不记每日账，统计页对云端功能永远显示没用过
+    （2026-10-22 用户反馈「图片去水印为什么不扣次数」的根因）。
+    记账失败只记日志，绝不影响已创建的任务。
+    """
+    try:
+        store.use_daily(resource, n=n)
+    except Exception as e:  # noqa: BLE001 — 记账失败绝不回滚已创建的任务
+        try:
+            logger.warning("[cloud-quota] 每日记账失败（忽略）: %s", str(e)[:160])
+        except Exception:
+            pass
+
+
 def cloud_quota_count(request, gate: dict, n: int = 1) -> None:
     """任务成功创建后的计数（与下载墙同语义：失败只记日志，不回滚已建任务）。
 
@@ -910,7 +938,8 @@ def cloud_quota_count(request, gate: dict, n: int = 1) -> None:
             store.use_daily(resource, n=n)
             return
         if _is_member_any(store):
-            return                                  # 会员不限，不计数
+            _record_daily(store, resource, n)       # 会员不限次，但每日账要记（统计页显示用）
+            return
         try:
             import license_client
             tok = _cloud_quota_token(store)
@@ -918,7 +947,9 @@ def cloud_quota_count(request, gate: dict, n: int = 1) -> None:
                 store.use_daily(resource, n=n)      # 无云端身份 → 退回每日
                 return
             r = license_client.cloud_quota_remote(tok, lifetime=n, resource=resource)
-            if not isinstance(r, dict) or not r.get("ok"):
+            if isinstance(r, dict) and r.get("ok"):
+                _record_daily(store, resource, n)   # 中心扣成功 ⇒ 同步记每日账（统计页/后台明细）
+            else:
                 store.use_daily(resource, n=n)      # 中心异常 → fail-open
         except Exception:
             store.use_daily(resource, n=n)
