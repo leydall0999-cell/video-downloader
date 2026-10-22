@@ -4967,7 +4967,15 @@ def _video_tracks_at(formats: list[dict], short_h: int) -> list[dict]:
     _tol = _tier_tolerance(short_h)
     tracks = []
     for f in formats:
-        if f.get("vcodec") in (None, "none"):
+        # 🔴 只排除**显式声明**无视频轨的（vcodec == "none"）。
+        #    vcodec 缺失（None / 空）是「未知」，不是「没有视频」—— 自研提取器
+        #    （金牌影院 nmwchxx 等）构造 formats 时根本不填 vcodec，老实现用
+        #    `in (None, "none")` 把这类条目一并跳过 ⇒ 每一档的 _tracks 都是空 ⇒
+        #    build_quality_options 里 `continue` ⇒ **一个分辨率档都列不出来**，
+        #    卡片只剩「仅音频 MP3 / WebM / 仅音频 M4A」（2026-10-22 用户实测
+        #    金牌影院《少帅》第1集，桌面端 + 网页版同时中招）。
+        #    yt-dlp 自身也按这个口径判：None 视为未知仍算视频流，只有 "none" 才算纯音频。
+        if str(f.get("vcodec") or "").strip().lower() == "none":
             continue
         _s = _short_side(f)
         if _s and abs(_s - short_h) <= _tol:
