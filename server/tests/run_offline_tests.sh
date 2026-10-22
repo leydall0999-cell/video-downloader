@@ -94,6 +94,8 @@ cd "$SERVER" || exit 1
 
 PASS=0
 FAIL=0
+# 失败套件名清单（2026-10-22）：只有计数没有名字时，偶发失败无法定位。
+FAILED_LIST=""
 
 run_one() {
   local f="$1"
@@ -102,7 +104,7 @@ run_one() {
   if "$PY" "tests/$f" 2>&1; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 }
 
@@ -125,7 +127,7 @@ run_node() {
   if "$NODE" "tests/$f" 2>&1; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 }
 
@@ -475,7 +477,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_sniff_core.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -487,7 +489,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_background_page_scope.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -500,7 +502,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_pagewatch.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -513,7 +515,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_popup_video_page.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -527,7 +529,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_ext_autoreload.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -542,7 +544,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_popup_quality_state.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -559,7 +561,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_cookie_harvest.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -575,7 +577,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_cookie_zone.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -591,7 +593,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_cookie_autopush.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -608,7 +610,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_page_title_lag.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -626,7 +628,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_sniff_meta.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -655,7 +657,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$SERVER/tests/test_platform_count_label.mjs"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -1126,7 +1128,7 @@ run_root() {
         VDL_DATA_DIR="$d" "$PY" "$REPO/tests/$f" 2>&1; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
   /bin/rm -rf "$d"
 }
@@ -1150,7 +1152,7 @@ run_pytest_root() {
         VDL_DATA_DIR="$d" env -u HTTP_PROXY -u HTTPS_PROXY "$PY" -m pytest "$path" -q 2>&1; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
   /bin/rm -rf "$d"
 }
@@ -1295,6 +1297,9 @@ run_one test_cookie_share_host_map.py
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
+if [ -n "$FAILED_LIST" ]; then
+  echo "  失败套件：$FAILED_LIST"
+fi
 echo "========================================="
 if [ "$FAIL" -gt 0 ]; then
   echo "❌ 存在失败用例，构建不应发布"
