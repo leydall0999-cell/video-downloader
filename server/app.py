@@ -2019,21 +2019,53 @@ def _cross_site_rejected(request) -> bool:
     return not (_EXT_ORIGIN_RE.match(origin) or _LOCAL_ORIGIN_RE.match(origin))
 
 
-# 前端脚本未做版本化（CSS/JS 文件名固定），需平衡两类缓存需求：
-# - 网页版：styles.css 100KB，强制 no-store 会让每次刷新都重下 → 渲染阻塞窗口内用户
-#   看到 FOUC（短暂文字版）；改短缓存 + ETag 协商可彻底消除。
-# - 桌面 App（pywebview/WKWebView）：HTML 必须 no-store，否则旧 HTML 会引用旧 JS/CSS，
-#   导致修复不生效（这是原中间件的目的）；WKWebView 5 分钟内重启可能拉到旧 JS/CSS 可接受。
-# 综合：HTML 强制 no-store；CSS/JS 改 public, max-age=300, must-revalidate（保留服务器
-# ETag，浏览器过期后自动 304 协商，仍能拉到新版本）。
+# 前端缓存策略（2026-10-22 重写，修「网页版首屏白屏数秒」）：
+# 根因链：ECS 上 index.html 的 `__BUILD_FP__` 占位符从未被替换 → 浏览器 isBuild=false
+# → app.js/styles.css 带 `?v=dev+时间戳` ⇒ URL 每次都不同 → 浏览器与 CF 边缘永远
+# 无法缓存（cf-cache-status: BYPASS）→ 每次访问都从 3Mbps 出口的源站全量拉
+# （app.js br 后仍 161KB，实测 TTFB 6.5s）→ 长时间白屏。
+# 修复：① 服务端出 HTML 时注入真实指纹（app.js/styles.css 的 mtime+size，
+#   scp 热更后自动变化，无需重启）；② HTML 仍 no-store（指纹必须每次新鲜）；
+#   ③ JS/CSS 改 public, max-age=30 天, immutable —— URL 指纹变化即缓存击穿，
+#   2026-09-29「CF 边缘 2h 旧文件」事故的前提（URL 不变）已不复存在。
+def _static_fp() -> str:
+    """前端静态资源指纹：mtime+size 组合，scp 覆盖文件后必然改变。
+
+    ⚠️ WEB_DIR 在测试/部分环境可能是 str ⇒ 必须 Path() 包一层；
+    任何异常都回落 "dev"（占位符不替换 → 前端走 Date.now() URL，
+    只是没缓存收益，绝不能让 HTML 500）。
+    """
+    try:
+        base = Path(WEB_DIR)
+        parts = []
+        for name in ("app.js", "styles.css"):
+            st = (base / name).stat()
+            parts.append(f"{int(st.st_mtime):x}{st.st_size:x}")
+        return "-".join(parts) or "dev"
+    except Exception:  # noqa: BLE001 — 指纹失败绝不影响页面返回
+        return "dev"
+
+
 @app.middleware("http")
 async def _no_cache_frontend(request: Request, call_next):
     resp = await call_next(request)
     path = request.url.path
     if path == "/" or path.endswith((".html", ".htm")):
+        # HTML 注入真实指纹（替换 index.html 里的 __BUILD_FP__ 占位符）
+        ctype = resp.headers.get("content-type", "")
+        if "text/html" in ctype and not resp.headers.get("content-encoding"):
+            body = b""
+            async for chunk in resp.body_iterator:
+                body += chunk
+            body = body.replace(b"__BUILD_FP__", _static_fp().encode())
+            headers = dict(resp.headers)
+            headers["content-length"] = str(len(body))
+            return Response(content=body, status_code=resp.status_code,
+                            headers=headers, media_type=ctype)
         resp.headers["Cache-Control"] = "no-store, max-age=0"
     elif path.endswith((".js", ".css")):
-        resp.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
+        # URL 指纹化（index.html 注入的 ?v=）⇒ 可安全长缓存；CF 边缘也会 HIT
+        resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
     return resp
 logger.info("CORS 已开启，允许来源：%s", ", ".join(_cors_origins))
 
@@ -4200,18 +4232,10 @@ async def index() -> HTMLResponse:
         return HTMLResponse(cache["html"])
 
 
-# 静态资源禁缓存：HTML 是动态的（no-store 由页面自身控制），但 js/css 曾被
-# Cloudflare 边缘按扩展名默认缓存，部署后用户最长 2h 拿旧文件（2026-09-29 踩坑）。
-# 统一 no-store：前端引用自带 ?v= 版本戳，浏览器缓存收益本来就为零。
-@app.middleware("http")
-async def _static_no_store(request, call_next):
-    response = await call_next(request)
-    p = request.url.path
-    if not p.startswith("/api/") and (
-        p.endswith(".js") or p.endswith(".css") or p.endswith(".html") or p == "/"
-    ):
-        response.headers["Cache-Control"] = "no-store"
-    return response
-
+# 2026-10-22：原 `_static_no_store` 中间件（对 js/css 一律 no-store）已删除——
+# 它注册晚于 `_no_cache_frontend`，外层覆盖了后者的 5 分钟缓存策略，且与
+# 「?v= 指纹」机制叠加后变成「URL 每次都不同 + 禁止缓存」双重浪费，是首屏
+# 白屏数秒的根因之一。现策略统一在 `_no_cache_frontend`：HTML no-store +
+# 注入指纹；JS/CSS 依赖 URL 指纹安全长缓存（immutable）。
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
