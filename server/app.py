@@ -931,6 +931,13 @@ def cloud_quota_count(request, gate: dict, n: int = 1) -> None:
     try:
         if gate.get("mode") == "relay":
             _cloud_quota_relay(request, {"resource": resource, "n": n})
+            # 🔴 2026-10-22：relay（hk 回派 cn）也记本地每日账，否则 HK 恢复后
+            # 会复发「云功能不扣次数」（与 cn 直连路径 2026-10-22 修复同族）。
+            # hk 本机 store 非账号权威 ⇒ 只做 best-effort 展示记账，失败忽略。
+            try:
+                _record_daily(current_member_store(request), resource, n)
+            except Exception:  # noqa: BLE001 — 记账失败绝不回滚已创建的任务
+                pass
             return
         store = gate.get("store") or current_member_store(request)
         if gate.get("legacy_daily"):
