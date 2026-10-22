@@ -8992,7 +8992,11 @@
     }
   };
   const sqrCopyUrl = () => shareCopy(el.sqrUrl.value, el.sqrCopyBtn, '复制链接');
-  const sqrOpen = () => { const u = el.sqrUrl.value; if (u) window.open(u, '_blank'); };
+  const sqrOpen = () => {
+    const u = el.sqrUrl.value; if (!u) return;
+    const w = window.open(u, '_blank');
+    if (!w) { shareSay('浏览器拦截了新标签页，已改为本页直接跳转…'); window.location.href = u; }
+  };
   const sqrSaveQr = () => {
     const src = el.sqrQrImg.src || '';
     if (!src) return;
@@ -9254,7 +9258,8 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };
   const pgToLink = async () => {
-    if (!_pgBlob) { pgSay('请先「生成本机网页文件」'); return; }
+    if (!_pgFiles.length) { pgSay('请先添加文件'); return; }
+    if (!_pgBlob) { await pgBuild(); if (!_pgBlob) return; }  // 没先点「生成本机网页文件」就自动合成，别让按钮像没反应
     const tok = await shareEnsureToken(pgSay, 'pagegen');
     if (!tok) return;
     const days = parseInt(el.pgExpire && el.pgExpire.value, 10)
@@ -9277,7 +9282,11 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
     }
   };
   const pgCopyUrl = () => shareCopy(el.pgUrl.value, el.pgCopyBtn, '复制链接');
-  const pgOpen = () => { const u = el.pgUrl.value; if (u) window.open(u, '_blank'); };
+  const pgOpen = () => {
+    const u = el.pgUrl.value; if (!u) return;
+    const w = window.open(u, '_blank');
+    if (!w) { pgSay('浏览器拦截了新标签页，已改为本页直接跳转…'); window.location.href = u; }
+  };
 
   if (el.sqrPickBtn) el.sqrPickBtn.addEventListener('click', sqrPick);
   if (el.sqrFileInput) el.sqrFileInput.addEventListener('change', sqrOnFile);
