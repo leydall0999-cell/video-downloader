@@ -53,13 +53,13 @@ def _repo_version() -> str:
 
 
 def test_changelog_structure():
-    """每条：版本号有值、条目非空、无空白项、单条不超长。"""
+    """每条：版本号有值、条目允许留白（空列表）、条目内无空白项、单条不超长。"""
     assert CHANGELOG, "内置更新日志不能为空"
     for row in CHANGELOG:
         ver = str(row.get("version") or "").strip()
         assert ver, "存在没有版本号的条目"
+        # 条目允许为空：更新说明留白时该版本条目就是空列表（内容由用户填写）
         items = row.get("items") or []
-        assert items, f"v{ver} 没有任何更新条目"
         for it in items:
             text = str(it).strip()
             assert text, f"v{ver} 存在空白条目"
@@ -89,7 +89,7 @@ def test_current_version_has_entry():
         "新版本请在 server/changelog.py 顶部补一条（version 与 VERSION 一致）"
     )
     assert hit[0]["version"] == cur
-    assert hit[0]["items"], f"v{cur} 的条目为空"
+    # 条目允许留白（空列表），此处只校验「版本命中」不校验内容
     print(f"✅ 当前版本 v{cur} 在内置日志中命中（{len(hit[0]['items'])} 条）")
 
 

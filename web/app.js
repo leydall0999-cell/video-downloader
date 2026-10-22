@@ -20186,7 +20186,7 @@ el.dwVidPlayer.hidden = true;
   /** 更新横幅里的一行摘要（取前 3 条，超出标「等 N 项」）。 */
   function _changelogSummary(latest) {
     const items = _changelogItems(latest);
-    if (!items.length) return '性能优化与问题修复';
+    if (!items.length) return '';
     const head = items.slice(0, 3).join('；');
     return items.length > 3 ? head + ' 等 ' + items.length + ' 项' : head;
   }
