@@ -152,7 +152,7 @@ def auth_register(request: Request, payload: dict[str, Any] = Body(...)) -> dict
         return {"ok": False, "error": "账号需为有效邮箱（支持 QQ/Google 邮箱）或手机号"}
     if len(pw) < 6:
         return {"ok": False, "error": "密码至少 6 位"}
-    from auth_store import create_user, issue_token, ensure_superusers, user_is_admin
+    from auth_store import create_user, issue_token, ensure_superusers, user_is_admin, user_role
     uid = create_user(ident, pw)
     if not uid:
         return {"ok": False, "error": "该账号已注册，请直接登录"}
@@ -162,7 +162,7 @@ def auth_register(request: Request, payload: dict[str, Any] = Body(...)) -> dict
     ensure_superusers(allow_bootstrap=_is_loopback(request))
     record_event("register", {"identifier": ident})
     return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident,
-            "is_admin": bool(user_is_admin(uid))}
+            "is_admin": bool(user_is_admin(uid)), "role": user_role(uid)}
 
 
 @router.post("/api/auth/login")
@@ -172,7 +172,7 @@ def auth_login(request: Request, payload: dict[str, Any] = Body(...)) -> dict[st
     if not ident or not pw:
         return {"ok": False, "error": "请输入账号和密码"}
     from auth_store import (authenticate, issue_token, ensure_superusers,
-                            user_is_admin, user_exists,
+                            user_is_admin, user_role, user_exists,
                             login_locked, note_login_failure, clear_login_failures)
     # 安全审计 2026-10-11（R-05）：登录失败限流，防在线暴力破解 / 撞库。
     _wait = login_locked(ident)
@@ -200,7 +200,7 @@ def auth_login(request: Request, payload: dict[str, Any] = Body(...)) -> dict[st
     ensure_superusers(allow_bootstrap=_is_loopback(request))
     record_event("login", {"identifier": ident})
     return {"ok": True, "token": issue_token(uid), "user_id": uid, "identifier": ident,
-            "is_admin": bool(user_is_admin(uid))}
+            "is_admin": bool(user_is_admin(uid)), "role": user_role(uid)}
 
 
 @router.get("/api/auth/me")
@@ -208,9 +208,9 @@ def auth_me(request: Request) -> dict[str, Any]:
     uid = _bearer(request)
     if not uid:
         return {"ok": False, "error": "未登录", "code": "NO_AUTH"}
-    from auth_store import user_identifier, user_is_admin
+    from auth_store import user_identifier, user_is_admin, user_role
     return {"ok": True, "user_id": uid, "identifier": user_identifier(uid) or uid,
-            "is_admin": bool(user_is_admin(uid))}
+            "is_admin": bool(user_is_admin(uid)), "role": user_role(uid)}
 
 
 @router.get("/api/account/profile")
@@ -225,7 +225,7 @@ def account_profile(request: Request, usage_period: str = "today") -> dict[str, 
     if usage_period not in ("today", "3d", "7d", "month"):
         usage_period = "today"
     import user_membership
-    from auth_store import user_identifier, user_is_admin, _load_users
+    from auth_store import user_identifier, user_is_admin, user_role, _load_users
     ident = user_identifier(uid) or uid
     store = user_membership.get_user_store(uid)
     st = store.status()
@@ -268,7 +268,7 @@ def account_profile(request: Request, usage_period: str = "today") -> dict[str, 
         "ok": True,
         "user_id": uid,
         "identifier": ident,
-        "is_admin": bool(user_is_admin(uid)),
+        "is_admin": bool(user_is_admin(uid)), "role": user_role(uid),
         "created_at": created_at,
         "avatar_url": user_avatar_url(uid),
         "membership": st,

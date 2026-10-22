@@ -159,6 +159,28 @@ def require_admin(request: Request) -> None:
         raise HTTPException(status_code=401, detail="未授权：需要超级用户权限")
 
 
+def require_super(request: Request) -> None:
+    """写操作闸门：只有**唯一超管**放行（2026-10-22 权限拆两级）。
+
+    分工：
+      require_admin —— 能进后台、能看（用户列表 / 会员 / 统计 / 配置只读）
+      require_super —— 能改（设/撤管理员、封号、发权益、改价、改配置、重置密码、删除）
+
+    管理员拿合法 token 调写接口一律 **403**（不是 401）：身份没问题，是权限不够。
+    前端据此提示「仅超级管理员可操作」，而不是把已登录的人踢回登录页。
+    """
+    from fastapi import HTTPException
+    uid = get_current_user_id(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="未授权：请先登录")
+    if not user_is_admin(uid):
+        raise HTTPException(status_code=401, detail="未授权：需要管理员权限")
+    from auth_store import user_role
+    if user_role(uid) != "super":
+        raise HTTPException(status_code=403,
+                            detail="仅超级管理员可执行此操作（管理员为只读）")
+
+
 # 凭据来源的中文说法（面板展示用；2026-10-05 探测式改造引入）。
 # env=环境变量下发 / managed=管理员受管配置 / user=用户自己填的（我们已不再要求）
 _SOURCE_CN = {"env": "环境变量", "managed": "管理员下发", "user": "本机文件"}
@@ -408,11 +430,19 @@ def admin_list_users(request: Request = None) -> dict[str, Any]:
 
 @router.post("/api/admin/users/{user_id}/set-admin")
 def admin_set_admin(user_id: str, payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     flag = bool(payload.get("is_admin", False))
+    target = _resolve_identifier(user_id)
+    # 🔴 唯一超管不可被降级（2026-10-22 权限拆两级）：超管身份由授权名单 /
+    #    「最早注册」推导，**不由这个接口决定**。允许在这里取消会直接把后台锁死
+    #    （全库无超管 ⇒ 所有写操作 403，且没有入口能恢复）。
+    from auth_store import is_super_identifier
+    if not flag and is_super_identifier(target):
+        return {"ok": False,
+                "error": "超级管理员不可被取消（超管唯一，身份由授权名单决定）"}
     # 自己不能被降权（云端行 user_id 是邮箱，前端 self 判断已由后端 self 字段兜住，
     # 这里再做一次硬拦：误点「取消管理员」会把唯一超管锁在门外）。
-    if not flag and _resolve_identifier(user_id) == _resolve_identifier(get_current_user_id(request)):
+    if not flag and target == _resolve_identifier(get_current_user_id(request)):
         return {"ok": False, "error": "不能取消当前登录账号的管理员权限"}
     return _admin_mutate(
         user_id,
@@ -422,7 +452,7 @@ def admin_set_admin(user_id: str, payload: dict[str, Any] = Body(...), request: 
 
 @router.post("/api/admin/users/{user_id}/disable")
 def admin_disable_user(user_id: str, request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     if _resolve_identifier(user_id) == _resolve_identifier(get_current_user_id(request)):
         return {"ok": False, "error": "不能禁用当前登录的账号"}
     return _admin_mutate(
@@ -433,7 +463,7 @@ def admin_disable_user(user_id: str, request: Request = None) -> dict[str, Any]:
 
 @router.post("/api/admin/users/{user_id}/enable")
 def admin_enable_user(user_id: str, request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     return _admin_mutate(
         user_id,
         lambda uid: set_user_disabled(uid, False),
@@ -442,7 +472,7 @@ def admin_enable_user(user_id: str, request: Request = None) -> dict[str, Any]:
 
 @router.post("/api/admin/users/{user_id}/reset-password")
 def admin_reset_password(user_id: str, payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     new_pw = str(payload.get("new_password") or "")
     if not new_pw or len(new_pw) < 6:
         return {"ok": False, "error": "新密码至少 6 位"}
@@ -455,7 +485,7 @@ def admin_reset_password(user_id: str, payload: dict[str, Any] = Body(...), requ
 @router.post("/api/admin/users/{user_id}/delete")
 def admin_delete_user(user_id: str, request: Request = None) -> dict[str, Any]:
     """删除账号（本机软删除 + 云端销号）：不可删自己；超管不可删。"""
-    require_admin(request)
+    require_super(request)
     me = _resolve_identifier(get_current_user_id(request))
     ident = _resolve_identifier(user_id)
     if user_id == get_current_user_id(request) or (ident and ident == me):
@@ -507,7 +537,7 @@ def _cloud_credit_ops(ident: str, tok: str, delta: int, pool: str) -> list:
 
 @router.post("/api/admin/memberships/grant")
 def admin_grant(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     user_id = str(payload.get("user_id") or "")
     code = str(payload.get("code") or "").strip()
     if not user_id or not code:
@@ -523,7 +553,7 @@ def admin_grant(payload: dict[str, Any] = Body(...), request: Request = None) ->
 
 @router.post("/api/admin/memberships/credits")
 def admin_credits(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     user_id = str(payload.get("user_id") or "")
     try:
         delta = int(payload.get("delta"))
@@ -589,7 +619,7 @@ def admin_stats_install(request: Request = None) -> dict[str, Any]:
 
 @router.post("/api/admin/stats/reset")
 def admin_stats_reset(request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     return reset_stats()
 
 
@@ -613,7 +643,7 @@ def admin_resolve_demand(days: int = 30, request: Request = None) -> dict[str, A
 
 @router.post("/api/admin/config/smtp")
 def admin_config_smtp(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     accounts = payload.get("accounts")
     if not isinstance(accounts, list):
         return {"ok": False, "error": "accounts 必须为数组"}
@@ -622,7 +652,7 @@ def admin_config_smtp(payload: dict[str, Any] = Body(...), request: Request = No
 
 @router.post("/api/admin/config/plans")
 def admin_config_plans(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     out = save_plan_overrides(payload or {})
     # 🔴 2026-10-06 终身免费次数下发中心：放行判定在云端，本机 plans.json 只是缓存。
     #   保存 free_quota（含 cloud_lifetime）后立刻下发，两端口径一致。
@@ -649,7 +679,7 @@ def admin_member_notice_get(request: Request = None) -> dict[str, Any]:
 @router.post("/api/admin/member-notice")
 def admin_member_notice_set(payload: dict[str, Any] = Body(...),
                             request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     enabled = bool(payload.get("enabled", True))
     text = str(payload.get("text") or "").strip()
     if len(text) > 500:
@@ -754,7 +784,7 @@ def admin_ai_set_credit_costs(
     `free_trial` 是免费用户「首次体验」策略（2026-10-05 晚定档：账号首次使用免费一次）。
     同样按字段合并，**只传要改的键**（比如只切 `enabled`）即可，其余保持原值。
     """
-    require_admin(request)
+    require_super(request)
     from fastapi import HTTPException
     from membership import (AI_CREDIT_COSTS, credit_cost_table, free_trial_policy,
                             load_plan_overrides, save_plan_overrides)
@@ -1154,7 +1184,7 @@ def admin_ai_set_volcengine(
     空字符串的字段**保持原值不变**（便于前端只提交改了的那几项，不会把没填
     的 Key 抹掉）；显式传 `"__clear__"` 才清空。
     """
-    require_admin(request)
+    require_super(request)
     from cloud_matting_config import get_cloud_matting_config, save_managed_config
     cur = get_cloud_matting_config()
 
@@ -1180,7 +1210,7 @@ def admin_ai_set_dashscope(
     payload: dict[str, Any] = Body(default={}),
 ) -> dict[str, Any]:
     """超级管理员：下发视觉理解（DashScope / 任意 OpenAI 兼容多模态）凭据。"""
-    require_admin(request)
+    require_super(request)
     from vision_config import get_vision_config, save_managed_vision_config
     cur = get_vision_config()
 
@@ -1209,7 +1239,7 @@ def admin_ai_set_deepseek(
     🔴 这里下发的是**网关地址 + 令牌**，不是 DeepSeek 官方 Key —— 真实 Key 只留在
     ECS 网关侧（`upstream.json`），本机永远不接触上游凭据。
     """
-    require_admin(request)
+    require_super(request)
     from gateway_config import get_gateway_config, save_managed_gateway
     cur = get_gateway_config()
 
@@ -1339,11 +1369,17 @@ def _usage_bundle(uid: str, ident: str, disabled: bool, is_admin: bool,
             "at": float(h.get("at") or 0),
         })
 
+    # 2026-10-22 权限拆两级：弹窗标题的标签要跟着「超管 / 管理员」分开展示
+    from auth_store import is_super_identifier as _is_super_ident
+    _role = ""
+    if is_admin:
+        _role = "super" if _is_super_ident(ident) else "admin"
     return {
         "user_id": uid,
         "identifier": ident,
         "disabled": bool(disabled),
         "is_admin": bool(is_admin),
+        "role": _role,
         "created_at": created_at,
         "membership": st,
         "today": {"date": today_row.get("date") or _t.strftime("%Y-%m-%d"),
@@ -1561,7 +1597,7 @@ def _find_plan_table(code: str) -> str:
 def admin_plan_sale(code: str, payload: dict[str, Any] = Body(...),
                     request: Request = None) -> dict[str, Any]:
     """超级管理员：单个档位快速上架 / 下架（不落其它表单改动）。"""
-    require_admin(request)
+    require_super(request)
     from admin_store import save_plan_overrides as _save
     import membership as M
 

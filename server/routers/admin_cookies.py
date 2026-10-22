@@ -57,7 +57,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 
 import atomic_io
 import cookie_pool as cp
-from routers.admin import require_admin
+from routers.admin import require_admin, require_super
 
 router = APIRouter()
 
@@ -805,7 +805,7 @@ def admin_cookies_verify(payload: dict[str, Any] = Body(default={}),
     桌面上必须交给云端跑：解析在云端发生，同一 IP、同一台机器验出来的结论才算数；
     在本机验（家宽 IP）容易得到「有效」而实际解析仍失败。
     """
-    require_admin(request)
+    require_super(request)
     want = _pick_source(request)
     domain = str((payload or {}).get("domain") or "").strip()
 
@@ -828,7 +828,7 @@ def admin_cookies_verify(payload: dict[str, Any] = Body(default={}),
 def admin_cookies_inject(payload: dict[str, Any] = Body(...),
                          request: Request = None) -> dict[str, Any]:
     """粘贴 Cookie → 验真 → 入池。默认注入到**云端池**（网页版立刻生效）。"""
-    require_admin(request)
+    require_super(request)
     want = _pick_source(request)
     domain = str((payload or {}).get("domain") or "").strip()
     header = (payload or {}).get("header")
@@ -853,7 +853,7 @@ def admin_cookies_inject(payload: dict[str, Any] = Body(...),
 def admin_cookies_delete(payload: dict[str, Any] = Body(...),
                          request: Request = None) -> dict[str, Any]:
     """按条目 id 删除。默认删云端池（界面上看到的是它）。"""
-    require_admin(request)
+    require_super(request)
     want = _pick_source(request)
     domain = str((payload or {}).get("domain") or "").strip()
     ids = (payload or {}).get("ids") or []

@@ -51,6 +51,7 @@ def _pool(cookies_by_domain: dict[str, list[dict]]):
             json.dumps({"cookies": items}, ensure_ascii=False), encoding="utf-8")
     with patch.object(cp, "_POOL_DIR", pool), \
          patch.object(ac, "require_admin", lambda request=None: None), \
+         patch.object(ac, "require_super", lambda request=None: None), \
          patch.object(ac, "_cloud_cfg", lambda: ("", "")):
         yield pool, TestClient(server_app.app)
 
@@ -71,7 +72,10 @@ def case_auth_required() -> None:
         raise HTTPException(status_code=401, detail="未授权：需要超级用户权限")
 
     with _pool({}) as (_pool_dir, client):
-        with patch.object(ac, "require_admin", _deny):
+        # 2026-10-22 权限拆两级：读接口走 require_admin、写接口走 require_super。
+        # 两面墙都要立，否则漏挂鉴权的写接口会因为另一道闸门没被替换而漏检。
+        with patch.object(ac, "require_admin", _deny), \
+             patch.object(ac, "require_super", _deny):
             calls = [
                 ("GET", "/api/admin/cookies", None),
                 ("POST", "/api/admin/cookies/verify", {}),

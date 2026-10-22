@@ -5129,6 +5129,29 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-btn-ghost { background: transparent; }
 .admin-btn-danger { background: #fdecec; border-color: transparent; color: #d5304b; font-weight: 500; }
 .admin-btn-danger:hover { background: #fbdcdc; }
+/* ===== 管理员只读视图（2026-10-22 权限拆两级：超管唯一，管理员只能看） =====
+   灰化而不是隐藏：让管理员知道「这里本来有操作，但你没有权限」，
+   比按钮凭空消失更容易理解，也不会让人误以为后台坏了。
+   真正的安全闸门在后端 require_super（写接口一律 403），这里只是视觉层。 */
+.admin-readonly-bar {
+  margin: .55rem 1.2rem .1rem;
+  padding: .55rem .85rem;
+  border-radius: 8px;
+  background: #fff7e6;
+  border: 1px solid #ffe0a3;
+  color: #8a5a00;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+.admin-readonly-bar b { color: #b45309; }
+.admin-readonly-mode .admin-btn-primary,
+.admin-readonly-mode .admin-btn-danger {
+  opacity: .38;
+  pointer-events: none;
+  cursor: not-allowed;
+  filter: grayscale(.35);
+}
+.admin-readonly { color: var(--muted, #8b93a7); font-size: .8rem; }
 /* 设计稿按钮：浅蓝底蓝字实心无边框（禁用/重置密码） */
 .admin-btn-soft { background: #e8f0fe; border-color: transparent; color: #2f6bff; font-weight: 500; }
 .admin-btn-soft:hover { background: #d9e6fd; }

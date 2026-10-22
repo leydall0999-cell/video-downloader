@@ -167,7 +167,8 @@ def test_sale_endpoint_wiring() -> None:
     i = src.find('"/api/admin/plans/{code}/sale"')
     nxt = src.find("\n@router", i + 10)
     seg = src[i:nxt if nxt > 0 else len(src)]
-    check("[端点] 带 require_admin 门禁", "require_admin(request)" in seg)
+    # 2026-10-22 权限拆两级：改套餐上/下架属写操作，只有唯一超管能调（管理员只读）
+    check("[端点] 带 require_super 门禁", "require_super(request)" in seg)
     check("[端点] 走字段级保存（只提交 on_sale，不带整档其它字段）",
           '_save({table: {code: {"on_sale": on_sale}}})' in seg and '"table": table' in seg)
     check("[端点] 下架后同步云端（网页版同步生效）", "push_plans_to_cloud" in seg)

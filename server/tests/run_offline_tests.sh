@@ -683,6 +683,19 @@ run_one test_plan_sales_state.py
 #      路由挂载与 require_admin 门禁。daily_usage 里的 date 字段非数值，必须跳过。
 run_one test_admin_user_usage.py
 
+# 2026-10-22 权限拆两级（超管唯一 / 管理员只读）：
+#   test_admin_roles.py —— 角色判定：名单优先、名单为空兜底最早注册的 is_admin、
+#     名单配多个只认第一个（超管唯一性硬保证）、非 admin 角色为空、未知 uid 不崩。
+#   test_admin_roles_api.py —— 闸门是否真装上：管理员调写接口 403（不是 401）、
+#     超管放行、普通用户 401；并静态扫描 16 个写接口全部 require_super、
+#     11 个只读接口仍 require_admin（管理员要能看），漏一个即后门。
+#   test_admin_roles_e2e.py —— 真起 FastAPI 应用 + 真登录拿 token：
+#     管理员 GET 200 / POST 403（禁用·提权·改 SMTP·重置密码·删 Cookie）、
+#     普通用户 401、超管写权限完好、超管不可被取消。
+run_one test_admin_roles.py
+run_one test_admin_roles_api.py
+run_one test_admin_roles_e2e.py
+
 #  37. test_plan_mkt_matrix.py —— 营销面板「模式×分组」联动（2026-10-03）：
 #      直接解析 web/app.js 的 PLAN_MODES / _MKT_BY_MODE / data-mkt 三处命名做交叉核对，
 #      并模拟 4 模式 × 3 分组显隐矩阵。防止「模式 value 与分组标识不同名」

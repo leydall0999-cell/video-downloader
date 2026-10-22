@@ -18196,6 +18196,10 @@ el.dwVidPlayer.hidden = true;
   let authMode = 'login';
   // 超级用户标记（后台管理面板可见性依据）：登录/me 后由后端 is_admin 写入
   let _vdlIsAdmin = false;
+  // 超级管理员标记（2026-10-22 权限拆两级）：只有**唯一超管**能改数据。
+  // _vdlIsAdmin=能进后台（超管 + 管理员都 true）；_vdlIsSuper=能改（仅超管）。
+  // 管理员进后台是**只读视图**：写操作按钮一律不渲染，后端 require_super 也会 403。
+  let _vdlIsSuper = false;
   // 登录用户的头像 URL（个人资料/用户卡加载后写入，供头部「账号」按钮渲染头像）
   let _vdlAvatarUrl = '';
   function updateAdminTabVisibility() {
@@ -18420,11 +18424,12 @@ el.dwVidPlayer.hidden = true;
     const tok = authToken();
     _renderAuthHeader();
     _updateProfileSidebarLock();
-    if (!tok) { _vdlIsAdmin = false; updateAdminTabVisibility(); return; }
+    if (!tok) { _vdlIsAdmin = false; _vdlIsSuper = false; updateAdminTabVisibility(); return; }
     try {
       const me = await request('/api/auth/me');
       if (!me || !me.ok) { logoutAccount(); return; }
       _vdlIsAdmin = !!me.is_admin;
+      _vdlIsSuper = me.role === 'super';
       updateAdminTabVisibility();
       _updateProfileSidebarLock();
       _chatRefresh();
@@ -18437,6 +18442,7 @@ el.dwVidPlayer.hidden = true;
     try { localStorage.removeItem('vdl_auth_token'); } catch (_) {}
     try { sessionStorage.removeItem('vdl_auth_token'); } catch (_) {}
     _vdlIsAdmin = false;
+    _vdlIsSuper = false;
     _vdlAvatarUrl = '';  // 头像随登出清空，防止下一个账号短暂显示上一位的头像
     updateAdminTabVisibility();
     _renderAuthHeader();
@@ -19402,8 +19408,9 @@ el.dwVidPlayer.hidden = true;
           // 未勾选「记住我」：仅本次会话（App 退出即失效）
           try { sessionStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
         }
-        // 同步超级用户标记（后端在登录/注册响应中返回 is_admin）
+        // 同步超级用户标记（后端在登录/注册响应中返回 is_admin / role）
         _vdlIsAdmin = !!r.is_admin;
+        _vdlIsSuper = r.role === 'super';
         updateAdminTabVisibility();
         _renderAuthHeader();
         _updateProfileSidebarLock();
@@ -22043,6 +22050,30 @@ el.dwVidPlayer.hidden = true;
     // 访客 path/message 等）全部未转义 —— 统一改为真转义（与外层 esc/escHtml 同实现）。
     const esc = escHtml;
 
+    // 管理员只读视图（2026-10-22 权限拆两级）：超管能改，管理员只能看。
+    // 这里只做「视觉闸门」——真正的数据安全在后端 require_super（16 个写接口一律 403）。
+    // 提示条只创建一次，之后按角色切显隐（幂等，避免每次开面板都插一个）。
+    const _syncAdminReadonly = () => {
+      const panel = document.getElementById('adminPanel');
+      if (!panel) return;
+      panel.classList.toggle('admin-readonly-mode', !_vdlIsSuper);
+      let bar = document.getElementById('adminReadonlyBar');
+      if (!_vdlIsSuper) {
+        if (!bar) {
+          bar = document.createElement('div');
+          bar.id = 'adminReadonlyBar';
+          bar.className = 'admin-readonly-bar';
+          bar.innerHTML = '👀 你以 <b>管理员</b> 身份查看后台：可以查看全部数据，'
+            + '<b>但不能修改</b>（设置/取消管理员、封禁、发放权益、改配置等仅超级管理员可操作）。';
+          const tabs = panel.querySelector('.admin-tabs');
+          if (tabs && tabs.parentNode) tabs.parentNode.insertBefore(bar, tabs);
+        }
+        bar.hidden = false;
+      } else if (bar) {
+        bar.hidden = true;
+      }
+    };
+
     const openAdmin = async () => {
       overlay.hidden = false;
       document.body.style.overflow = 'hidden';
@@ -22055,9 +22086,19 @@ el.dwVidPlayer.hidden = true;
         showGate('无权限', '当前账号不是超级用户，无法访问后台管理面板。', false);
         return;
       }
+      // 管理员（非超管）进来是只读视图：提示条 + 写按钮灰化。
+      // 放在 showPanel 之前，避免先闪一下可点的按钮再变灰。
+      _syncAdminReadonly();
       try {
         const me = await request('/api/auth/me');
-        if (me && me.ok) _currentUid = me.user_id;
+        if (me && me.ok) {
+          _currentUid = me.user_id;
+          // 角色可能已在别处变更（超管刚取消了你的管理员 / 或刚提你为超管），
+          // 进面板时用最新值复核一次，避免拿着过期标记继续按旧权限渲染。
+          _vdlIsAdmin = !!me.is_admin;
+          _vdlIsSuper = me.role === 'super';
+          _syncAdminReadonly();
+        }
       } catch (_) { /* 不影响进入 */ }
       showPanel();
       loadAll();
@@ -23288,12 +23329,22 @@ el.dwVidPlayer.hidden = true;
         return identifier.includes(q) || uidStr.includes(q) || created.includes(q) || memStr.includes(q);
       });
       if (userCount) userCount.textContent = (q || fv) ? `匹配 ${list.length} / 共 ${lastUsers.length} 个用户` : `共 ${lastUsers.length} 个用户`;
-      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>超级用户</th><th>操作</th></tr></thead>';
+      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>角色</th><th>操作</th></tr></thead>';
       const rows = list.map((u) => {
         const m = u.membership || {};
         const cred = (m.credits_total != null) ? m.credits_total : '—';
         const disabled = !!u.disabled;
         const isAdmin = !!u.is_admin;
+        // 角色三分（2026-10-22 权限拆两级）：super=唯一超管（能动数据）/ admin=管理员（只读
+        // 后台）/ ''=普通用户。后端 list_users 已按「唯一超管标识」算好 role；
+        // 老后端没有该字段时退回 admin —— 宁可把超管显示成管理员，也不要把管理员显示成超管。
+        const role = u.role || (isAdmin ? 'admin' : '');
+        const isSuper = role === 'super';
+        const roleChip = isSuper
+          ? '<span class="admin-chip is-gold">👑 超管</span>'
+          : (role === 'admin'
+              ? '<span class="admin-chip is-blue">管理员</span>'
+              : '<span class="admin-chip is-gray">普通</span>');
         // 「当前账号」：列表行改为云端总库后 user_id 是邮箱，本机 uid 比不出来
         // ⇒ 后端按账号标识回填 u.self（旧字段兜底保留，兼容未升级的后端）
         const self = u.self === true || u.user_id === _currentUid;
@@ -23308,14 +23359,23 @@ el.dwVidPlayer.hidden = true;
         const stText = disabled ? '<span class="admin-st-bad">已禁用</span>' : '正常';
         const adminOp = isAdmin
           ? (self ? '<span class="admin-tag admin-tag-ok">👑 当前账号</span>'
-                  : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="unadmin">取消管理员</button>`)
-          : `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="admin">设为管理员</button>`;
+                  : (_vdlIsSuper
+                      ? `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="unadmin">取消管理员</button>`
+                      // 管理员视角：没有写权限，不渲染任何改权限按钮（后端也会 403）
+                      : '<span class="admin-readonly">只读</span>'))
+          : (_vdlIsSuper
+              ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="admin">设为管理员</button>`
+              : '');
+        // 写操作按钮仅超管可见：管理员是只读视角，只看「使用详情」
+        // （后端 require_super 也会 403，这里是前端第一道，避免点了才报错）
         const ops = `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="usage">使用详情</button>`
-          + (disabled
+          + (_vdlIsSuper
+          ? (disabled
           ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="enable">启用</button>`
           : `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
             + `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`
-            + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`));
+            + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`))
+          : '');
         return `<tr>
           <td><span class="admin-ava-wrap">${ava}${esc(u.identifier)}</span></td>
           <td><code class="admin-uid" data-copy="${esc(u.user_id || '')}" title="点击复制">${esc(u.user_id || '—')}</code></td>
@@ -23323,7 +23383,7 @@ el.dwVidPlayer.hidden = true;
           <td>${memChip}</td>
           <td>${cred}</td>
           <td>${stText}</td>
-          <td>${isAdmin ? '是' : '否'}</td>
+          <td>${roleChip}</td>
           <td class="admin-ops">${adminOp}${ops}</td>
         </tr>`;
       }).join('');
@@ -23581,7 +23641,11 @@ el.dwVidPlayer.hidden = true;
           `<b>${esc(u.identifier || uid)}</b><code class="admin-uid" data-copy="${esc(uid)}" title="点击复制">${esc(uid)}</code>`
           + (u.created_at ? ` · 注册于 ${esc(_usageFmtDate(u.created_at))}` : '')
           + (u.disabled ? ' · <span class="admin-chip is-red">已禁用</span>' : '')
-          + (u.is_admin ? ' · <span class="admin-chip is-gold">超管</span>' : '');
+          + (u.role === 'super'
+              ? ' · <span class="admin-chip is-gold">👑 超管</span>'
+              : ((u.is_admin || u.role === 'admin')
+                  ? ' · <span class="admin-chip is-blue">管理员</span>'
+                  : ''));
         const m = u.membership || {};
         const us0 = u.usage_summary || {};
         const cu0 = _usageCloudUsage(u);   // 云端（网页版 / 其它设备）当日用量

@@ -39,7 +39,10 @@ def _build_client():
     store = M.MembershipStore()
     UM.get_user_store = lambda uid: store          # 真实 store 注入（不 mock 业务逻辑）
     A._require_user = lambda req: "test_uid"       # 仅绕过登录校验
-    AD.require_admin = lambda req: None            # 仅绕过管理员校验
+    AD.require_admin = lambda req: None            # 仅绕过管理员（只读）校验
+    # 2026-10-22 权限拆两级：/api/admin/config/plans 属写操作，闸门改成 require_super，
+    # 这里也必须一并绕过，否则测试拿到的是 403（那拦的是权限，不是额度保存逻辑）。
+    AD.require_super = lambda req: None
     app = FastAPI()
     app.include_router(A.router)                   # 真实 router（含 /api/account/profile）
     app.include_router(AD.router)                  # 真实 router（含 /api/admin/config/plans）
