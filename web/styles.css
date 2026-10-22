@@ -4103,10 +4103,14 @@ details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
 /* 宽度随窗口自适应：宽屏最多 940（6 档套餐 3 列 ×2 行），窗口变小先收列、再收整包（见 .member-plans）。
    ⚠️ 必须用 #memberModal —— 弹窗元素是 `<dialog id="memberModal" class="modal">`，**没有** member-modal 类，
    历史上写成 `.member-modal.modal` 的那条是死规则（永远不匹配，实际一直吃基类 .modal 的 560px）。 */
-#memberModal.modal { width: min(940px, 100% - 2rem); max-width: 940px; }
-.member-card .modal-head { margin-bottom: .85rem; }
-/* 会员中心主体：单列展示状态/套餐/激活码 */
-.member-body { display: block; }
+#memberModal.modal { width: min(940px, 100% - 2rem); max-width: 940px; display: flex; flex-direction: column; }
+/* 2026-10-22「下拉还是滑上去」：不再让 <dialog> 整体滚（标题先被顶走，观感=顶部滑动）。
+   卡片改纵向 flex：.modal-head 标题 + ✕ 常驻；.member-body 自己滚；标签栏 sticky
+   钉在内容区顶部 ⇒ 下拉时顶部区域纹丝不动，只有套餐列表在滚。 */
+.member-card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.member-card .modal-head { flex: none; margin-bottom: .85rem; }
+/* 会员中心主体：单列展示状态/套餐/激活码；滚动容器改为 .member-body 自身 */
+.member-body { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .member-main { width: 100%; }
 /* 独立登录/注册弹窗（参考图二/图三风格） */
 .auth-card {
