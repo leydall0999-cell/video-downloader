@@ -41,15 +41,32 @@ def _resolve_identifier(user_id: str) -> str:
     """user_id → 账号标识（邮箱/手机号，云端主键）。
 
     云端行的 user_id 就是规范化邮箱；本机行是 u_xxx，需查本机账号表。
+
+    🔴 2026-10-22 修（与桌面端同源，手机号账号提权「点了没反应」的根因）：
+    入参也可能**本身就是账号标识** —— 云端 uid = 手机号（如 "15638319956"），
+    而面板行的 user_id 恰恰就是云端 uid。旧实现只认「含 @ 的字符串」，其余
+    一律当本机 user_id 去查表 —— 本机 user_id 是 u_xxx，查不到 ⇒ 返回空 ⇒
+    `_cloud_sync("")` 直接跳过云端（notice「未找到对应账号标识，本次仅本机生效」）
+    ⇒ 本机改了、**云端没改**，而面板列表读的是云端数据 ⇒ 用户看到「点了完全没反应」。
     """
-    uid = (user_id or "").strip()
-    if "@" in uid:
-        return uid.lower()
+    raw = (user_id or "").strip()
+    if not raw:
+        return ""
+    if "@" in raw:
+        return raw.lower()
     try:
         from auth_store import user_identifier
-        return str(user_identifier(uid) or "").strip().lower()
+        ident = str(user_identifier(raw) or "").strip().lower()
+        if ident:
+            return ident
     except Exception:
+        pass
+    # 本机按 user_id 没查到：入参很可能就是账号标识本身（手机号 / 非邮箱标识）。
+    # 云端 uid 就是规范化标识 ⇒ 原样（小写）返回即可。
+    # u_ 开头的是本机 user_id，查不到说明账号已删 ⇒ 返回空。
+    if raw.startswith("u_"):
         return ""
+    return raw.lower()
 
 
 def _cloud_sync(ident: str, op) -> str:
@@ -165,7 +182,7 @@ def require_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="拒绝来自外部站点的跨源请求")
     uid = get_current_user_id(request)
     if not uid or not user_is_admin(uid):
-        raise HTTPException(status_code=401, detail="未授权：需要超级用户权限")
+        raise HTTPException(status_code=401, detail="未授权：需要管理员权限")
 
 
 def require_super(request: Request) -> None:
@@ -190,7 +207,7 @@ def require_super(request: Request) -> None:
     if not uid:
         raise HTTPException(status_code=401, detail="未授权：请先登录")
     if not user_is_admin(uid):
-        raise HTTPException(status_code=401, detail="未授权：需要管理员权限")
+        raise HTTPException(status_code=401, detail="未授权：需要超级管理员权限")
     from auth_store import user_role
     if user_role(uid) != "super":
         raise HTTPException(status_code=403,

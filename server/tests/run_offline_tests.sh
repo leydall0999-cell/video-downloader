@@ -103,6 +103,7 @@ run_one test_cookie_share_host_map.py      # 分享域/极速版域→主站登�
 run_one test_admin_roles.py             # 后台权限拆两级：超管唯一（名单首项/最早注册兜底）、其余 is_admin 一律 admin（2026-10-22 自桌面端同口径移植）
 run_one test_admin_roles_api.py         # 路由层闸门：admin.py 11 写 + admin_cookies 3 写全用 require_super、读接口仍 require_admin、CSRF 兜底不丢、超管不可被降级
 run_one test_admin_roles_e2e.py         # 真 HTTP：超管写 200 / 管理员写 403（不是 401）/ 普通用户 401 / 超管可取消他人管理员但取消不了自己
+run_one test_admin_promote_effect.py   # 提权「点了没反应」的根因：手机号账号的标识解析必须命中（否则云端同步被跳过 + 云端权威回写把本机打回）＋权限文案两级口径（2026-10-22）
 run_one test_cookie_verify_cooldown.py     # 联网验真冷却：全量 6h/手动 10min 内不重复打平台（云端机房 IP 高频探同一 session 会被风控踢下线，2026-10-21 快手）
 run_one test_nmw_extractor.py              # 金牌影院：域名族识别 + 五种链接写法（/sid/ 可省、三段式老域名、maccms、详情页）+ 签名公式锁定（2026-10-21 用户第三次「又不行了」）
 run_one test_cookie_pool_nmw_family.py     # 金牌影院一族 Cookie 池链路：hardened 双域名/白名单派生/验真派发按域/测试 URL（2026-10-21 收编 chrqj.com 时发现只认老域名）
