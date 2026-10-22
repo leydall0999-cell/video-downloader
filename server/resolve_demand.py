@@ -11,8 +11,10 @@
 
 设计约束：
   - 存储 JSONL（append-only）：天然抗并发、无 schema 迁移、坏了不拖垮主流程；
-  - 聚合口径「站点×天」：同一 host 同一天只计 1 次需求（重试 10 次 ≠ 10 个
-    需求；但不同天重复出现说明持续有人要，照计）——防刷也防低估；
+  - 聚合口径「站点×周」（2026-10-23 起，原为「站点×天」）：同一 host 同一
+    自然周（周一为起点）只计 1 次需求（重试 10 次 ≠ 10 个需求；不同周反复出现
+    说明持续有人要，照计）——防刷也防低估。按周而非按天：同一站点一天内被
+    几个用户同时要，并不比一周内持续被要更有开发价值，周计数才反映「持续性」；
   - 写入双节流：同 host 60s 内只落一条（内存态）+ 文件超 2MB 截断保底，
     保证一个失控站点也刷不爆磁盘；
   - URL 只留前 200 字符当「样例链接」供开发直接测试用；不记 Cookie/token。
@@ -24,9 +26,11 @@ import json
 import os
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 LOG_NAME = ".resolve_demand.log"
+DEFAULT_WINDOW_DAYS = 84           # 默认看 12 周：按周计数窗口太短会全是 1 分
 MAX_BYTES = 2 * 1024 * 1024          # 超限截断（保留尾部 KEEP_TAIL 行）
 KEEP_TAIL = 2000
 THROTTLE_SECONDS = 60.0              # 同 host 写入节流窗口
@@ -83,12 +87,23 @@ def record_demand(host: str, url: str = "", category: str = "unsupported_platfor
     return True
 
 
-def demand_summary(days: int = 30, base_dir: Path | None = None) -> list[dict]:
-    """按站点聚合需求榜：[{host, days_count, total, last_ts, last_url, categories}]。
+def _week_key(ts: float) -> str:
+    """该时间戳所在自然周（周一为起点）的周一日期串，作为「周」去重键。"""
+    try:
+        d = datetime.fromtimestamp(float(ts)).date()
+    except (OSError, OverflowError, ValueError):
+        return ""
+    return (d - timedelta(days=d.weekday())).isoformat()
 
-    days_count = 该站点在窗口内被记录的**不同天数**（站点级热度，重试免疫）；
-    total = 窗口内原始记录数（含同一天多条，供参考）；
-    按 days_count 降序，再按 last_ts 降序。
+
+def demand_summary(days: int = DEFAULT_WINDOW_DAYS, base_dir: Path | None = None) -> list[dict]:
+    """按站点聚合需求榜：[{host, weeks_count, days_count, total, weeks, last_ts, last_url, categories}]。
+
+    weeks_count = 该站点在窗口内被记录的**不同周数**（周一为界，站点级热度，重试免疫）；
+    days_count  = 同值别名（旧字段名，保留给未升级的对端/前端，勿新增引用）；
+    total = 窗口内原始记录数（含同一周多条，供参考）；
+    weeks = 命中周的周一日期列表（新→旧，最多 12 条，供界面展示趋势）；
+    按 weeks_count 降序，再按 last_ts 降序。
     """
     path = _demand_path(base_dir)
     if not path.exists():
@@ -111,12 +126,12 @@ def demand_summary(days: int = 30, base_dir: Path | None = None) -> list[dict]:
                 host = str(rec.get("host") or "").lower()
                 if not host:
                     continue
-                day = time.strftime("%Y-%m-%d", time.localtime(ts))
+                week = _week_key(ts) or time.strftime("%Y-%m-%d", time.localtime(ts))
                 agg = per_host.setdefault(host, {
-                    "host": host, "days": set(), "total": 0,
+                    "host": host, "weeks": set(), "total": 0,
                     "last_ts": 0.0, "last_url": "", "categories": {},
                 })
-                agg["days"].add(day)
+                agg["weeks"].add(week)
                 agg["total"] += 1
                 if ts >= agg["last_ts"]:
                     agg["last_ts"] = ts
@@ -127,13 +142,16 @@ def demand_summary(days: int = 30, base_dir: Path | None = None) -> list[dict]:
         return []
     out = []
     for host, agg in per_host.items():
+        weeks = sorted(agg["weeks"], reverse=True)
         out.append({
             "host": host,
-            "days_count": len(agg["days"]),
+            "weeks_count": len(weeks),
+            "days_count": len(weeks),          # 兼容别名（旧前端/旧对端只认这个键）
+            "weeks": weeks[:12],
             "total": agg["total"],
             "last_ts": int(agg["last_ts"]),
             "last_url": agg["last_url"],
             "categories": agg["categories"],
         })
-    out.sort(key=lambda r: (-r["days_count"], -r["last_ts"]))
+    out.sort(key=lambda r: (-r["weeks_count"], -r["last_ts"]))
     return out

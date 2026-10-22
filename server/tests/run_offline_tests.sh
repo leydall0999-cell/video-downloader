@@ -139,7 +139,7 @@ run_node test_notice_modal.mjs             # 下单失败/活动限购改用弹�
 run_node test_cookie_contribute_hidden.mjs # 「贡献 Cookie 到公共池」勾选框隐藏：只 display:none 不删元素/仍默认勾选/不留悬空指引（2026-10-09 用户反馈）
 run_node test_placeholder_contrast.mjs     # 输入框 placeholder 灰度统一：全局兜底须与 #urlInput 基准 #a2acbd 同值，防个别框吃浏览器默认深灰 #757575（2026-10-09 用户反馈）
 run_one test_member_plans_source.py        # 1/3/7 天档 + 套餐价格单一真源：超管改价/改天数在展示/下单/发放三处同步（2026-09-30）
-run_one test_resolve_demand.py             # 解析需求登记（Downie 机制本土化）：落库字段/同 host 60s 节流/「站点×天」聚合口径/坏行跳过/2MB 截断（2026-10-17）
+run_one test_resolve_demand.py             # 解析需求登记（Downie 机制本土化）：落库字段/同 host 60s 节流/「站点×周」聚合口径/坏行跳过/2MB 截断（2026-10-17，10-23 改按周）
 run_one test_member_notice.py              # 会员中心公告：云端下发生效/关闭即隐藏/空文本不显示/下发失败不抛/前端 textContent（2026-10-18）
 run_one test_resolve_demand_merge.py       # 需求榜跨节点合并棘轮：hmac 常量时间/内部请求防递归/CF UA/_json 别名/合并口径/peer_ok 明示（2026-10-17）
 run_one test_pay_gateway_web.py            # 网页版支付真通道：后端带云端令牌转发 VPS 支付服务 / 无令牌必拒 / PAID 拉权益 / 离线回落 mock / 前端按通道切文案（2026-10-09）

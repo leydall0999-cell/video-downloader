@@ -1076,9 +1076,9 @@ def client_error(payload: dict, request: app.Request):
 
 
 # ── 解析需求榜（2026-10-17，Downie 机制本土化第一环）─────────────────────────
-# 解析失败（白名单空白站点 / 未知域名）自动落库后的聚合视图：按「站点×天」计数，
-# 重试免疫。用途：每月挑 Top 站点写成专用提取器——把 Downie「用户报一个写一个」
-# 的十年机制，变成我们可执行的开发排期输入。
+# 解析失败（白名单空白站点 / 未知域名）自动落库后的聚合视图：按「站点×周」计数
+# （2026-10-23 起；原按天），重试免疫。用途：每月挑 Top 站点写成专用提取器——把
+# Downie「用户报一个写一个」的十年机制，变成我们可执行的开发排期输入。
 #
 # 🔴 跨节点合并：未知站解析失败**默认落在 HK**（非国内域名一律转发对端处理，
 #    见 app._peer_overseas_fallback），只读本机日志榜单近乎空白。故本机管理员
@@ -1094,8 +1094,19 @@ def _internal_token_ok(request) -> bool:
     return bool(got) and hmac.compare_digest(got, tok)
 
 
+def _demand_weeks(r: dict) -> int:
+    """节点间兼容取值：新节点回 weeks_count，旧节点只有 days_count（按天，会偏高）。"""
+    v = r.get("weeks_count")
+    if v is None:
+        v = r.get("days_count")
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _merge_peer_demand(local_rows: list, days: int) -> tuple[bool, list]:
-    """向对端拉需求榜并合并（site-days 跨节点可加：同一请求只会落一个节点，
+    """向对端拉需求榜并合并（site-weeks 跨节点可加：同一请求只会落一个节点，
     不会因双记虚高；对端不可达/未配 → 原样返回本地）。"""
     peer = (os.environ.get("VDL_PEER_ENDPOINT") or "").strip().rstrip("/")
     tok = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()
@@ -1120,7 +1131,17 @@ def _merge_peer_demand(local_rows: list, days: int) -> tuple[bool, list]:
             continue
         cur = by_host.get(h)
         if cur:
-            cur["days_count"] += int(r.get("days_count") or 0)
+            # 有周列表（新版节点）→ 取并集，同站点同周在两节点都出现时只算 1 周；
+            # 旧节点只回计数 → 退回相加（宁可略高估，也不丢信号）。
+            lw = cur.get("weeks") or []
+            pw = r.get("weeks") or []
+            if lw and pw:
+                merged_weeks = set(lw) | set(pw)
+                cur["weeks"] = sorted(merged_weeks, reverse=True)[:12]
+                cur["weeks_count"] = len(merged_weeks)
+            else:
+                cur["weeks_count"] = _demand_weeks(cur) + _demand_weeks(r)
+            cur["days_count"] = cur["weeks_count"]      # 兼容别名
             cur["total"] += int(r.get("total") or 0)
             for c, n in (r.get("categories") or {}).items():
                 cur["categories"][c] = cur["categories"].get(c, 0) + int(n or 0)
@@ -1129,13 +1150,17 @@ def _merge_peer_demand(local_rows: list, days: int) -> tuple[bool, list]:
                 cur["last_url"] = r.get("last_url") or cur.get("last_url")
             cur["nodes"] = ["cn", "hk"]
         else:
-            by_host[h] = dict(r, nodes=["hk"])
-    out = sorted(by_host.values(), key=lambda x: (-x["days_count"], -x.get("last_ts", 0)))
+            row = dict(r)
+            row["weeks_count"] = _demand_weeks(r)
+            row["days_count"] = row["weeks_count"]
+            row["nodes"] = ["hk"]
+            by_host[h] = row
+    out = sorted(by_host.values(), key=lambda x: (-_demand_weeks(x), -x.get("last_ts", 0)))
     return True, out
 
 
 @router.get('/api/admin/resolve-demand')
-def admin_resolve_demand(request: app.Request, days: int = 30):
+def admin_resolve_demand(request: app.Request, days: int = 84):
     is_internal = _internal_token_ok(request)
     if not is_internal:
         _require_admin(request)
