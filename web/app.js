@@ -23336,6 +23336,13 @@ el.dwVidPlayer.hidden = true;
       const q = (userSearch && userSearch.value || '').trim().toLowerCase();
       const fv = (userStatusFilter && userStatusFilter.value) || '';
       const _isMember = (u) => !!(u.membership && (u.membership.download_active || u.membership.ai_active));
+      // 最近使用 = 登录时间与各设备心跳（last_seen）取最新。App 心跳定期刷新
+      // 设备 last_seen，云端行两字段都有；本机兜底行可能两者皆缺 → 显示 —。
+      const _lastUsed = (u) => {
+        let t = parseFloat(u.last_login) || 0;
+        for (const d of (u.devices || [])) t = Math.max(t, parseFloat(d.last_seen) || 0);
+        return t;
+      };
       // 顶部统计卡（对齐设计稿：总用户 / 免费会员 / 异常状态）
       if (userStatCards) {
         const total = lastUsers.length;
@@ -23359,11 +23366,13 @@ el.dwVidPlayer.hidden = true;
         const identifier = String(u.identifier == null ? '' : u.identifier).toLowerCase();
         const uidStr = (u.user_id || '').toLowerCase();
         const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString().toLowerCase() : '';
+        const lu = _lastUsed(u);
+        const lastUsedStr = lu ? new Date(lu * 1000).toLocaleString().toLowerCase() : '';
         const memStr = mem.toLowerCase();
-        return identifier.includes(q) || uidStr.includes(q) || created.includes(q) || memStr.includes(q);
+        return identifier.includes(q) || uidStr.includes(q) || created.includes(q) || lastUsedStr.includes(q) || memStr.includes(q);
       });
       if (userCount) userCount.textContent = (q || fv) ? `匹配 ${list.length} / 共 ${lastUsers.length} 个用户` : `共 ${lastUsers.length} 个用户`;
-      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>角色</th><th>操作</th></tr></thead>';
+      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>注册时间</th><th>最近使用</th><th>会员状态</th><th>积分</th><th>状态</th><th>角色</th><th>操作</th></tr></thead>';
       const rows = list.map((u) => {
         const m = u.membership || {};
         const cred = (m.credits_total != null) ? m.credits_total : '—';
@@ -23414,6 +23423,7 @@ el.dwVidPlayer.hidden = true;
           <td><span class="admin-ava-wrap">${ava}${esc(u.identifier)}</span></td>
           <td><code class="admin-uid" data-copy="${esc(u.user_id || '')}" title="点击复制">${esc(u.user_id || '—')}</code></td>
           <td>${u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—'}</td>
+          <td>${_lastUsed(u) ? new Date(_lastUsed(u) * 1000).toLocaleString() : '—'}</td>
           <td>${memChip}</td>
           <td>${cred}</td>
           <td>${stText}</td>
@@ -23422,7 +23432,7 @@ el.dwVidPlayer.hidden = true;
         </tr>`;
       }).join('');
       const emptyMsg = (q || fv) ? '无匹配用户' : '暂无用户';
-      userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="8" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
+      userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="9" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
     };
 
     // ---- 会员管理 ----
