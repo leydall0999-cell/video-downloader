@@ -2732,7 +2732,7 @@
     el.ucList.innerHTML = list.map(it => {
       const statusText = {
         pending: '未开始',
-        uploading: `上传中 ${it.progress||0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
+        uploading: `上传中 ${Math.floor(it.progress||0)}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
         uploaded: '已上传，待转码',
         running: it.stage === '无损直转' ? '无损直转中…'
                : it.stage === '排队中' ? '排队中…'
@@ -2744,7 +2744,7 @@
       // 移除按钮：pending/failed/uploading/uploaded 可移除（上传/待转码=取消+清分片）；转码中禁用
       const disabled = !['pending','failed','uploading','uploaded'].includes(it.status) ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
-        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress||0}%"></div></div>` : '';
+        ? `<div class="progress"><div class="progress-fill" style="width:${(it.progress||0).toFixed(2)}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.downloadUrl
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName||'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
         : '';
@@ -2942,6 +2942,7 @@
     item.progress = 0;
     item.speedText = '';
     item.uploadedText = '';
+    item._emaSpeed = 0;               // 速度指数平滑值（瞬时速度抖动大，直显会让文字乱蹦）
     item._removed = false;            // 上传中删除标记（abort 后不再重试/不再 finish）
     item._xhrs = new Set();           // 进行中的分片 XHR（删除时 abort）
     item._chStats = ucChStats();      // 双通道质量统计（动态选路用）
@@ -2964,26 +2965,34 @@
       return t;
     };
 
+    // 进度条绘制（rAF 合并）：6 路并发每秒上百次 progress 事件，逐次写 DOM 会反复
+    // querySelector + 样式重算，反而让动画断续。
+    let peakBytes = 0, rafId = 0;
+    const paintProgress = () => {
+      const li = document.querySelector(`.uc-item[data-id="${item.id}"]`);
+      if (!li) return;
+      const fill = li.querySelector('.progress-fill');
+      if (fill) fill.style.width = `${item.progress.toFixed(2)}%`;
+      const st = li.querySelector('.uc-item-status');
+      if (st) st.textContent = `上传中 ${Math.floor(item.progress)}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
+    };
     const updateProgress = () => {
       const now = performance.now();
-      const tot = totalUploaded();
+      // 单调取峰值：分片失败重试会让该片 loaded 归零，否则进度条会倒退
+      const tot = Math.max(peakBytes, totalUploaded());
+      peakBytes = tot;
       const dt = (now - lastT) / 1000;
-      if (dt > 0.4) {                // 0.4s 平滑窗口算瞬时速度
-        item.speedText = ucFormatSpeed((tot - lastBytes) / dt);
+      if (dt > 0.4) {                // 0.4s 平滑窗口算瞬时速度，再做指数平滑（避免数字乱蹦）
+        const inst = (tot - lastBytes) / dt;
+        item._emaSpeed = item._emaSpeed ? item._emaSpeed * 0.65 + inst * 0.35 : inst;
+        item.speedText = ucFormatSpeed(item._emaSpeed);
         lastBytes = tot;
         lastT = now;
       }
       item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
-      item.progress = Math.round(tot / file.size * 30);
-      // 定向更新该行 DOM（进度条 + 状态文字），不重建整个列表——
-      // 否则高频渲染会反复重建下拉/卡片导致闪烁与焦点丢失
-      const li = document.querySelector(`.uc-item[data-id="${item.id}"]`);
-      if (li) {
-        const fill = li.querySelector('.progress-fill');
-        if (fill) fill.style.width = `${item.progress || 0}%`;
-        const st = li.querySelector('.uc-item-status');
-        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
-      }
+      // 浮点：上传阶段只占 0–30% 宽度，取整会让慢速上传数秒才跳一格
+      item.progress = file.size ? (tot / file.size * 30) : 0;
+      if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; paintProgress(); });
     };
 
     // 分片并发 worker 池：每片失败重试 UC_CHUNK_RETRIES 次，耗尽则整个文件失败
@@ -3287,12 +3296,12 @@
              ? (it.stage === '拼接中' ? '拼接中…' : (it.progress ? `拼接中 ${it.progress}%` : '拼接中…'))
              : it.status === 'completed' ? (it.stale ? '完成 ✅ · 上次结果' : '完成 ✅') : '失败：' + (it.errorMsg || ''))
         : (it.status === 'uploading'
-             ? `上传中 ${it.progress || 0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`
+             ? `上传中 ${Math.floor(it.progress || 0)}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`
              : it.status === 'uploaded' ? '已就绪' : it.status === 'failed' ? '失败：' + (it.errorMsg || '') : '未开始');
       const cls = it.status === 'pending' ? '' : ('is-' + it.status.replace('uploading', 'running'));
       const disabled = !['pending', 'failed', 'uploading', 'uploaded'].includes(it.status) ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
-        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
+        ? `<div class="progress"><div class="progress-fill" style="width:${(it.progress || 0).toFixed(2)}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.downloadUrl
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName || 'merged'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}` : '';
       const upDisabled = (it.isResult || idx === 0) ? 'disabled' : '';
@@ -3385,6 +3394,7 @@
   // 上传单个片段（复用 ucUploadChunk）；末尾用 finish(mode=store) 落地为拼接素材
   const mcUploadOne = (item) => new Promise((resolve) => {
     item.status = 'uploading'; item.progress = 0; item.speedText = ''; item.uploadedText = '';
+    item._emaSpeed = 0;               // 速度指数平滑值（同 ucUploadOne）
     item._removed = false; item._xhrs = new Set(); item._chStats = ucChStats();
     mcRender();
     const file = item.file;
@@ -3396,18 +3406,32 @@
     let uploadedBytes = 0; const done = new Set(); const inFlight = new Map();
     const t0 = performance.now(); let lastBytes = 0, lastT = t0;
     const totalUploaded = () => { let t = uploadedBytes; for (const v of inFlight.values()) t += v; return t; };
-    const updateProgress = () => {
-      const now = performance.now(); const tot = totalUploaded(); const dt = (now - lastT) / 1000;
-      if (dt > 0.4) { item.speedText = ucFormatSpeed((tot - lastBytes) / dt); lastBytes = tot; lastT = now; }
-      item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
-      item.progress = Math.round(tot / file.size * 30);
+    // 进度条绘制（rAF 合并，理由同 ucUploadOne）
+    let peakBytes = 0, rafId = 0;
+    const paintProgress = () => {
       const li = mcListEl.querySelector(`.uc-item[data-id="${item.id}"]`);
-      if (li) {
-        const fill = li.querySelector('.progress-fill');
-        if (fill) fill.style.width = `${item.progress || 0}%`;
-        const st = li.querySelector('.uc-item-status');
-        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
+      if (!li) return;
+      const fill = li.querySelector('.progress-fill');
+      if (fill) fill.style.width = `${item.progress.toFixed(2)}%`;
+      const st = li.querySelector('.uc-item-status');
+      if (st) st.textContent = `上传中 ${Math.floor(item.progress)}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
+    };
+    const updateProgress = () => {
+      const now = performance.now();
+      // 单调取峰值：分片失败重试会让该片 loaded 归零，否则进度条会倒退
+      const tot = Math.max(peakBytes, totalUploaded());
+      peakBytes = tot;
+      const dt = (now - lastT) / 1000;
+      if (dt > 0.4) {
+        const inst = (tot - lastBytes) / dt;
+        item._emaSpeed = item._emaSpeed ? item._emaSpeed * 0.65 + inst * 0.35 : inst;
+        item.speedText = ucFormatSpeed(item._emaSpeed);
+        lastBytes = tot; lastT = now;
       }
+      item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
+      // 浮点：上传阶段只占 0–30% 宽度，取整会让慢速上传数秒才跳一格
+      item.progress = file.size ? (tot / file.size * 30) : 0;
+      if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; paintProgress(); });
     };
     let idx = 0; const workers = [];
     const worker = async () => {
