@@ -1345,7 +1345,16 @@ def _aria2c_path() -> str | None:
 def _build_aria2c_args(concurrency: int) -> list[str]:
     n = str(_clamp_concurrency(concurrency))
     # -x 每服务器最大连接 / -s 分片数 / -j 整体并行下载数 / -k 最小分片大小
-    return ["-x", n, "-s", n, "-j", n, "-k", "1M", "--continue=true", "--max-tries=5"]
+    #
+    # --enable-cookie=true 必须显式打开：aria2 默认关闭 cookie 支持，此时它把
+    # yt-dlp 传进来的 --header="Cookie: ..." 收进内部 cookieStorage 却**不发送**，
+    # 请求头里根本没有 Cookie 一行 ⇒ 需要登录态的源（百度网盘直链等）直接 403。
+    # 2026-10-24 实测：不加该开关 d.pcs.baidu.com 返回 403 且抓包无 Cookie 头，
+    # 加上后 Cookie 正常随请求发出。
+    return [
+        "-x", n, "-s", n, "-j", n, "-k", "1M",
+        "--continue=true", "--max-tries=5", "--enable-cookie=true",
+    ]
 
 
 # —— 百度网盘直链（2026-10-24 本机实测）——
