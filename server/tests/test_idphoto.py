@@ -531,6 +531,11 @@ def test_frontend_drag_paste_and_matting_bridge_wiring():
     assert "addEventListener('paste'" in js, "没接 ⌘V 粘贴"
     assert "switchView('idphoto')" in js, "「用作证件照」没切到证件照视图"
     assert "form.append('precut'" in js, "生成时没带 precut（从抠图带入会白抠一次）"
+    # 2026-10-23 用户反馈「调人位置时整张都跟着走」：预览是**整版排版图**，给它套
+    # translate 会把白边和别的格一起推走 ⇒ 观感是「拖整张照片」。位移必须走
+    # 「按新位置重合成真图」的通道（idpScheduleOff → /render），背景巍然不动。
+    assert "idpScheduleOff" in js, "拖动没走「按位置重合成」通道（会退回整版平移）"
+    assert "translate(${(idpOff.x" not in js, "拖动又给整张预览图套了 translate（整版会跟着走）"
     print("✅ 拖动 / 滚轮 / 拖拽 / 粘贴 / 一键抠图带入 五条通道接线齐全")
 
 

@@ -7963,24 +7963,18 @@
     return { w: Math.max(1, spec.w * k), h: Math.max(1, spec.h * k) };
   };
 
-  // 拖动时本地先动（即时反馈）；松手才请求后端出真图并清掉本地位移
-  const idpApplyOff = () => {
-    if (!el.idpPreview) return;
-    if (!idpOff.x && !idpOff.y) {
-      el.idpPreview.style.transform = '';
-      return;
-    }
-    const d = idpSingleDisplay();
-    el.idpPreview.style.transform =
-      `translate(${(idpOff.x * d.w).toFixed(1)}px, ${(idpOff.y * d.h).toFixed(1)}px)`;
-  };
+  // 🔴 拖动时**不能**给整张预览图套 translate —— 预览是「整版排版图」（多张 + 白边），
+  // 平移它等于把整张照片连同白边一起推走，观感是「拖整张」而不是「拖人」。2026-10-23 用户反馈。
+  // 现在改为：拖动过程中按新位置重合成真图（复用已抠好的 RGBA，几百毫秒），
+  // 于是背景/白边巍然不动、只有人像在动，且所见即所得。位移换算仍由 idpSingleDisplay 提供。
 
-  const idpRenderZoom = async () => {
+  const idpRenderZoom = async (opts) => {
+    const live = !!(opts && opts.live);       // live = 拖动过程中的中间帧（静默 + 预载防闪）
     if (!idpJob) return;
     const seq = idpRenderSeq + 1;
     idpRenderSeq = seq;
     const z = idpZoomFactor();
-    idpSetStatus(`正在按 ${Math.round(z * 100)}% 重新出图…`, false);
+    if (!live) idpSetStatus(`正在按 ${Math.round(z * 100)}% 重新出图…`, false);
     try {
       const fd = new FormData();
       fd.append('zoom', String(z));
@@ -7993,15 +7987,52 @@
       idpOff.x = Number(d.ox) || 0;
       idpOff.y = Number(d.oy) || 0;
       if (Number(d.width)) idpSheetW = Number(d.width);
-      el.idpPreview.style.transform = '';       // 真图本身已含位移，清掉本地预览位移
+      el.idpPreview.style.transform = '';       // 真图本身已含位移，清掉任何残留的本地位移
       const url = `/api/idphoto/${idpJob}/file?t=${Date.now()}`;
-      el.idpPreview.src = url;
-      el.idpDl.href = url;
-      idpSetStatus(`已按 ${Math.round(z * 100)}% 重新出图 ✅`, false);
+      if (live) {
+        // 中间帧：先在内存里把新图加载完再换 src，避免拖动时浏览画布闪白
+        const pre = new Image();
+        const swap = () => {
+          if (seq !== idpRenderSeq) return;     // 加载期间又拖了，交给更新的帧
+          el.idpPreview.src = url;
+          el.idpDl.href = url;
+        };
+        pre.onload = swap;
+        pre.onerror = swap;
+        pre.src = url;
+      } else {
+        el.idpPreview.src = url;
+        el.idpDl.href = url;
+        idpSetStatus(`已按 ${Math.round(z * 100)}% 重新出图 ✅`, false);
+      }
     } catch (error) {
       if (seq !== idpRenderSeq) return;
-      idpSetStatus('调整失败：' + ((error && error.message) || '未知错误'), true);
+      if (!live) idpSetStatus('调整失败：' + ((error && error.message) || '未知错误'), true);
     }
+  };
+
+  // 拖动中的实时重绘：节流 110ms + 单并发（同一时刻只飞一个请求，完成时若有新位置再补一帧），
+  // 避免快速拖动打出一串请求把后端 PIL 合成排队排到松手之后。
+  let idpLiveTimer = 0;
+  let idpLiveBusy = false;
+  let idpLiveDirty = false;
+  const idpKickLive = async () => {
+    if (!idpJob) return;
+    if (idpLiveBusy) { idpLiveDirty = true; return; }
+    idpLiveBusy = true;
+    await idpRenderZoom({ live: true });
+    idpLiveBusy = false;
+    if (idpLiveDirty) {
+      idpLiveDirty = false;
+      idpKickLive();
+    }
+  };
+  const idpScheduleOff = () => {
+    if (!idpJob || idpLiveTimer) return;
+    idpLiveTimer = setTimeout(() => {
+      idpLiveTimer = 0;
+      idpKickLive();
+    }, 110);
   };
 
   // 边拖边出图：input 时先更新数字，停手 350ms 再请求（避免拖动过程打一串请求）
@@ -8037,13 +8068,15 @@
       if (!idpDrag) return;
       idpOff.x = idpDrag.ox + (e.clientX - idpDrag.sx) / idpDrag.w;
       idpOff.y = idpDrag.oy + (e.clientY - idpDrag.sy) / idpDrag.h;
-      idpApplyOff();
+      idpScheduleOff();
     });
     const idpDragEnd = (e) => {
       if (!idpDrag) return;
       idpDrag = null;
       el.idpPreview.classList.remove('is-dragging');
       try { el.idpPreview.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      clearTimeout(idpLiveTimer);           // 松手：撤掉待发的中间帧，直接出最终图
+      idpLiveTimer = 0;
       idpRenderZoom();
     };
     el.idpPreview.addEventListener('pointerup', idpDragEnd);
@@ -8186,7 +8219,14 @@
       idpSetStatus(`完成 ✅ ${spec.name} ${spec.w}×${spec.h}${d.layout > 1 ? ` · ${d.layout} 张排版` : ''}`
         + '　·　可在预览上拖动 / 滚轮微调', false);
     } catch (error) {
-      idpSetStatus('失败：' + ((error && error.message) || '未知错误'), true);
+      const _m = (error && error.message) || '';
+      // 每日次数用完（2026-10-23 起证件照也进每日配额）：与其他功能同一套会员墙交互
+      if (_m.indexOf('MEMBER_QUOTA|') === 0) {
+        try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) { /* 会员中心未就绪 */ }
+        idpSetStatus(_m.split('|').slice(1).join('|') || '今日证件照次数已用完，明天再来', true);
+        return;
+      }
+      idpSetStatus('失败：' + (_m || '未知错误'), true);
     } finally {
       el.idpBtn.disabled = false;
     }
