@@ -2438,6 +2438,16 @@
     });
     return _ucEpProbe;
   };
+  // 探测退化重探：一次网络抖动不该让整页永久退化成「只有同源」。
+  // ucProbeEndpoints 的结果是缓存的（_ucEpProbe）；若首探只拿到同源，这里丢掉缓存重探一次。
+  // 退化代价极大：只剩同源时所有分片挤一条 H2 连接，CF 按连接限速 ⇒ 个位数 KB/s。
+  const ucEnsureEndpointPool = async () => {
+    if (UC_UPLOAD_ENDPOINTS.length > 1) return;
+    if (ucEndpointCandidates().length <= 1) return;   // 本来就只有同源（非 https / 非主站域名）
+    _ucEpProbe = null;
+    try { await ucProbeEndpoints(); } catch (e) { /* ignore */ }
+  };
+
   // 页面加载即开始探测（不阻塞），首次上传时若已就绪就直接用上多通道
   if (typeof window !== 'undefined' && !window.__vdl_ucEpProbeKicked) {
     window.__vdl_ucEpProbeKicked = true;
@@ -2517,6 +2527,45 @@
     ucEpFail[ep] = ok ? 0 : (ucEpFail[ep] || 0) + 1;
   };
   const ucState = { list: [], nextId: 1, active: 0, polling: null };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 全局 origin 租借：**每个 origin 同时只允许 1 条活跃分片连接**。
+  //
+  // 2026-10-23 真实 Chromium（本机同一条宽带）A/B 实测，各 2MB 分片：
+  //   · 6 路全打同一 origin  → 102 KB/s，3/6 片 120s 超时
+  //   · 6 路分到 6 个 origin → 411 KB/s，6/6 成功，29.9s
+  //   · 12 路挤 6 origin（每 origin 2 路）→ 205 KB/s，4/12 片超时
+  // ⇒ 同一 origin 的多条分片是在**抢同一条 HTTP/2 连接**，CF 按连接限速：
+  //   路数越多每条越慢，不是「加起来更快」。之前每个文件各自起 6 路，
+  //   两个文件并行（UC_MAX_CONCURRENT=2）就是 12 路挤在 6 条连接上；
+  //   若端点探测退化到只剩同源，12 路挤 1 条 ⇒ 每路个位数 KB/s
+  //   （用户 2026-10-23 截图：7 KB/s / 22 KB/s）。
+  //
+  // 所以把「并发上限」从「每文件 6 路」改成「池子里有几个 origin 就有几条」，
+  // 跨文件、跨功能（转换/拼接/音乐/图片/字幕）共享同一个配额。
+  // ═══════════════════════════════════════════════════════════════════════════
+  const ucOriginBusy = new Set();
+  const ucOriginQueue = [];
+  const ucAcquireOrigin = async (want) => {
+    for (;;) {
+      let ep = null;
+      if (want && !ucOriginBusy.has(want)) ep = want;
+      else {
+        for (const e of UC_UPLOAD_ENDPOINTS) {
+          if (!ucOriginBusy.has(e)) { ep = e; break; }
+        }
+      }
+      if (ep) { ucOriginBusy.add(ep); return ep; }
+      await new Promise((r) => ucOriginQueue.push(r));
+    }
+  };
+  const ucReleaseOrigin = (ep) => {
+    if (!ep) return;
+    ucOriginBusy.delete(ep);
+    // 唤醒所有等待者（各自重新挑空闲 origin，避免丢唤醒导致死等）
+    const ws = ucOriginQueue.splice(0);
+    for (const w of ws) { try { w(); } catch (e) { /* ignore */ } }
+  };
 
   const ucFormatSize = (bytes) => {
     if (!bytes && bytes !== 0) return '';
@@ -2741,14 +2790,19 @@
   // endpoint: 上传目标（双端点混合上传时按分片轮询/故障转移选择；默认同源）
   // onProgress(loaded) 让调用方合并 in-flight 字节算总进度，避免「长时间 0%」假卡死
   // xhrs(Set) 收集进行中的 XHR，供「上传中删除」时 abort
-  const ucUploadChunk = (uploadId, index, total, blob, onProgress, xhrs, endpoint) => new Promise((resolve, reject) => {
+  const ucUploadChunk = async (uploadId, index, total, blob, onProgress, xhrs, endpoint) => {
+    // 先租一个空闲 origin：同一 origin 同时只跑 1 条分片（实测见 ucAcquireOrigin 注释）。
+    // 排队期间不建连接、不占带宽，轮到才发请求。
+    const ep = await ucAcquireOrigin(endpoint);
+    try {
+      return await new Promise((resolve, reject) => {
     const form = new FormData();
     form.append('upload_id', uploadId);
     form.append('index', index);
     form.append('total', total);
     form.append('file', blob, 'chunk');
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', (endpoint || location.origin) + '/api/upload-chunk');
+    xhr.open('POST', ep + '/api/upload-chunk');
     // 设备隔离：XHR 不走 request() 封装，需手动带设备 ID（否则 job 无归属，文件不隔离）
     xhr.setRequestHeader('X-Device-Id', deviceId());
     xhr.timeout = 300000;   // 5 分钟单片超时（防后台 tab 限流/网络静默断网卡死；后台 tab 限流可压到 ~100KB/s，32MB 分片需 5+ 分钟）
@@ -2793,7 +2847,11 @@
     xhr.addEventListener('timeout', () => { cleanup(); reject(new Error('分片超时（5 分钟无响应，可能是网络断/后台 tab 限流；切回前台后会自动续传）')); });
     xhr.addEventListener('abort', () => { cleanup(); reject(new Error(stalled ? '分片卡住（25 秒无进展，已换通道重试）' : '已取消')); });
     xhr.send(form);
-  });
+      });
+    } finally {
+      ucReleaseOrigin(ep);   // 无论成功/失败/取消，都要把 origin 还回池子（否则队列永久卡死）
+    }
+  };
 
   // 上传 + 启动单个 job：32MB 分片 × 4 路并发，进度占 30%（转码从 30% 累加），实时速度显示
   const ucUploadOne = (item) => new Promise((resolve, reject) => {
@@ -2920,7 +2978,7 @@
       });
     };
     let probeP;
-    try { probeP = ucProbeEndpoints(); } catch (e) { probeP = Promise.resolve(); }
+    try { probeP = ucEnsureEndpointPool().then(() => ucProbeEndpoints()); } catch (e) { probeP = Promise.resolve(); }
     Promise.race([probeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))])
       .then(ucStartWorkers, ucStartWorkers);
   });
@@ -3311,7 +3369,7 @@
     });
     };
     let mcProbeP;
-    try { mcProbeP = ucProbeEndpoints(); } catch (e) { mcProbeP = Promise.resolve(); }
+    try { mcProbeP = ucEnsureEndpointPool().then(() => ucProbeEndpoints()); } catch (e) { mcProbeP = Promise.resolve(); }
     Promise.race([mcProbeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))])
       .then(mcStartWorkers, mcStartWorkers);
   });
@@ -7415,7 +7473,7 @@
       });
     };
     let musProbeP;
-    try { musProbeP = ucProbeEndpoints(); } catch (e) { musProbeP = Promise.resolve(); }
+    try { musProbeP = ucEnsureEndpointPool().then(() => ucProbeEndpoints()); } catch (e) { musProbeP = Promise.resolve(); }
     Promise.race([musProbeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))]).then(musStart, musStart);
   });
 
@@ -7814,7 +7872,7 @@
       });
     };
     let imgProbeP;
-    try { imgProbeP = ucProbeEndpoints(); } catch (e) { imgProbeP = Promise.resolve(); }
+    try { imgProbeP = ucEnsureEndpointPool().then(() => ucProbeEndpoints()); } catch (e) { imgProbeP = Promise.resolve(); }
     Promise.race([imgProbeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))]).then(imgStart, imgStart);
   });
 
@@ -8084,7 +8142,7 @@
     };
     const pump = async () => {
       let sbProbeP;
-      try { sbProbeP = ucProbeEndpoints(); } catch (e) { sbProbeP = Promise.resolve(); }
+      try { sbProbeP = ucEnsureEndpointPool().then(() => ucProbeEndpoints()); } catch (e) { sbProbeP = Promise.resolve(); }
       await Promise.race([sbProbeP.catch(() => {}), new Promise((r) => setTimeout(r, 6500))]);
       const ws = [];
       for (let w = 0; w < 4; w++) ws.push(sbWorker(w));

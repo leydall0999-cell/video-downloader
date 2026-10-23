@@ -120,6 +120,7 @@ run_node test_web_hls_assemble.js
 run_node test_web_route_retry.js
 run_node test_web_userdata_sync.js           # 网页版云备份引擎：Cookie 端到端加密(真 WebCrypto)/无明文外带/幂等/冲突守卫/摘要取云端实际量（2026-10-17）
 run_node test_upload_endpoints.js            # 网页版上传提速（2026-10-22）：端点池红线（只准同后端，禁 hk 那个独立节点）/2MB 分片/6 路并发/轮换选路/连续失败摘除与恢复/5 条上传路径都真用上多端点
+run_node test_upload_origin_lease.js         # 网页版上传（2026-10-23）：每 origin 同时只 1 条活跃分片（实测 6路同源 102 / 6源 411 / 12路挤6源 205 KB/s），ucUploadChunk 用租到的 ep + finally 归还 + 5 条路径探测退化重探
 run_node test_convert_poll_lifecycle.mjs   # 音乐/图片转换轮询定时器自杀停表回归（2026-09-29 线上卡 30% 事故）
 run_node test_dw_preview_zoom.mjs          # 去水印捏合缩放(只放大图片)+结果预览灯箱+重新加工（2026-09-29 用户反馈）
 run_node test_view_top_gap.mjs             # 顶层视图卡片与吸顶顶栏间距：main > .panel 3rem，防「顶栏+卡片」粘连（2026-10-04 用户反馈）
