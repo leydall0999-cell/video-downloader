@@ -24,8 +24,8 @@ _MEDIA_BY_EXT = {
 }
 
 @router.get("/api/library")
-def library_list(q: str = "", platform: str = "", kind: str = "all") -> dict:
-    items = app.library_mod.scan_library(app.DOWNLOAD_DIR)
+def library_list(q: str = "", platform: str = "", kind: str = "all", force: int = 0) -> dict:
+    items = app.library_mod.scan_library(app.DOWNLOAD_DIR, force=bool(force))
     if q:
         ql = q.lower()
         items = [

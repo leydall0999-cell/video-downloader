@@ -2207,6 +2207,16 @@ class MembershipStore:
         if limit is None:
             # 免费表未覆盖但会员表有（原画/批量）→ 免费额度为 0
             limit = 0
+        # 🔴 2026-10-20 实测修复：负数配额 = **不限量**（会员档约定，如字幕提取
+        # subtitle_extract.member_limit = -1）。原实现把它当上限比较 `used < -1`，
+        # 恒为 False → 会员调字幕提取反而被 402「今日免费额度已用尽（-1/日）」永久拦住。
+        # 免费档不会出现负数（FREE_DAILY_LIMITS 全是正整数），故此处判负安全。
+        if int(limit) < 0:
+            return {"resource": resource, "allowed": True, "unlimited": True,
+                    "limit": int(limit),
+                    "tier": "member" if is_member else "free",
+                    "member_limit": mem_limits.get(resource),
+                    "free_limit": free_limits.get(resource, 0)}
         # 🔴 拆键兼容：把老键 app_compute 的已用量归集到新独立键（只读迁移）
         _mig = migrate_legacy_usage(self._state["daily_usage"])
         used = int(_mig.get(resource, 0))

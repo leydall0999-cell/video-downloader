@@ -356,6 +356,11 @@ def _get_session(model_name: str = None):
     模型名 / INT8 开关与已缓存 session 不符时，丢弃按新模式重建。
     """
     global _SESSIONS
+    # ⚠️ 必须显式声明：函数体内会写 _INT8_RUNTIME_OK（首帧探针结果）。
+    # 少了这行，Python 会把它当局部变量，导致 `if use_int8 and _INT8_RUNTIME_OK is None`
+    # 读未赋值局部 → UnboundLocalError，被外层 except 吞成
+    # 「INT8 会话创建失败，回退 fp32」——表现为白量化 2 分钟却永远拿不到 INT8 提速。
+    global _INT8_RUNTIME_OK
     name = _resolve_model_name(model_name)
     spec = MODELS.get(name) or MODELS[DEFAULT_MODEL]
     use_int8 = (name == "lama") and _int8_enabled()

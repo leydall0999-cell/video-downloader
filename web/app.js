@@ -2118,6 +2118,226 @@
 
   /** 桌面版「保存到本机」：走原生桥（弹系统保存面板 → 写盘 → 回报真实路径）。
    *  幂等绑定：paintTask 会被反复调用，但只允许挂一个 click 监听。 */
+  // —— 并发分段下载（方案④，2026-10-21）——
+  // 为什么不靠对象存储：方案③要先在阿里云开 OSS、建 bucket、配 AK/SK，还要把成品
+  // 额外上传一份，成本和运维都不小。但慢的根因其实不是「跨境」本身，而是**单连接限速**：
+  // 实测同一条链路（CF → Railway）1 连接 122KB/s、8 连接并行 673KB/s（5.5x，可叠加）。
+  // 而 /api/tasks/{id}/file 用的 Starlette FileResponse **原生支持 Range**（实测 206 +
+  // Content-Range + Accept-Ranges，且 cf-cache-status=BYPASS 走回源），所以浏览器侧
+  // 把文件切成 8 段并发拉、按偏移直接写盘即可，服务端零改动、不花钱。
+  //
+  // 落盘用 File System Access API（Chrome/Edge 86+）：showSaveFilePicker 拿到句柄后
+  // createWritable()，每读到一块就 write({position}) 写到对应偏移 —— 418MB 全程不进内存。
+  // 任何一步不满足（老浏览器 / 非 https / 服务端不支持 Range / 用户取消）都回退原
+  // /file 整页下载，保证「保存」这个动作永远能完成，只是慢一点。
+  const SEG_CONCURRENCY = 8;                       // 实测最佳；再高边际收益很小
+  const SEG_MIN_BYTES = 8 * 1024 * 1024;           // < 8MB 单流就够快，不值得并发
+  const SEG_CHUNK_MIN = 2 * 1024 * 1024;           // 每段至少 2MB，避免小文件切太碎
+
+  function fmtSegBytes(n) {
+    if (!n) return '0 B';
+    const u = ['B', 'KB', 'MB', 'GB'];
+    let i = 0, v = n;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+  }
+
+  /** 用 1 字节 Range 探测总大小；服务端不支持 Range 时返回 0（调用方据此回退）。 */
+  async function probeTotalBytes(url) {
+    try {
+      const r = await fetch(url, {
+        headers: Object.assign({ 'Range': 'bytes=0-0', 'X-Device-Id': deviceId() }, authBearerHeaders()),
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (r.status !== 206) return 0;
+      const cr = r.headers.get('Content-Range') || '';
+      const m = /\/(\d+)\s*$/.exec(cr);
+      return m ? parseInt(m[1], 10) : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /** 分段并发下载并直接落盘。返回 'OK' | 'CANCELLED' | 'UNSUPPORTED' | 'SKIP'。 */
+  async function concurrentSaveFile(url, filename, hooks) {
+    const onProgress = (hooks && hooks.onProgress) || function () {};
+    if (typeof window.showSaveFilePicker !== 'function') return 'UNSUPPORTED';
+    const total = await probeTotalBytes(url);
+    if (!total) return 'UNSUPPORTED';          // 不是 206 → 服务端/中间层不支持 Range
+    if (total < SEG_MIN_BYTES) return 'SKIP';  // 小文件并发反而更慢
+
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({ suggestedName: filename || 'download' });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return 'CANCELLED';
+      return 'UNSUPPORTED';
+    }
+    const writable = await handle.createWritable();
+
+    const parts = Math.max(1, Math.min(SEG_CONCURRENCY, Math.ceil(total / SEG_CHUNK_MIN)));
+    const segSize = Math.ceil(total / parts);
+    const ctrl = new AbortController();
+    let loaded = 0;
+
+    const pullSegment = async (start, end) => {
+      const r = await fetch(url, {
+        headers: Object.assign(
+          { 'Range': `bytes=${start}-${end}`, 'X-Device-Id': deviceId() },
+          authBearerHeaders()),
+        credentials: 'include',
+        signal: ctrl.signal,
+      });
+      if (r.status !== 206) throw new Error(`分段请求被拒（HTTP ${r.status}）`);
+      if (!r.body || !r.body.getReader) throw new Error('当前浏览器不支持流式分段');
+      const reader = r.body.getReader();
+      let pos = start;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || !value.length) continue;
+        await writable.write({ type: 'write', position: pos, data: value });
+        pos += value.length;
+        loaded += value.length;
+        onProgress(loaded, total);
+      }
+    };
+
+    try {
+      const jobs = [];
+      for (let i = 0; i < parts; i++) {
+        const start = i * segSize;
+        if (start >= total) break;
+        const end = Math.min(total - 1, start + segSize - 1);
+        jobs.push(pullSegment(start, end));
+      }
+      await Promise.all(jobs);
+      await writable.close();
+      return 'OK';
+    } catch (err) {
+      try { ctrl.abort(); } catch (_) {}
+      try { await writable.abort(); } catch (_) {}
+      throw err;
+    }
+  }
+
+  // —— 云端直链保存（方案③，2026-10-20）——
+  // 背景：浏览器版「保存到本机」= 部署节点单流回传。节点在海外时跨境单连接实测
+  // ~120KB/s（418MB ≈ 49 分钟）。这里改成：先问后端要对象存储预签名直链（节点已上传
+  // 一次到 OSS/CDN），拿到就整页跳到直链，由浏览器直连 CDN 下载。
+  // 任何一步不可用（未配置 404 / 上传失败 502 / 超时 / 老浏览器）都**回退原 /file**，
+  // 保证「保存」这个动作永远能完成 —— 只是慢一点。
+  function bindTaskCloudSaveBridge(refs, task) {
+    const btn = refs.save;
+    if (btn.dataset.cloudBridge === task.task_id) return;
+    btn.dataset.cloudBridge = task.task_id;
+    const apiBase = refs.base || window.VDL_API_BASE || '';
+    btn.addEventListener('click', async (e) => {
+      if (btn.dataset.cloudSaving === '1') { e.preventDefault(); return; }
+      const fallback = btn.href;
+      if (typeof fetch !== 'function' || !fallback) return;   // 老环境：不拦，走原下载
+      // showSaveFilePicker 需要「用户激活」：自动保存时 refs.save.click() 是程序化点击
+      // （isTrusted=false），此时弹不出保存面板，直接走整页下载，别白试一次。
+      const userGesture = !!(e && e.isTrusted);
+      e.preventDefault();
+      btn.dataset.cloudSaving = '1';
+      const label = btn.textContent;
+      let direct = '';
+      try {
+        // 最多等 10 分钟让节点把文件传完（大文件 + 节点出网上传受限，别设太短）
+        for (let i = 0; i < 200; i++) {
+          const r = await fetch(`${apiBase}/api/tasks/${encodeURIComponent(task.task_id)}/direct_url`,
+            { headers: Object.assign({ 'X-Device-Id': deviceId() }, authBearerHeaders()) });
+          if (r.status === 200) {
+            const d = await r.json().catch(() => ({}));
+            if (d && d.url) { direct = d.url; break; }
+            break;
+          }
+          if (r.status !== 202) break;                       // 404/409/502 → 回退
+          const d = await r.json().catch(() => ({}));
+          const pct = (d && typeof d.percent === 'number') ? Math.floor(d.percent) : 0;
+          btn.textContent = `云端加速准备中 ${pct}%`;
+          if (refs.saveHint) {
+            refs.saveHint.hidden = false;
+            refs.saveHint.textContent = '正在把成品传到云端存储（只传一次，之后下载走 CDN 全速）…';
+          }
+          await new Promise((res) => setTimeout(res, 3000));
+        }
+      } catch (_) {
+        direct = '';
+      } finally {
+        btn.dataset.cloudSaving = '';
+        btn.textContent = label;
+      }
+      if (direct) {
+        if (refs.saveHint) {
+          refs.saveHint.hidden = false;
+          refs.saveHint.textContent = '已切换到云端 CDN 直连下载（比节点单流回传快数倍）';
+        }
+        window.location.href = direct;
+        return;
+      }
+
+      // 方案④：没有对象存储直链 → 并发分段直接落盘。
+      // 为什么值得：跨境单连接被限速在 ~120KB/s，8 连接可叠加到 ~670KB/s；而这条路径
+      // 不额外上传副本、不依赖 OSS，服务端 FileResponse 本来就支持 Range。
+      if (fallback && userGesture && typeof window.showSaveFilePicker === 'function') {
+        const t0 = Date.now();
+        let lastPaint = 0;
+        btn.dataset.cloudSaving = '1';
+        btn.textContent = '准备下载…';
+        try {
+          if (refs.saveHint) {
+            refs.saveHint.hidden = false;
+            refs.saveHint.textContent = '正在用多连接分段下载（跨境单连接被限速，多连接可叠加）…';
+          }
+          const ret = await concurrentSaveFile(
+            fallback,
+            task.filename || btn.dataset.saveName || 'download',
+            {
+              onProgress: (done, totalBytes) => {
+                const now = Date.now();
+                const finished = totalBytes > 0 && done >= totalBytes;
+                if (!finished && now - lastPaint < 250) return;   // 节流，别把主线程刷爆
+                lastPaint = now;
+                const pct = totalBytes ? Math.floor(done * 100 / totalBytes) : 0;
+                const sec = Math.max(0.001, (now - t0) / 1000);
+                btn.textContent = `下载中 ${pct}% · ${fmtSegBytes(done / sec)}/s`;
+                if (refs.saveHint) {
+                  refs.saveHint.textContent = `${fmtSegBytes(done)} / ${fmtSegBytes(totalBytes)} · 多连接分段下载`;
+                }
+              },
+            });
+          if (ret === 'OK') {
+            btn.textContent = '已保存 ✅';
+            if (refs.saveHint) refs.saveHint.textContent = '✅ 已保存到所选位置（多连接分段下载）';
+            setTimeout(() => { btn.textContent = label; }, 4000);
+            btn.dataset.cloudSaving = '';
+            return;
+          }
+          if (ret === 'CANCELLED') {
+            btn.textContent = label;
+            if (refs.saveHint) refs.saveHint.textContent = '已取消保存，可随时再点「保存到本机」。';
+            btn.dataset.cloudSaving = '';
+            return;
+          }
+          // SKIP / UNSUPPORTED → 落到下面整页下载（小文件或老浏览器，慢一点但稳）
+        } catch (err) {
+          btn.textContent = label;
+          if (refs.saveHint) {
+            refs.saveHint.hidden = false;
+            refs.saveHint.textContent = '分段下载失败，已改用普通下载（速度会慢一些）。';
+          }
+        } finally {
+          btn.dataset.cloudSaving = '';
+        }
+      }
+      // 回退：与旧版行为一致（浏览器直接拉 /file）
+      window.location.href = fallback;
+    });
+  }
+
   function bindTaskSaveBridge(refs, task) {
     const btn = refs.save;
     if (btn.dataset.bridgeTask === task.task_id) return;
@@ -2153,8 +2373,7 @@
     });
   }
 
-  const paintTask = (refs, task, autoSave) => {
-    const active = ACTIVE_STATES.includes(task.status);
+  const paintTask = (refs, task, autoSave) => {    const active = ACTIVE_STATES.includes(task.status);
     refs.title.textContent = task.title || refs.fallbackTitle || '解析中…';
     refs.platform.textContent = task.platform;
     refs.quality.textContent = task.quality;
@@ -2331,6 +2550,10 @@
     } else {
       // 任务在哪个节点跑，文件就从哪个节点取（浏览器版交给浏览器保存）
       refs.save.href = `${refs.base || window.VDL_API_BASE || ''}/api/tasks/${task.task_id}/file?download=1&device=${encodeURIComponent(deviceId())}`;
+      // 方案③（2026-10-20）：优先走对象存储直链。节点先把成品上传一次到 OSS/CDN，
+      // 浏览器再从 CDN 全速拉 —— 不再跨境单流回传（实测单流 ~120KB/s，418MB 要 49 分钟）。
+      // 未配置对象存储时后端回 404，这里静默回退原 /file，行为与旧版完全一致。
+      bindTaskCloudSaveBridge(refs, task);
     }
     const webAutoSave = autoSave && !isDesktopShell();
     refs.status.textContent = webAutoSave ? '已完成 · 已自动保存到本机' : '已完成';
@@ -12300,26 +12523,112 @@ el.dwVidPlayer.hidden = true;
     comSyncStyleFoldHint();  // 折叠卡摘要跟着变（收起状态下也能看到当前风格）
   };
 
+  // 配音引擎（edge-tts）健康提示：微软会周期性作废旧版客户端，表现是「配音全部 403」。
+  // 后端 tts_guard 会自动巡查并在判定版本过期时自动升级，这里只负责把结果讲清楚，
+  // 并在「升到最新仍被拒 / 升级失败」时给一个一键修复入口。
+  // ⚠️ 文案必须短：环境条是单行 nowrap + ellipsis，写长了用户只能看到前半句。
+  const ttsGuardAlert = (g) => {
+    if (!g || !g.status) return null;
+    const st = g.status;
+    if (st === 'ok') return null;
+    if (st === 'updated') {
+      return { level: 'ok', text: '配音引擎曾失效，已自动升级恢复' };
+    }
+    if (st === 'network') {
+      return { level: 'warn', text: '配音引擎连不上微软服务（网络/代理问题，非版本问题），会自动重试' };
+    }
+    if (st === 'disabled') {
+      return { level: 'warn', text: '配音引擎自动巡查已关闭（VDL_TTS_GUARD=0）' };
+    }
+    if (st === 'missing') {
+      return { level: 'err', text: '未安装 edge-tts，配音不可用' };
+    }
+    if (st === 'outdated_cannot_fix') {
+      return { level: 'err', text: 'edge-tts 已是最新仍被微软拒绝（协议变更），需等官方修复' };
+    }
+    // repair_failed / unknown
+    return { level: 'err', text: '配音引擎异常：' + String(g.message || st).slice(0, 60) };
+  };
+
+  /** 一键修复：下载最新 edge-tts 并热加载（不需要重装软件）。 */
+  const repairTtsEngine = async () => {
+    if (repairTtsEngine._busy) return;
+    repairTtsEngine._busy = true;
+    el.comEnvStatus.className = 'com-env-status warn';
+    el.comEnvStatus.textContent = '⏳ 正在升级配音引擎（edge-tts），请稍候…';
+    try {
+      const r = await request('/api/commentary/tts-guard/repair', { method: 'POST', timeout: 240000 });
+      const st = (r && r.state) || {};
+      if (r && r.ok) {
+        showToast((r.result && r.result.updated)
+          ? '配音引擎已升级到 ' + (r.result.version || '最新版') + '，已生效'
+          : '配音引擎已是 ' + (st.current_version || '最新版') + '，无需升级', 4000);
+      } else {
+        showToast('修复未成功：' + ((r && r.error) || (st.message || '请稍后重试')), 6000);
+      }
+    } catch (e) {
+      showToast('修复失败：' + (e.message || '未知错误'), 6000);
+    } finally {
+      repairTtsEngine._busy = false;
+      refreshCommentaryDiagnostics();
+    }
+  };
+
   const refreshCommentaryDiagnostics = async () => {
+    const box = el.comEnvStatus;
     try {
       const d = await request('/api/commentary/diagnostics');
       const issues = d.issues || [];
       const ready = d.ready && !issues.length;
       commentaryEnvReady = ready;
-      el.comEnvStatus.hidden = false;
-      el.comEnvStatus.className = 'com-env-status ' + (ready ? 'ok' : 'err');
+      // 配音引擎（edge-tts）状态：环境就绪但配音引擎异常时，条也要变色，
+      // 否则用户会以为「环境没问题」却跑出一部没旁白的片子。
+      const ga = ttsGuardAlert(d.tts_guard);
+      let level = ready ? 'ok' : 'err';
+      let text;
+      let detail = '';
       if (ready) {
-        el.comEnvStatus.textContent = '✓ 解说环境就绪：python=' + d.python + '  ffprobe=' + (d.ffmpeg_dir || '');
+        // 正常态保持精简（原来把 python/ffprobe 全路径铺在条上，窄屏会溢出截断），
+        // 排障需要的路径放 title，鼠标悬停即可看到。
+        detail = 'python=' + d.python + '\nffprobe=' + (d.ffmpeg_dir || '');
+        text = '✓ 解说环境就绪';
+        if (ga && ga.level !== 'ok') {
+          text = '⚠ ' + ga.text;
+          level = ga.level;
+        } else if (ga) {
+          text += ' · ' + ga.text;
+        }
       } else if (!d.enabled) {
-        el.comEnvStatus.textContent = '⚠ 解说功能未启用：未检测到 commentary-pipeline 目录。';
+        text = '⚠ 解说功能未启用：未检测到 commentary-pipeline 目录。';
       } else {
-        el.comEnvStatus.textContent = '⚠ 解说环境未就绪：' + issues.join('；') + '  dir=' + (d.dir || 'none') + ' python=' + (d.python || '');
+        text = '⚠ 解说环境未就绪：' + issues.join('；');
+        detail = 'dir=' + (d.dir || 'none') + '\npython=' + (d.python || '');
+      }
+      box.hidden = false;
+      box.className = 'com-env-status ' + level;
+      // 单行省略直接内联：这条横幅曾在某些布局下不受 #commentaryView 作用域样式约束，
+      // 长路径会把整条撑出视口（用户只看到半句话）。内联优先级最高，不受样式表影响。
+      box.style.whiteSpace = 'nowrap';
+      box.style.overflow = 'hidden';
+      box.style.textOverflow = 'ellipsis';
+      box.textContent = text;   // ⚠️ 必须在下方的 appendChild 之前：textContent 赋值会清空子节点
+      // 「自动修不了」才给人工入口：整条横幅可点（比只点几个字可靠得多），
+      // 尾部用 span 做视觉引导（pointer-events:none，让事件落到横幅本身）。
+      const needFix = !!(ga && ga.level === 'err');
+      box.dataset.fixable = needFix ? '1' : '0';
+      box.style.cursor = needFix ? 'pointer' : '';
+      box.title = needFix ? (detail ? detail + '\n\n点击此处升级 edge-tts' : '点击此处升级 edge-tts') : detail;
+      if (needFix) {
+        const hint = document.createElement('span');
+        hint.textContent = ' · 点此一键修复 →';
+        hint.style.cssText = 'font-weight:700;text-decoration:underline;pointer-events:none;';
+        box.appendChild(hint);
       }
     } catch (e) {
       commentaryEnvReady = false;
-      el.comEnvStatus.hidden = false;
-      el.comEnvStatus.className = 'com-env-status err';
-      el.comEnvStatus.textContent = '⚠ 无法读取解说环境诊断：' + (e.message || '未知错误');
+      box.hidden = false;
+      box.className = 'com-env-status err';
+      box.textContent = '⚠ 无法读取解说环境诊断：' + (e.message || '未知错误');
     }
   };
 
@@ -16199,6 +16508,14 @@ el.dwVidPlayer.hidden = true;
 
   el.comRefresh.addEventListener('click', loadCommentary);
 
+  // 配音引擎（edge-tts）被微软作废时，环境横幅会标成可点：点一下自动升级最新版。
+  // 绑在横幅本身而不是内部链接上 —— webview 里 <a href="#"> 的点击偶发不响应。
+  if (el.comEnvStatus) {
+    el.comEnvStatus.addEventListener('click', () => {
+      if (el.comEnvStatus.dataset.fixable === '1') repairTtsEngine();
+    });
+  }
+
   // 配音与音量：手动调节滑块 + 保存/重置
   el.comLoudness.addEventListener('input', onLoudnessInput);
   el.comLoudnessOff.addEventListener('change', onLoudnessOff);
@@ -16731,7 +17048,9 @@ el.dwVidPlayer.hidden = true;
   };
 
 
-  const loadLibrary = async () => {
+  const loadLibrary = async (force = false) => {
+    // 仅显式 true 才强制重扫（addEventListener 会把 event 对象当首参传入，需排除）
+    const isForce = force === true;
     const params = new URLSearchParams();
     const q = el.libSearch.value.trim();
     const platform = el.libPlatform.value;
@@ -16739,6 +17058,7 @@ el.dwVidPlayer.hidden = true;
     if (q) params.set('q', q);
     if (platform) params.set('platform', platform);
     if (kind && kind !== 'all') params.set('kind', kind);
+    if (isForce) params.set('force', '1');
     try {
       // 每次刷新清除旧选中（卡片重新渲染，旧 ID 已无效）
       selectedLibIds.clear();
@@ -17616,7 +17936,7 @@ el.dwVidPlayer.hidden = true;
   if (el.cryptoEncrypt) el.cryptoEncrypt.addEventListener('click', () => cryptoRun('encrypt'));
   if (el.cryptoDecrypt) el.cryptoDecrypt.addEventListener('click', () => cryptoRun('decrypt'));
 
-  el.libRefresh.addEventListener('click', loadLibrary);
+  el.libRefresh.addEventListener('click', () => loadLibrary(true));
   el.libSearch.addEventListener('input', debounce(loadLibrary, 300));
   el.libPlatform.addEventListener('change', loadLibrary);
   el.libKind.addEventListener('change', loadLibrary);

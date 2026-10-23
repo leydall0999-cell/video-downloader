@@ -501,6 +501,7 @@ echo "   ℹ️  PyInstaller $([ -x "$VENV/bin/pyinstaller" ] && "$VENV/bin/pyin
   --hidden-import downloader \
   --hidden-import cookie_cache \
   --hidden-import ydlp_update \
+  --hidden-import tts_guard \
   --hidden-import platforms \
   --hidden-import tasks \
   --hidden-import yt_dlp_plugins \

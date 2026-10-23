@@ -185,15 +185,29 @@ if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
   fi
   printf '%s\n' "$_pl_sha" > "$COMMENTARY_STAGING/_pipeline_sha.txt"
   echo "   ✔ 管线指纹: ${_pl_sha}"
+  # 管线依赖收集：
+  #   * sherpa_onnx —— server/routers/subtitle.py 的 SenseVoice 预识别（粤语/噪声增强）
+  #     与 onnxruntime（抠像/去水印/SR）都要显式 collect：它们在代码里是延迟导入，
+  #     PyInstaller 静态分析扫不到，漏了打包后一调用就 ImportError。
+  #   * edge_tts —— 解说配音（管线默认 TTS）。
+  #   * faster_whisper/ctranslate2 —— 解说转写主引擎，**与 Mac 版同一套**
+  #     （Mac DMG 内 requirements.txt 即 faster-whisper==1.2.1）。
+  #     2026-10-19 起改为硬性要求：缺它则 Windows 版解说功能退化成不可用，
+  #     属于必须中止构建的发布级缺陷，不再静默跳过。
   COMMENTARY_DATA=(
     --add-data "$(_win "$COMMENTARY_STAGING");commentary"
-    --collect-all faster_whisper
+    --collect-all sherpa_onnx
     --collect-all edge_tts
-    --collect-all ctranslate2
-    --collect-all tokenizers
     --collect-all onnxruntime
-    --collect-all av
   )
+  if "$VENV/Scripts/python.exe" -c "import faster_whisper" >/dev/null 2>&1; then
+    echo "   + faster_whisper 就位，收集转写引擎（faster-whisper + ctranslate2）"
+    COMMENTARY_DATA+=(--collect-all faster_whisper --collect-all ctranslate2 --collect-all tokenizers --collect-all av)
+  else
+    echo "❌ 构建环境缺少 faster_whisper —— Windows 解说功能将无法转写，构建中止。"
+    echo "   修复：$VENV/Scripts/pip.exe install -r $COMMENTARY_DIR/requirements.txt"
+    exit 1
+  fi
 else
   echo "⚠️  未找到解说管线($COMMENTARY_DIR)，解说功能不包含在包内；设 COMMENTARY_PIPELINE_DIR=<路径> 可启用"
   echo "⚠️  注意：无解说管线 = Windows 版失去解说/字幕管线能力，正式发布前必须确认本项！"
@@ -238,8 +252,11 @@ fi
   --paths "$(_win "$REPO")" \
   --add-data "$(_win "$REPO/web");web" \
   --add-data "$(_win "$REPO/yt_dlp_plugins");yt_dlp_plugins" \
+  --add-data "$(_win "$REPO/extension");extension" \
+  --add-data "$(_win "$REPO/server/assets");server/assets" \
   --hidden-import app \
   --hidden-import downloader \
+  --hidden-import tts_guard \
   --hidden-import platforms \
   --hidden-import tasks \
   --hidden-import yt_dlp_plugins \
@@ -290,8 +307,49 @@ else
   echo "⚠️  未找到 ffprobe，解说功能将不可用（下载不受影响）"
 fi
 
+echo "▶ 捆绑 MSVC 运行时（ctranslate2 / onnxruntime 的硬依赖）"
+# 🔴 2026-10-19 实测：ctranslate2.dll **不**自带 msvcp140.dll，它跟 Python 自带的
+#    vcruntime140.dll 不一样，属于 VC++ Redistributable。目标机没装过 VC++ 运行库
+#    （全新系统、精简版镜像、部分 Win10 老机器）时，`import faster_whisper` 直接
+#    `ImportError: DLL load failed while importing _ext` —— 解说功能整体不可用，
+#    且报错发生在子进程里，用户只看到「转写失败」这种无从下手的提示。
+#    这里把运行库 DLL 一并塞进包内（微软允许随应用再分发），Windows DLL 搜索会
+#    先查 exe 同级与 _internal，因此无需用户装任何东西。
+_MSVC_DLLS=(msvcp140.dll msvcp140_1.dll msvcp140_2.dll concrt140.dll vcruntime140.dll vcruntime140_1.dll)
+# 注意：本段在 version.txt 段之前执行，DIST_APP / RUN_ROOT 尚未定义，这里自行推导。
+_msvc_dist="$REPO/dist/VideoDownloader"
+if [ -d "$_msvc_dist/_internal" ]; then _msvc_run="$_msvc_dist/_internal"; else _msvc_run="$_msvc_dist"; fi
+_msvc_src=""
+for _cand in "/c/Windows/System32" "/c/Windows/SysWOW64" "$(dirname "$("$VENV/Scripts/python.exe" -c 'import sys;print(sys.executable)')")"; do
+  if [ -f "$_cand/msvcp140.dll" ]; then _msvc_src="$_cand"; break; fi
+done
+if [ -n "$_msvc_src" ]; then
+  _copied=0
+  for _d in "$_msvc_dist" "$_msvc_run"; do
+    [ -d "$_d" ] || continue
+    for _dll in "${_MSVC_DLLS[@]}"; do
+      if [ -f "$_msvc_src/$_dll" ]; then
+        cp "$_msvc_src/$_dll" "$_d/" 2>/dev/null && _copied=$((_copied+1))
+      fi
+    done
+  done
+  echo "   ✔ 已随包 VC++ 运行库: $_msvc_src（$_copied 个文件）"
+  if [ ! -f "$_msvc_run/msvcp140.dll" ] && [ ! -f "$_msvc_dist/msvcp140.dll" ]; then
+    echo "   ⚠️ msvcp140.dll 未能落盘 —— 目标机未装 VC++ 运行库时转写会失败"
+  fi
+else
+  echo "   ⚠️ 构建机找不到 msvcp140.dll，未随包 CRT；目标机需自装 VC++ 2015-2022 运行库"
+fi
+
 echo "▶ 捆绑 aria2c（种子后端随安装包自包含，从官方 GitHub release 下载 Windows 版）"
-"$VENV/Scripts/python.exe" "$REPO/desktop/bundle_aria2.py" "$REPO/dist/VideoDownloader" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用，需本机安装 aria2 或装 VC++ 运行库）"
+# 🔴 2026-10-20 实测修复：PyInstaller 6 的 onedir 布局下 sys._MEIPASS 指向 `_internal/`，
+#   而 server/torrent.py 的 _find_aria2c() 只查 `<_MEIPASS>/bin/aria2c.exe`。
+#   此前这里传的是产物根目录，aria2c 落到 `<根>/bin/`（与 deno.exe 所在的 `_internal/bin` 不同层），
+#   运行时永远找不到 → /api/torrents 恒 404「种子下载功能未启用」，即使打包步骤成功。
+#   故与下方 version.txt 的 RUN_ROOT 同口径：有 _internal 就传 _internal。
+_ARIA2_ROOT="$REPO/dist/VideoDownloader"
+if [ -d "$_ARIA2_ROOT/_internal" ]; then _ARIA2_ROOT="$_ARIA2_ROOT/_internal"; fi
+"$VENV/Scripts/python.exe" "$REPO/desktop/bundle_aria2.py" "$_ARIA2_ROOT" 2>&1 || echo "   ⚠️ aria2 打包跳过（种子功能将运行时禁用，需本机安装 aria2 或装 VC++ 运行库）"
 
 echo "▶ 写入版本身份（version.txt / build_version.txt）"
 # 语义化版本号来自仓库根 VERSION（仅发版时手工 +1），与 build_mac.sh 同一来源。
@@ -327,7 +385,8 @@ if command -v iscc >/dev/null 2>&1; then
 else
   for _p in "/c/Program Files (x86)/Inno Setup 6/iscc.exe" \
             "/c/Program Files/Inno Setup 6/iscc.exe" \
-            "/c/Program Files (x86)/Inno Setup 5/iscc.exe"; do
+            "/c/Program Files (x86)/Inno Setup 5/iscc.exe" \
+            "$REPO/.tools/InnoSetup6/ISCC.exe"; do
     [ -f "$_p" ] && { _ISCC="$_p"; break; }
   done
 fi

@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +36,40 @@ THUMB_DIR_NAME = ".thumbs"
 VAULT_TMP_DIR_NAME = ".vault_tmp"
 # 批量抽帧产物目录（`<标题>.抽帧[.n]`）：里面动辄上百张图，不进媒体库列表，避免刷屏。
 FRAMES_DIR_MARK = ".抽帧"
+# 内部工作区（2026-10-20 实测发现）：DOWNLOAD_DIR 下除了用户素材，还躺着各功能的
+# 临时工作目录。它们全是中间产物，绝不能当媒体库条目列出来 —— 实测一次 30s 视频去水印
+# 会往 `dewatermark/dw_work_<job>/frames/` 写 450+ 张 PNG，媒体库 456 条里 451 条是帧图，
+# 真正的片子被埋掉，且用户误点删除会毁掉正在跑的任务。
+#   · dw_work_*     去水印逐帧工作区（抽帧/掩码/中间视频）
+#   · preview_cache 去水印预览片段缓存
+#   · uploads       分片上传暂存（上传完成即落库，暂存件无需展示）
+# 产物本身（dw_img_* / dw_vid_* / dw_pdf_*）仍保留在库里，用户能找到成品。
+_SKIP_DIR_NAMES = {"preview_cache", "uploads"}
+_SKIP_DIR_PREFIXES = ("dw_work_",)
+# 去水印与抠像共用 DW_DIR（dewatermark/）放中间件：上传原件、缩略图、胶卷图、预览片段、
+# 分析/拆分临时图。只有 `dw_img_* / dw_vid_<job> / dw_pdf_<job> / mat_<job>.png` 是成品。
+_SKIP_FILE_PREFIXES = (
+    "dw_up_", "dw_pdf_up_", "dw_vid_up_", "dw_prev_up_",
+    "dw_vid_thumb_", "dw_vid_film_", "dw_prev_",
+    "mat_up_", "mat_anl_", "mat_spl_",
+)
 _THUMB_LOCK = threading.Lock()
+
+# --------------------------------------------------------------------------- #
+# 扫描缓存（性能）—— 见下方 scan_library 顶部注释
+# --------------------------------------------------------------------------- #
+# 前端搜索框每输入一次（防抖 300ms）就请求一次 /api/library；旧实现每次都
+# 递归 rglob 全盘 + 逐文件读 .vdlmeta.json + stat ⇒ 大库下「输入/切页签」明显卡。
+# 两级缓存：
+#   ① 扫描结果缓存（stale-while-revalidate）：命中直接返内存列表；过期时先返
+#      旧结果、后台刷新，搜索与切页签永不阻塞在磁盘扫描上。
+#   ② sidecar 记忆：(媒体 mtime/size + sidecar mtime/size) 未变则复用已解析 meta。
+_SCAN_TTL = 8.0
+_SCAN_CACHE: dict[str, dict[str, Any]] = {}
+_SCAN_INFLIGHT: set[str] = set()
+_SCAN_LOCK = threading.Lock()
+_SIDECAR_MEMO: dict[str, tuple[Any, dict[str, Any]]] = {}
+_SIDECAR_MEMO_CAP = 200_000
 
 
 # --------------------------------------------------------------------------- #
@@ -93,78 +128,181 @@ def _in_progress(path: Path) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# 缓存辅助
+# --------------------------------------------------------------------------- #
+def _load_sidecar_memo(path: Path) -> dict[str, Any]:
+    """带记忆的 sidecar 读取：sidecar 的 (mtime_ns, size) 未变则复用上次解析结果。
+
+    避免每次扫描都把所有 `.vdlmeta.json` 重新读盘 + JSON 解析（大库下是主要开销）。
+    """
+    sidecar = path.with_name(path.stem + ".vdlmeta.json")
+    try:
+        sst = sidecar.stat()
+        skey: Any = (sst.st_mtime_ns, sst.st_size)
+    except OSError:
+        skey = None
+    k = str(path)
+    hit = _SIDECAR_MEMO.get(k)
+    if hit is not None and hit[0] == skey:
+        return hit[1]
+    meta: dict[str, Any] = {}
+    if skey is not None:
+        try:
+            meta = json.loads(sidecar.read_text(encoding="utf-8") or "{}")
+        except Exception:
+            meta = {}
+    if len(_SIDECAR_MEMO) >= _SIDECAR_MEMO_CAP:
+        _SIDECAR_MEMO.clear()  # 软上限，防止长期运行无限增长
+    _SIDECAR_MEMO[k] = (skey, meta)
+    return meta
+
+
+def invalidate_library_cache(download_dir: Path | None = None) -> None:
+    """清除扫描缓存（删除/新增文件后调用，确保下次读取立即反映变化）。"""
+    with _SCAN_LOCK:
+        if download_dir is None:
+            _SCAN_CACHE.clear()
+            return
+        try:
+            _SCAN_CACHE.pop(str(download_dir.resolve()), None)
+        except OSError:
+            _SCAN_CACHE.pop(str(download_dir), None)
+
+
+# --------------------------------------------------------------------------- #
 # 扫描
 # --------------------------------------------------------------------------- #
-def scan_library(download_dir: Path) -> list[dict[str, Any]]:
-    """递归扫描下载目录下的媒体文件，返回按修改时间倒序的清单。"""
+def _scan_impl(download_dir: Path) -> list[dict[str, Any]]:
+    """真正遍历磁盘的实现：os.scandir 递归（DirEntry.stat 在 Windows 上零成本）。"""
     items: list[dict[str, Any]] = []
-    if not download_dir.exists():
+    try:
+        root = download_dir.resolve()
+    except OSError:
         return items
-    for path in download_dir.rglob("*"):
-        if not path.is_file():
+    if not root.is_dir():
+        return items
+    stack: list[str] = [str(root)]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                entries = list(it)
+        except OSError:
             continue
-        suffix = path.suffix.lower()
-        rel = path.relative_to(download_dir)
-        # 跳过缩略图缓存目录与转换目录里的临时/派生文件（可选包含 conversions，但跳过 .part）
-        if rel.parts and rel.parts[0] == THUMB_DIR_NAME:
-            continue
-        # 🔴 安全审计 2026-10-11（P1-7）：任何点开头目录（含保险箱解密临时目录
-        #    `.vault_tmp`）都不进媒体库 —— 里面的 .dec 是加密文件的**明文**产物。
-        if rel.parts and rel.parts[0] == VAULT_TMP_DIR_NAME:
-            continue
-        if any(part.startswith(".") for part in rel.parts[:-1]):
-            continue
-        # 跳过批量抽帧子目录（`<标题>.抽帧` / `<标题>.抽帧.2`）里的成百上千张帧图
-        if any(FRAMES_DIR_MARK in part for part in rel.parts[:-1]):
-            continue
-        if _in_progress(path):
-            continue
-        # 库内保险箱加密项：读明文文件头还原原名/类型，标记 encrypted
-        encrypted = False
-        if suffix == ENCRYPTED_EXT:
+        # 同一目录内的名字集合：`.part` 判定无需额外 stat
+        names = {e.name for e in entries}
+        for entry in entries:
             try:
-                orig_name, orig_kind, orig_ext = crypto_mod.read_header(path)
-            except Exception:
-                continue  # 损坏/非法的加密文件，跳过
-            kind = orig_kind
-            ext = orig_ext or "vdlenc"
-            name = orig_name
-            encrypted = True
-        elif suffix not in MEDIA_EXTS:
-            continue
-        else:
-            if suffix in AUDIO_EXTS:
-                kind = "audio"
-            elif suffix in IMAGE_EXTS:
-                kind = "image"
-            else:
-                kind = "video"
-            ext = suffix.lstrip(".")
-            name = path.name
-        meta = _load_sidecar(path)
-        if encrypted:
-            title = meta.get("title") or Path(orig_name).stem
-        else:
-            title = meta.get("title") or path.stem
-        stat = path.stat()
-        items.append(
-            {
-                "id": encode_id(rel.as_posix()),
-                "name": name,
-                "title": title,
-                "platform": meta.get("platform") or "",
-                "uploader": meta.get("uploader") or "",
-                "duration": int(meta.get("duration") or 0),
-                "source_url": meta.get("source_url") or "",
-                "thumbnail": meta.get("thumbnail") or "",  # 外链缩略图，可能失效，前端可回退
-                "kind": kind,
-                "ext": ext,
-                "size": stat.st_size,
-                "mtime": int(stat.st_mtime),
-                "encrypted": encrypted,
-            }
-        )
+                if entry.is_dir(follow_symlinks=False):
+                    nm = entry.name
+                    # 点开头目录（含 .thumbs / .vault_tmp）与批量抽帧目录一律不下钻
+                    if nm.startswith(".") or FRAMES_DIR_MARK in nm:
+                        continue
+                    # 功能内部工作区（去水印逐帧工作区、预览缓存、上传暂存）：不是用户素材
+                    if nm in _SKIP_DIR_NAMES or nm.startswith(_SKIP_DIR_PREFIXES):
+                        continue
+                    stack.append(entry.path)
+                    continue
+
+                name = entry.name
+                # 去水印的原始上传件 / 预览片段：中间产物，不进库
+                if name.startswith(_SKIP_FILE_PREFIXES):
+                    continue
+                suffix = os.path.splitext(name)[1].lower()
+                # yt-dlp 下载中会留 `<name>.part`，成品未就绪，跳过
+                if (name + ".part") in names:
+                    continue
+
+                p = Path(entry.path)
+                encrypted = False
+                if suffix == ENCRYPTED_EXT:
+                    try:
+                        orig_name, orig_kind, orig_ext = crypto_mod.read_header(p)
+                    except Exception:
+                        continue  # 损坏/非法加密文件，跳过
+                    kind = orig_kind
+                    ext = orig_ext or "vdlenc"
+                    name = orig_name
+                    encrypted = True
+                elif suffix not in MEDIA_EXTS:
+                    continue
+                else:
+                    if suffix in AUDIO_EXTS:
+                        kind = "audio"
+                    elif suffix in IMAGE_EXTS:
+                        kind = "image"
+                    else:
+                        kind = "video"
+                    ext = suffix.lstrip(".")
+
+                meta = _load_sidecar_memo(p)
+                if encrypted:
+                    title = meta.get("title") or Path(orig_name).stem
+                else:
+                    title = meta.get("title") or p.stem
+                st = entry.stat(follow_symlinks=False)
+                items.append(
+                    {
+                        "id": encode_id(p.relative_to(root).as_posix()),
+                        "name": name,
+                        "title": title,
+                        "platform": meta.get("platform") or "",
+                        "uploader": meta.get("uploader") or "",
+                        "duration": int(meta.get("duration") or 0),
+                        "source_url": meta.get("source_url") or "",
+                        "thumbnail": meta.get("thumbnail") or "",
+                        "kind": kind,
+                        "ext": ext,
+                        "size": st.st_size,
+                        "mtime": int(st.st_mtime),
+                        "encrypted": encrypted,
+                    }
+                )
+            except OSError:
+                continue
     items.sort(key=lambda x: x["mtime"], reverse=True)
+    return items
+
+
+def _schedule_refresh(key: str, download_dir: Path) -> None:
+    """缓存过期时的后台刷新（stale-while-revalidate），同一目录只跑一个。"""
+    with _SCAN_LOCK:
+        if key in _SCAN_INFLIGHT:
+            return
+        _SCAN_INFLIGHT.add(key)
+
+    def _run() -> None:
+        try:
+            items = _scan_impl(download_dir)
+            with _SCAN_LOCK:
+                _SCAN_CACHE[key] = {"ts": time.monotonic(), "items": items}
+        finally:
+            with _SCAN_LOCK:
+                _SCAN_INFLIGHT.discard(key)
+
+    threading.Thread(target=_run, name="vdl-lib-refresh", daemon=True).start()
+
+
+def scan_library(download_dir: Path, force: bool = False) -> list[dict[str, Any]]:
+    """返回媒体库清单（按修改时间倒序），带缓存。
+
+    force=True：跳过缓存同步重扫（供前端「刷新」按钮使用）。
+    其余情况：命中缓存直接返回；过期则先返回旧结果并后台刷新。
+    """
+    try:
+        key = str(download_dir.resolve())
+    except OSError:
+        key = str(download_dir)
+    with _SCAN_LOCK:
+        ent = _SCAN_CACHE.get(key)
+    if ent is not None and not force:
+        if time.monotonic() - ent["ts"] < _SCAN_TTL:
+            return ent["items"]
+        _schedule_refresh(key, download_dir)
+        return ent["items"]
+    items = _scan_impl(download_dir)
+    with _SCAN_LOCK:
+        _SCAN_CACHE[key] = {"ts": time.monotonic(), "items": items}
     return items
 
 
@@ -234,4 +372,6 @@ def delete_item(download_dir: Path, lib_id: str) -> bool:
                 f.unlink()
         except OSError:
             pass
+    # 删除后清缓存，下一次读取立即反映（不必等 TTL 过期）
+    invalidate_library_cache(download_dir)
     return True

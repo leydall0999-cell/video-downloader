@@ -95,8 +95,24 @@ def test_stream_proxy_upstream_error():
     print("✅ /api/stream/proxy 上游失败分支返回 502（_clean_message 雷已排，无 NameError）")
 
 
+def test_direct_url_route_wired():
+    """方案③（2026-10-20）：对象存储直链路由必须已装配。
+
+    前端「保存到本机」会先打这条接口；若路由没挂上（Starlette 404），前端会把
+    「没配对象存储」和「路由不存在」混为一谈，只能盲回退 —— 所以这里钉死：
+    必须是业务 404（任务不存在），不能是 Not Found。
+    """
+    c = _client()
+    r = c.get("/api/tasks/nope/direct_url")
+    assert r.status_code == 404, f"预期业务 404，实际 {r.status_code} {r.text[:200]}"
+    detail = (r.json() or {}).get("detail", "")
+    assert detail != "Not Found", "direct_url 路由未挂载（Starlette Not Found）"
+    print("✅ /api/tasks/{id}/direct_url 已装配（业务 404，非路由缺失）")
+
+
 if __name__ == "__main__":
     test_root_serves_html()
     test_core_routes_wired()
     test_stream_proxy_upstream_error()
+    test_direct_url_route_wired()
     print("\n🎉 后端无头冒烟测试全部通过 — 核心路由装配正确，沙盒内可验证。")

@@ -904,9 +904,18 @@ def _run_update_win(job_id: str, data: dict, work: Path, target_ver: str) -> Non
         _set("applying", 98)
         # 脱离父进程启动：本进程随后会被安装器关闭（/CLOSEAPPLICATIONS），
         # 安装器不能是子进程树里的成员，否则一并被杀。
+        # 🔴 2026-10-18 修复：DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP 只是
+        #    "无控制台/新进程组"，**并不能**把安装器带出主进程的 Windows 作业对象
+        #    （launcher _setup_win_job_object，KILL_ON_JOB_CLOSE）——安装器
+        #    /CLOSEAPPLICATIONS 关停本进程 → 作业句柄关闭 → 级联终结会把安装器
+        #    一起杀掉，更新烂尾。正确解法：安装器侧 CREATE_BREAKAWAY_FROM_JOB
+        #    （0x01000000）+ 作业侧 JOB_OBJECT_LIMIT_BREAKAWAY_OK（已配对，
+        #    见 launcher）。两者缺一不可；作业设置失败时该标志被系统忽略，无害。
         kwargs: dict[str, Any] = {}
         if os.name == "nt":
-            kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            kwargs["creationflags"] = (
+                0x00000008 | 0x00000200 | 0x01000000
+            )  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB
         else:
             kwargs["start_new_session"] = True
         subprocess.Popen(

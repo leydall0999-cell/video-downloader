@@ -666,7 +666,49 @@ def commentary_diagnostics() -> dict:
         "ready": app.COMMENTARY_RT.ready(),
         "issues": app.COMMENTARY_RT.issues,
         "frozen": getattr(app.sys, "frozen", False),
+        # 配音引擎（edge-tts）健康状态：微软会周期性作废旧版，这里给出「是否正常 /
+        # 是否已自动升级 / 是否已是最新仍被拒」，前端据此提示，不用用户自己猜。
+        "tts_guard": _tts_guard_state(),
     }
+
+
+def _tts_guard_state() -> dict:
+    try:
+        return app.tts_guard.status()
+    except Exception as exc:  # noqa: BLE001 - 诊断接口本身不能因为子系统异常而 500
+        return {"ok": False, "status": "unknown", "message": f"无法读取配音引擎状态：{exc}"}
+
+
+@router.get("/api/commentary/tts-guard")
+def commentary_tts_guard() -> dict:
+    """配音引擎（edge-tts）巡查状态。
+
+    背景：解说配音走 edge-tts，微软会周期性作废旧版客户端（403 / NoAudioReceived）。
+    这不是功能坏了 —— 应用内会自动巡查并在判定版本过期时自动升级，
+    本接口把「当前版本 / 最近一次探活结果 / 是否已自动修复」摊开给用户看。
+    """
+    return {"ok": True, "state": _tts_guard_state()}
+
+
+@router.post("/api/commentary/tts-guard/check")
+def commentary_tts_guard_check(repair: bool = True) -> dict:
+    """立刻探活一次（真合成一句「你好」，约 1~3 秒；判定版本过期会顺带自动升级）。"""
+    try:
+        st = app.tts_guard.check(auto_repair=bool(repair), force=True)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"探活失败：{exc}", "state": _tts_guard_state()}
+    return {"ok": True, "state": st}
+
+
+@router.post("/api/commentary/tts-guard/repair")
+def commentary_tts_guard_repair() -> dict:
+    """一键修复：强制下载最新 edge-tts 并热加载（不等故障判定）。"""
+    try:
+        r = app.tts_guard.repair(reason="用户手动修复", force=True)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"修复失败：{exc}", "state": _tts_guard_state()}
+    return {"ok": bool(r.get("ok")), "result": r, "state": _tts_guard_state()}
+
 
 def _effective_duration(src_path, trim_start: float = 0.0, trim_end: float = 0.0,
                         drama_start_sec: float | None = None,

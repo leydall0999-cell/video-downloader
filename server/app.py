@@ -61,6 +61,12 @@ win_no_window.install()
 import ydlp_update
 ydlp_update.bootstrap()
 
+# 同理：解说配音走 edge-tts，微软会周期性作废旧版（403 / NoAudioReceived）。
+# 在**任何 import edge_tts 之前**把用户目录里的热补丁层插到 sys.path 最前，
+# 这样「自动巡查发现失效 → 下载新版 → 下次启动即生效」，不必重新打包发版。
+import tts_guard
+tts_guard.bootstrap()
+
 import downloader
 import library as library_mod
 import subtitles as subtitles_mod
@@ -1260,6 +1266,13 @@ class _CommentaryRuntime:
     def _check_deps(self, py: str) -> bool:
         if not self.python_ok:
             return False
+        # 🔴 包内捆绑模式（单二进制双角色）下**不能**用 `python -c` 探测依赖：
+        #    sys.executable 是 GUI 主程序，它不认 `-c`，会当成正常启动再拉起一个应用实例，
+        #    30 秒后超时返回非 0 —— 于是明明依赖齐全却恒定报「解说 Python 缺少依赖」，
+        #    整个解说功能被卡在「环境未就绪」。依赖完整性由构建期 --collect-all 保证；
+        #    若真缺包，worker 子进程会在对应阶段抛 ImportError 并回显到任务日志。
+        if os.environ.get("VDL_COMMENTARY_BUNDLED") == "1" or COMMENTARY_MODE == "bundled":
+            return True
         try:
             r = subprocess.run(
                 [py, "-c", "import faster_whisper, edge_tts"],
@@ -1336,7 +1349,11 @@ class _CommentaryRuntime:
         # 启动环境意外带入了该变量（某些启动方式会），首层 worker 就会被误拦、任务在「准备输入文件」即失败。
         # server 进程永远不是 worker，因此这里显式清除，保证首层 worker 一定以 depth=0 启动。
         env.pop("VDL_WORKER_DEPTH", None)
-        env.setdefault("PYTHONIOENCODING", "utf-8")
+        # 🔴 2026-10-20 Windows 实测缺陷：这里原本是 setdefault，若父进程环境里已有
+        #    空值/GBK 的 PYTHONIOENCODING 就不会覆盖，管线打印 `¥` 直接 UnicodeEncodeError。
+        #    改为强制赋值 + 打开 UTF-8 模式（PYTHONUTF8 影响 open() 默认编码，覆盖更广）。
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
         if COMMENTARY_DIR:
             env["COMMENTARY_BASE"] = str(COMMENTARY_DIR)
         if self.ffmpeg_dir:
@@ -1851,6 +1868,24 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
         except OSError:
             shutil.copyfile(use_src, in_file)  # 跨挂载点软链失败则退化为复制
 
+        # 🔴 2026-10-20 Windows 实测缺陷：`os.symlink` 有时**不抛异常却也没建出可用链接**
+        #    （实测结果是一个 0 字节普通文件），于是 worker 拿到空视频：任务一直 running、
+        #    6 个步骤全停在 pending、日志一片空白，用户视角就是「点了没反应」。
+        #    这里以「源文件字节数」为唯一判据复核，对不上就删掉重新实体复制（跨卷/无权限都覆盖）。
+        try:
+            _src_sz = os.path.getsize(use_src)
+            _dst_sz = os.path.getsize(in_file)
+        except OSError:
+            _src_sz, _dst_sz = 1, 0
+        if _dst_sz != _src_sz:
+            try:
+                if in_file.is_symlink() or in_file.exists():
+                    in_file.unlink()
+            except OSError:
+                pass
+            shutil.copyfile(use_src, in_file)
+            print(f"[桥接] 软链不可用（目标 {_dst_sz}B ≠ 源 {_src_sz}B），已改为实体复制", flush=True)
+
         # 子进程参数：edit_only 真 → 走 --edit-only（吃已审核脚本，不重跑转录）；否则 --auto。
         # 加 -u 关闭 stdout 块缓冲，让进度行实时回流（ETA 才平滑）。
         # bundled 模式：用主程序自身(sys.executable)以 --vdl-commentary-worker 重入为 worker，
@@ -2323,6 +2358,13 @@ async def lifespan(_: FastAPI):
         engine_idle.ensure_started()
     except Exception:
         logger.exception("启动引擎空闲卸载巡检失败")
+    # 配音引擎（edge-tts）自动巡查：启动 25s 后首次探活，之后每 6 小时一次；
+    # 判定「版本被微软作废」时自动下载新版到用户目录热补丁层并热加载。
+    # 必须放后台线程：探活要联网合成一句话，绝不能挡住服务监听。
+    try:
+        tts_guard.ensure_started()
+    except Exception:
+        logger.exception("启动配音引擎巡查失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:
@@ -3408,23 +3450,45 @@ def _run_voice_preview_inprocess(text: str, voice: str, output_mp3: Path, timeou
         "zh-CN-XiaoxiaoNeural",
     ]
 
-    async def _try(text: str, v: str, timeout_s: float) -> bool:
+    # 用容器持模块引用：自愈升级后要换成热加载的新模块（局部名重新赋值会遮蔽闭包）
+    _mod = {"m": edge_tts}
+    _last_exc: list[BaseException] = []
+    tried: list[str] = []
+
+    async def _try(v: str, timeout_s: float) -> bool:
         try:
-            await asyncio.wait_for(edge_tts.Communicate(text, v).save(str(output_mp3)), timeout=timeout_s)
+            await asyncio.wait_for(_mod["m"].Communicate(text, v).save(str(output_mp3)), timeout=timeout_s)
             return output_mp3.exists() and output_mp3.stat().st_size > 100
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - 逐音色试，末次错误留作分类
+            _last_exc.append(exc)
             return False
 
-    async def _main():
+    async def _one_round(first: str) -> bool:
+        # 首选音色试 2 次（防网络瞬抖），失败再走回退链
         for _ in range(2):
-            if await _try(text, voice, 20):
-                return
-        tried = [voice]
+            if await _try(first, 20):
+                return True
         for fb in FALLBACK_VOICES:
-            if fb == voice:
+            if fb == first:
                 continue
-            tried.append(fb)
-            if await _try(text, fb, 20):
+            if fb not in tried:
+                tried.append(fb)
+            if await _try(fb, 20):
+                return True
+        return False
+
+    async def _main():
+        tried.append(voice)
+        if await _one_round(voice):
+            return
+        # 🔴 2026-10-20：全部音色都失败，最可能是 edge-tts 客户端版本被微软作废（403）。
+        #    这不是功能坏了 —— 自动升级并热加载后重跑一轮，让用户点「试听」不至于直接被拒。
+        exc = _last_exc[-1] if _last_exc else None
+        if tts_guard.repair_after_auth_error(exc):
+            import importlib
+            importlib.invalidate_caches()
+            _mod["m"] = importlib.import_module("edge_tts")
+            if await _one_round(voice):
                 return
         raise RuntimeError(f"edge-tts 生成失败: 已尝试 {', '.join(tried)}，均无法合成该文本")
 

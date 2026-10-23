@@ -7,6 +7,7 @@ handler 原样搬入、零改引用。路由用 @router.get/post 挂载，已在
 """
 import app
 import hmac
+import object_store
 import re
 from fastapi import APIRouter
 router = APIRouter()
@@ -42,6 +43,10 @@ def _read_build_version() -> str:
     exe = getattr(app.sys, 'executable', '')
     if exe:
         candidates.append(app.Path(exe).resolve().parent.parent / 'Resources' / 'build_version.txt')
+        # Windows onedir（PyInstaller）等：构建脚本就写在可执行文件同级。
+        # 缺这一条时 Windows 版 /api/version 恒返回 'dev'（2026-10-20 实测），
+        # 更新自校验、stale 进程识别全都失灵。与 system.py 的 _candidates_build_txt 对齐。
+        candidates.append(app.Path(exe).resolve().parent / 'build_version.txt')
     candidates.append(app.Path(__file__).resolve().parent.parent / 'build_version.txt')
     for c in candidates:
         if c.exists():
@@ -772,6 +777,46 @@ def download_file(task_id: str, request: app.Request, download: int=0) -> app.Re
             headers={'Content-Disposition': f"attachment; filename=\"{_ascii}\"; filename*=UTF-8''{_encoded}"},
         )
     return app.FileResponse(path=task.filepath, filename=task.filepath.name, media_type=_mt)
+
+
+@router.get('/api/tasks/{task_id}/direct_url')
+def task_direct_url(task_id: str, request: app.Request) -> app.Response:
+    """对象存储直链（方案③，2026-10-20）。
+
+    为什么要有这条：`/file?download=1` 是**部署节点单流回传**。节点在海外时
+    （Cloudflare → Railway）跨境单连接实测 ~120KB/s，418MB 要 49 分钟。
+    直链方案让节点先上传一次到 OSS/CDN，浏览器再从 CDN 全速拉 —— 一次上传，
+    之后重下/多设备/分享都是全速。
+
+    状态码契约（前端据此决定是否回退，必须严格遵守）：
+      200 就绪：{status:'ready', url, expires_in, size, cdn}
+      202 上传中：{status:'uploading', uploaded, total, percent}
+      404 未配置对象存储（前端**静默**回退 /file，行为与旧版一致）
+      409 成品还没准备好
+      502 上传失败（前端回退 /file，并提示走的是慢通道）
+    """
+    task = app._require_owned_task(task_id, request)
+    if task.status != 'completed' or not task.filepath or (not task.filepath.exists()):
+        raise app.HTTPException(status_code=409, detail='文件尚未准备好')
+    if not object_store.enabled():
+        return app.JSONResponse(status_code=404, content={
+            'status': 'disabled', 'detail': '未配置对象存储（VDL_OSS_*）'})
+    try:
+        state = object_store.ensure_uploaded(
+            task_id, task.filepath, getattr(task, 'filename', '') or task.filepath.name)
+    except Exception as e:  # noqa: BLE001 — 任何异常都不能挡住「能下载」这条底线
+        app.logger.warning('对象存储直链失败 task=%s：%s', task_id, e)
+        return app.JSONResponse(status_code=502, content={
+            'status': 'failed', 'error': str(e)[:200]})
+    status = state.get('status')
+    if status == 'ready':
+        return state
+    if status == 'uploading':
+        return app.JSONResponse(status_code=202, content=state)
+    if status == 'disabled':
+        return app.JSONResponse(status_code=404, content=state)
+    return app.JSONResponse(status_code=502, content=state)
+
 
 @router.delete('/api/tasks/{task_id}')
 def cancel_task(task_id: str, request: app.Request) -> dict:

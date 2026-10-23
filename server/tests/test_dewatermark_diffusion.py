@@ -135,7 +135,12 @@ class TestDiffusionOnDemandRuntime(unittest.TestCase):
         so = os.path.join(lib, "fakepkg", "_c.so")
         self.assertTrue(os.path.exists(so))
         self.assertEqual((open(os.path.join(lib, "fakepkg", "__init__.py")).read()), "X = 1\n")
-        self.assertTrue(stat.S_IMODE(os.stat(so).st_mode) & stat.S_IXUSR)
+        # chmod 0o755 的可执行位只在 POSIX 有意义：Windows 的 st_mode 不含权限位，
+        # 该项恒为 0（2026-10-20 Win 实测跑红，与产品行为无关）。Windows 上改判「文件存在且非空」。
+        if os.name == "nt":
+            self.assertGreater(os.path.getsize(so), 0)
+        else:
+            self.assertTrue(stat.S_IMODE(os.stat(so).st_mode) & stat.S_IXUSR)
         self.assertTrue(os.path.exists(os.path.join(lib, ".installed", "fakepkg-1.0-py3-none-any.whl-done")))
 
     def test_ensure_runtime_orchestrates_install(self):

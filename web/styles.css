@@ -6482,6 +6482,12 @@ body.com-hist-open #comHistScrim { opacity: 1; pointer-events: auto; }
    ===== v2 三轮打磨（2026-09-17）：紧凑节奏 + 卡片风格统一 + 窄中栏加宽 =====
    ====================================================================== */
 /* 1) 顶部两横条瘦身：环境横幅一行化、素材条减高，把纵向空间还给预览舞台 */
+/* 环境横幅里可能内联一个「一键修复」链接（配音引擎被微软作废时），
+   链接继承条内文字颜色，靠下划线区分，不额外占行。 */
+#commentaryView .com-env-status a {
+  color: inherit; font-weight: 700; text-decoration: underline;
+  margin-left: .15rem; cursor: pointer;
+}
 #commentaryView .com-env-status {
   padding: .35rem .7rem; font-size: .74rem; line-height: 1.45;
   margin: .15rem 0 .5rem;

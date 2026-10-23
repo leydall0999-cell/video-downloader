@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -31,9 +32,21 @@ _MATTING_CAPS_CACHE: dict[str, Any] = {"ts": 0.0, "caps": None}
 
 
 def _config_dir() -> Path:
-    """配置目录：VDL_HOME 可覆盖（测试隔离用），否则 ~/.video-downloader。"""
+    """配置目录：VDL_HOME 可覆盖（测试隔离用）。
+
+    Windows 冻结包必须用 %APPDATA%\\VideoDownloader —— 与 llm_config / auth_store /
+    membership 等模块保持同一处，运维下发的 gateway_managed.json 才读得到。
+    🔴 2026-10-20 实测缺陷：此前 Windows 也读 ~/.video-downloader，而安装版把
+       gateway_managed.json 写在 %APPDATA%\\VideoDownloader ⇒ 网关恒判「未接入」
+       ⇒ inject_llm_env 注入不到 LLM_API_KEY ⇒ 解说管线启动即报「LLM_API_KEY 未设置」。
+    """
     override = (os.environ.get("VDL_HOME") or "").strip()
-    base = Path(override) if override else Path.home() / ".video-downloader"
+    if override:
+        base = Path(override)
+    elif sys.platform == "win32" and getattr(sys, "frozen", False):
+        base = Path(os.environ.get("APPDATA", str(Path.home()))) / "VideoDownloader"
+    else:
+        base = Path.home() / ".video-downloader"
     try:
         base.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -41,12 +54,25 @@ def _config_dir() -> Path:
     return base
 
 
+def _legacy(path: Path) -> Path:
+    """新位置没文件时回落到历史位置 ~/.video-downloader（macOS 上两者相同）。"""
+    try:
+        if path.is_file():
+            return path
+        old = Path.home() / ".video-downloader" / path.name
+        if old.is_file():
+            return old
+    except OSError:
+        pass
+    return path
+
+
 def _user_path() -> Path:
-    return _config_dir() / "gateway.json"
+    return _legacy(_config_dir() / "gateway.json")
 
 
 def _managed_path() -> Path:
-    return _config_dir() / "gateway_managed.json"
+    return _legacy(_config_dir() / "gateway_managed.json")
 
 
 def _read_json(path: Path) -> dict[str, Any]:

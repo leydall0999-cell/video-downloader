@@ -157,13 +157,34 @@ def _spill(src, target: Path) -> None:
     if target.name in ("aria2c", "aria2c.exe"):
         target.chmod(0o755)
 
+def _bundle_from_cache(bin_dir: Path) -> bool:
+    """离线兜底：用构建机 .tools/ 下已缓存的 aria2 二进制（此前成功下载留下的）。
+
+    2026-10-20：本次构建机出网走代理，GitHub release 502，打包静默降级 → 种子功能被禁用。
+    缓存命中即用，避免「明明本地有二进制却因为一次下载失败少了个功能」。
+    """
+    tools = Path(__file__).resolve().parent.parent / ".tools"
+    exe = "aria2c.exe" if sys.platform == "win32" else "aria2c"
+    cands = sorted(tools.glob(f"aria2_x/**/{exe}")) + [tools / exe]
+    for c in cands:
+        try:
+            if c.is_file() and c.stat().st_size > 0:
+                shutil.copyfile(c, bin_dir / exe)
+                (bin_dir / exe).chmod(0o755)
+                _log(f"下载不可用，改用本地缓存 {c}")
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _bundle_download(platform_key: str, bin_dir: Path) -> bool:
     fname, kind = _DOWNLOAD[platform_key]
     url = f"{_RELEASE_BASE}/{fname}"
     with tempfile.TemporaryDirectory() as td:
         archive = Path(td) / fname
         if not _download(url, archive):
-            return False
+            return _bundle_from_cache(bin_dir)
         _extract_flat(archive, kind, bin_dir)
     return True
 

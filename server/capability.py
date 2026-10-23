@@ -15,6 +15,33 @@ logger = logging.getLogger("vdl.capability")
 
 def _total_ram_bytes() -> int:
     """跨平台取物理内存字节数；取不到返回 0。"""
+    # Windows：`os.sysconf` 是 POSIX 专有（Windows 上根本没有该属性），/proc/meminfo 也不存在，
+    # 此前三个分支全落空 → 恒返回 0。后果不只是 UI 显示「约 0.0 GB」：
+    #   tier 被误判成 low，扩散档（需 16GB+）在 Windows 上**永久置灰**，32GB 机器也用不了。
+    # 2026-10-20 实测发现（/api/dw/capability 报 ram_gb=0.0）。
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            st = _MEMORYSTATUSEX()
+            st.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                return int(st.ullTotalPhys)
+        except Exception:  # noqa: BLE001 —— 探测失败退回 0，由调用方按 low 处理
+            pass
     # POSIX（macOS / Linux 均支持 sysconf 物理页）
     try:
         if hasattr(os, "sysconf") and "SC_PHYS_PAGES" in os.sysconf_names \

@@ -742,10 +742,15 @@ def concat_local_api(payload: LocalConcatRequest, request: app.Request) -> dict:
         # 安全校验：拒绝明显可疑的路径（如系统根目录、父目录穿越）
         try:
             resolved = p.resolve()
-            if not str(resolved).startswith(("/Users/", "/home/", "/Volumes/", "C:\\\\")):
-                raise app.HTTPException(status_code=400, detail=f"路径不在用户目录下：{path}")
         except Exception:
             raise app.HTTPException(status_code=400, detail=f"无法解析路径：{path}")
+        # ⚠️ 2026-10-20 实测修复两处：
+        #   ① Windows 前缀写字面量 `"C:\\\\"`（= C: + 两个反斜杠），而 str(Path) 是单反斜杠，
+        #      于是**任何** Windows 本机路径都被判「不在用户目录下」→ 本机合并必定 400；
+        #   ② 原来的 except Exception 把上面刚抛的 HTTPException 也吞了，
+        #      真正的「路径不在用户目录下」被改写成「无法解析路径」，排障方向被带偏。
+        if not str(resolved).startswith(("/Users/", "/home/", "/Volumes/", "C:\\")):
+            raise app.HTTPException(status_code=400, detail=f"路径不在用户目录下：{path}")
         seg_paths.append(resolved)
     return _create_concat_job(seg_paths, payload.out_format, payload.out_name,
                               payload.to_library, payload.audio_only, request)

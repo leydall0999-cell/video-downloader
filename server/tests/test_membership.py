@@ -256,6 +256,30 @@ def test_daily_quota_unlimited_and_unknown():
     assert st.quota_state("whatever_future")["unknown"] is True
     print("✅ 日配额：未知/已下线资源一律 fail-open 放行")
 
+def test_negative_member_limit_means_unlimited():
+    """负数配额 = 不限量（2026-10-20 实测缺陷）。
+
+    会员档 `subtitle_extract.member_limit = -1` 表示「无限」。原实现直接拿它当上限做
+    `used < limit` 比较，会员反而永远 False → 字幕提取被 402
+    「今日字幕提取免费额度已用尽（-1/日）」挡住，免费档（2/日）却能正常用。
+    """
+    cur = [T0]
+    st = _mkstore(tempfile.mkdtemp(), cur)
+    st.activate("download_year")           # 先成为会员
+    orig = M.effective_daily_limits
+    M.effective_daily_limits = lambda: ({"subtitle": -1}, {"subtitle": 2})
+    try:
+        q = st.quota_state("subtitle")
+        assert q["allowed"] is True, f"会员 -1 应视为不限量，实际 {q}"
+        assert q.get("unlimited") is True
+        # 连跑多次都必须放行（不是「剩余 0 次」）
+        for i in range(5):
+            assert st.use_daily("subtitle")["ok"] is True, f"第 {i+1} 次被拦"
+    finally:
+        M.effective_daily_limits = orig
+    print("✅ 负数会员配额 = 不限量，会员字幕提取不再被 402 拦")
+
+
 def test_daily_quota_reset_on_new_day():
     cur = [T0]
     st = _mkstore(tempfile.mkdtemp(), cur)
@@ -337,6 +361,7 @@ if __name__ == "__main__":
         test_new_quota_keys_roll_over_daily,
         test_member_quota_upgrade_after_activation,
         test_daily_quota_unlimited_and_unknown,
+        test_negative_member_limit_means_unlimited,
         test_daily_quota_reset_on_new_day,
         test_cloud_authority_syncs_daily_usage,
         test_state_persists_across_instances,

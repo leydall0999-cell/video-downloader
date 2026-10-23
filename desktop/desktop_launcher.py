@@ -18,6 +18,17 @@ import subprocess
 import threading
 from pathlib import Path
 
+# 🔴 2026-10-18：import webview（连带 pythonnet / .NET runtime 初始化）必须尽早。
+#    曾出现：后端重模块（fastapi/uvicorn/PIL/cv2/onnxruntime 等）在子线程 import 完成、
+#    服务就绪后，主线程才 import webview → 部分 Windows 机器上 GUI 线程创建窗口
+#    **静默失败**：进程活着、API 200、WebView2 渲染进程也在跑，但 EnumWindows
+#    找不到该进程的任何窗口（用户看到"程序打不开/白屏"）。提前到进程干净期加载，
+#    避开与后端 DLL/线程环境的相互干扰。失败不致命：下方 webview 分支有兜底。
+try:
+    import webview as _webview
+except Exception:  # pragma: no cover - 打包缺件时走浏览器回落
+    _webview = None
+
 try:
     import fcntl as _fcntl  # macOS / Linux
 except ImportError:  # pragma: no cover - Windows 走 .exe 单实例
@@ -42,6 +53,16 @@ WEB_DIR = BASE / "web"
 PLUGINS_DIR = BASE / "yt_dlp_plugins"
 # 提前把 server 目录注入路径，供 _detect_commentary 直接 import commentary_locate
 sys.path.insert(0, str(SERVER_DIR))
+
+# 配音引擎热补丁层必须先于任何 import edge_tts 生效。
+# 解说 worker 是「重入自身」的同一进程，所以这一行同时覆盖主进程与 worker：
+# 巡查发现 edge-tts 被微软作废 → 新版下载到用户目录 → 下次启动即用新版，不必重打包。
+try:
+    import tts_guard as _tts_guard
+    _tts_guard.bootstrap()
+except Exception:
+    _tts_guard = None
+
 
 def _detect_ffmpeg() -> str | None:
     exe = ".exe" if sys.platform == "win32" else ""
@@ -192,9 +213,40 @@ def _run_commentary_worker(argv: list[str]) -> int:
     _work_root = _app_data_dir() / "commentary"
     os.environ["COMMENTARY_WORK_ROOT"] = str(_work_root)
 
-    # Windows windowed 无控制台，重绑标准流避免崩溃
-    if sys.platform == "win32":
+    # 🔴 2026-10-20 Windows 实测缺陷：管线默认 provider 是 qwen3tts（本机 7871 克隆服务，
+    #    依赖 torch —— 桌面版为了体积早把 torch 砍掉了，Windows 上必然起不来）。
+    #    于是每次都先撞一次本地服务、打印一行 ⛔ 红色告警，再回退 edge-tts：
+    #    用户看到「本轮成片旁白不是你的克隆音色」就以为功能坏了。
+    #    这里在**用户没显式配置**时把默认值定为 edge（云端微软音色，开箱即用）。
+    #    用户若在设置里选了克隆音色，VDL_TTS_PROVIDER 已存在，不会被覆盖。
+    if sys.platform == "win32" and not (os.environ.get("VDL_TTS_PROVIDER") or "").strip():
+        os.environ["VDL_TTS_PROVIDER"] = "edge"
+
+    # Windows windowed 无控制台，重绑标准流避免崩溃。
+    # 🔴 2026-10-19：**仅当确实没有可用的 stdout 时**才重绑。
+    #    历史实现无条件 dup2 到 nul，会覆盖掉父进程用 PIPE 建立的 fd 1 ——
+    #    于是 worker 的所有进度日志（转写/解说词/配音/渲染）全部丢弃，
+    #    前端 6 个步骤永远停在「准备」，用户看到的就是「点了没反应」。
+    #    sys.stdout is None 才是「GUI 双击、无控制台」的可靠判据；
+    #    作为子进程被 Popen 拉起时 sys.stdout 是有效管道，必须保持原样。
+    if sys.platform == "win32" and sys.stdout is None:
         _rebind_std_streams()
+
+    # 🔴 2026-10-20 Windows 实测缺陷：worker 的 stdout 是父进程 PIPE，但编码仍按
+    #    **系统 locale(cp936/GBK)** 初始化（PYTHONIOENCODING 在冻结包里没生效）。
+    #    管线 llm_script.py 会打印 `估算¥0.0123`，`¥`(U+00A5) 在 GBK 里无映射
+    #    ⇒ UnicodeEncodeError ⇒ 整条解说链在「生成 AI 解说词」直接失败。
+    #    这里把所有标准流强制重设为 UTF-8 且 errors=replace：
+    #    宁可个别字符变 `?`，也绝不允许日志把业务打死。
+    for _name in ("stdout", "stderr"):
+        _st = getattr(sys, _name, None)
+        _rec = getattr(_st, "reconfigure", None)
+        if _rec is None:
+            continue
+        try:
+            _rec(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
 
     # 把包内管线根注入 sys.path，使 import process 命中包内版本（process.py 自行接管 scripts/）
     sys.path.insert(0, str(loc.root))
@@ -209,11 +261,35 @@ def _run_commentary_worker(argv: list[str]) -> int:
     # 真正传入的 in_file 会变成第二个 positional 报「unrecognized arguments」。
     worker_argv = [a for a in argv[1:] if a != "--vdl-commentary-worker"]
     sys.argv = ["process.py", *worker_argv]
+    code = 0
     try:
         process.main()
     except SystemExit as e:
-        return int(e.code) if isinstance(e.code, int) else 0
-    return 0
+        code = int(e.code) if isinstance(e.code, int) else 0
+    except BaseException:  # noqa: BLE001
+        # 🔴 2026-10-20 Windows 实测缺陷：管线内部抛异常时（如 llm_script 打印 `¥` 撞 GBK），
+        #    异常冒到 PyInstaller 窗口版顶层后**进程不退出**：34s CPU 后彻底僵住，
+        #    但仍持有父进程建立的 stdout 管道写端 ⇒ 父进程 `for line in proc.stdout`
+        #    永远等不到 EOF ⇒ job 永远 running、无 error、无日志，用户看到「点了没反应」。
+        #    这里兜住一切异常：把 traceback 打进管道（父进程据此显示失败原因），
+        #    再以非零码退出，保证父进程一定能拿到退出码并把任务标 failed。
+        import traceback
+
+        traceback.print_exc()
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        code = 1
+    # 强制退出：不留任何非守护线程/子进程句柄把管道撑住。
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:  # noqa: BLE001
+        pass
+    os._exit(code)
+    return code  # pragma: no cover
 
 def _find_free_port(start: int = 8321, tries: int = 80) -> int:
     """挑一个真空闲端口。
@@ -247,7 +323,11 @@ def _update_active_port(p: int, lock_file=None) -> None:
             cur = lock_file.read().strip()
             parts = cur.split()
             pid = parts[0] if parts else os.getpid()
-            build = parts[2] if len(parts) >= 3 else ""
+            # 🔴 2026-10-19：版本 tag 含空格（"v1.0.76 · 构建 xxx @ MM-DD HH:MM"），
+            # 必须 join 后半段。旧代码取 parts[2] 会把 tag 退化成 "v1.0.76"，
+            # 导致接管判定 obuild != self_build 永真（同版本也判为旧版 → 误杀），
+            # 且混构实测断言读不到「构建」字样。与 _read_lock / 互斥体分支同源修复。
+            build = " ".join(parts[2:]) if len(parts) >= 3 else ""
             lock_file.seek(0)
             lock_file.truncate()
             lock_file.write(f"{pid} {PORT} {build}\n")
@@ -741,6 +821,10 @@ def _choose_save_path(prompt: str, suggested: str, log_path: str = "") -> str:
     `osascript`（功能一致，但面板文案是英文）。
     返回 "" 表示面板机制整体不可用，由调用方决定兜底位置。
     """
+    if sys.platform == "win32":
+        # 2026-10-20：Windows 上 applet/osascript 两条路都不存在，原实现恒返回 ""，
+        # 8 个保存入口因此从不弹面板（静默落到「下载」，用户以为没反应）。补原生另存为。
+        return _windows_choose_save_path(prompt, suggested, log_path)
     got = _choose_save_path_via_applet(prompt, suggested, log_path)
     if got:
         return got
@@ -916,6 +1000,11 @@ class VdlApi:
 
         返回所选目录绝对路径；用户取消 / 非 macOS / 失败 → 空串（调用方按取消处理）。
         """
+        if sys.platform == "win32":
+            # 2026-10-20 修复：原先这里直接 `return ""`，Windows 上点「选择扩展目录」
+            # 完全不弹框、无提示 —— 与「添加文件」是同一批 osascript-only 缺陷
+            return _windows_choose_folder(
+                "请选择浏览器扩展的加载目录（就是含 manifest.json 的那个文件夹）")
         if sys.platform != "darwin":
             return ""
         try:
@@ -943,6 +1032,10 @@ class VdlApi:
 
         改为走 pyobjc 自己的 NSOpenPanel（cocoa 主线程原生 panel），100% 不走 Tk。
         """
+        if sys.platform == "win32":
+            # 2026-10-20：Windows 无 osascript，原先必落到 `return ""` → 选目录静默无反应。
+            # 走 Shell 原生 SHBrowseForFolder（同样是「不进 Tk 主线程」的思路）
+            return _windows_choose_folder("选择剪映草稿导出目录")
         try:
             import os as _os
             # AppleScript 弹「选择文件夹」原生 panel（cocoa 主线程，纯 macOS API）
@@ -1009,6 +1102,14 @@ class VdlApi:
                 "any": (_MEDIA_EXTS + _COMPRESS_IMAGE_EXTS, "选择视频/音频/图片文件（可多选）"),
             }
             exts, prompt = _KINDS.get(str(kind or "media").strip().lower(), _KINDS["media"])
+
+            # 🔴 2026-10-20 Windows 实测缺陷修复：Windows 上不存在 osascript，
+            #    原实现直接落到 `subprocess.run(["osascript", ...])` → FileNotFoundError
+            #    → 被下面 `except Exception: pass` 吞掉 → 返回 "" → 前端空数组 →
+            #    六个视图的「添加文件」按钮点了**毫无反应**。改走 Win32 原生对话框。
+            if sys.platform == "win32":
+                return _windows_choose_files(exts, prompt, multiple=True)
+
             # AppleScript 列表必须用引号+逗号+空格：`{"mp4", "mov"}`。
             # `of type` 是 choose file 的子句，必须与 choose file 同一行。
             ext_list = "{" + ", ".join(f'"{e}"' for e in exts) + "}"
@@ -1054,6 +1155,15 @@ class VdlApi:
         try:
             import subprocess as _sp
             exts = ["wav", "mp3", "m4a", "flac", "aac", "ogg", "opus", "mp4"]
+            # 同一类缺陷（2026-10-20）：Windows 无 osascript → 原实现必然返回空串，
+            # 「选择音色样本」点了没反应。走 Win32 原生单选对话框。
+            if sys.platform == "win32":
+                picked = _windows_choose_files(
+                    exts, "选择你的音色样本（念一句话的录音，3~15 秒最佳）", multiple=False
+                )
+                if isinstance(picked, list):
+                    return picked[0] if picked else ""
+                return picked
             ext_list = "{" + ", ".join(f'"{e}"' for e in exts) + "}"
             script_lines = [
                 f'set theFile to choose file of type {ext_list} with prompt '
@@ -1184,15 +1294,25 @@ class VdlApi:
         # 🔴 优先 MLX venv（.venv_qwen3tts_mlx）：Apple GPU 直跑，实测 RTF≈1.05；
         #    旧 torch venv 在 macOS 13 无 MPS，纯 CPU 一句 3 字都要跑几分钟。
         #    两者都放候选里，脚本自身 --engine auto 也会在 torch venv 里 execv 切到 MLX。
+        #
+        # ★ 2026-10-20：venv 目录布局随平台不同 —— POSIX 是 `bin/python`，
+        #   Windows 是 `Scripts\python.exe`。原实现只列 bin/python，Windows 上即使
+        #   用户真装了环境也必然走到「没找到 Python 环境」分支，引擎永远起不来。
+        _bindir = "Scripts" if sys.platform == "win32" else "bin"
+        _pyexe = "python.exe" if sys.platform == "win32" else "python"
+
+        def _venv(dirpath: str) -> str:
+            return os.path.join(dirpath, _bindir, _pyexe)
+
         venv_cands = [
-            os.path.join(os.path.dirname(script), ".venv_qwen3tts_mlx", "bin", "python"),
-            os.path.join(os.path.dirname(script), ".venv_qwen3tts", "bin", "python"),
-            os.path.join(dev_root, "scripts", ".venv_qwen3tts_mlx", "bin", "python"),
-            os.path.join(dev_root, "scripts", ".venv_qwen3tts", "bin", "python"),
-            os.path.join(c_dir, "scripts", ".venv_qwen3tts_mlx", "bin", "python") if c_dir else None,
-            os.path.join(c_dir, "scripts", ".venv_qwen3tts", "bin", "python") if c_dir else None,
-            os.path.expanduser("~/.video-downloader/venvs/qwen3tts_mlx/bin/python"),
-            os.path.expanduser("~/.video-downloader/venvs/qwen3tts/bin/python"),
+            _venv(os.path.join(os.path.dirname(script), ".venv_qwen3tts_mlx")),
+            _venv(os.path.join(os.path.dirname(script), ".venv_qwen3tts")),
+            _venv(os.path.join(dev_root, "scripts", ".venv_qwen3tts_mlx")),
+            _venv(os.path.join(dev_root, "scripts", ".venv_qwen3tts")),
+            _venv(os.path.join(c_dir, "scripts", ".venv_qwen3tts_mlx")) if c_dir else None,
+            _venv(os.path.join(c_dir, "scripts", ".venv_qwen3tts")) if c_dir else None,
+            _venv(os.path.expanduser("~/.video-downloader/venvs/qwen3tts_mlx")),
+            _venv(os.path.expanduser("~/.video-downloader/venvs/qwen3tts")),
         ]
         py = next((p for p in venv_cands if p and os.path.isfile(p)), None)
         if not py:
@@ -1210,7 +1330,15 @@ class VdlApi:
             pass
 
         try:
-            log_path = os.path.expanduser("~/Library/Logs/qwen3tts_server.log")
+            # macOS 用 ~/Library/Logs；Windows 没有这个约定（会建出个空的 Library\Logs），
+            # 按 Windows 习惯放 %LOCALAPPDATA%\VideoDownloader\logs，便于用户/支持排查
+            if sys.platform == "win32":
+                _log_dir = os.path.join(
+                    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local"),
+                    "VideoDownloader", "logs")
+            else:
+                _log_dir = os.path.expanduser("~/Library/Logs")
+            log_path = os.path.join(_log_dir, "qwen3tts_server.log")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             with open(log_path, "a") as lf:
                 subprocess.Popen(
@@ -1231,6 +1359,10 @@ class VdlApi:
     def stop_qwen3tts(self) -> dict:
         """切走「Qwen3-TTS 本地语音克隆」引擎时由前端自动调用：停掉本机 7871 服务，省内存。"""
         import subprocess
+        if sys.platform == "win32":
+            # 2026-10-20：Windows 无 pkill，原实现必然抛 FileNotFoundError →
+            # 返回「停止失败」且服务继续占内存。改为按端口精确定位再 taskkill。
+            return _windows_stop_port_listener(7871, "Qwen3-TTS")
         try:
             subprocess.run(["pkill", "-f", "start_qwen3tts_server.py"], check=False)
             return {"ok": True, "msg": "已停止 Qwen3-TTS 本地服务（切换其他引擎时自动释放）。"}
@@ -1999,25 +2131,188 @@ class VdlApi:
 def _handle_exit(*_args) -> None:
     os._exit(0)
 
+def _setup_win_job_object() -> None:
+    """Windows 作业对象（Job Object）：主进程入"杀子作业"，进程树全灭。
+
+    背景（2026-10-18 22:55 实测）：用户机器上残留 9 个孤儿 aria2c + 6 个孤儿
+    msedgewebview2——VDL 主进程被 taskkill /F、崩溃或被安装器关停后，后端线程
+    subprocess 出来的子进程无人认领继续跑：8 个 aria2c 抢同一个做种任务的
+    控制文件（有损坏风险）、~250MB 内存泄漏，还挡住安装程序更新文件（Inno
+    Setup 弹"以下应用程序正在使用将由安装程序更新的文件"列出一堆 aria2c）。
+
+    后端是主进程内的**线程**（daemon=True），线程随主进程死，但它 spawn 的
+    子进程不会——Python subprocess 不建立进程树关联。
+    正解：CreateJobObjectW + KILL_ON_JOB_CLOSE。主进程入动作业后所有后代
+    自动入作业；主进程退出（含 crash / taskkill /F / 被安装器关停）时内核
+    关闭作业句柄 → 作业内全部进程被级联终结，从机制上杜绝孤儿。
+
+    BREAKAWAY_OK：放行应用内更新的安装器子进程破例脱离作业（见
+    server/routers/system.py 的更新流程：安装器要活得比本进程久，否则
+    /CLOSEAPPLICATIONS 关停本进程 → 作业关闭 → 安装器被级联杀掉，更新烂尾）。
+    注意：DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP **不能**脱离作业，
+    安装器侧必须配对 CREATE_BREAKAWAY_FROM_JOB 才生效。
+
+    失败不致命（Win7 嵌套作业限制 / 进程已被别的作业持有等）：记日志继续跑。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes as _ct
+        from ctypes import wintypes as _w
+        _k = _ct.windll.kernel32
+
+        class _JOBOBJECT_BASIC_LIMIT_INFORMATION(_ct.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", _w.LARGE_INTEGER),
+                ("PerJobUserTimeLimit", _w.LARGE_INTEGER),
+                ("LimitFlags", _w.DWORD),
+                ("MinimumWorkingSetSize", _ct.c_size_t),
+                ("MaximumWorkingSetSize", _ct.c_size_t),
+                ("ActiveProcessLimit", _w.DWORD),
+                ("Affinity", _ct.c_size_t),
+                ("PriorityClass", _w.DWORD),
+                ("SchedulingClass", _w.DWORD),
+            ]
+
+        class _IO_COUNTERS(_ct.Structure):
+            _fields_ = [
+                ("ReadOperationCount", _ct.c_ulonglong),
+                ("WriteOperationCount", _ct.c_ulonglong),
+                ("OtherOperationCount", _ct.c_ulonglong),
+                ("ReadTransferCount", _ct.c_ulonglong),
+                ("WriteTransferCount", _ct.c_ulonglong),
+                ("OtherTransferCount", _ct.c_ulonglong),
+            ]
+
+        class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(_ct.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoInfo", _IO_COUNTERS),
+                ("ProcessMemoryLimit", _ct.c_size_t),
+                ("JobMemoryLimit", _ct.c_size_t),
+                ("PeakProcessMemoryUsed", _ct.c_size_t),
+                ("PeakJobMemoryUsed", _ct.c_size_t),
+            ]
+
+        _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+        _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
+        _JobObjectExtendedLimitInformation = 9
+
+        # 🔴 ctypes 坑（2026-10-18 实测 err=6）：GetCurrentProcess 返回伪句柄
+        #    0xFFFFFFFF，restype 默认 32 位 c_int → Win64 传参高 32 位是垃圾 →
+        #    AssignProcessToJobObject 报 ERROR_INVALID_HANDLE。HANDLE 类函数
+        #    必须显式声明 restype/argtypes，让伪句柄零扩展成完整 64 位。
+        _k.CreateJobObjectW.restype = _w.HANDLE
+        _k.AssignProcessToJobObject.argtypes = [_w.HANDLE, _w.HANDLE]
+        _k.AssignProcessToJobObject.restype = _w.BOOL
+        _k.SetInformationJobObject.argtypes = [_w.HANDLE, _ct.c_int, _ct.c_void_p, _w.DWORD]
+        _k.SetInformationJobObject.restype = _w.BOOL
+        _k.GetCurrentProcess.restype = _w.HANDLE
+
+        _hJob = _k.CreateJobObjectW(None, None)
+        if not _hJob:
+            raise OSError(f"CreateJobObjectW 失败: err={_k.GetLastError()}")
+        _info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        _info.BasicLimitInformation.LimitFlags = (
+            _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | _JOB_OBJECT_LIMIT_BREAKAWAY_OK
+        )
+        if not _k.SetInformationJobObject(
+            _hJob, _JobObjectExtendedLimitInformation,
+            _ct.byref(_info), _ct.sizeof(_info),
+        ):
+            _err = _k.GetLastError()
+            _k.CloseHandle(_hJob)
+            raise OSError(f"SetInformationJobObject 失败: err={_err}")
+        if not _k.AssignProcessToJobObject(_hJob, _k.GetCurrentProcess()):
+            _err = _k.GetLastError()
+            _k.CloseHandle(_hJob)
+            raise OSError(f"AssignProcessToJobObject 失败: err={_err}")
+        # 句柄故意不关：进程存活期持有；进程退出时内核自动关 → 触发级联终结。
+        globals()["_VDL_WIN_JOB_HANDLE"] = _hJob
+        _launch_log("Windows 作业对象已就位（KILL_ON_JOB_CLOSE）：主进程退出将级联终结 aria2c/ffmpeg/WebView2 等全部子进程")
+    except Exception as _e:
+        _launch_log(f"Windows 作业对象设置失败（非致命，仍按旧行为运行）: {_e!r}")
+
 def _pid_alive(pid: int) -> bool:
+    """进程存活判定。
+
+    🔴 2026-10-19 修复：Windows 上必须用 OpenProcess+GetExitCodeProcess，
+    不能用 os.kill(pid, 0)——PyInstaller windowed 冻结进程（GUI 子系统、
+    无控制台）里 os.kill(pid,0) 对活进程抛 OSError(EBADF/ERROR_INVALID_HANDLE)
+    （实测：同一活进程，console python 报 OK，冻结 exe 报句柄无效），
+    导致接管判定 _pid_alive=False → 旧版实例漏杀 → 新版不接管。
+    顺带解决僵尸误报：进程已死但别处持有句柄时，GetExitCodeProcess
+    返回退出码（非 STILL_ACTIVE），而 os.kill 的 OpenProcess 对僵尸仍成功。
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes as _ct
+            from ctypes import wintypes as _w
+            _k = _ct.windll.kernel32
+            _k.OpenProcess.restype = _w.HANDLE
+            _k.OpenProcess.argtypes = [_w.DWORD, _w.BOOL, _w.DWORD]
+            _h = _k.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not _h:
+                return False
+            try:
+                _code = _w.DWORD()
+                if _k.GetExitCodeProcess(_h, _ct.byref(_code)):
+                    return _code.value == 259  # STILL_ACTIVE
+                return False
+            finally:
+                _k.CloseHandle(_h)
+        except Exception:
+            pass  # ctypes 异常时退回 os.kill
     try:
         os.kill(pid, 0)
     except OSError:
         return False
     return True
 
-def _read_self_build_version() -> str:
-    """读取当前 .app 的构建指纹（由 build_mac.sh 写入 Resources/build_version.txt）。
+def _pid_is_vdl(pid: int) -> bool:
+    """Windows：用 tasklist 校验 pid 对应进程确为本程序。
 
-    用于启动时的版本自检——若已有实例的版本比当前 .app 旧，则自动接管，
-    彻底避免「双击后仍在跑旧版」导致的反复调试浪费。
+    版本接管要 taskkill 掉锁文件里的 pid——若该 pid 早已死亡并被系统分配给
+    无关进程（PID 复用），误杀会干掉用户的其他程序（浏览器等）。
+    校验失败（tasklist 异常）时返回 True 保持旧行为，不阻断正常接管。
     """
+    if sys.platform != "win32":
+        return True
     try:
-        p = BASE / "build_version.txt"
-        if p.exists():
-            return p.read_text("utf-8").strip()
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {int(pid)}", "/NH", "/FO", "CSV"],
+            capture_output=True, timeout=5,
+        )
+        text = (out.stdout or b"").decode("utf-8", "ignore")
+        return "VideoDownloader" in text
     except Exception:
-        pass
+        return True
+
+def _read_self_build_version() -> str:
+    """读取当前构建指纹（build_mac.sh / build_win.sh 写入 build_version.txt）。
+
+    用于启动时的版本自检——若已有实例的版本比当前构建旧，则自动接管，
+    彻底避免「双击后仍在跑旧版」导致的反复调试浪费。
+
+    🔴 2026-10-18 修复：Windows 冻结构建（PyInstaller）下 BASE = sys._MEIPASS
+    （即 _internal/），而 build_version.txt 由安装器放在 exe 同级目录，
+    _read_self_build_version() 永远返回 "" → 锁文件只有 2 字段 →
+    版本比对恒不成立 → 「旧版在跑、新版双击」时新版只会激活旧窗口再退出
+    （实测：新 exe 启动 4s 后 rc=0，用户装的新版被旧版堵死）。
+    现按顺序探测：BASE → exe 同级目录（PyInstaller 安装布局）。
+    """
+    _candidates = [BASE / "build_version.txt"]
+    if getattr(sys, "frozen", False):
+        try:
+            _candidates.append(Path(sys.executable).resolve().parent / "build_version.txt")
+        except Exception:
+            pass
+    for _p in _candidates:
+        try:
+            if _p.exists():
+                return _p.read_text("utf-8").strip()
+        except Exception:
+            pass
     return ""
 
 def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
@@ -2039,10 +2334,12 @@ def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
     return not _pid_alive(pid)
 
 def _activate_existing_window() -> None:
-    """重复启动时把已有 视频工坊 窗口提到最前（macOS）。
+    """重复启动时把已有 视频工坊 窗口提到最前（macOS / Windows）。
 
     提窗优先级（**绝不自动打开浏览器**，用户明确：App 就是 App，不跳网页）：
-      1. AppKit `NSRunningApplication.activateWithOptions_` —— 官方"把另一实例带到
+      Windows：EnumWindows 按 pid / 标题找窗口 → ShowWindow(SW_RESTORE)
+          → AttachThreadInput + SetForegroundWindow（绕过前台限制）；
+      macOS：AppKit `NSRunningApplication.activateWithOptions_` —— 官方"把另一实例带到
          前台"API，**无需任何「辅助功能」权限**；
       2. osascript System Events `set frontmost` —— 需要「辅助功能」权限，未授权会失败；
       3. 以上都失败只写日志，保持现状（提窗失败不跳浏览器）。
@@ -2052,7 +2349,7 @@ def _activate_existing_window() -> None:
     try:
         lp = Path.home() / ".vdl_instance.lock"
         if lp.exists():
-            parts = lp.read_text().strip().split()
+            parts = _read_lock_text(lp).strip().split()
             if len(parts) >= 1 and parts[0].isdigit():
                 pid = int(parts[0])
     except Exception:
@@ -2078,7 +2375,59 @@ def _activate_existing_window() -> None:
         except Exception:
             raised = False
 
-    # 2) osascript System Events 提窗（需要「辅助功能」权限，失败静默降级）
+    # 2) Windows：EnumWindows 找已有实例窗口 → SW_RESTORE + SetForegroundWindow
+    #    （SetForegroundWindow 有前台限制，标准解法：AttachThreadInput 贴到前台线程）
+    if not raised and sys.platform == "win32":
+        try:
+            import ctypes as _ct
+            from ctypes import wintypes as _w
+            _u32 = _ct.windll.user32
+            _k32 = _ct.windll.kernel32
+            _WNDENUMPROC = _ct.WINFUNCTYPE(_w.BOOL, _w.HWND, _w.LPARAM)
+            _u32.EnumWindows.argtypes = [_WNDENUMPROC, _w.LPARAM]
+            _u32.GetWindowThreadProcessId.argtypes = [_w.HWND, _w.LPDWORD]
+            _u32.IsWindowVisible.argtypes = [_w.HWND]
+            _u32.GetWindowTextW.argtypes = [_w.HWND, _w.LPWSTR, _w.INT]
+            _u32.ShowWindow.argtypes = [_w.HWND, _w.INT]
+            _u32.SetForegroundWindow.argtypes = [_w.HWND]
+            _u32.AttachThreadInput.argtypes = [_w.DWORD, _w.DWORD, _w.BOOL]
+            found = []
+
+            def _cb(hwnd, _l):
+                if not _u32.IsWindowVisible(hwnd):
+                    return True
+                tpid = _w.DWORD()
+                _u32.GetWindowThreadProcessId(hwnd, _ct.byref(tpid))
+                if pid and tpid.value == pid:
+                    found.append(hwnd)  # lock 文件记录的旧实例 pid，精确匹配
+                    return True
+                buf = _ct.create_unicode_buffer(256)
+                if _u32.GetWindowTextW(hwnd, buf, 256) > 0:
+                    t = buf.value
+                    if "视频工坊" in t or "VideoDownloader" in t:
+                        found.append(hwnd)  # pid 未知时按标题兜底
+                return True
+
+            _u32.EnumWindows(_WNDENUMPROC(_cb), 0)
+            for _hw in found:
+                _u32.ShowWindow(_hw, 9)  # SW_RESTORE：最小化态先恢复
+            if found:
+                _cur_tid = _k32.GetCurrentThreadId()
+                _fg = _u32.GetForegroundWindow()
+                _fg_tid = _u32.GetWindowThreadProcessId(_fg, None) if _fg else 0
+                if _fg_tid and _fg_tid != _cur_tid:
+                    _u32.AttachThreadInput(_fg_tid, _cur_tid, True)
+                    _u32.SetForegroundWindow(found[0])
+                    _u32.AttachThreadInput(_fg_tid, _cur_tid, False)
+                else:
+                    _u32.SetForegroundWindow(found[0])
+                raised = True
+                _launch_log(f"win32 提窗成功（hwnd={found[0]}，共 {len(found)} 个窗口）")
+        except Exception as _e:
+            _launch_log(f"win32 提窗异常：{_e!r}")
+            raised = False
+
+    # 3) osascript System Events 提窗（需要「辅助功能」权限，失败静默降级）
     if not raised and sys.platform == "darwin":
         try:
             r = subprocess.run(
@@ -2110,10 +2459,33 @@ def _launch_log(msg: str) -> None:
     """把启动关键节点写入 ~/.vdl_launch.log，便于「双击打不开」时定位。"""
     try:
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
-        with open(_LAUNCH_LOG, "a") as f:
+        with open(_LAUNCH_LOG, "a", encoding="utf-8") as f:
             f.write(f"[{ts}] {msg}\n")
     except Exception:
         pass
+
+
+def _read_lock_text(path) -> str:
+    """读单实例锁文件文本，utf-8 优先、GBK(mbcs) 回退。
+
+    🔴 2026-10-19：锁文件的写入方曾是 `open(path, "a+")`——**不指定编码就用
+    进程 locale 默认编码**。实测同一台机器：系统 Python 默认 utf-8，而
+    PyInstaller windowed 冻结进程默认 cp936（GBK）→ 冻结 exe 写出的
+    「v1.0.76 · 构建 xxx」是 GBK 字节（\\xa1\\xa4 / \\xb9\\xb9\\xbd\\xa8），
+    任何按 utf-8 读的外部组件/测试直接 UnicodeDecodeError，读成空锁。
+    现在写入统一显式 utf-8；这里保留 GBK 回退，只为兼容存量 GBK 锁。
+    """
+    try:
+        data = Path(path).read_bytes()
+    except Exception:
+        return ""
+    for enc in ("utf-8", "mbcs"):
+        try:
+            return data.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", "replace")
+
 
 def _release_lock(f, path) -> None:
     try:
@@ -2143,6 +2515,433 @@ def _show_error_dialog(msg: str) -> None:
         )
     except Exception:
         pass
+
+def _parse_openfile_result(raw: str) -> list[str]:
+    """解析 GetOpenFileNameW 写回的缓冲内容。
+
+    Windows 多选对话框不返回数组，而是把结果写进同一块缓冲，格式二选一：
+      · 只选了一个：        "C:\\dir\\a.mp4\\0"
+      · 选了多个：          "C:\\dir\\0a.mp4\\0b.mov\\0\\0"（目录 + 各文件名，双 NUL 结尾）
+    漏了这层解析就会出现「明明选了文件，列表里还是没有」——表现和「点了没反应」一样。
+    """
+    parts = raw.split("\0")
+    while parts and parts[-1] == "":
+        parts.pop()
+    if not parts:
+        return []
+    if len(parts) == 1:
+        return [parts[0]]
+    folder = parts[0]
+    return [os.path.join(folder, name) for name in parts[1:]]
+
+
+_OFN_STRUCT_CACHE = None
+
+
+def _openfilenamew_struct():
+    """返回缓存的 OPENFILENAMEW Structure 类（x64 = 152 字节）。
+
+    「打开」与「另存为」用的是同一个 Win32 结构，只靠 Flags / lpstrDefExt 区分。
+    抽成工厂是为了让两条路径共用一份字段定义 —— 字段少一个就会读写错位，
+    表现为「对话框能弹但返回值乱码或崩溃」，这种错极难从现象反推。
+    """
+    global _OFN_STRUCT_CACHE
+    if _OFN_STRUCT_CACHE is not None:
+        return _OFN_STRUCT_CACHE
+
+    import ctypes
+    from ctypes import wintypes
+
+    class _OPENFILENAMEW(ctypes.Structure):
+        _fields_ = [
+            ("lStructSize", wintypes.DWORD),
+            ("hwndOwner", wintypes.HWND),
+            ("hInstance", wintypes.HINSTANCE),
+            ("lpstrFilter", wintypes.LPCWSTR),
+            ("lpstrCustomFilter", wintypes.LPWSTR),
+            ("nMaxCustFilter", wintypes.DWORD),
+            ("nFilterIndex", wintypes.DWORD),
+            ("lpstrFile", wintypes.LPWSTR),
+            ("nMaxFile", wintypes.DWORD),
+            ("lpstrFileTitle", wintypes.LPWSTR),
+            ("nMaxFileTitle", wintypes.DWORD),
+            ("lpstrInitialDir", wintypes.LPCWSTR),
+            ("lpstrTitle", wintypes.LPCWSTR),
+            ("Flags", wintypes.DWORD),
+            ("nFileOffset", wintypes.WORD),
+            ("nFileExtension", wintypes.WORD),
+            ("lpstrDefExt", wintypes.LPCWSTR),
+            ("lCustData", wintypes.LPARAM),
+            ("lpfnHook", wintypes.LPVOID),
+            ("lpTemplateName", wintypes.LPCWSTR),
+            ("pvReserved", wintypes.LPVOID),
+            ("dwReserved", wintypes.DWORD),
+            ("FlagsEx", wintypes.DWORD),
+        ]
+
+    _OFN_STRUCT_CACHE = _OPENFILENAMEW
+    return _OPENFILENAMEW
+
+
+def _windows_choose_folder(prompt: str = "请选择文件夹") -> str:
+    """Windows 原生「选择文件夹」对话框（ctypes 直调 shell32.SHBrowseForFolderW）。
+
+    🔴 2026-10-20 同类缺陷：`choose_folder` / `choose_extension_dir` 历史实现同样
+       只有 osascript，Windows 上恒返回空串 —— 点「选择目录」完全不弹框、无提示。
+       影响「剪映草稿导出目录」「浏览器扩展加载目录」两处。
+
+    为什么不复用 tkinter.filedialog.askdirectory：launcher 有「非主线程不许开 Tk」
+    的硬约束（macOS 上真触发过 NSWindow SIGTRAP 卡死整个 App），Windows 侧也不
+    保证 bridge 线程能起 Tk mainloop —— 直接调 Win32 是唯一不赌的实现。
+
+    返回：所选目录绝对路径（不带尾部分隔符）/ 用户取消 "" / 失败 "ERROR: ..."。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception as exc:  # pragma: no cover
+        return f"ERROR: {exc}"
+
+    BIF_RETURNONLYFSDIRS = 0x0001
+    BIF_EDITBOX = 0x0010
+    BIF_NEWDIALOGSTYLE = 0x0040
+
+    class _BROWSEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("hwndOwner", wintypes.HWND),
+            ("pidlRoot", wintypes.LPVOID),
+            ("pszDisplayName", wintypes.LPWSTR),
+            ("lpszTitle", wintypes.LPCWSTR),
+            ("ulFlags", wintypes.UINT),
+            ("lpfn", wintypes.LPVOID),
+            ("lParam", wintypes.LPARAM),
+            ("iImage", ctypes.c_int),
+        ]
+
+    try:
+        shell32 = ctypes.windll.shell32
+        ole32 = ctypes.windll.ole32
+        shell32.SHBrowseForFolderW.argtypes = [ctypes.POINTER(_BROWSEINFOW)]
+        shell32.SHBrowseForFolderW.restype = wintypes.LPVOID
+        shell32.SHGetPathFromIDListW.argtypes = [wintypes.LPVOID, wintypes.LPWSTR]
+        shell32.SHGetPathFromIDListW.restype = wintypes.BOOL
+        ole32.CoTaskMemFree.argtypes = [wintypes.LPVOID]
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+    display = ctypes.create_unicode_buffer(260)
+    bi = _BROWSEINFOW()
+    try:
+        bi.hwndOwner = ctypes.windll.user32.GetForegroundWindow()
+    except Exception:
+        bi.hwndOwner = None
+    bi.pidlRoot = None
+    bi.pszDisplayName = ctypes.cast(display, wintypes.LPWSTR)
+    bi.lpszTitle = prompt or "请选择文件夹"
+    # EDITBOX 让用户能直接粘贴路径 —— 深层目录用鼠标一层层点太慢
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_EDITBOX | BIF_NEWDIALOGSTYLE
+
+    # shell 对话框内部走 COM，bridge 线程未必初始化过 → 显式 STA（已初始化返回 S_FALSE，无害）
+    try:
+        ole32.CoInitializeEx(None, 0x2)
+    except Exception:
+        pass
+
+    try:
+        pidl = shell32.SHBrowseForFolderW(ctypes.byref(bi))
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+    if not pidl:
+        return ""                      # 用户点了取消 / 关闭
+    try:
+        path = ctypes.create_unicode_buffer(4096)
+        if not shell32.SHGetPathFromIDListW(pidl, path):
+            return ""
+        return (path.value or "").rstrip("\\")
+    finally:
+        try:
+            ole32.CoTaskMemFree(pidl)  # pidl 由 shell 分配，必须归还，否则每次选目录泄漏
+        except Exception:
+            pass
+
+
+def _windows_choose_save_path(prompt: str, suggested: str, log_path: str = "") -> str:
+    """Windows 原生「另存为」对话框（ctypes 直调 comdlg32.GetSaveFileNameW）。
+
+    🔴 2026-10-20 同类缺陷：`_choose_save_path` 的两级实现（applet + osascript）都是
+       macOS 专属，Windows 上恒返回 ""。8 个保存入口（去水印/文案/二维码/解说/
+       抠像/转换/任务文件/直链）因此**从不弹面板**，静默落到「下载」文件夹 ——
+       能保存但用户以为「没反应」（找不到文件放哪了）。
+
+    返回约定与 macOS 侧完全一致：绝对路径 / "CANCELLED" / ""（机制不可用）。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception as exc:  # pragma: no cover
+        return f"ERROR: {exc}"
+
+    def _log(msg: str) -> None:
+        if not log_path:
+            return
+        try:
+            import datetime as _dt
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{_dt.datetime.now().isoformat()}] {msg}\n")
+        except Exception:
+            pass
+
+    OFN_OVERWRITEPROMPT = 0x00000002
+    OFN_NOCHANGEDIR = 0x00000008
+    OFN_PATHMUSTEXIST = 0x00000800
+    OFN_EXPLORER = 0x00080000
+
+    _OPENFILENAMEW = _openfilenamew_struct()
+
+    # 建议名清洗：Win32 对话框收到含路径分隔符的 lpstrFile 会跑偏
+    name = (suggested or "文件").replace("\\", "_").replace("/", "_").strip() or "文件"
+    buf_size = 4096
+    buf = ctypes.create_unicode_buffer(buf_size)
+    buf.value = name
+
+    # 过滤器留空 = 不过滤类型（用户已在前端选定输出格式，再筛一次只会挡住自己）
+    ofn = _OPENFILENAMEW()
+    ofn.lStructSize = ctypes.sizeof(_OPENFILENAMEW)
+    try:
+        ofn.hwndOwner = ctypes.windll.user32.GetForegroundWindow()
+    except Exception:
+        ofn.hwndOwner = None
+    ofn.lpstrFilter = None
+    ofn.lpstrFile = ctypes.cast(buf, wintypes.LPWSTR)
+    ofn.nMaxFile = buf_size
+    ofn.lpstrTitle = prompt or "保存文件"
+    ofn.lpstrInitialDir = None  # 交给系统记住上次位置，比硬塞「下载」更符合习惯
+    # 有扩展名就预填默认扩展：用户敲「片子」回车也能得到「片子.mp4」而不是无后缀文件
+    ext = ""
+    if "." in name:
+        tail = name.rsplit(".", 1)[-1]
+        if 2 <= len(tail) <= 5 and tail.isalnum():
+            ext = tail
+    ofn.lpstrDefExt = ext or None
+    ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_OVERWRITEPROMPT
+
+    try:
+        ctypes.windll.ole32.CoInitializeEx(None, 0x2)
+    except Exception:
+        pass
+
+    try:
+        ok = ctypes.windll.comdlg32.GetSaveFileNameW(ctypes.byref(ofn))
+    except Exception as exc:
+        _log(f"win32 save-dialog exception: {exc!r}")
+        return f"ERROR: {exc}"
+
+    if not ok:
+        try:
+            err = int(ctypes.windll.comdlg32.CommDlgExtendedError())
+        except Exception:
+            err = 0
+        if err == 0:
+            _log("win32 save-dialog cancelled")
+            return "CANCELLED"
+        _log(f"win32 save-dialog failed code=0x{err:04X}")
+        return f"ERROR: 保存对话框失败 code=0x{err:04X}"
+
+    chosen = (buf.value or "").strip()
+    _log(f"win32 save-dialog -> {chosen}")
+    return chosen
+
+
+def _parse_netstat_listening_pids(raw: str, port: int) -> set[int]:
+    """从 `netstat -ano` 输出里挑出「正在 LISTEN 指定端口」的 PID 集合。
+
+    行格式（列宽随语言/版本变化，必须按空白切分而不是定宽截取）：
+        TCP    127.0.0.1:7871      0.0.0.0:0      LISTENING     12345
+        TCP    [::1]:7871          [::]:0         LISTENING     12345
+
+    只认 LISTENING：ESTABLISHED / TIME_WAIT 里也有同一端口和 PID，
+    但那些是**连接**不是**监听**——按它们杀会误伤客户端。
+    """
+    pids: set[int] = set()
+    for line in (raw or "").splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP":
+            continue
+        local, state, pid = parts[1], parts[3].upper(), parts[4]
+        if state != "LISTENING":
+            continue
+        # IPv6 是 [::1]:7871 → 同样按「最后一个冒号之后」取端口
+        if local.rsplit(":", 1)[-1] == str(port) and pid.isdigit() and pid != "0":
+            pids.add(int(pid))
+    return pids
+
+
+def _windows_stop_port_listener(port: int, label: str = "") -> dict:
+    """结束占用指定 TCP 端口的监听进程（Windows），返回 {"ok", "msg"}。
+
+    🔴 2026-10-20：`stop_qwen3tts` 原实现是 `pkill -f start_qwen3tts_server.py`，
+       Windows 上没有 pkill → FileNotFoundError → 返回「停止失败」，而服务仍在跑、
+       继续占着内存（Qwen3-TTS 权重按 GB 算）。用户切回 edge-tts 后本地服务白跑。
+
+    为什么**按端口**而不是按镜像名/命令行：
+      · `python.exe` 在这台机器上有一堆（后端自己也叫 python），按名字杀必然误伤宿主进程；
+      · 该服务就是监听固定端口，端口是唯一、精确且不会误杀的判据。
+
+    为什么用 `netstat -ano` 而不是 wmic：
+      wmic 在 Win11 24H2 起默认不预装（已弃用），调它会直接「找不到命令」；
+      netstat 是 in-box 组件，所有版本都在。
+
+    返回：
+      {"ok": True,  "msg": "已停止…"}          —— 成功杀掉
+      {"ok": True,  "msg": "当前未在运行…"}    —— 端口无人监听（本来就没起）
+      {"ok": False, "msg": "…"}                —— 查询或结束失败
+    """
+    import subprocess
+
+    name = f"{label} " if label else ""
+    # CREATE_NO_WINDOW：桌面 App 内不要为每次查询闪一个黑色控制台窗口
+    no_win = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    try:
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+                             capture_output=True, timeout=15,
+                             creationflags=no_win)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "msg": f"停止{name}服务失败：无法查询端口占用（{exc}）"}
+
+    # ⚠️ 必须按字节读再宽松解码，不能用 text=True：
+    #    中文 Windows 的 netstat 表头是 GBK（CP936），`text=True` 默认按 UTF-8 解 →
+    #    subprocess 的 reader 线程抛 UnicodeDecodeError → stdout 直接变空 →
+    #    永远判定「未在运行」，停止功能**静默失效**（实测踩到，2026-10-20）。
+    #    我们只需要 ASCII 部分（TCP / LISTENING / 数字 PID），丢几个表头汉字无所谓。
+    raw = (out.stdout or b"").decode("utf-8", "replace")
+    pids = _parse_netstat_listening_pids(raw, port)
+
+    if not pids:
+        return {"ok": True, "msg": f"{name}本地服务当前未在运行，无需停止。"}
+
+    killed: list[int] = []
+    failed: list[int] = []
+    for pid in sorted(pids):
+        try:
+            # 同上：中文 Windows 的 taskkill 回显是 GBK，text=True 会解码炸掉
+            r = subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                               capture_output=True, timeout=15,
+                               creationflags=no_win)
+            (killed if r.returncode == 0 else failed).append(pid)
+        except Exception:  # noqa: BLE001
+            failed.append(pid)
+
+    if failed and not killed:
+        return {"ok": False,
+                "msg": f"停止{name}服务失败（PID {', '.join(map(str, failed))}），"
+                       f"可能权限不足，请在任务管理器手动结束。"}
+    if failed:
+        return {"ok": False,
+                "msg": f"已停止部分{name}进程（PID {', '.join(map(str, killed))}），"
+                       f"但 PID {', '.join(map(str, failed))} 未能停止，请手动结束。"}
+    return {"ok": True,
+            "msg": f"已停止{name}本地服务（PID {', '.join(map(str, killed))}），内存已释放。"}
+
+
+def _windows_choose_files(exts: list[str], prompt: str, *, multiple: bool = True) -> list[str] | str:
+    """Windows 原生文件选择框（ctypes 直调 comdlg32.GetOpenFileNameW，零依赖、不碰 tkinter）。
+
+    🔴 2026-10-20 Windows 实测缺陷（用户报「点击添加文件没反应」）：
+       `choose_files` / `choose_folder` / `pick_voice_sample` 历史实现**只有 macOS 的
+       `osascript` 子进程**（desktop_launcher 里 6 处真调用全是 osascript）。
+       Windows 上 `osascript` 根本不存在 → `subprocess.run` 抛 FileNotFoundError →
+       被外层 `except Exception: pass` 吞掉 → `return ""` →
+       前端 `desktop.chooseFiles()` 的 `norm("")` 得到 `[]` →
+       调用点 `if (list && list.length)` 不成立 → **按钮点了完全没反应**：
+       不报错、不提示、不弹框，用户只能反复点（转码/音乐/图片/压缩/合并/高清修复
+       六个视图的「添加文件」全部同一条链路，全部失效）。
+
+       修法：Windows 直接走 Win32 通用对话框，返回真实绝对路径数组 ——
+       这样「跳过上传、直接读本地文件转码」的原生优势在 Windows 上才真正成立。
+
+    参数：
+      exts     —— 允许的扩展名（不带点），如 ["mp4", "mov"]；空表示不过滤
+      prompt   —— 对话框标题
+      multiple —— 是否允许多选
+
+    返回：
+      路径列表（多选）/ 只选一个时也可能是单元素列表；用户取消返回 ""；
+      失败返回 "ERROR: ..."（与 osascript 分支的返回约定保持一致）。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception as exc:  # pragma: no cover - 理论上不可能
+        return f"ERROR: {exc}"
+
+    OFN_READONLY = 0x00000001
+    OFN_NOCHANGEDIR = 0x00000008
+    OFN_ALLOWMULTISELECT = 0x00000200
+    OFN_PATHMUSTEXIST = 0x00000800
+    OFN_FILEMUSTEXIST = 0x00001000
+    OFN_EXPLORER = 0x00080000
+
+    # 「打开」与「另存为」共用同一份字段定义，见 _openfilenamew_struct 的说明
+    _OPENFILENAMEW = _openfilenamew_struct()
+
+    # 过滤器串格式：显示名 \0 模式 \0 ... \0 \0（结尾双 NUL，漏了会退化成不过滤）
+    groups: list[str] = []
+    patterns: list[str] = []
+    for e in exts or []:
+        e = str(e).strip().lstrip(".")
+        if e:
+            patterns.append(f"*.{e}")
+    if patterns:
+        groups.append(f"支持的文件 ({';'.join(patterns)})")
+        groups.append(";".join(patterns))
+    groups.append("所有文件 (*.*)")
+    groups.append("*.*")
+    filter_str = "\0".join(groups) + "\0\0"
+
+    # 多选时 Windows 会把「目录 + 若干文件名」写进同一缓冲，10 个长路径也能塞爆 4KB
+    buf_size = 65536 if multiple else 4096
+    buf = ctypes.create_unicode_buffer(buf_size)
+
+    ofn = _OPENFILENAMEW()
+    ofn.lStructSize = ctypes.sizeof(_OPENFILENAMEW)
+    try:
+        ofn.hwndOwner = ctypes.windll.user32.GetForegroundWindow()
+    except Exception:
+        ofn.hwndOwner = None
+    ofn.lpstrFilter = filter_str
+    ofn.lpstrFile = ctypes.cast(buf, wintypes.LPWSTR)
+    ofn.nMaxFile = buf_size
+    ofn.lpstrTitle = prompt or "选择文件"
+    ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_READONLY
+    if multiple:
+        ofn.Flags |= OFN_ALLOWMULTISELECT
+
+    # 通用对话框内部走 COM，bridge 调用线程未必初始化过 → 显式 STA（已初始化返回 S_FALSE，无害）
+    try:
+        ctypes.windll.ole32.CoInitializeEx(None, 0x2)
+    except Exception:
+        pass
+
+    try:
+        ok = ctypes.windll.comdlg32.GetOpenFileNameW(ctypes.byref(ofn))
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+    if not ok:
+        try:
+            err = int(ctypes.windll.comdlg32.CommDlgExtendedError())
+        except Exception:
+            err = 0
+        # err == 0 表示用户点了取消 / 关闭；非 0 才是真故障
+        return "" if err == 0 else f"ERROR: 文件选择框失败 code=0x{err:04X}"
+
+    # 缓冲内容 → 路径数组（单选用完整路径，多选是「目录 + 若干文件名」，见解析函数注释）
+    paths = _parse_openfile_result(buf[:])
+    # 与 osascript 分支保持同一约定：没选到东西一律返回空串（前端 norm 会转成 []）
+    return paths if paths else ""
+
 
 def _show_windows_message_box(msg: str, title: str = "视频工坊") -> bool:
     """Windows 原生 MessageBox 弹窗（ctypes 直调 user32，不依赖 tkinter / 任何 Python 包）。
@@ -2245,14 +3044,118 @@ def _ensure_single_instance():
     lock_path = Path.home() / ".vdl_instance.lock"
     self_build = _read_self_build_version()
 
+    # ── 🔴 2026-10-18 修复：Windows 单实例失效（连点图标开出 N 个窗口）──
+    # 根因：下方锁文件依赖 `fcntl.flock`，而 fcntl 是 POSIX 专属，Windows 上
+    # `_fcntl is None` → 锁文件只是"君子协议"。多进程同时启动时全部 open("a+")
+    # seek+truncate+write 成功，每个都自认 singleton；再加上"后端端口绑定前"
+    # 有几秒竞态窗口（端口未绑 → 僵尸锁清理不删 → 激活分支被跳过），
+    # 用户快速双击 3 次就开 3 个窗口（实测 8 进程 10 窗口）。
+    # 正解：Windows 命名互斥体（内核级，跨进程原子）。
+    _win_mutex_ok = False  # 持有互斥体 = 已由内核保证无其他 VDL 实例
+    if sys.platform == "win32":
+        import ctypes as _ct
+        from ctypes import wintypes as _w
+        _k = _ct.windll.kernel32
+        _k.CreateMutexW.restype = _w.HANDLE
+        _k.CreateMutexW.argtypes = [_w.LPVOID, _w.BOOL, _w.LPWSTR]
+        _k.WaitForSingleObject.restype = _w.DWORD
+        _k.WaitForSingleObject.argtypes = [_w.HANDLE, _w.DWORD]
+        _MUTEX_NAME = "Local\\VideoGongfang_SingleInstance_Mutex"
+        _WAIT_OBJECT_0, _WAIT_ABANDONED = 0, 0x80
+        _k.SetLastError(0)
+        _mutex = _k.CreateMutexW(None, False, _MUTEX_NAME)
+        # 对象是否已存在：修复前的旧构建只创建互斥体但不持有所有权
+        # （bInitialOwner=False + 从不 Wait），对象因旧进程句柄而存在且空闲——
+        # 混构场景（旧版在跑 + 新版启动）必须靠锁文件/端口分支兜底接管。
+        _mutex_preexisted = bool(_mutex) and (_k.GetLastError() == 183)
+        if _mutex:
+            # 🔴 判据必须用 WaitForSingleObject(0ms)，不能用 CreateMutexW 的
+            # ERROR_ALREADY_EXISTS(183)：183 只说明"互斥体对象存在"，不说明
+            # "被持有"——本进程第一次 CreateMutexW 自己就开着一个非拥有句柄，
+            # 对象会因此续命。2026-10-18 实测：接管流程里旧实例已被 taskkill
+            # 杀掉，重抢循环却因 183 永远为真，5s 抢不回 → 新版激活退出打不开。
+            # WaitForSingleObject 返回值才是权威：
+            #   0    WAIT_OBJECT_0   → 获得所有权，本进程是唯一实例
+            #   0x80 WAIT_ABANDONED  → 前主崩溃/被杀未 ReleaseMutex，wait 方照样获得所有权
+            #   258  WAIT_TIMEOUT    → 确有活实例持有
+            _wait = _k.WaitForSingleObject(_mutex, 0)
+            if _wait in (_WAIT_OBJECT_0, _WAIT_ABANDONED):
+                # 句柄不关（进程存活期持有），防 GC：挂到模块级全局。
+                globals()["_VDL_SINGLE_INSTANCE_MUTEX"] = _mutex
+                # 对象是本次新建 → 之前绝无实例创建过它，跳过端口分支；
+                # 对象已存在却空闲 → 可能是旧构建在跑（只创建不持有所有权），
+                # 不设 _win_mutex_ok，交给下方锁文件/端口分支兜底判定。
+                if not _mutex_preexisted:
+                    _win_mutex_ok = True
+            else:
+                # 互斥体被持有 = 已有实例在跑。**不能直接激活退出**（2026-10-18 回归
+                # 修复）：旧代码在这里无条件 sys.exit(0)，导致「旧版在跑、新版双击」
+                # 时新版永远抢不了班——下面基于锁文件的版本接管逻辑成了死代码
+                # （实测：新 exe 启动 4s 后 rc=0 退出，旧构建继续占着窗口和端口，
+                # 用户装的新版被旧版堵死）。正确流程：读锁文件判版本——
+                #   * 旧版本且 pid 存活 → 杀旧实例（整棵树）→ 等退出 → 重抢互斥体
+                #     → 成为 singleton 继续启动；
+                #   * 同版本 / 版本未知 / pid 已死 → 激活窗口并退出（保持单实例）。
+                try:
+                    _raw = _read_lock_text(lock_path)
+                except Exception:
+                    _raw = ""
+                _parts = _raw.strip().split()
+                _opid = int(_parts[0]) if _parts and _parts[0].isdigit() else None
+                # 版本 tag 含空格（"v1.0.76 · 构建 xxx @ MM-DD HH:MM"），必须 join 后半段，
+                # 只取 _parts[2] 会退化成 "v1.0.76" ——同版本实例也比对不相等 → 误杀。
+                _obuild = " ".join(_parts[2:]) if len(_parts) >= 3 else ""
+                # 接管判定（2026-10-18 修正）：
+                #  * 知道自己版本（self_build 非空）才有资格判新旧；
+                #  * 对方版本为空 = 旧构建写的 2 字段锁（Windows 下 BASE 指向
+                #    _internal 导致读不到 build_version.txt 的历史 bug，已修）→ 视为旧版；
+                #  * 对方版本不同 = 旧版在跑 → 一律接管。
+                if self_build and _opid and _pid_alive(_opid) and (not _obuild or _obuild != self_build):
+                    _launch_log(f"检测到旧版本实例({_obuild or '版本未知(旧构建)'})持有互斥体，自动接管并关闭")
+                    # taskkill /F /T：连子树一起杀（旧构建没有作业对象保护，
+                    # 只杀主进程会留下 aria2c/WebView2 孤儿——正是本轮修的 bug）。
+                    # _kill_process_tree 走的是 POSIX 信号语义，Windows 上不可靠。
+                    # 杀前先校验 pid 确是本程序，防 PID 复用误杀无关进程。
+                    if not _pid_is_vdl(_opid):
+                        _launch_log(f"锁文件 pid={_opid} 已被无关进程复用（PID 复用），放弃接管")
+                        _activate_existing_window()
+                        sys.exit(0)
+                    try:
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(_opid)],
+                                       capture_output=True, timeout=10)
+                    except Exception as _te:
+                        _launch_log(f"taskkill 旧实例异常（继续尝试重抢互斥体）: {_te!r}")
+                    # 重抢互斥体：复用已打开的同一个句柄 + WaitForSingleObject(0)。
+                    # 旧实例退出后内核释放所有权；最多等 5s
+                    # （竞态下可能被第三个实例抢走 → 激活退出）
+                    _acquired = False
+                    for _ in range(50):
+                        if _k.WaitForSingleObject(_mutex, 0) in (_WAIT_OBJECT_0, _WAIT_ABANDONED):
+                            _acquired = True
+                            break
+                        time.sleep(0.1)
+                    if _acquired:
+                        globals()["_VDL_SINGLE_INSTANCE_MUTEX"] = _mutex
+                        _win_mutex_ok = True
+                        _launch_log("已接管旧版本实例并重新获得互斥体，继续启动")
+                        # 不退出：继续往下走（僵尸锁清理 + 写锁），成为唯一实例
+                    else:
+                        _launch_log("重抢互斥体失败（可能被其他实例抢走），激活其窗口并退出")
+                        _activate_existing_window()
+                        sys.exit(0)
+                else:
+                    _launch_log("检测到已在运行的同版本实例（Windows 互斥体），激活其窗口并退出")
+                    _activate_existing_window()
+                    sys.exit(0)
+
     def _read_lock():
         try:
-            parts = lock_path.read_text().strip().split()
+            parts = _read_lock_text(lock_path).strip().split()
         except Exception:
             return None, None, ""
         pid = int(parts[0]) if parts and parts[0].isdigit() else None
         port = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else None
-        build = parts[2] if len(parts) >= 3 else ""
+        build = " ".join(parts[2:]) if len(parts) >= 3 else ""
         return pid, port, build
 
     def _port_bound(port):
@@ -2280,22 +3183,41 @@ def _ensure_single_instance():
     opid, oport, obuild = _read_lock() if lock_path.exists() else (None, None, "")
 
     # 端口被占用 = 真的有别的实例在提供本地服务（PID 复用也不会误判）
+    # 🔴 2026-10-19 修复：本分支【不再】用 _win_mutex_ok 把守。互斥体是
+    # 2026-10-18 才引入的——从更早的【无互斥体版本】升级时，新版 CreateMutexW
+    # 创建的是全新对象（preexisted=False → _win_mutex_ok=True），旧版实例
+    # 不会被互斥体覆盖到；若这里跳过端口分支，旧版继续占着端口和窗口，
+    # 新版 uvicorn 只能另选端口起第二个实例——正是「新版装完打不开」。
+    # 锁文件 + 端口 + pid + 版本才是跨版本权威判据；互斥体只对同代构建有效。
+    # 走到这里的其他路径（持锁无事发生 / 互斥体已存在却空闲）同样安全：
+    # 锁 pid 是活 VDL 且版本不同 → 接管；同版本 → 激活退出；否则继续启动。
     if _port_bound(oport):
-        if obuild and obuild != self_build and opid and _pid_alive(opid):
-            _launch_log(f"检测到旧版本实例({obuild})在端口 {oport} 运行，自动接管并关闭")
-            _kill_process_tree(opid)
+        _lock_pid_is_vdl = bool(opid) and _pid_alive(opid) and _pid_is_vdl(opid)
+        if self_build and _lock_pid_is_vdl and (not obuild or obuild != self_build):
+            _launch_log(f"检测到旧版本实例({obuild or '版本未知(旧构建)'})在端口 {oport} 运行，自动接管并关闭")
+            if sys.platform == "win32":
+                # taskkill /F /T：连子树一起杀（Windows 上 POSIX 信号语义不可靠）
+                try:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(opid)],
+                                   capture_output=True, timeout=10)
+                except Exception as _te:
+                    _launch_log(f"taskkill 旧实例异常（继续等端口释放）: {_te!r}")
+            else:
+                _kill_process_tree(opid)
             for _ in range(50):  # 最多等 5s 让端口释放
                 if not _port_bound(oport):
                     break
                 time.sleep(0.1)
-        else:
+        elif _lock_pid_is_vdl:
             _launch_log("检测到已在运行的同版本实例，激活其窗口并退出（保持单实例）")
             _activate_existing_window()
             sys.exit(0)
+        # else：端口被无关进程占用，或锁文件已僵尸 → 无视，继续启动（自有端口另选）
 
     # ── 自己是唯一实例：拿文件锁（不提前截断，避免清空持有者已写内容）──
     try:
-        f = open(lock_path, "a+")
+        f = open(lock_path, "a+", encoding="utf-8")  # 🔴 显式 utf-8：不指定就用进程
+        # locale 默认编码——冻结进程是 cp936、开发态是 utf-8，读写会错位
         if _fcntl is not None:
             _fcntl.flock(f, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
         f.seek(0)
@@ -2318,6 +3240,11 @@ def _ensure_single_instance():
     return f
 
 def main() -> None:
+    # 进程树保卫（必须最先）：主进程入 Windows"杀子作业"，之后 spawn 的
+    # aria2c/ffmpeg/deno/WebView2 渲染进程全部入作业；主进程一旦退出
+    # （含 crash / taskkill /F / 被安装器关停）内核级联终结整棵树，杜绝孤儿。
+    _setup_win_job_object()
+
     # Win7 / Win8 / Win8.1 启动拦截：上游（Python 3.13 / WebView2 / 原生依赖）已整体不
     # 支持这些系统，安装包无法稳定运行。放在最前面 fail-fast——装完打不开再来问，
     # 不如启动即弹窗引导（详见 _check_windows_version 注释）。
@@ -2444,9 +3371,8 @@ def main() -> None:
         _launch_log("tkinter 护栏注册失败（非致命）: " + repr(_mpe))
 
     # 开窗口 → 优先原生窗口（pywebview），回退浏览器
-    try:
-        import webview
-    except ImportError:
+    webview = _webview
+    if webview is None:
         _launch_log("未捆绑 webview 模块，无法打开原生窗口（不跳浏览器，仅提示）")
         _browser_fallback(server_thread)
         return
@@ -2514,21 +3440,43 @@ def main() -> None:
         api = VdlApi()
 
         # ---- 窗口尺寸/位置记忆（2026-09-17：用户要求按上次手动调整后的宽高打开） ----
-        # 存 _app_data_dir()/window_frame.json；首次运行无文件 → 用默认 1100x750 居中。
+        # 存 _app_data_dir()/window_frame.json；首次运行无文件 → 用默认 1280x800 居中。
         _win_frame_file = _app_data_dir() / "window_frame.json"
 
         def _load_win_frame():
             import json as _json
             try:
                 d = _json.loads(_win_frame_file.read_text(encoding="utf-8"))
-                w = max(800, min(3840, int(d.get("width", 1100))))
-                h = max(500, min(2160, int(d.get("height", 750))))
+                # 🔴 2026-10-19：最小宽高抬到 960x640，确保不低于 web 的 901px 断点，
+                #    否则侧边栏（桌面版导航）被隐藏、顶部 pills 横向 nav 换行成多行 → 排版错乱
+                #    （与 Mac 版对齐：Mac 窗口始终宽于断点，渲染竖向侧边栏）。
+                # 🔵 2026-10-19 15:55：首启默认从 1100x750 调大到 1280x800（用户反馈默认窗口偏小；
+                #    125% DPI 下 1280x800 逻辑像素 = 1600x1000 物理，1920x1080 屏内舒适容纳）
+                w = max(960, min(3840, int(d.get("width", 1280))))
+                h = max(640, min(2160, int(d.get("height", 800))))
                 x = d.get("x"); y = d.get("y")
                 x = int(x) if isinstance(x, (int, float)) else None
                 y = int(y) if isinstance(y, (int, float)) else None
+                # 🔴 2026-10-18 修复：最小化/屏幕外的坐标曾被 _save_win_frame 打包存下
+                #    （实测 {"width":159,"height":27,"x":-25600,"y":-25600}），
+                #    导致窗口每次启动都落在虚拟桌面外，用户完全看不到内容
+                #    （任务栏缩略图却正常 → "小图能看到、点开白屏"）。
+                #    坐标必须落在虚拟桌面内，否则按首次运行居中处理。
+                if x is not None and y is not None and sys.platform == "win32":
+                    try:
+                        import ctypes as _ct
+                        _u32 = _ct.WinDLL("user32")
+                        vx = _u32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+                        vy = _u32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+                        vw = _u32.GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
+                        vh = _u32.GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+                        if not (vx <= x <= vx + vw - 200 and vy <= y <= vy + vh - 200):
+                            x, y = None, None
+                    except Exception:
+                        x, y = None, None
                 return w, h, x, y
             except Exception:
-                return 1100, 750, None, None
+                return 1280, 800, None, None
 
         _win_w, _win_h, _win_x, _win_y = _load_win_frame()
         window = webview.create_window(
@@ -2538,7 +3486,7 @@ def main() -> None:
             height=_win_h,
             x=_win_x,
             y=_win_y,
-            min_size=(800, 500),
+            min_size=(960, 640),
             text_select=True,
             js_api=api,
         )
@@ -2547,13 +3495,21 @@ def main() -> None:
             """resized/moved 时持久化窗口框架（失败静默，不影响主流程）。"""
             import json as _json
             try:
+                _w = int(window.width); _h = int(window.height)
+                _x = int(window.x); _y = int(window.y)
+                # 🔴 2026-10-18 修复：最小化时 pywebview/WinForms 返回怪异值
+                #    （实测 159x27 @ (-25600,-25600)），旧代码照单全收 → 写坏
+                #    frame 文件 → 下次启动窗口永久屏幕外。低于 min_size 或负坐标
+                #    一律视为"非正常展示态"，跳过保存。
+                if _w < 960 or _h < 640 or _x < 0 or _y < 0:
+                    return
                 _win_frame_file.parent.mkdir(parents=True, exist_ok=True)
                 _json.dump(
                     {
-                        "width": int(window.width),
-                        "height": int(window.height),
-                        "x": int(window.x),
-                        "y": int(window.y),
+                        "width": _w,
+                        "height": _h,
+                        "x": _x,
+                        "y": _y,
                     },
                     open(_win_frame_file, "w", encoding="utf-8"),
                 )
@@ -2568,6 +3524,21 @@ def main() -> None:
 
         # 把 window 引用交给桥接 API，供「返回桌面」/「退出」按钮调用
         api.window = window
+
+        # 🔴 2026-10-19 修复「点击卡死 / 未响应 / 所有 API 超时」根因：
+        #    pywebview 在窗口 before_load 时会递归枚举 js_api（本对象 VdlApi）的全部属性，
+        #    生成 JS 桥的 function 列表。VdlApi.window 是 pywebview.Window，其 .native 是
+        #    WinForms WebView2 控件——对象图里存在 Rect.Bounds.Empty → Rect.Empty → … 的
+        #    **无限递归**，外加上千个 COM 属性枚举。一次 get_functions 会长时间占用 GIL
+        #    ⇒ uvicorn 事件循环被饿死（/api/version 等全部超时）、主线程消息循环卡死
+        #    （标题栏显示“未响应”）。
+        #    设 _serializable=False 让 pywebview 直接跳过该属性（Python 侧
+        #    self.window.minimize() 等方法仍可用），彻底切断递归链。前端只调用 api.<方法>()，
+        #    从不访问 api.window，故对 JS 桥无影响。
+        try:
+            api.window._serializable = False
+        except Exception:
+            pass
 
         # 窗口行为说明（macOS 原生窗口）：
         #   - 点窗口红叉 / Cmd+W  → closing 拦截 → 最小化到 Dock（返回桌面，软件常驻）
@@ -2629,6 +3600,57 @@ def main() -> None:
 
         # Windows 端退出 webview 后清理资源
         _launch_log("原生窗口已创建，启动 webview 主循环")
+        # ── 2026-10-18 窗口就绪 watchdog（Windows）──
+        # 背景：GUI 线程创建窗口是**静默**的。失败时进程活着、后端 API 200、
+        # WebView2 渲染进程也在跑，但 EnumWindows 找不到本进程任何窗口 ——
+        # 用户侧即"程序打不开/白屏"，且日志无任何异常，无从下手。
+        # 探针实验（pywebview 6.2.1 + WebView2 155 全部通过）无法复现，
+        # 故这里不做根因猜测，直接做**可观测 + 保底**：
+        #   1. 轮询本进程可见顶层窗口（>300x200），出现即记录并退出；
+        #   2. 25s 未见 → dump 全部线程栈到 ~/.vdl_window_timeout.log +
+        #      回落浏览器（后端在跑，用户至少能完整使用，不至于干瞪眼）。
+        if sys.platform == "win32":
+            def _watch_window_ready():
+                import ctypes as _ct
+                from ctypes import wintypes as _wt
+                _u32 = _ct.WinDLL("user32", use_last_error=True)
+                _me = os.getpid()
+                _found = []
+
+                @_ct.WINFUNCTYPE(_ct.c_bool, _wt.HWND, _wt.LPARAM)
+                def _cb(h, _p):
+                    pid = _wt.DWORD()
+                    _u32.GetWindowThreadProcessId(h, _ct.byref(pid))
+                    if pid.value == _me and _u32.IsWindowVisible(h):
+                        r = _wt.RECT()
+                        _u32.GetWindowRect(h, _ct.byref(r))
+                        if (r.right - r.left) > 300 and (r.bottom - r.top) > 200:
+                            _found.append((r.left, r.top, r.right, r.bottom))
+                    return True
+
+                deadline = time.time() + 25.0
+                while time.time() < deadline and not _found:
+                    _found.clear()
+                    try:
+                        _u32.EnumWindows(_cb, 0)
+                    except Exception:
+                        return
+                    if _found:
+                        _launch_log(f"窗口就绪 watchdog：已确认可见窗口 {_found[0]}")
+                        return
+                    time.sleep(1.5)
+                if not _found:
+                    _launch_log("窗口就绪 watchdog：25s 未见可见窗口，dump 线程栈并回落浏览器")
+                    try:
+                        import faulthandler as _fh
+                        _fh.dump_traceback(
+                            file=open(Path.home() / ".vdl_window_timeout.log", "w"))
+                    except Exception:
+                        pass
+                    _browser_fallback(server_thread)
+
+            threading.Thread(target=_watch_window_ready, daemon=True,
+                             name="vdl-window-watchdog").start()
         # 🔴 登录态持久化修复（2026-09-30）：pywebview 默认 private_mode=True，
         #   其 cocoa 后端在每次启动时 removeDataOfTypes(全部网站数据) —— 把 localStorage
         #   （含登录 token vdl_auth_token）连同 cookie 一并清空。后果：桌面 App 彻底退出

@@ -184,9 +184,21 @@ def test_run_update_win_happy_path():
         assert calls[0].cmd == [str(dest), "/VERYSILENT", "/NORESTART",
                                 "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"], calls[0].cmd
         # 必须脱离父进程：本进程随后会被 /CLOSEAPPLICATIONS 关闭，
-        # 安装器若是子进程树成员会一并被杀（Windows 上走 creationflags，
-        # 非 Windows 上等价物是 start_new_session）。
-        assert calls[0].kw.get("start_new_session") is True, calls[0].kw
+        # 安装器若是子进程树成员会一并被杀。
+        # 🔴 2026-10-18：光"脱离父进程"不够——主进程在 Windows 作业对象里
+        #    （launcher _setup_win_job_object，KILL_ON_JOB_CLOSE），DETACHED_PROCESS
+        #    | CREATE_NEW_PROCESS_GROUP 出不了作业；安装器必须带
+        #    CREATE_BREAKAWAY_FROM_JOB(0x01000000)，否则作业关闭时被级联杀掉。
+        #    本断言此前只在 macOS 上跑过（Windows 上 start_new_session 分支
+        #    不成立，一直红着没人发现）——改为平台感知，两端都锁。
+        if os.name == "nt":
+            cf = calls[0].kw.get("creationflags") or 0
+            assert cf & 0x00000008, f"缺少 DETACHED_PROCESS: {cf:#x}"
+            assert cf & 0x00000200, f"缺少 CREATE_NEW_PROCESS_GROUP: {cf:#x}"
+            assert cf & 0x01000000, \
+                f"缺少 CREATE_BREAKAWAY_FROM_JOB({cf:#x})：安装器出不了 Windows 作业对象，更新会烂尾"
+        else:
+            assert calls[0].kw.get("start_new_session") is True, calls[0].kw
     finally:
         _rmtree(work)  # 内部断言目录确已消失（沙盒拦截静默失败会被抓到）
     print("✅ 正常路径：静默安装参数齐全 + 脱离父进程启动")
