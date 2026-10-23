@@ -16509,6 +16509,14 @@ el.dwVidPlayer.hidden = true;
     if (!h2) return;
     const label = h2.querySelector('.guide-title-text');
     if (label) label.textContent = text; else h2.textContent = text;
+    // 2026-10-23 全站改版：页面标题已搬到页头 .ph-title（h2 退为 sr-only 语义锚点），
+    // 动态文案（如「视频格式转换 · 3 个文件」）必须同步到页头，否则状态看不见。
+    // 纯展示同步，不改变任何业务判断。
+    try {
+      const scope = h2.closest('section[id]');
+      const ph = scope && scope.querySelector('.ph .ph-title');
+      if (ph) ph.textContent = text;
+    } catch (_) { /* 忽略：老结构没有页头 */ }
   }
 
   // 每个功能右上角「?」按钮：**显示 / 隐藏**该功能的操作引导（二态开关，不是开合）。
@@ -25070,6 +25078,119 @@ el.dwVidPlayer.hidden = true;
     });
   })();
 
+  /* ======================================================================
+     V6–V11 全站改版：左侧导轨（76px 图标栏 + 悬停浮层）
+     ----------------------------------------------------------------------
+     原则（用户 2026-10-23 明确）：**只改视觉与导航外壳，不动任何操作逻辑与参数**。
+     所以这里只做三件纯展示的事：
+       ① 把各分组原有入口搬进对应的浮层容器（元素 id / data-view / 事件绑定
+          全部原地不动，只是换了父节点，点击路径与参数完全一致）；
+       ② 悬停 / 聚焦时展开浮层（原生 hover 用 CSS，这里只补键盘与点击的兜底）；
+       ③ 把当前激活视图同步到 body[data-view] 与分组的 .has-active，
+          供 CSS 决定「顶栏是否收起」「哪个分组图标高亮」。
+     不接管 switchView、不拦任何点击、不改任何表单字段。
+     ====================================================================== */
+  (function initRailNav() {
+    const rail = document.getElementById('sidebar');
+    if (!rail) return;
+
+    // ① 每个分组包一层浮层容器（个人中心组同样处理，浮层向上弹）
+    const groups = Array.from(rail.querySelectorAll('.sidebar-group'));
+    for (const group of groups) {
+      if (group.querySelector(':scope > .rail-flyout')) continue;
+      const head = group.querySelector('.sidebar-group-title');
+      const fly = document.createElement('div');
+      fly.className = 'rail-flyout';
+      fly.setAttribute('role', 'group');
+      const gname = head ? (head.querySelector('.sidebar-group-en') || {}).textContent : '';
+      fly.dataset.title = (gname || '').trim();
+      // 原有入口原地搬入浮层：不重建元素，保留 id / data-view / 已注册的事件
+      for (const item of Array.from(group.querySelectorAll(':scope > .sidebar-item'))) {
+        fly.appendChild(item);
+      }
+      group.appendChild(fly);
+      // 导轨形态下「折叠」没有意义，一律展开（否则浮层里没内容）
+      group.classList.remove('collapsed');
+    }
+
+    const openOf = (group) => { if (group) group.classList.add('is-open'); };
+    const closeAll = (except) => {
+      for (const g of groups) if (g !== except) g.classList.remove('is-open');
+    };
+
+    rail.addEventListener('pointerenter', (e) => {
+      const g = e.target && e.target.closest ? e.target.closest('.sidebar-group') : null;
+      if (g) openOf(g);
+    }, true);
+    rail.addEventListener('pointerleave', () => closeAll(null));
+    // 悬浮在浮层外（导轨的空白处）时收起，避免多个浮层叠着
+    rail.addEventListener('pointerover', (e) => {
+      const g = e.target && e.target.closest ? e.target.closest('.sidebar-group') : null;
+      closeAll(g);
+      if (g) openOf(g);
+    });
+    // 键盘可达：Tab 进分组即展开
+    rail.addEventListener('focusin', (e) => {
+      const g = e.target && e.target.closest ? e.target.closest('.sidebar-group') : null;
+      if (!g) return;
+      closeAll(g);
+      openOf(g);
+    });
+    rail.addEventListener('focusout', () => {
+      // 焦点离开后若鼠标不在导轨上则收起（延迟一拍，等焦点落到浮层内）
+      setTimeout(() => {
+        if (!rail.matches(':hover') && !rail.contains(document.activeElement)) closeAll(null);
+      }, 0);
+    });
+    // 点完入口立刻收起浮层（点击本身不受影响）
+    rail.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('.rail-flyout .sidebar-item')) closeAll(null);
+    });
+    /* 导轨形态下顶栏被收起，登录入口只剩「个人中心头像」：
+       未登录时点头像 / 点个人中心浮层里的任何一项，都直接拉起登录弹窗
+       （程序化 click 顶栏那颗隐藏按钮，复用既有登录逻辑，不新增一套）。
+       已登录时完全不动，走原有 switchView。 */
+    rail.addEventListener('click', (e) => {
+      const inProfile = e.target.closest ? e.target.closest('#profileSidebarGroup') : null;
+      if (!inProfile) return;
+      const locked = inProfile.dataset.locked === '1';
+      if (!locked) return;
+      const authBtn = document.getElementById('authHeaderBtn');
+      if (authBtn) { e.preventDefault(); e.stopPropagation(); authBtn.click(); }
+    }, true);
+    // Esc 收起
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAll(null);
+    });
+
+    // ③ 把当前激活视图同步给 body 与分组（纯展示态）
+    const syncActive = () => {
+      const active = rail.querySelector('.sidebar-item.is-active');
+      const g = active ? active.closest('.sidebar-group') : null;
+      for (const each of groups) each.classList.toggle('has-active', each === g);
+      let view = '';
+      if (active) view = active.dataset.view || '';
+      // 首页按钮在分组之外，单独判断
+      const home = rail.querySelector('.sidebar-item.sidebar-home');
+      if (home && home.classList.contains('is-active')) view = 'home';
+      if (view) document.body.dataset.view = view;
+    };
+    syncActive();
+    try {
+      new MutationObserver(syncActive).observe(rail, {
+        subtree: true, attributes: true, attributeFilter: ['class'],
+      });
+    } catch (_) { /* 老 WebView 没有 MutationObserver 就只在初始同步一次 */ }
+
+    // ④ 页头返回键：回首页（与设计稿的 ‹ 一致）。只做导航，不做别的。
+    document.addEventListener('click', (e) => {
+      const back = e.target.closest ? e.target.closest('.ph-back') : null;
+      if (!back) return;
+      e.preventDefault();
+      try { window.VDL.switchView('home'); } catch (_) { /* 首屏初始化未完成时忽略 */ }
+    });
+  })();
+
   // Phase 2：暴露共享 helper 到 window.VDL，供 web/js/desktop-app.js（桌面版专属脚本）复用。
   // 仅追加命名空间，不改变任何现有运行时行为；web 与 app 共享这些基础能力。
   window.VDL = Object.assign(window.VDL || {}, {
@@ -25082,6 +25203,13 @@ el.dwVidPlayer.hidden = true;
     trackTask,
     switchView,
   });
+  // 深链：#download / #library 等直接进对应视图（只读 location.hash，不改任何既有跳转）
+  try {
+    const _deep = String(location.hash || '').replace(/^#/, '').trim();
+    if (_deep && /^[a-z_]+$/.test(_deep) && typeof switchView === 'function') {
+      switchView(_deep);
+    }
+  } catch (_) { /* 老 WebView 或异常 hash 一律忽略，行为与改动前一致 */ }
 })();
 
 /* ==== v2 四轮（2026-09-17）：三栏拖动分隔条 + 侧栏收起（宽度/状态存 localStorage） ==== */

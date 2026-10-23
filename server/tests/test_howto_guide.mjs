@@ -47,7 +47,9 @@ const eq = (a, b, msg) => { count++; assert.equal(a, b, msg); };
 /* 夹逼就能确定「这条引导到底在谁的肚子里」，比解析 DOM 树更直接。       */
 /* ------------------------------------------------------------------ */
 const EXPECT = new Map([
-  ['download',      ['class="hero-link-wrap"', 'class="panel input-panel"']],
+  // 2026-10-23 全站改版：下载页原来的 hero（hero-link-wrap）已收敛为 .ph 页头，
+  // 锚点跟着换成「页头里的返回键」——它只出现在 download 页，作用等价。
+  ['download',      ['class="ph-back"', 'class="panel input-panel"']],
   ['uploadconvert', ['id="uploadConvertView"', 'id="musicConvertView"']],
   ['musicconvert',  ['id="musicConvertView"', 'id="imageConvertView"']],
   ['imageconvert',  ['id="imageConvertView"', 'id="compressView"']],
@@ -218,8 +220,11 @@ const btnCount = (indexHtml.match(BTN_RE) || []).length;
 eq(btnCount, 16,
   `「?」查看引导按钮应恰好 16 个（11 个纯标题视图 + 4 个 lib-head 视图 + 下载页），实际 ${btnCount} 个`);
 
-const TITLE_IDS = ['ucTitle', 'musTitle', 'imgTitle', 'cpTitle', 'srTitle',
-  'shareTitle', 'pageTitle', 'bridgeTitle', 'sbTitle', 'dwTitle', 'idpTitle'];
+// 2026-10-23 全站改版：ucTitle / dwTitle 的文案已搬到页头 .ph-title，
+// h2 退为 sr-only 语义锚点（不再承载「?」按钮），故从本清单移除；
+// 它们右上角仍需有「?」，改由下方 PH_TITLE_VIEWS 断言保证。
+const TITLE_IDS = ['musTitle', 'imgTitle', 'cpTitle', 'srTitle',
+  'shareTitle', 'pageTitle', 'bridgeTitle', 'sbTitle', 'idpTitle'];
 for (const id of TITLE_IDS) {
   const reBtn = new RegExp(`<h2 id="${id}"[^>]*>[\\s\\S]*?class="howto-btn"[\\s\\S]*?</h2>`);
   ok(reBtn.test(indexHtml),
@@ -231,6 +236,15 @@ for (const id of TITLE_IDS) {
     'JS 一旦用 textContent 改标题文案，会把「?」按钮一起抹掉');
 }
 
+/* 页头形态（.ph）承载「?」的视图：入口必须还在页头右侧 */
+for (const view of ['uploadConvertView', 'dwView']) {
+  const vi = indexHtml.indexOf(`<section id="${view}"`);
+  ok(vi > 0, `找不到 <section id="${view}">`);
+  const seg = indexHtml.slice(vi, vi + 1200);
+  ok(/class="ph-actions"[\s\S]{0,300}?class="howto-btn"/.test(seg),
+    `「${view}」的页头右侧没有「?」按钮 —— 右上角缺少随时重看引导的入口`);
+}
+
 for (const view of ['libraryView', 'commentaryView', 'subscribeView', 'torrentView']) {
   const vi = indexHtml.indexOf(`<section id="${view}"`);
   ok(vi > 0, `找不到 <section id="${view}">`);
@@ -240,11 +254,12 @@ for (const view of ['libraryView', 'commentaryView', 'subscribeView', 'torrentVi
     `「${view}」的头部（lib-head）里没有「?」按钮 —— 右上角缺少随时重看引导的入口`);
 }
 
-const heroStart = indexHtml.indexOf('<section class="hero"');
+// 2026-10-23：下载页 hero（大标题）已收敛为 .ph 页头，锚点随之更换
+const heroStart = indexHtml.indexOf('id="downloadView"');
 const heroEnd = indexHtml.indexOf('class="panel input-panel"');
-ok(heroStart > 0 && heroEnd > heroStart, '定位下载页 hero 区间失败');
+ok(heroStart > 0 && heroEnd > heroStart, '定位下载页页头区间失败');
 ok(indexHtml.slice(heroStart, heroEnd).includes('class="howto-btn"'),
-  '下载页 hero 右上角没有「?」按钮');
+  '下载页页头右上角没有「?」按钮');
 
 // JS 侧：按钮能开合引导、状态能同步，且动态标题不会把按钮抹掉
 ok(/function howtoSyncButtons\s*\(/.test(appJsCode),
