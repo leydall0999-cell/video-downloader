@@ -24919,6 +24919,157 @@ el.dwVidPlayer.hidden = true;
   };
   try { initAdmin(); } catch (_) { /* 后台面板缺失不影响主流程 */ }
 
+  /* ==========================================================================
+   * 首页 V5（2026-10-23 按 Ardot 设计稿 9:1 重建）
+   *  - 主推横幅：选视频 / 拖入 / 粘贴链接 / 看示例（全部接到真实流程，不做假按钮）
+   *  - 创作组大卡的「上次：…」取真实解说历史；取不到就保持隐藏（不编数据）
+   * ========================================================================== */
+  (function initHomeV5() {
+    const hero = document.getElementById('v5Hero');
+    if (!hero) return;
+    const pickBtn = document.getElementById('v5HeroPick');
+    const demoBtn = document.getElementById('v5HeroDemo');
+    const heroInput = document.getElementById('v5HeroInput');
+    const hint = hero.querySelector('.v5-hero-hint');
+    const hintDefault = hint ? hint.textContent : '';
+    const comFile = document.getElementById('comFileInput');
+
+    // 横幅提示位临时改成一句话说明（3.6s 后复原），不新增浮层
+    let hintTimer = null;
+    const flashHint = (text) => {
+      if (!hint) return;
+      hint.textContent = text;
+      hint.style.color = 'rgba(255,255,255,.98)';
+      hint.style.fontWeight = '600';
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(() => {
+        hint.textContent = hintDefault;
+        hint.style.color = '';
+        hint.style.fontWeight = '';
+      }, 3600);
+    };
+
+    // 带文件进入视频解说：切视图 → 塞进 #comFileInput → 触发原生 change（走原有上传逻辑）
+    const openCommentaryWithFile = (file) => {
+      switchView('commentary');
+      if (!file || !comFile) return;
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        comFile.files = dt.files;
+        comFile.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (_e) {
+        // 极老 WebKit 没有 DataTransfer 构造器：退回「选择视频」让用户自己挑
+        flashHint('这个文件没能自动带入，请在解说页点「📁 从本地文件生成」');
+        if (comFile) comFile.click();
+      }
+    };
+
+    if (pickBtn) {
+      pickBtn.addEventListener('click', () => {
+        switchView('commentary');
+        if (comFile) comFile.click();
+      });
+    }
+
+    // 整块横幅都是投放区
+    ['dragenter', 'dragover'].forEach((t) => {
+      hero.addEventListener(t, (e) => { e.preventDefault(); hero.classList.add('is-dragover'); });
+    });
+    ['dragleave', 'dragend', 'drop'].forEach((t) => {
+      hero.addEventListener(t, () => hero.classList.remove('is-dragover'));
+    });
+    hero.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) openCommentaryWithFile(f);
+    });
+
+    // 粘贴链接：视频解说只吃本地文件 ⇒ 把链接带到「下载」页，下载完再回来解说（真路径，不假装能直连）
+    const handoffToDownload = (url) => {
+      switchView('download');
+      const box = document.getElementById('urlInput');
+      if (box) {
+        box.value = url;
+        try { box.focus(); box.setSelectionRange(url.length, url.length); } catch (_e) { /* ignore */ }
+      }
+      flashHint('视频解说需要本地文件：链接已填进「下载」页，下载完成后回这里拖入即可');
+    };
+
+    if (heroInput) {
+      heroInput.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const v = String(heroInput.value || '').trim();
+        if (!v) return;
+        e.preventDefault();
+        handoffToDownload(v);
+        heroInput.value = '';
+      });
+      // 直接粘贴链接（Ctrl/⌘+V）也走同一条路
+      heroInput.addEventListener('paste', (e) => {
+        const txt = (e.clipboardData && e.clipboardData.getData('text')) || '';
+        const v = txt.trim();
+        if (!/^https?:\/\//i.test(v)) return;         // 普通文本留给用户继续编辑
+        e.preventDefault();
+        handoffToDownload(v);
+        heroInput.value = '';
+      });
+    }
+
+    // 看示例成片：本地没有随包示例视频 ⇒ 打开解说页并展开「怎么用 · 视频解说」的步骤说明
+    if (demoBtn) {
+      demoBtn.addEventListener('click', () => {
+        switchView('commentary');
+        const d = document.querySelector('#commentaryView details.howto');
+        if (d) {
+          d.open = true;
+          try { d.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_e) { /* ignore */ }
+        }
+        flashHint('示例：解说页已打开「怎么用」步骤，按 01→04 走一遍就是成片');
+      });
+    }
+
+    // ---- 创作组大卡的「上次：…」----
+    const fmtMtime = (ts) => {
+      const n = Number(ts);
+      if (!n) return '';
+      const d = new Date(n < 1e12 ? n * 1000 : n);
+      if (isNaN(d.getTime())) return '';
+      const p = (x) => String(x).padStart(2, '0');
+      return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    };
+    const setLast = (view, text) => {
+      const node = document.querySelector(`.v5-last[data-last-for="${view}"]`);
+      if (!node || !text) return;
+      node.textContent = text;
+      node.title = text;
+      node.hidden = false;
+    };
+    const loadLastUsed = async () => {
+      try {
+        const data = await request('/api/commentary/list');
+        const items = (data && data.items) || [];
+        if (!items.length) return;
+        // 服务端按 mtime 倒序；再兜一层排序，避免字段缺失时取错
+        const top = items.slice().sort((a, b) => Number(b.mtime || 0) - Number(a.mtime || 0))[0];
+        const name = String(top.name || '').replace(/\.(mp4|mov|mkv|webm)$/i, '');
+        const when = fmtMtime(top.mtime);
+        setLast('commentary', '上次：' + name + (when ? ' · ' + when : ''));
+      } catch (_e) { /* 没登录/没历史 ⇒ 保持隐藏 */ }
+    };
+    // 首页懒加载：切到 home 时才拉一次，避免拖慢启动
+    let lastLoaded = false;
+    const onceLoad = () => {
+      if (lastLoaded) return;
+      lastLoaded = true;
+      loadLastUsed();
+    };
+    if (!document.getElementById('homeView').hidden) onceLoad();
+    document.querySelectorAll('[data-view="home"]').forEach((b) => {
+      b.addEventListener('click', onceLoad);
+    });
+  })();
+
   // Phase 2：暴露共享 helper 到 window.VDL，供 web/js/desktop-app.js（桌面版专属脚本）复用。
   // 仅追加命名空间，不改变任何现有运行时行为；web 与 app 共享这些基础能力。
   window.VDL = Object.assign(window.VDL || {}, {
