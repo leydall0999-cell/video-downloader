@@ -198,6 +198,51 @@ def test_push_sends_mode_and_refreshes_cache() -> None:
               membership._CLOUD_PLANS_CACHE.get("free_quota", {}).get("mode") == "off")
 
 
+# ── ⑤ 每日额度必须下发（2026-10-20 实测：后台把「生成二维码」改成免费 2 次，
+#      网页版仍按代码默认 20 显示/放行 —— 根因是推送只发了 cloud_lifetime/mode，
+#      daily_free_limits / daily_member_limits 从未上云；网页端只读云端。）────────
+def test_push_sends_daily_limits() -> None:
+    cap: dict = {}
+    fake_admin = types.SimpleNamespace(_license_admin_token=lambda: "adm")
+    fq = {"mode": "on",
+          "daily_free_limits": {"share_qr": 2, "share_page": 2},
+          "daily_member_limits": {"share_qr": 200, "share_page": 200}}
+    with patch.object(membership, "_license_api", return_value="http://x/api/license/free_quota_set"), \
+         patch.dict(sys.modules, {"admin_store": fake_admin}), \
+         patch.object(membership, "load_plan_overrides", return_value={"free_quota": fq}), \
+         patch.object(license_client, "free_quota_set_remote",
+                      lambda token, **kw: cap.update(token=token, kw=kw) or
+                      {"ok": True, "free_quota_overrides": fq, "effective_cloud_limits": {}}):
+        r = membership.push_free_quota_to_cloud()
+        check("下发成功", r.get("ok") is True, str(r))
+        check("daily_free_limits 一并下发",
+              cap["kw"].get("daily_free_limits") == {"share_qr": 2, "share_page": 2}, str(cap["kw"]))
+        check("daily_member_limits 一并下发",
+              cap["kw"].get("daily_member_limits") == {"share_qr": 200, "share_page": 200}, str(cap["kw"]))
+
+
+def test_license_client_payload_carries_daily_limits() -> None:
+    sent: dict = {}
+
+    def _fake_post(path, payload, base_url, timeout, opener=None):
+        sent.update(path=path, payload=payload)
+        return {"ok": True}
+
+    with patch.object(license_client, "_post", _fake_post):
+        license_client.free_quota_set_remote("adm",
+                                             daily_free_limits={"share_qr": 2},
+                                             daily_member_limits={"share_qr": 200},
+                                             base_url="http://x")
+    check("走 free_quota_set 端点", str(sent.get("path") or "").endswith("/free_quota_set"), str(sent.get("path")))
+    check("payload 带 daily_free_limits",
+          sent["payload"].get("daily_free_limits") == {"share_qr": 2}, str(sent.get("payload")))
+    check("payload 带 daily_member_limits",
+          sent["payload"].get("daily_member_limits") == {"share_qr": 200}, str(sent.get("payload")))
+    check("未传的项不塞进 payload（中心不动该项）",
+          "cloud_lifetime" not in sent["payload"] and "mode" not in sent["payload"],
+          str(sent.get("payload")))
+
+
 def test_push_skips_when_no_override() -> None:
     with patch.object(membership, "_license_api", return_value="http://x/api/license/free_quota_set"), \
          patch.dict(sys.modules, {"admin_store": types.SimpleNamespace(_license_admin_token=lambda: "adm")}), \

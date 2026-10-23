@@ -370,8 +370,12 @@ def section_c_contracts():
           "if (!_verNewer(target, own)) return;" in bg)
     check("扩展没有引入新权限相关 API（新增权限会让静默更新变成需用户重新授权）",
           "chrome.management" not in bg and "chrome.permissions" not in bg)
-    check("manifest 权限没被新增（仍是 webRequest/storage/alarms）",
-          sorted(man.get("permissions") or []) == ["alarms", "storage", "webRequest"],
+    # 权限清单是「静默更新」的命门：加一项就会让下次更新变成需用户重新授权。
+    # 2026-10-18 有意加了 cookies（「登录态同步」按站主动读 Cookie，光靠 webRequest
+    # 只能拿到正在播放的那条请求头），因此把 cookies 记进基准；再有新增就应当红，
+    # 提醒「这次更新用户会被要求重新授权」。
+    check("manifest 权限没被新增（基准含 cookies 登录态同步）",
+          sorted(man.get("permissions") or []) == ["alarms", "cookies", "storage", "webRequest"],
           man.get("permissions"))
     check("manifest 版本已 bump（≥1.0.44，否则包内版本不前进就永远不会触发更新）",
           _ver_ge(man.get("version"), (1, 0, 44)), man.get("version"))

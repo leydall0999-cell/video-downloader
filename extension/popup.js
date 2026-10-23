@@ -297,6 +297,10 @@ function render(st) {
   } else {
     note.hidden = true;
   }
+
+  // 桌面端地址可能在本面板打开期间才探到（首帧是空串）→ 登录态区的按钮要跟着解禁，
+  // 否则用户看到「存到我自己的 App」一直灰着，会以为功能坏了。
+  ckUpdateBtns();
 }
 
 function refresh() {
@@ -669,3 +673,230 @@ chrome.runtime.sendMessage({ type: 'getEndpoint' }, function (r) {
   refresh();
   refreshDesktopAuth();
 });
+
+
+// ---- 登录态同步（2026-10-18）----
+// 为什么要有这块：桌面 App 自己解密浏览器 Cookie 库只认 Chrome/Edge/Brave/Chromium
+// 的默认 profile（macOS 上还撞钥匙串授权），网页版更是受同源策略彻底读不到别站 Cookie。
+// 于是让用户一键把「浏览器里已经登录的站」交给本机 App（私密，写本机缓存），
+// 或显式同意后贡献到云端公共池（共享，网页版靠它拿到登录态）。
+// 采集与推送逻辑全在 cookie-harvest.js（可 node 直测）；本段只做 UI 与串行推送，
+// 绝不自动触发外发 —— 每一个出网动作都必须来自用户点按钮。
+var ckItems = [];      // 最近一次扫描结果（VDLCookie.harvest 的返回）
+var ckBusy = false;    // 扫描 / 推送进行中：防连点，也用于禁按钮
+var ckScanned = false;
+
+function ckMsg(text, kind) {
+  var el = $('ckMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'ckz-msg' + (kind ? ' is-' + kind : '');
+  el.hidden = !text;
+}
+
+/** 按钮可用性：本机推送要「有桌面端地址 + 至少一项已登录」；云端还要求勾选同意。 */
+function ckUpdateBtns() {
+  var local = $('ckPushLocal');
+  var cloud = $('ckPushCloud');
+  if (!local || !cloud) return;
+  var ready = VDLCookie.pickReady(ckItems);
+  var readyCloud = VDLCookie.pickReady(ckItems, { cloud: true });
+  var agree = !!($('ckAgree') && $('ckAgree').checked);
+  local.disabled = ckBusy || !ready.length || !state.endpoint;
+  cloud.disabled = ckBusy || !readyCloud.length || !agree;
+  // 灰着的原因要能看见：否则用户以为「扫到了却点不动」是坏了
+  local.title = !state.endpoint ? '未连接桌面端：请先启动「视频工坊」App'
+    : (!ready.length ? '没有已登录的平台' : '');
+  cloud.title = !readyCloud.length ? '没有可贡献的平台（微博/爱奇艺只能同步到本机）'
+    : (!agree ? '请先勾选上方同意项' : '');
+}
+
+function ckRender() {
+  var list = $('ckList');
+  if (!list) return;
+  list.innerHTML = '';
+  var onCount = 0;
+  var noPerm = false;
+  var timedOut = 0;
+  // 已登录的排在前面：用户扫完只想看「哪几个能同步」
+  var rows = (ckItems || []).slice().sort(function (a, b) {
+    return (b.loggedIn ? 1 : 0) - (a.loggedIn ? 1 : 0);
+  });
+  rows.forEach(function (it) {
+    if (it.error === 'no-permission') noPerm = true;
+    if (it.error === 'timeout') timedOut++;
+    if (it.loggedIn) onCount++;
+    var row = document.createElement('div');
+    row.className = 'ckz-row' + (it.loggedIn ? ' on' : ' off');
+    var nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = it.name;
+    row.appendChild(nm);
+    if (!it.cloud) {
+      var tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = '仅本机';
+      tag.title = '该站不在云端公共池白名单内，只能同步给自己的 App';
+      row.appendChild(tag);
+    }
+    var st = document.createElement('span');
+    st.className = 'st';
+    if (it.error === 'no-permission') st.textContent = '缺少 Cookie 权限';
+    else if (it.error === 'timeout') st.textContent = '读取超时';
+    else if (it.error) st.textContent = '读取失败';
+    else if (it.loggedIn) st.textContent = '已登录 · ' + it.count + ' 项';
+    else st.textContent = '未登录';
+    row.appendChild(st);
+    list.appendChild(row);
+  });
+
+  var sum = $('ckSummary');
+  if (sum) {
+    if (noPerm) {
+      // 最可能的真实原因：manifest 新增了 cookies 权限 → Chrome 停用了扩展，
+      // 用户必须到扩展管理页点一次「重新启用」，否则 getAll 永远报权限错。
+      sum.textContent = '缺少 Cookie 权限，请在扩展管理页重新启用';
+      sum.className = 'ckz-sub is-warn';
+    } else if (!ckScanned) {
+      sum.textContent = '展开后点「扫描」';
+      sum.className = 'ckz-sub';
+    } else if (onCount) {
+      sum.textContent = onCount + ' 个平台已登录' + (timedOut ? '（' + timedOut + ' 个超时）' : '');
+      sum.className = 'ckz-sub is-ok';
+    } else if (timedOut) {
+      // 全部超时（常见于浏览器网络服务异常）：别写成「没有已登录的平台」——
+      // 那会让用户去挨个重新登录，而真正的解法是重试或重启浏览器。
+      sum.textContent = timedOut + ' 个平台读取超时，点「重新扫描」再试';
+      sum.className = 'ckz-sub is-warn';
+    } else {
+      sum.textContent = '没有检测到已登录的平台';
+      sum.className = 'ckz-sub';
+    }
+  }
+  ckUpdateBtns();
+}
+
+function ckScan(done) {
+  if (ckBusy) { if (done) done(); return; }
+  if (typeof VDLCookie === 'undefined' || !VDLCookie.harvest) {
+    ckMsg('登录态模块未加载：请到扩展管理页重新加载一次扩展', 'err');
+    if (done) done();
+    return;
+  }
+  ckBusy = true;
+  var btn = $('ckScan');
+  if (btn) { btn.disabled = true; btn.textContent = '扫描中…'; }
+  ckUpdateBtns();
+  VDLCookie.harvest(chrome, function (res) {
+    // 「默认共享到云端」是产品策略（与桌面 App 每 30 分钟自动推一致）：
+    // 首次扫到已登录站点就直接推一次，不需要用户再点按钮；取消勾选才不推。
+    // 30 分钟节流 —— popup 每打开都是新实例，不节流会每次开面板都重推，
+    // 撞云端每域 30 秒的限流。
+    var first = !ckScanned;
+    ckItems = res || [];
+    ckScanned = true;
+    ckBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = '重新扫描'; }
+    ckRender();
+    if (done) done();
+    // 勾选框是「当下这一刻」的意愿，优先于 storage：用户刚点了取消（set 还没落地）
+    // 就展开面板，也必须不推。storage 里只负责跨会话记住这个选择。
+    if (first && !($('ckAgree') && $('ckAgree').checked === false)) {
+      // 打开面板补推一次。与 background 的 alarm / startup 共用 autoPush 内部
+      // 的节流戳（storage.local），所以不会双推；用户取消勾选后 autoPush 直接跳过。
+      VDLCookie.autoPush(chrome, null, function (r) {
+        if (r && r.pushed) ckMsg('已自动共享 ' + r.pushed + ' 个平台到云端池', 'ok');
+      });
+    }
+  });
+}
+
+/** 串行推送：逐站发、逐站回报，失败要把原因落到界面上（别只显示「失败」）。 */
+function ckPush(kind) {
+  if (ckBusy) return;
+  var isCloud = kind === 'cloud';
+  var targets = VDLCookie.pickReady(ckItems, { cloud: isCloud });
+  if (!targets.length) return;
+  if (!isCloud && !state.endpoint) {
+    ckMsg('未连接桌面端：请先启动「视频工坊」App，再回来点一次', 'err');
+    return;
+  }
+  if (isCloud && !($('ckAgree') && $('ckAgree').checked)) {
+    ckMsg('请先勾选同意，才会把登录态贡献到云端池', 'err');
+    return;
+  }
+
+  var btn = isCloud ? $('ckPushCloud') : $('ckPushLocal');
+  var label = btn.textContent;
+  ckBusy = true;
+  ckUpdateBtns();
+  ckMsg('', '');
+  var okN = 0;
+  var fail = [];
+  var i = 0;
+  function step() {
+    if (i >= targets.length) {
+      ckBusy = false;
+      btn.textContent = label;
+      ckUpdateBtns();
+      if (!fail.length) {
+        ckMsg('已同步 ' + okN + ' 个平台' +
+          (isCloud ? '到云端池：网页版现在可以用这几个站的登录态了' : '到本机 App'), 'ok');
+      } else if (okN) {
+        ckMsg('成功 ' + okN + ' 个，失败 ' + fail.length + ' 个：' + fail[0], 'err');
+      } else {
+        ckMsg('同步失败：' + fail[0], 'err');
+      }
+      return;
+    }
+    var p = targets[i++];
+    btn.textContent = '同步中 ' + i + '/' + targets.length + '…';
+    var onDone = function (r) {
+      if (r && r.ok) okN++;
+      else fail.push(p.name + '（' + ((r && r.error) || '失败') + '）');
+      step();
+    };
+    if (isCloud) VDLCookie.pushCloud(p, p.header, onDone);
+    else VDLCookie.pushLocal(state.endpoint, p, p.header, onDone);
+  }
+  step();
+}
+
+(function bindCookieZone() {
+  var zone = $('ckZone');
+  if (!zone) return;
+  // 首次展开才读 Cookie（不展开完全不碰，避免无谓的权限调用与用户疑虑）
+  zone.addEventListener('toggle', function () {
+    if (zone.open && !ckScanned && !ckBusy) ckScan();
+  });
+  if ($('ckScan')) $('ckScan').addEventListener('click', function () { ckScan(); });
+  // 勾选状态持久化到 storage.local（background 的自动推送读同一个键）。
+  // HTML 默认 checked；只有用户显式取消过才落 false —— 别把「读不到」当成关闭。
+  if ($('ckAgree')) {
+    try {
+      var shareKey = VDLCookie.AUTO_KEY;
+      chrome.storage.local.get([shareKey], function (d) {
+        if (d && d[shareKey] === false) {
+          $('ckAgree').checked = false;
+          ckUpdateBtns();
+        }
+      });
+    } catch (e) { /* 读不到就按 HTML 默认（共享） */ }
+    $('ckAgree').addEventListener('change', function () {
+      var on = !!$('ckAgree').checked;
+      try {
+        var patch = {};
+        patch[VDLCookie.AUTO_KEY] = on;
+        chrome.storage.local.set(patch);
+      } catch (e) { /* 存不了不影响本次会话 */ }
+      ckUpdateBtns();
+      if (on) ckMsg('', '');
+    });
+  }
+  if ($('ckPushLocal')) {
+    $('ckPushLocal').addEventListener('click', function () { ckPush('local'); });
+  }
+  if ($('ckPushCloud')) {
+    $('ckPushCloud').addEventListener('click', function () { ckPush('cloud'); });
+  }
+})();

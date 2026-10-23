@@ -25,8 +25,21 @@ def _cache_file(host: str) -> Path:
     safe = (host or "unknown").replace("/", "_").replace("\\", "_").replace(":", "_")
     return _COOKIE_CACHE_DIR / f"{safe}.json"
 
-def get_cached_cookie_header(host: str) -> str | None:
-    """返回缓存的 Cookie 请求头；缺失 / 过期 / 解密失败则返回 None。"""
+def _root_of(host: str) -> str:
+    """取根域（近似 eTLD+1）：www.bilibili.com → bilibili.com。
+
+    与 cookie_pool._strip_sub 同规则。目标站都是 .com/.tv/.cn 这类单段后缀，
+    取后两段够用；遇到 .co.uk 这种会退化成 "co.uk"（宁可少命中，绝不拿错站的
+    凭据去请求目标站）。
+    """
+    h = (host or "").strip().lower()
+    parts = h.split(".")
+    if len(parts) <= 2:
+        return h
+    return ".".join(parts[-2:])
+
+def _read_cached(host: str) -> str | None:
+    """读某个 host 的缓存；缺失 / 过期 / 读坏都返回 None。"""
     try:
         f = _cache_file(host)
         if f.exists():
@@ -35,6 +48,13 @@ def get_cached_cookie_header(host: str) -> str | None:
                 return data.get("header") or None
     except Exception:
         pass
+    return None
+
+def get_cached_cookie_header(host: str) -> str | None:
+    """返回缓存的 Cookie 请求头；缺失 / 过期 / 解密失败则返回 None。"""
+    hit = _read_cached(host)
+    if hit:
+        return hit
     # 实时解密浏览器并写缓存
     try:
         from downloader import get_browser_cookie_header
@@ -44,6 +64,15 @@ def get_cached_cookie_header(host: str) -> str | None:
             return header
     except Exception:
         pass
+    # 2026-10-18：浏览器解密拿不到时回落到「根域缓存」。
+    # 起因：浏览器扩展按根域（bilibili.com）推送登录态（见 app.py::cookie_browser_push），
+    # 而解析时 host 是具体域（www.bilibili.com / api.bilibili.com）—— 不回落到根域
+    # 就永远命中不到，扩展同步等于白做。
+    # 放在浏览器解密**之后**是刻意的：精确 host 的解密结果含 host-only cookie，比根域
+    # 快照更准；只有解密失败（非默认 profile / 钥匙串没授权 / 没装该浏览器）才兜底。
+    root = _root_of(host)
+    if root and root != host:
+        return _read_cached(root)
     return None
 
 def _save(host: str, header: str) -> None:

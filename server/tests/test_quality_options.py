@@ -95,6 +95,34 @@ def test_audio_only_keeps_best_audio():
     print("✅ 纯音频保持最佳音质 + mp3/m4a 选项")
 
 
+def test_missing_vcodec_still_lists_tiers():
+    """vcodec 缺失 ≠ 没有视频轨（2026-10-22 金牌影院实测）。
+
+    自研提取器（nmwchxx 金牌影院等）构造 formats 时不填 vcodec。老实现用
+    `vcodec in (None, "none")` 过滤 ⇒ 每一档的 _tracks 都为空 ⇒ 一个分辨率档
+    都列不出来，卡片只剩「仅音频 MP3 / WebM / 仅音频 M4A」。
+    vcodec 缺失是「未知」，只有显式 "none" 才是纯音频轨。
+    """
+    info = {"formats": [
+        # 金牌影院的真实形态：m3u8 混合流，只有 height，没有 vcodec/acodec
+        {"format_id": "nmw-1080", "height": 1080, "ext": "mp4", "protocol": "m3u8_native"},
+        {"format_id": "nmw-720", "height": 720, "ext": "mp4", "protocol": "m3u8_native"},
+        {"format_id": "nmw-480", "height": 480, "ext": "mp4", "protocol": "m3u8_native"},
+    ]}
+    ks = _keys(build_quality_options(info))
+    assert "1080" in ks and "720" in ks and "480" in ks, ks
+    print("✅ vcodec 缺失时仍按 height 平铺分辨率档（金牌影院）")
+
+    # 显式声明无视频轨的仍必须排除（不能被上面的放宽连坐）
+    info2 = {"formats": [
+        {"height": 1080, "vcodec": "none", "acodec": "mp4a", "ext": "m4a"},
+        {"height": None, "vcodec": "none", "acodec": "mp4a", "ext": "m4a"},
+    ]}
+    ks2 = _keys(build_quality_options(info2))
+    assert "1080" not in ks2, ks2
+    print("✅ vcodec 显式为 none 的仍被排除，不放宽成假档")
+
+
 def test_valid_quality_any_real_height():
     assert is_valid_quality("144") and is_valid_quality("1080") and is_valid_quality("4320")
     assert is_valid_quality(BEST_KEY) and is_valid_quality(AUDIO_KEY)
@@ -109,5 +137,6 @@ if __name__ == "__main__":
     test_no_fake_higher_tiers()
     test_youtube_full_resolutions()
     test_audio_only_keeps_best_audio()
+    test_missing_vcodec_still_lists_tiers()
     test_valid_quality_any_real_height()
-    print("\n🎉 清晰度全档平铺测试全部通过（6 项）")
+    print("\n🎉 清晰度全档平铺测试全部通过（7 项）")

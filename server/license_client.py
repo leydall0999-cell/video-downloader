@@ -373,6 +373,8 @@ def cloud_quota_remote(token: str, lifetime: int = 0, daily: int = 0,
 
 def free_quota_set_remote(token: str, cloud_lifetime: Any = _UNSET,
                          mode: Any = _UNSET,
+                         daily_free_limits: Any = _UNSET,
+                         daily_member_limits: Any = _UNSET,
                          base_url: Optional[str] = None,
                          timeout: float = 10.0) -> dict[str, Any]:
     """管理员下发「免费额度」覆盖到授权中心（2026-10-06；2026-10-13 加 mode）。
@@ -395,6 +397,14 @@ def free_quota_set_remote(token: str, cloud_lifetime: Any = _UNSET,
         payload["cloud_lifetime"] = cloud_lifetime
     if mode is not _UNSET:
         payload["mode"] = mode
+    # 🔴 2026-10-20：每档每日额度也要下发。此前只发 cloud_lifetime/mode，
+    #    云端 `free_quota_overrides.daily_*_limits` 停在 10-17 那次快照（缺
+    #    share_qr/share_page）⇒ 桌面后台把「生成二维码」改成免费 2 次，网页版
+    #    仍按代码默认 20 次显示/放行（网页端只读云端，没有本机覆盖概念）。
+    if daily_free_limits is not _UNSET:
+        payload["daily_free_limits"] = daily_free_limits
+    if daily_member_limits is not _UNSET:
+        payload["daily_member_limits"] = daily_member_limits
     return _post("/api/license/free_quota_set", payload, base_url, timeout)
 
 

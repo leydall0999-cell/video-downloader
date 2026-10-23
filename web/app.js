@@ -830,15 +830,9 @@
     pageBuildBtn: $('pageBuildBtn'),
     pageHint: $('pageHint'),
     pageResult: $('pageResult'),
-    pagePathInput: $('pagePathInput'),
-    pageCopyPathBtn: $('pageCopyPathBtn'),
-    pageOpenBtn: $('pageOpenBtn'),
     pageLinkInput: $('pageLinkInput'),
     pageCopyLinkBtn: $('pageCopyLinkBtn'),
     pageOpenLinkBtn: $('pageOpenLinkBtn'),
-    pageQrWrap: $('pageQrWrap'),
-    pageQrImg: $('pageQrImg'),
-    pageLocalTag: $('pageLocalTag'),
     pageResultHint: $('pageResultHint'),
 
     // 高清修复（sr* 前缀，独立 tab；2026-09-12 新增：快速档 + AI 档，全程本地）
@@ -1532,7 +1526,9 @@
     });
 
   // 轻量 toast 提示
-  const showToast = (msg, ms = 2600) => {
+  // 2026-10-22：加第三个参数 kind（'err' 用红底）——后台面板的操作反馈要区分
+  // 成功/失败；既有调用只传 (msg, ms)，行为完全不变。
+  const showToast = (msg, ms = 2600, kind = '') => {
     let t = document.getElementById('vdl-toast');
     if (!t) {
       t = document.createElement('div');
@@ -1542,6 +1538,7 @@
       document.body.appendChild(t);
     }
     t.textContent = msg;
+    t.style.background = kind === 'err' ? '#8a2b2b' : '#222a38';
     t.style.display = 'block';
     clearTimeout(t._timer);
     t._timer = setTimeout(() => {
@@ -2958,7 +2955,7 @@
     el.ucList.innerHTML = list.map(it => {
       const statusText = {
         pending: '未开始',
-        uploading: `上传中 ${it.progress||0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
+        uploading: `上传中 ${Math.floor(it.progress||0)}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`,
         uploaded: '已上传，待转码',
         running: it.stage === '无损直转' ? '无损直转中…'
                : it.stage === '排队中' ? '排队中…'
@@ -2970,7 +2967,7 @@
       // 移除按钮：pending/failed/uploading/uploaded 可移除（上传/待转码=取消+清分片）；转码中禁用
       const disabled = !['pending','failed','uploading','uploaded'].includes(it.status) ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
-        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress||0}%"></div></div>` : '';
+        ? `<div class="progress"><div class="progress-fill" style="width:${(it.progress||0).toFixed(2)}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.downloadUrl
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName||'converted'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}`
         : '';
@@ -3168,6 +3165,7 @@
     item.progress = 0;
     item.speedText = '';
     item.uploadedText = '';
+    item._emaSpeed = 0;               // 速度指数平滑值（瞬时速度抖动大，直显会让文字乱蹦）
     item._removed = false;            // 上传中删除标记（abort 后不再重试/不再 finish）
     item._xhrs = new Set();           // 进行中的分片 XHR（删除时 abort）
     item._chStats = ucChStats();      // 双通道质量统计（动态选路用）
@@ -3190,26 +3188,34 @@
       return t;
     };
 
+    // 进度条绘制（rAF 合并）：6 路并发每秒上百次 progress 事件，逐次写 DOM 会反复
+    // querySelector + 样式重算，反而让动画断续。
+    let peakBytes = 0, rafId = 0;
+    const paintProgress = () => {
+      const li = document.querySelector(`.uc-item[data-id="${item.id}"]`);
+      if (!li) return;
+      const fill = li.querySelector('.progress-fill');
+      if (fill) fill.style.width = `${item.progress.toFixed(2)}%`;
+      const st = li.querySelector('.uc-item-status');
+      if (st) st.textContent = `上传中 ${Math.floor(item.progress)}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
+    };
     const updateProgress = () => {
       const now = performance.now();
-      const tot = totalUploaded();
+      // 单调取峰值：分片失败重试会让该片 loaded 归零，否则进度条会倒退
+      const tot = Math.max(peakBytes, totalUploaded());
+      peakBytes = tot;
       const dt = (now - lastT) / 1000;
-      if (dt > 0.4) {                // 0.4s 平滑窗口算瞬时速度
-        item.speedText = ucFormatSpeed((tot - lastBytes) / dt);
+      if (dt > 0.4) {                // 0.4s 平滑窗口算瞬时速度，再做指数平滑（避免数字乱蹦）
+        const inst = (tot - lastBytes) / dt;
+        item._emaSpeed = item._emaSpeed ? item._emaSpeed * 0.65 + inst * 0.35 : inst;
+        item.speedText = ucFormatSpeed(item._emaSpeed);
         lastBytes = tot;
         lastT = now;
       }
       item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
-      item.progress = Math.round(tot / file.size * 30);
-      // 定向更新该行 DOM（进度条 + 状态文字），不重建整个列表——
-      // 否则高频渲染会反复重建下拉/卡片导致闪烁与焦点丢失
-      const li = document.querySelector(`.uc-item[data-id="${item.id}"]`);
-      if (li) {
-        const fill = li.querySelector('.progress-fill');
-        if (fill) fill.style.width = `${item.progress || 0}%`;
-        const st = li.querySelector('.uc-item-status');
-        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
-      }
+      // 浮点：上传阶段只占 0–30% 宽度，取整会让慢速上传数秒才跳一格
+      item.progress = file.size ? (tot / file.size * 30) : 0;
+      if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; paintProgress(); });
     };
 
     // 分片并发 worker 池：每片失败重试 UC_CHUNK_RETRIES 次，耗尽则整个文件失败
@@ -3513,12 +3519,12 @@
              ? (it.stage === '拼接中' ? '拼接中…' : (it.progress ? `拼接中 ${it.progress}%` : '拼接中…'))
              : it.status === 'completed' ? (it.stale ? '完成 ✅ · 上次结果' : '完成 ✅') : '失败：' + (it.errorMsg || ''))
         : (it.status === 'uploading'
-             ? `上传中 ${it.progress || 0}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`
+             ? `上传中 ${Math.floor(it.progress || 0)}%${it.speedText ? ' · ' + it.speedText : ''}${it.uploadedText ? ' · ' + it.uploadedText : ''}`
              : it.status === 'uploaded' ? '已就绪' : it.status === 'failed' ? '失败：' + (it.errorMsg || '') : '未开始');
       const cls = it.status === 'pending' ? '' : ('is-' + it.status.replace('uploading', 'running'));
       const disabled = !['pending', 'failed', 'uploading', 'uploaded'].includes(it.status) ? 'disabled' : '';
       const progressHtml = (it.status === 'running' || it.status === 'uploading')
-        ? `<div class="progress"><div class="progress-fill" style="width:${it.progress || 0}%"></div></div>` : '';
+        ? `<div class="progress"><div class="progress-fill" style="width:${(it.progress || 0).toFixed(2)}%"></div></div>` : '';
       const downloadHtml = it.status === 'completed' && it.downloadUrl
         ? `<a class="uc-item-download" href="${it.downloadUrl}" download="${it.outputName || 'merged'}">下载</a>${it.libraryId ? ' · 已存媒体库' : ''}` : '';
       const upDisabled = (it.isResult || idx === 0) ? 'disabled' : '';
@@ -3611,6 +3617,7 @@
   // 上传单个片段（复用 ucUploadChunk）；末尾用 finish(mode=store) 落地为拼接素材
   const mcUploadOne = (item) => new Promise((resolve) => {
     item.status = 'uploading'; item.progress = 0; item.speedText = ''; item.uploadedText = '';
+    item._emaSpeed = 0;               // 速度指数平滑值（同 ucUploadOne）
     item._removed = false; item._xhrs = new Set(); item._chStats = ucChStats();
     mcRender();
     const file = item.file;
@@ -3622,18 +3629,32 @@
     let uploadedBytes = 0; const done = new Set(); const inFlight = new Map();
     const t0 = performance.now(); let lastBytes = 0, lastT = t0;
     const totalUploaded = () => { let t = uploadedBytes; for (const v of inFlight.values()) t += v; return t; };
-    const updateProgress = () => {
-      const now = performance.now(); const tot = totalUploaded(); const dt = (now - lastT) / 1000;
-      if (dt > 0.4) { item.speedText = ucFormatSpeed((tot - lastBytes) / dt); lastBytes = tot; lastT = now; }
-      item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
-      item.progress = Math.round(tot / file.size * 30);
+    // 进度条绘制（rAF 合并，理由同 ucUploadOne）
+    let peakBytes = 0, rafId = 0;
+    const paintProgress = () => {
       const li = mcListEl.querySelector(`.uc-item[data-id="${item.id}"]`);
-      if (li) {
-        const fill = li.querySelector('.progress-fill');
-        if (fill) fill.style.width = `${item.progress || 0}%`;
-        const st = li.querySelector('.uc-item-status');
-        if (st) st.textContent = `上传中 ${item.progress || 0}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
+      if (!li) return;
+      const fill = li.querySelector('.progress-fill');
+      if (fill) fill.style.width = `${item.progress.toFixed(2)}%`;
+      const st = li.querySelector('.uc-item-status');
+      if (st) st.textContent = `上传中 ${Math.floor(item.progress)}%${item.speedText ? ' · ' + item.speedText : ''}${item.uploadedText ? ' · ' + item.uploadedText : ''}`;
+    };
+    const updateProgress = () => {
+      const now = performance.now();
+      // 单调取峰值：分片失败重试会让该片 loaded 归零，否则进度条会倒退
+      const tot = Math.max(peakBytes, totalUploaded());
+      peakBytes = tot;
+      const dt = (now - lastT) / 1000;
+      if (dt > 0.4) {
+        const inst = (tot - lastBytes) / dt;
+        item._emaSpeed = item._emaSpeed ? item._emaSpeed * 0.65 + inst * 0.35 : inst;
+        item.speedText = ucFormatSpeed(item._emaSpeed);
+        lastBytes = tot; lastT = now;
       }
+      item.uploadedText = `${ucFormatSize(tot)} / ${ucFormatSize(file.size)}`;
+      // 浮点：上传阶段只占 0–30% 宽度，取整会让慢速上传数秒才跳一格
+      item.progress = file.size ? (tot / file.size * 30) : 0;
+      if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; paintProgress(); });
     };
     let idx = 0; const workers = [];
     const worker = async () => {
@@ -5744,11 +5765,10 @@
     wait.forEach(it => srStartOne(it).catch(() => {}));
   });
 
-  // ===== 生成网页（2026-09-30 新增）：本机文件 → 一个自包含 HTML 页面 =====
-  // 与「生成二维码」互补，不是替代：那边给的是**链接**（对方要联网、文件留在分享节点上），
-  // 这边给的是一个**文件**（离线也能看，发出去就归对方）。因此刻意放在同级入口。
-  // 接入方式也保持一致：桌面端走原生框拿路径（免上传），网页端走上传
-  // （服务端把页面内容回传，浏览器直接下载——服务端的磁盘路径对访客没有意义）。
+  // ===== 生成网页（2026-09-30 新增）：多文件 → 一个自包含 HTML 页面 → 在线链接 =====
+  // 2026-10-23 起只保留在线链接产出（本机文件与二维码已按用户要求移除）：
+  // 本机生成仍是链路的必要中间步（桌面走原生路径 / 浏览器走上传），但不再展示与下载。
+  // 上传复用「生成二维码」那套通道（/api/share/upload_path + /api/share/task），不新增后端接口。
   const pgDesktopNative = () => !!(window.VDL && window.VDL.desktop && typeof window.VDL.desktop.chooseFiles === 'function');
   const PG_MAX_ITEM = 80 * 1024 * 1024;
   const PG_MAX_TOTAL = 200 * 1024 * 1024;
@@ -5827,10 +5847,7 @@
     pgState.paths = []; pgState.files = []; pgState.pageHtml = ''; pgState.outName = '';
     pgState.outPath = ''; pgState.link = ''; pgState.sid = ''; pgState.warn = '';
     if (el.pageResult) el.pageResult.hidden = true;
-    if (el.pagePathInput) el.pagePathInput.value = '';
     if (el.pageLinkInput) { el.pageLinkInput.value = ''; el.pageLinkInput.placeholder = '正在生成在线链接…'; }
-    if (el.pageQrWrap) el.pageQrWrap.hidden = true;
-    if (el.pageQrImg) el.pageQrImg.removeAttribute('src');
     pgRenderLink(-1, '');
     if (el.pageResultHint) el.pageResultHint.textContent = '';
     pgSetHint('');
@@ -5855,22 +5872,11 @@
     pgState.outPath = data.out_path || '';
     pgState.link = ''; pgState.sid = '';
     if (el.pageResult) el.pageResult.hidden = false;
-    if (el.pagePathInput) {
-      el.pagePathInput.value = isUpload ? (data.out_name || '') : (data.out_path || '');
-    }
-    if (el.pageCopyPathBtn) el.pageCopyPathBtn.hidden = !!isUpload;
-    if (el.pageOpenBtn) el.pageOpenBtn.textContent = isUpload ? '下载网页（HTML）' : '用浏览器打开';
-    if (el.pageLocalTag) {
-      el.pageLocalTag.textContent = '本地文件 · ' + pgHuman(data.html_size || 0)
-        + '（源 ' + pgHuman(data.source_size || 0) + '，膨胀 ' + (data.inflated || 1) + ' 倍）';
-    }
     const kinds = (data.items || []).map((x) => PG_KIND_LABEL[x.kind] || '文件');
     pgState.warn = kinds.indexOf('视频') >= 0
       ? ' ⚠️ 页面里的视频需为 H.264 / VP9 / AV1 编码，否则浏览器无法播放（MKV、MPEG-4 Visual 等都不行）。'
       : '';
-    // 主产出 = 在线链接：生成完立即上传分享节点换链接 + 二维码
-    if (el.pageQrWrap) el.pageQrWrap.hidden = true;
-    if (el.pageQrImg) el.pageQrImg.removeAttribute('src');
+    // 主产出 = 在线链接：生成完立即上传分享节点换链接
     pgRenderLink(0);
     pgSetHint('生成完成', '#16a34a');
     pgPublishLink(pgState.outPath);
@@ -5882,10 +5888,8 @@
     if (!inp) return;
     if (st === 1) {
       inp.value = pgState.link;
-      if (el.pageQrWrap) el.pageQrWrap.hidden = false;
-      if (el.pageQrImg) el.pageQrImg.src = '/api/share/qr?text=' + encodeURIComponent(pgState.link) + '&size=640';
       if (el.pageResultHint) {
-        el.pageResultHint.textContent = '在线链接已就绪 —— 把链接或二维码发给别人，手机 / 电脑点开就能看。'
+        el.pageResultHint.textContent = '在线链接已就绪 —— 把链接发给别人，手机 / 电脑点开就能看。'
           + (pgState.warn || '');
       }
     } else if (st === 0) {
@@ -5900,8 +5904,7 @@
         const needLogin = !!(arg && arg.indexOf('登录') >= 0);
         el.pageResultHint.textContent = (needLogin
           ? '登录 / 注册后重新点「生成网页」，即可拿到在线链接。'
-          : ((arg ? '未能生成在线链接（' + arg + '）。' : '')
-             + '本地 HTML 文件仍可用，可点下方「复制路径 / 用浏览器打开」。'))
+          : ((arg ? '未能生成在线链接（' + arg + '）。' : '') + '请重试。'))
           + (pgState.warn || '');
       }
     }
@@ -5924,7 +5927,9 @@
       const r = await fetch('/api/share/upload_path', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authBearerHeaders() },
-        body: JSON.stringify({ path: outPath, expire: 0 }),   // 0 = 永久有效
+        // 🔴 2026-10-20：src=pagegen → 服务端按「生成网页」独立配额（share_page）
+        //    计数；不传则全部落到「生成二维码」（share_qr）的额度上。
+        body: JSON.stringify({ path: outPath, expire: 0, src: 'pagegen' }),   // 0 = 永久有效
       });
       if (r.status === 404) throw new Error('当前版本没有分享通道');
       const d = await r.json().catch(() => null);
@@ -5954,22 +5959,6 @@
       pgRenderLink(2, t.sent || 0);
     }
     pgRenderLink(-1, '上传超时，请重试');
-  }
-
-  // 网页端：页面内容随响应回来，用 Blob 存到访客本机。
-  // ⚠️ 这条兜底只在**真浏览器**里用；桌面壳 WKWebView 不支持 <a download>（会把主框架
-  //    导航到 blob:，整个界面被页面替换，2026-09-21 生成二维码踩过），所以桌面端不给这个按钮。
-  function pgDownloadHtml() {
-    if (!pgState.pageHtml) return;
-    const blob = new Blob([pgState.pageHtml], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = pgState.outName || '页面.html';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
 
   async function pgBuild() {
@@ -6045,34 +6034,6 @@
   }
   if (el.pageClearBtn) el.pageClearBtn.addEventListener('click', pgReset);
   if (el.pageBuildBtn) el.pageBuildBtn.addEventListener('click', () => { pgBuild(); });
-  if (el.pageCopyPathBtn) {
-    el.pageCopyPathBtn.addEventListener('click', () => {
-      const v = el.pagePathInput ? el.pagePathInput.value : '';
-      if (!v) return;
-      el.pagePathInput.select();
-      try { document.execCommand('copy'); } catch (e2) {}
-      const btn = el.pageCopyPathBtn;
-      btn.textContent = '已复制';
-      setTimeout(() => { btn.textContent = '复制路径'; }, 1600);
-    });
-  }
-  if (el.pageOpenBtn) {
-    el.pageOpenBtn.addEventListener('click', () => {
-      // 网页端：没有本机路径，改为把页面内容存到访客本机
-      if (!pgState.paths.length) { pgDownloadHtml(); return; }
-      const p = el.pagePathInput ? el.pagePathInput.value : '';
-      if (!p) return;
-      // file:// 交给系统默认浏览器打开；桌面壳里 window.open 会被静默拦截（见 desktop_launcher.open_external）
-      const fileUrl = 'file://' + p.split('/').map(encodeURIComponent).join('/');
-      const openExt = window.VDL && window.VDL.desktop && window.VDL.desktop.openExternal;
-      if (typeof openExt === 'function') {
-        Promise.resolve(openExt(fileUrl)).then((ok) => { if (!ok) window.open(fileUrl, '_blank'); })
-          .catch(() => { window.open(fileUrl, '_blank'); });
-        return;
-      }
-      window.open(fileUrl, '_blank');
-    });
-  }
   if (el.pageCopyLinkBtn) {
     el.pageCopyLinkBtn.addEventListener('click', () => {
       const v = pgState.link || (el.pageLinkInput ? el.pageLinkInput.value : '');
@@ -17188,6 +17149,13 @@ el.dwVidPlayer.hidden = true;
       const tid = (data.task_ids || []).length;
       if (n === 0) {
         showSubHint('已是最新，没有新视频', false);
+      } else if (data.quota_exhausted) {
+        // 订阅追更与「视频下载」共用同一份每日额度（2026-10-20）：额度用尽时
+        // 只会把剩下的次数用掉，其余留到下一轮自动重试 —— 必须说清楚，否则
+        // 用户会以为「显示 10 个新视频怎么只下了 3 个」是 bug。
+        showSubHint(`发现 ${n} 个新视频，但今日下载额度已用完，本次只加入 ${tid} 个任务；`
+          + '剩余的下次检查会自动重试 — 开通VIP会员可解锁更多次数', true);
+        if (tid) switchView('download');
       } else {
         showSubHint(`发现 ${n} 个新视频，已加入下载队列（${tid} 个任务）`, false);
         switchView('download');
@@ -18027,7 +17995,17 @@ el.dwVidPlayer.hidden = true;
       || (st.mode === 'flash_sale' && Number(st.flash_price) > 0 && _fs && _fe
         ? (_nowSec < _fs ? 'upcoming' : (_nowSec <= _fe ? 'active' : 'ended')) : 'none');
     const flashSoon = flashPhase === 'upcoming';
-    const mkBadge = (st.badge && flashPhase !== 'ended')
+    // 🔴 2026-10-20：角标只允许出现在「真·秒杀档（未开始/进行中）」或「非秒杀档且无秒杀残渣」。
+    //    flash_phase 只覆盖秒杀档三态，覆盖不到两类残渣 —— 用户看到的就是「活动结束了还挂着限时秒杀」：
+    //    ① 秒杀模式但秒杀价/时间被清空（phase='none'，不是 'ended'）；
+    //    ② 已切回普通模式却留着旧秒杀字段（flash_price/flash_start/flash_end）。
+    //    这两种情况价格早已是原价，角标再挂「限时秒杀」等于骗人，一律不显示。
+    const _flashResidual = st.mode !== 'flash_sale'
+      && (Number(st.flash_price) > 0 || _fs > 0 || _fe > 0);
+    const _flashBadgeOk = st.mode === 'flash_sale'
+      ? (flashPhase === 'upcoming' || flashPhase === 'active')
+      : !_flashResidual;
+    const mkBadge = (st.badge && _flashBadgeOk)
       ? `<span class="member-badge member-badge-flash">${escHtml(st.badge)}</span>` : '';
     const outBadge = (!st.buyable && st.reason) ? `<span class="member-badge member-badge-off">${escHtml(st.reason)}</span>` : '';
     const soonBadge = flashSoon ? '<span class="member-badge member-badge-flash">即将开抢</span>' : '';
@@ -18412,6 +18390,12 @@ el.dwVidPlayer.hidden = true;
   // 这里只补两件事：**给用户看到状态**、**允许手动补一次同步**。
   // ⚠️ 硬边界：界面绝不展示任何 Cookie 内容 —— 平台登录态由用户本机端到端加密后
   //    上传，云端与超管都只拿得到「有哪些平台、几条」。功能产物（成片/图片）不上云。
+  //
+  // 🔴 2026-10-20 用户要求：这张卡**隐藏**（与网页版同步处理）。只掐展示入口：
+  //    renderCloudData 的状态文案/计数照常渲染（只是 hidden），登录/换机的自动同步
+  //    （cloudSyncAccount → /api/cloud/sync、userdata 自动 push）全部照旧，后台链路
+  //    与这张卡的显隐无关。要恢复显示把这个开关改回 true。
+  const CLOUD_DATA_CARD_VISIBLE = false;
   async function renderCloudData() {
     const row = $('cloudDataRow');
     if (!row) return;
@@ -18419,7 +18403,7 @@ el.dwVidPlayer.hidden = true;
     let st = null;
     try { st = await request('/api/userdata/status'); } catch (_) { row.hidden = true; return; }
     if (!st || !st.ok) { row.hidden = true; return; }
-    row.hidden = false;
+    row.hidden = !CLOUD_DATA_CARD_VISIBLE;   // 隐藏期：照常渲染，只是不展示
     // 🔴 2026-10-17 修：N / M 一律取**云端实际**备份量（st.cloud ← 授权中心摘要，
     //    见 /api/userdata/status），不再拿 st.settings_local / st.cookies_local
     //    冒充「已备份」—— 否则云端一条 Cookie 都没有时也会显示「已备份 7 个平台登录态」。
@@ -18447,7 +18431,7 @@ el.dwVidPlayer.hidden = true;
     }
     const hint = $('cloudDataHint');
     if (hint) {
-      hint.hidden = false;
+      hint.hidden = !CLOUD_DATA_CARD_VISIBLE;   // 与卡片同上：文案照填，不展示
       let h;
       if (!st.available && ckLocal > 0) {
         h = '本机加密组件不可用，平台登录态暂不上云（设置与偏好仍会同步）。';
@@ -18491,6 +18475,10 @@ el.dwVidPlayer.hidden = true;
   let authMode = 'login';
   // 超级用户标记（后台管理面板可见性依据）：登录/me 后由后端 is_admin 写入
   let _vdlIsAdmin = false;
+  // 超级管理员标记（2026-10-22 权限拆两级）：只有**唯一超管**能改数据。
+  // _vdlIsAdmin=能进后台（超管 + 管理员都 true）；_vdlIsSuper=能改（仅超管）。
+  // 管理员进后台是**只读视图**：写操作按钮一律不渲染，后端 require_super 也会 403。
+  let _vdlIsSuper = false;
   // 登录用户的头像 URL（个人资料/用户卡加载后写入，供头部「账号」按钮渲染头像）
   let _vdlAvatarUrl = '';
   function updateAdminTabVisibility() {
@@ -18715,11 +18703,12 @@ el.dwVidPlayer.hidden = true;
     const tok = authToken();
     _renderAuthHeader();
     _updateProfileSidebarLock();
-    if (!tok) { _vdlIsAdmin = false; updateAdminTabVisibility(); return; }
+    if (!tok) { _vdlIsAdmin = false; _vdlIsSuper = false; updateAdminTabVisibility(); return; }
     try {
       const me = await request('/api/auth/me');
       if (!me || !me.ok) { logoutAccount(); return; }
       _vdlIsAdmin = !!me.is_admin;
+      _vdlIsSuper = me.role === 'super';
       updateAdminTabVisibility();
       _updateProfileSidebarLock();
       _chatRefresh();
@@ -18732,6 +18721,7 @@ el.dwVidPlayer.hidden = true;
     try { localStorage.removeItem('vdl_auth_token'); } catch (_) {}
     try { sessionStorage.removeItem('vdl_auth_token'); } catch (_) {}
     _vdlIsAdmin = false;
+    _vdlIsSuper = false;
     _vdlAvatarUrl = '';  // 头像随登出清空，防止下一个账号短暂显示上一位的头像
     updateAdminTabVisibility();
     _renderAuthHeader();
@@ -19697,8 +19687,9 @@ el.dwVidPlayer.hidden = true;
           // 未勾选「记住我」：仅本次会话（App 退出即失效）
           try { sessionStorage.setItem('vdl_auth_token', r.token); } catch (_) {}
         }
-        // 同步超级用户标记（后端在登录/注册响应中返回 is_admin）
+        // 同步超级用户标记（后端在登录/注册响应中返回 is_admin / role）
         _vdlIsAdmin = !!r.is_admin;
+        _vdlIsSuper = r.role === 'super';
         updateAdminTabVisibility();
         _renderAuthHeader();
         _updateProfileSidebarLock();
@@ -19960,9 +19951,14 @@ el.dwVidPlayer.hidden = true;
     _renderAvatar(prof && prof.avatar_url);
     _renderAuthHeader();
     // 角色标签（顶部 tag 唯一展示角色，不再单独一行）
+    // 2026-10-22 拆两级：超管（唯一）/ 管理员（后台只读）/ 普通用户。
+    // 🔴 老后端没有 role 字段时按 is_admin 兜底成「管理员」——
+    // 宁可把超管显示成只读管理员，也不要把管理员误显示成超管。
     const isAdmin = !!me.is_admin;
+    const _role = me.role || (isAdmin ? 'admin' : '');
     if (el.userMenuTag) {
-      el.userMenuTag.textContent = isAdmin ? '👑 超级管理员' : '普通用户';
+      el.userMenuTag.textContent = _role === 'super' ? '👑 超级管理员'
+        : (_role === 'admin' ? '管理员（只读）' : '普通用户');
       el.userMenuTag.classList.toggle('is-admin', isAdmin);
     }
     // 注册时间
@@ -20241,7 +20237,11 @@ el.dwVidPlayer.hidden = true;
       return;
     }
     setTxt(el.profName, me.identifier || '已登录');
-    setTxt(el.profTag, me.is_admin ? '👑 超级管理员' : '普通用户');
+    // 2026-10-22 拆两级：超管（唯一）/ 管理员（后台只读）/ 普通用户。
+    // 老后端没有 role 字段时按 is_admin 兜底成「管理员」，绝不反向误标。
+    const _profRole = me.role || (me.is_admin ? 'admin' : '');
+    setTxt(el.profTag, _profRole === 'super' ? '👑 超级管理员'
+      : (_profRole === 'admin' ? '管理员（只读）' : '普通用户'));
     _vdlAvatarUrl = (prof && prof.avatar_url) || '';
     _renderAvatar(prof && prof.avatar_url);
     _renderAuthHeader();
@@ -20462,7 +20462,7 @@ el.dwVidPlayer.hidden = true;
   /** 更新横幅里的一行摘要（取前 3 条，超出标「等 N 项」）。 */
   function _changelogSummary(latest) {
     const items = _changelogItems(latest);
-    if (!items.length) return '性能优化与问题修复';
+    if (!items.length) return '';
     const head = items.slice(0, 3).join('；');
     return items.length > 3 ? head + ' 等 ' + items.length + ' 项' : head;
   }
@@ -22328,6 +22328,28 @@ el.dwVidPlayer.hidden = true;
       el.textContent = text || '';
       el.className = 'admin-msg' + (isErr ? ' is-err' : (text ? ' is-ok' : ''));
     };
+    // 后台操作反馈（2026-10-22）：此前写操作**成功时完全没有任何提示**，
+    // 失败时用 alert()（pywebview 走 NSAlert 模态，阻塞且样式突兀）。
+    // 用户反馈「点击设为管理员没有任何反应」——真因是：后端把「本次仅本机生效」
+    // 这类 notice 放在响应里，而前端只判 r.ok 就静默 loadUsers()，把 notice 丢了；
+    // 面板列表读的是**云端**数据，云端没同步成功 ⇒ 列表纹丝不动 ⇒ 看起来没反应。
+    // 现在：成功/失败/notice 一律用轻量 toast 显式说出来。
+    const _adminToast = (text, isErr) => {
+      if (!text) return;
+      try { showToast(String(text), isErr ? 4600 : 2800, isErr ? 'err' : ''); }
+      catch (_e) { /* ignore */ }
+    };
+    // 把后端响应整理成一句话：成功时把 notice 一并带出来（notice ≠ 空即意味着
+    // 「这次只改了一半 / 没同步到云端」，必须让用户看见）。
+    const _adminResult = (r, okText) => {
+      const notice = r && r.notice ? String(r.notice).replace(/^（|）$/g, '') : '';
+      if (r && r.ok) {
+        _adminToast(notice ? (okText + '（' + notice + '）') : okText, false);
+        return true;
+      }
+      _adminToast((r && (r.error || r.detail)) || '操作失败', true);
+      return false;
+    };
     const adminRequest = async (path, opts = {}) => {
       const tok = authToken();
       const headers = Object.assign({}, opts.headers || {}, tok ? { Authorization: 'Bearer ' + tok } : {});
@@ -22337,6 +22359,30 @@ el.dwVidPlayer.hidden = true;
     // 数十处 innerHTML（用户账号标识、告警 detail/email/ip、对账明细、事件日志、
     // 访客 path/message 等）全部未转义 —— 统一改为真转义（与外层 esc/escHtml 同实现）。
     const esc = escHtml;
+
+    // 管理员只读视图（2026-10-22 权限拆两级）：超管能改，管理员只能看。
+    // 这里只做「视觉闸门」——真正的数据安全在后端 require_super（16 个写接口一律 403）。
+    // 提示条只创建一次，之后按角色切显隐（幂等，避免每次开面板都插一个）。
+    const _syncAdminReadonly = () => {
+      const panel = document.getElementById('adminPanel');
+      if (!panel) return;
+      panel.classList.toggle('admin-readonly-mode', !_vdlIsSuper);
+      let bar = document.getElementById('adminReadonlyBar');
+      if (!_vdlIsSuper) {
+        if (!bar) {
+          bar = document.createElement('div');
+          bar.id = 'adminReadonlyBar';
+          bar.className = 'admin-readonly-bar';
+          bar.innerHTML = '👀 你以 <b>管理员</b> 身份查看后台：可以查看全部数据，'
+            + '<b>但不能修改</b>（设置/取消管理员、封禁、发放权益、改配置等仅超级管理员可操作）。';
+          const tabs = panel.querySelector('.admin-tabs');
+          if (tabs && tabs.parentNode) tabs.parentNode.insertBefore(bar, tabs);
+        }
+        bar.hidden = false;
+      } else if (bar) {
+        bar.hidden = true;
+      }
+    };
 
     const openAdmin = async () => {
       overlay.hidden = false;
@@ -22350,9 +22396,19 @@ el.dwVidPlayer.hidden = true;
         showGate('无权限', '当前账号不是超级用户，无法访问后台管理面板。', false);
         return;
       }
+      // 管理员（非超管）进来是只读视图：提示条 + 写按钮灰化。
+      // 放在 showPanel 之前，避免先闪一下可点的按钮再变灰。
+      _syncAdminReadonly();
       try {
         const me = await request('/api/auth/me');
-        if (me && me.ok) _currentUid = me.user_id;
+        if (me && me.ok) {
+          _currentUid = me.user_id;
+          // 角色可能已在别处变更（超管刚取消了你的管理员 / 或刚提你为超管），
+          // 进面板时用最新值复核一次，避免拿着过期标记继续按旧权限渲染。
+          _vdlIsAdmin = !!me.is_admin;
+          _vdlIsSuper = me.role === 'super';
+          _syncAdminReadonly();
+        }
       } catch (_) { /* 不影响进入 */ }
       showPanel();
       loadAll();
@@ -22392,6 +22448,8 @@ el.dwVidPlayer.hidden = true;
       else if (name === 'recon') loadMonitorRecon();
       // 解析需求榜（2026-10-17）：解析失败自动登记的站点热度，按需拉取
       else if (name === 'demand') loadResolveDemand();
+      // Cookie 池（2026-10-19）：默认只读文件（毫秒级），联网验真要显式点按钮
+      else if (name === 'cookies') loadCookies();
     };
 
     const loadAll = () => {
@@ -22547,14 +22605,15 @@ el.dwVidPlayer.hidden = true;
     };
     // ---- 解析需求榜（2026-10-17，Downie「用户报一个写一个」机制第一环）----
     // 解析失败（白名单空白站点 / 未知域名）自动落库后的站点热度视图。
-    // 口径「站点×天」：同一站点同一天多次失败只计 1 次需求，重试免疫；
-    // 不同天重复出现照计（持续有人要的站排前面）。用途：开发排期输入。
+    // 口径「站点×周」（2026-10-23 起，原按天）：同一站点同一自然周（周一为界）
+    // 多次失败只计 1 次需求，重试免疫；不同周重复出现照计（持续有人要的站排前面）。
+    // 窗口 12 周：按周计数窗口太短会全是 1 分，看不出持续性。
     const loadResolveDemand = async () => {
       const box = $('adminDemandBody');
       if (!box) return;
       box.innerHTML = '<div class="admin-empty">加载中…</div>';
       try {
-        const d = await adminRequest('/api/admin/resolve-demand?days=30');
+        const d = await adminRequest('/api/admin/resolve-demand?days=84');
         const rows = (d && d.demand) || [];
         if (!rows.length) {
           box.innerHTML = '<div class="admin-empty">暂无需求登记——出现「暂不支持」类解析失败后自动累计</div>';
@@ -22563,11 +22622,13 @@ el.dwVidPlayer.hidden = true;
         const catName = (c) => (c === 'pending_extractor' ? '已收录缺提取器'
           : c === 'unsupported_platform' ? '未收录新站' : (c || '-'));
         box.innerHTML =
-          '<table><thead><tr><th>站点</th><th>需求天数</th><th>记录数</th><th>分类</th><th>最近一次</th><th>样例链接</th></tr></thead><tbody>' +
+          '<table><thead><tr><th>站点</th><th>需求周数</th><th>记录数</th><th>分类</th><th>最近一次</th><th>样例链接</th></tr></thead><tbody>' +
           rows.slice(0, 50).map((x) => {
             const cats = Object.entries(x.categories || {}).map(([c, n]) => `${catName(c)}×${n}`).join('，') || '-';
             const last = x.last_ts ? new Date(x.last_ts * 1000).toLocaleDateString() : '-';
-            return `<tr><td><b>${esc(x.host)}</b></td><td>${x.days_count}</td><td>${x.total}</td>` +
+            const wc = (x.weeks_count != null ? x.weeks_count : x.days_count) || 0;
+            const wkTip = (x.weeks || []).length ? `命中周（周一）：${(x.weeks || []).join('、')}` : '';
+            return `<tr><td><b>${esc(x.host)}</b></td><td title="${esc(wkTip)}">${wc}</td><td>${x.total}</td>` +
               `<td>${esc(cats)}</td><td>${last}</td>` +
               `<td title="${esc(x.last_url || '')}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((x.last_url || '-').slice(0, 60))}</td></tr>`;
           }).join('') + '</tbody></table>';
@@ -22575,6 +22636,333 @@ el.dwVidPlayer.hidden = true;
         box.innerHTML = `<div class="admin-empty">加载失败：${esc(err && err.message || err)}</div>`;
       }
     };
+    // ---- Cookie 池（2026-10-19）-----------------------------------------
+    // 公共池是网页版解析的命脉：池里某个站集体失效时，症状是「网页版解析全失败」，
+    // 而后台原本完全看不见。这里把「哪个站还有效、剩几个账号、每账号存了多少项、
+    // 多久没更新」摊开，并支持粘贴补注入。
+    // 三态口径（与后端 admin_cookies.py 一致）：
+    //   valid   站点明确回答已登录（probe=struct 时只是「含登录字段」，界面标出来）
+    //   invalid 站点明确回答未登录 / 超过 30 天 TTL / 本机判定缺登录字段
+    //   unknown 没有探针或网络不可达 —— **不等于无效**，不能按无效删
+    let _ckData = null;
+    let _ckBusy = false;
+    // 平台筛选：'' = 全部平台（tab 浏览）；具体域名 = 只看该平台
+    let _ckFilter = '';
+    // 当前展示哪个平台的明细（tab 浏览时的当前 tab）
+    let _ckActiveDomain = null;
+
+    const _ckAgo = (sec) => {
+      const n = Number(sec) || 0;
+      if (n <= 0) return '-';
+      if (n < 60) return '刚刚';
+      if (n < 3600) return Math.floor(n / 60) + ' 分钟前';
+      if (n < 86400) return Math.floor(n / 3600) + ' 小时前';
+      return Math.floor(n / 86400) + ' 天前';
+    };
+
+    const _ckChip = (kind, n, label) => (n > 0
+      ? '<span class="ckp-chip ckp-' + kind + '">' + esc(label) + ' ' + n + '</span>' : '');
+
+    const _ckSrcLabel = (v) => ({
+      sync: 'App 自动同步', contrib: '网页/扩展贡献', admin: '后台注入',
+    }[v] || (v || '-'));
+
+    const _ckStatusCell = (it) => {
+      if (it.status === 'valid') {
+        const tag = it.probe === 'struct' ? ' <span class="ckp-note">结构校验</span>' : '';
+        return '<span class="ckp-st ckp-ok">● 有效</span>' + tag;
+      }
+      if (it.status === 'invalid') return '<span class="ckp-st ckp-bad">● 无效</span>';
+      return '<span class="ckp-st ckp-unk">● 未校验</span>';
+    };
+
+    const _ckFillDomains = (d) => {
+      const sel = $('adminCkDomain');
+      if (!sel || sel.dataset.filled === '1') return;
+      const opts = (d.injectable || []).map((x) =>
+        '<option value="' + esc(x.domain) + '">' + esc(x.title) + '</option>').join('');
+      sel.innerHTML = '<option value="">选择平台…</option>' + opts;
+      sel.dataset.filled = '1';
+    };
+
+    const _ckFillPlatformSel = (d) => {
+      const sel = $('adminCkPlatformSel');
+      if (!sel) return;
+      const doms = d.domains || [];
+      // 选项里直接带摘要：运营不用逐个点进去就知道该补哪个站
+      const opts = ['<option value="">全部平台（' + doms.length + '）</option>']
+        .concat(doms.map((r) => {
+          const bits = [r.accounts + ' 账号', r.entries + ' 份'];
+          if (r.valid) bits.push('有效 ' + r.valid);
+          if (r.invalid) bits.push('无效 ' + r.invalid);
+          if (r.unknown) bits.push('未校验 ' + r.unknown);
+          return '<option value="' + esc(r.domain) + '">' + esc(r.title)
+            + '（' + esc(bits.join(' · ')) + '）</option>';
+        }));
+      sel.innerHTML = opts.join('');
+      sel.value = _ckFilter || '';
+    };
+
+    const _ckBlock = (r, d) => {
+      const rows = (r.items || []).map((a) => {
+        const ids = (a.entries || []).map((e) => e.id).join(',');
+        return '<tr>'
+          + '<td><b>' + esc(a.label) + '</b>'
+          + (a.snapshots > 1 ? ' <span class="ckp-note">' + a.snapshots + ' 份快照</span>' : '')
+          + '</td>'
+          + '<td>' + _ckStatusCell(a) + '</td>'
+          + '<td>' + a.parts + ' 项</td>'
+          + '<td>' + a.snapshots + '</td>'
+          + '<td>' + esc(_ckSrcLabel(a.source)) + '</td>'
+          + '<td>' + _ckAgo(a.age_sec) + '</td>'
+          + '<td>' + (a.used_ts ? _ckAgo(a.used_age_sec) : '<span class="ckp-note">未使用</span>') + '</td>'
+          + '<td class="ckp-detail" title="' + esc(a.detail || '') + '">' + esc(a.detail || '-') + '</td>'
+          + '<td><button type="button" class="admin-btn admin-btn-ghost admin-btn-sm"'
+          + ' data-ck-del="' + esc(r.domain) + '" data-ck-ids="' + esc(ids) + '">删除</button></td>'
+          + '</tr>';
+      }).join('');
+
+      return '<div class="ckp-block">'
+        + '<div class="ckp-hd">'
+        + '<b>' + esc(r.title) + '</b>'
+        + '<span class="ckp-meta">' + r.accounts + ' 个账号 · ' + r.entries + ' 份</span>'
+        + _ckChip('ok', r.valid, '有效')
+        + _ckChip('bad', r.invalid, '无效')
+        + _ckChip('unk', r.unknown, '未校验')
+        + (r.broken ? '<span class="ckp-chip ckp-bad">解不开 ' + r.broken + '</span>' : '')
+        + '<span class="ckp-meta">' + (r.last_ts ? '更新于 ' + _ckAgo(d.now - r.last_ts) : '无记录') + '</span>'
+        + '<button type="button" class="admin-btn admin-btn-sm" data-ck-inject="' + esc(r.domain) + '">补注入</button>'
+        + '</div>'
+        + '<div class="admin-table-wrap"><table class="admin-table">'
+        + '<thead><tr><th>账号</th><th>状态</th><th>Cookie 项</th><th>份数</th>'
+        + '<th>来源</th><th>最近更新</th><th>最近使用</th><th>说明</th><th>操作</th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table></div>'
+        + '</div>';
+    };
+
+    const _ckRender = (d, note) => {
+      const body = $('adminCkBody');
+      const sum = $('adminCkSummary');
+      const hint = $('adminCkHint');
+      const tabs = $('adminCkTabs');
+      if (!body) return;
+      const s = d.summary || {};
+      const doms = d.domains || [];
+      _ckFillDomains(d);
+
+      if (sum) {
+        // 数据源必须一眼可见：桌面端的「本机池」和网页版真正在用的「云端池」
+        // 是两个池，看错了会得出完全相反的结论（本机空 = 以为网页版也没 Cookie）。
+        const srcTag = d.source === 'cloud' ? '☁ 云端公共池' : '💻 本机池';
+        sum.textContent = srcTag + ' · ' + (d.source_label && d.source !== 'cloud' ? d.source_label + ' · ' : '')
+          + '共 ' + doms.length + ' 个平台 · ' + (s.accounts || 0) + ' 个账号 · '
+          + (s.entries || 0) + ' 份 Cookie';
+        sum.title = d.pool_dir ? ('池目录：' + d.pool_dir) : '';
+      }
+      if (hint) {
+        const bits = [];
+        if (note) bits.push(note);
+        // 云端不可达而回退本机时，必须把原因顶在最前面：否则管理员会把「本机空」
+        // 当成「网页版池也空了」，转头去补一堆其实不缺的 Cookie。
+        if (d.cloud_error) bits.push('⚠ 云端池不可达，当前显示的是本机池：' + d.cloud_error);
+        if (d.checked_at) {
+          bits.push('上次联网校验：' + _ckAgo(d.check_age_sec) + '（点「立即校验」重新打平台确认）');
+        } else {
+          bits.push('还没做过联网校验：「未校验」只是本机字段检查，不代表失效');
+        }
+        const gaps = d.gaps || [];
+        if (gaps.length) {
+          const names = gaps.map((x) => {
+            const hit = doms.find((y) => y.domain === x);
+            return hit ? hit.title : x;
+          });
+          // 截断：缺口多的时候列满一行会把「上次校验」挤没，反而看不清重点
+          const shown = names.slice(0, 5).join('、')
+            + (names.length > 5 ? ' 等 ' + names.length + ' 个' : '');
+          bits.push('⚠ 建议补注入：' + shown);
+        }
+        hint.textContent = bits.join('  ·  ');
+      }
+
+      if (!doms.length) {
+        _ckFilter = '';
+        _ckActiveDomain = null;
+        _ckFillPlatformSel(d);
+        if (tabs) tabs.innerHTML = '';
+        body.innerHTML = '<div class="admin-empty">池里还没有任何 Cookie。用上面的「补注入」粘贴一份，'
+          + '或等 App / 浏览器扩展自动同步。</div>';
+        return;
+      }
+
+      // 筛选态自愈：选过的平台被删 / 云端换了池 → 回「全部平台」
+      if (_ckFilter && !doms.some((x) => x.domain === _ckFilter)) _ckFilter = '';
+      if (_ckActiveDomain && !doms.some((x) => x.domain === _ckActiveDomain)) _ckActiveDomain = null;
+      // 下拉选了具体平台 → 直接锁定该平台；「全部平台」→ 用当前 tab（没有则第一个）
+      if (_ckFilter) _ckActiveDomain = _ckFilter;
+      if (!_ckActiveDomain) _ckActiveDomain = doms[0].domain;
+      _ckFillPlatformSel(d);
+
+      const active = doms.find((x) => x.domain === _ckActiveDomain) || doms[0];
+
+      // tab 条只在「全部平台」模式出现：选了具体平台就只展示那一个，不再给 tab
+      if (tabs) {
+        tabs.innerHTML = _ckFilter ? '' : doms.map((r) => {
+          const on = r.domain === active.domain;
+          return '<button type="button" class="ckp-tab' + (on ? ' is-on' : '') + '"'
+            + ' data-ck-tab="' + esc(r.domain) + '"'
+            + (on ? ' aria-selected="true"' : ' aria-selected="false"') + '>'
+            + '<span class="ckp-tab-name">' + esc(r.title) + '</span>'
+            + '<span class="ckp-tab-meta">' + r.accounts + ' 账号 · ' + r.entries + ' 份</span>'
+            + _ckChip('ok', r.valid, '有效') + _ckChip('bad', r.invalid, '无效') + _ckChip('unk', r.unknown, '未校验')
+            + '</button>';
+        }).join('');
+      }
+
+      body.innerHTML = _ckBlock(active, d);
+    };
+
+    const loadCookies = async (note) => {
+      const body = $('adminCkBody');
+      if (!body) return;
+      if (!_ckData) body.innerHTML = '<div class="admin-empty">加载中…</div>';
+      try {
+        const d = await adminRequest('/api/admin/cookies');
+        if (!d || !d.ok) throw new Error((d && (d.error || d.detail)) || '接口返回异常');
+        _ckData = d;
+        _ckRender(d, note);
+      } catch (err) {
+        body.innerHTML = '<div class="admin-empty">加载失败：' + esc(err && err.message || err) + '</div>';
+      }
+    };
+
+    const _ckVerify = async () => {
+      if (_ckBusy) return;
+      _ckBusy = true;
+      const btn = $('adminCkVerify');
+      const label = btn ? btn.textContent : '立即校验';
+      if (btn) { btn.disabled = true; btn.textContent = '校验中…'; }
+      try {
+        const r = await adminRequest('/api/admin/cookies/verify', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        if (!r || !r.ok) throw new Error((r && (r.error || r.detail)) || '校验失败');
+        const note = (r.source === 'cloud' ? '云端校验 ' : '本机校验 ') + r.checked
+          + ' 个会话（' + r.elapsed + 's）：有效 ' + r.valid + '、无效 ' + r.invalid
+          + '、未确认 ' + r.unknown;
+        await loadCookies(note);
+      } catch (err) {
+        if ($('adminCkHint')) $('adminCkHint').textContent = '校验失败：' + (err && err.message || err);
+      } finally {
+        _ckBusy = false;
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+      }
+    };
+
+    const _ckInject = async () => {
+      const sel = $('adminCkDomain');
+      const area = $('adminCkHeader');
+      const msgEl = $('adminCkInjectMsg');
+      const btn = $('adminCkInjectBtn');
+      const domain = sel ? sel.value : '';
+      const raw = area ? area.value : '';
+      const say = (text, isErr) => {
+        if (!msgEl) return;
+        msgEl.textContent = text || '';
+        msgEl.className = 'admin-msg' + (isErr ? ' is-err' : (text ? ' is-ok' : ''));
+      };
+      if (!domain) { say('先选一个平台', true); return; }
+      if (!raw.trim()) { say('请粘贴 Cookie 内容', true); return; }
+      const label = btn ? btn.textContent : '注入';
+      if (btn) { btn.disabled = true; btn.textContent = '注入中…'; }
+      say('', false);
+      try {
+        const r = await adminRequest('/api/admin/cookies/inject', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: domain, header: raw }),
+        });
+        if (r && r.ok) {
+          say('注入成功：' + r.parts + ' 项 Cookie'
+            + (r.verified ? '（已验真）' : '（站点未确认，已按可用处理）')
+            + (r.target === 'cloud' ? '，已进云端池（网页版立刻可用）' : '，仅写入本机'), false);
+          if (area) area.value = '';
+          await loadCookies();
+        } else {
+          say((r && r.error) || '注入失败', true);
+        }
+      } catch (err) {
+        say('注入失败：' + (err && err.message || err), true);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+      }
+    };
+
+    const _ckDelete = async (domain, idsCsv) => {
+      const ids = String(idsCsv || '').split(',').filter(Boolean);
+      if (!ids.length) return;
+      const name = (function () {
+        const hit = ((_ckData && _ckData.domains) || []).find((x) => x.domain === domain);
+        return hit ? hit.title : domain;
+      })();
+      if (typeof confirm === 'function'
+        && !confirm('删除「' + name + '」的 ' + ids.length + ' 份 Cookie 快照？\n\n'
+          + '删除后该账号立即从公共池移除，网页版解析不再使用它。')) return;
+      try {
+        const r = await adminRequest('/api/admin/cookies/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: domain, ids: ids }),
+        });
+        if (r && r.ok) await loadCookies('已删除 ' + r.removed + ' 份');
+        else _adminToast((r && r.error) || '删除失败', true);
+      } catch (err) {
+        _adminToast('删除失败：' + (err && err.message || err), true);
+      }
+    };
+
+    // 事件委托：平台块的「补注入 / 删除」都是运行时渲染出来的，绑不到具体元素上。
+    if ($('adminCkBody')) {
+      $('adminCkBody').addEventListener('click', (e) => {
+        const del = e.target && e.target.closest ? e.target.closest('[data-ck-del]') : null;
+        if (del) {
+          _ckDelete(del.dataset.ckDel, del.dataset.ckIds);
+          return;
+        }
+        const inj = e.target && e.target.closest ? e.target.closest('[data-ck-inject]') : null;
+        if (inj) {
+          const sel = $('adminCkDomain');
+          if (sel) sel.value = inj.dataset.ckInject;
+          const sec = $('adminCkInjectSec') || (sel && sel.closest('.admin-cfg-section'));
+          if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          if ($('adminCkHeader')) $('adminCkHeader').focus();
+        }
+      });
+    }
+    // 平台 tab 条：一次只看一个平台（2026-10-19 用户要求「不要排一起」）。
+    // 同样是运行时渲染 → 事件委托；切换只重渲染，不打接口（数据已在 _ckData 里）。
+    if ($('adminCkTabs')) {
+      $('adminCkTabs').addEventListener('click', (e) => {
+        const tab = e.target && e.target.closest ? e.target.closest('[data-ck-tab]') : null;
+        if (!tab) return;
+        const domain = tab.dataset.ckTab;
+        if (!domain || domain === _ckActiveDomain) return;
+        _ckActiveDomain = domain;
+        if (_ckData) _ckRender(_ckData);
+      });
+    }
+    // 平台筛选下拉：默认「全部平台」（tab 浏览）；选具体平台只展示该平台。
+    if ($('adminCkPlatformSel')) {
+      $('adminCkPlatformSel').addEventListener('change', (e) => {
+        _ckFilter = (e.target && e.target.value) || '';
+        if (_ckFilter) _ckActiveDomain = _ckFilter;
+        if (_ckData) _ckRender(_ckData);
+      });
+    }
+    if ($('adminCkVerify')) $('adminCkVerify').addEventListener('click', _ckVerify);
+    if ($('adminCkRefresh')) $('adminCkRefresh').addEventListener('click', () => loadCookies());
+    // 🔴 2026-10-19：漏了这一行 —— 「注入」按钮从上线起就是死的（点下去什么都不发生，
+    // 连提示都没有），每行的「补注入」也就只能帮用户选好平台、焦点到输入框。
+    // 真机点按钮 + 读 #adminCkInjectMsg 才发现（截图和接口单测都看不出来）。
+    if ($('adminCkInjectBtn')) $('adminCkInjectBtn').addEventListener('click', _ckInject);
+
     // ---- 网站访客 + 错误事件（2026-09-26 从运维看板并入，与看板同数据源）----
     let _monRange = 'day';
     // 当前统计范围的可视提示：按钮高亮之外再给一行文字，避免「以为没生效」
@@ -23227,6 +23615,13 @@ el.dwVidPlayer.hidden = true;
       const q = (userSearch && userSearch.value || '').trim().toLowerCase();
       const fv = (userStatusFilter && userStatusFilter.value) || '';
       const _isMember = (u) => !!(u.membership && (u.membership.download_active || u.membership.ai_active));
+      // 最近使用 = 云端算好的 last_active（登录 / 设备心跳 / 每日用量明细 / 历史用量
+      // 取最大，含历史数据）；旧云端没有该字段时退回 last_login 与设备 last_seen 取最新。
+      const _lastUsed = (u) => {
+        let t = parseFloat(u.last_login) || 0;
+        for (const d of (u.devices || [])) t = Math.max(t, parseFloat(d.last_seen) || 0);
+        return Math.max(t, parseFloat(u.last_active) || 0);
+      };
       // 顶部统计卡（对齐设计稿：总用户 / 免费会员 / 异常状态）
       if (userStatCards) {
         const total = lastUsers.length;
@@ -23250,16 +23645,28 @@ el.dwVidPlayer.hidden = true;
         const identifier = String(u.identifier == null ? '' : u.identifier).toLowerCase();
         const uidStr = (u.user_id || '').toLowerCase();
         const created = u.created_at ? new Date(u.created_at * 1000).toLocaleString().toLowerCase() : '';
+        const lu = _lastUsed(u);
+        const lastUsedStr = lu ? new Date(lu * 1000).toLocaleString().toLowerCase() : '';
         const memStr = mem.toLowerCase();
-        return identifier.includes(q) || uidStr.includes(q) || created.includes(q) || memStr.includes(q);
+        return identifier.includes(q) || uidStr.includes(q) || created.includes(q) || lastUsedStr.includes(q) || memStr.includes(q);
       });
       if (userCount) userCount.textContent = (q || fv) ? `匹配 ${list.length} / 共 ${lastUsers.length} 个用户` : `共 ${lastUsers.length} 个用户`;
-      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>注册时间</th><th>会员状态</th><th>积分</th><th>状态</th><th>超级用户</th><th>操作</th></tr></thead>';
+      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>注册时间</th><th>最近使用</th><th>会员状态</th><th>积分</th><th>状态</th><th>角色</th><th>操作</th></tr></thead>';
       const rows = list.map((u) => {
         const m = u.membership || {};
         const cred = (m.credits_total != null) ? m.credits_total : '—';
         const disabled = !!u.disabled;
         const isAdmin = !!u.is_admin;
+        // 角色三分（2026-10-22 权限拆两级）：super=唯一超管（能动数据）/ admin=管理员（只读
+        // 后台）/ ''=普通用户。后端 list_users 已按「唯一超管标识」算好 role；
+        // 老后端没有该字段时退回 admin —— 宁可把超管显示成管理员，也不要把管理员显示成超管。
+        const role = u.role || (isAdmin ? 'admin' : '');
+        const isSuper = role === 'super';
+        const roleChip = isSuper
+          ? '<span class="admin-chip is-gold">👑 超管</span>'
+          : (role === 'admin'
+              ? '<span class="admin-chip is-blue">管理员</span>'
+              : '<span class="admin-chip is-gray">普通</span>');
         // 「当前账号」：列表行改为云端总库后 user_id 是邮箱，本机 uid 比不出来
         // ⇒ 后端按账号标识回填 u.self（旧字段兜底保留，兼容未升级的后端）
         const self = u.self === true || u.user_id === _currentUid;
@@ -23274,27 +23681,37 @@ el.dwVidPlayer.hidden = true;
         const stText = disabled ? '<span class="admin-st-bad">已禁用</span>' : '正常';
         const adminOp = isAdmin
           ? (self ? '<span class="admin-tag admin-tag-ok">👑 当前账号</span>'
-                  : `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="unadmin">取消管理员</button>`)
-          : `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="admin">设为管理员</button>`;
+                  : (_vdlIsSuper
+                      ? `<button class="admin-btn admin-btn-sm" data-uid="${esc(u.user_id)}" data-act="unadmin">取消管理员</button>`
+                      // 管理员视角：没有写权限，不渲染任何改权限按钮（后端也会 403）
+                      : '<span class="admin-readonly">只读</span>'))
+          : (_vdlIsSuper
+              ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="admin">设为管理员</button>`
+              : '');
+        // 写操作按钮仅超管可见：管理员是只读视角，只看「使用详情」
+        // （后端 require_super 也会 403，这里是前端第一道，避免点了才报错）
         const ops = `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="usage">使用详情</button>`
-          + (disabled
+          + (_vdlIsSuper
+          ? (disabled
           ? `<button class="admin-btn admin-btn-sm admin-btn-primary" data-uid="${esc(u.user_id)}" data-act="enable">启用</button>`
           : `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="disable">禁用</button>`
             + `<button class="admin-btn admin-btn-sm admin-btn-soft" data-uid="${esc(u.user_id)}" data-act="reset">重置密码</button>`
-            + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`));
+            + (self ? '' : `<button class="admin-btn admin-btn-sm admin-btn-danger" data-uid="${esc(u.user_id)}" data-act="del">删除</button>`))
+          : '');
         return `<tr>
           <td><span class="admin-ava-wrap">${ava}${esc(u.identifier)}</span></td>
           <td><code class="admin-uid" data-copy="${esc(u.user_id || '')}" title="点击复制">${esc(u.user_id || '—')}</code></td>
           <td>${u.created_at ? new Date(u.created_at * 1000).toLocaleString() : '—'}</td>
+          <td>${_lastUsed(u) ? new Date(_lastUsed(u) * 1000).toLocaleString() : '—'}</td>
           <td>${memChip}</td>
           <td>${cred}</td>
           <td>${stText}</td>
-          <td>${isAdmin ? '是' : '否'}</td>
+          <td>${roleChip}</td>
           <td class="admin-ops">${adminOp}${ops}</td>
         </tr>`;
       }).join('');
       const emptyMsg = (q || fv) ? '无匹配用户' : '暂无用户';
-      userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="8" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
+      userTable.innerHTML = head + '<tbody>' + (rows || `<tr><td colspan="9" class="admin-empty">${emptyMsg}</td></tr>`) + '</tbody>';
     };
 
     // ---- 会员管理 ----
@@ -23314,7 +23731,11 @@ el.dwVidPlayer.hidden = true;
       const rows = lastMembers.map((m) => {
         const dl = m.download_active ? `✅ ${esc(m.download_plan || '')}` : '—';
         const ai = m.ai_active ? `✅ ${esc(m.ai_plan || '')}` : '—';
-        const ops = `<button class="admin-btn admin-btn-sm" data-uid="${esc(m.user_id)}" data-act="credit">调整积分</button>`;
+        // 管理员（只读）看得到全部记录，但不能改 —— 写按钮直接置为不可用并说明原因，
+        // 免得点了才弹 403（用户反馈「点了没反应」）。
+        const ops = _vdlIsSuper
+          ? `<button class="admin-btn admin-btn-sm" data-uid="${esc(m.user_id)}" data-act="credit">调整积分</button>`
+          : '<span class="admin-readonly" title="仅超级管理员可调整积分">只读</span>';
         return `<tr>
           <td>${esc(m.identifier)}</td>
           <td><code class="admin-uid" data-copy="${esc(m.user_id || '')}" title="点击复制">${esc(m.user_id || '—')}</code></td>
@@ -23343,6 +23764,119 @@ el.dwVidPlayer.hidden = true;
       subtitle_extract: '字幕提取', compress: '文件压缩', sr: '超分',
     };
     const _usageResLabel = (k) => _USAGE_RES_LABELS[k] || k;
+    // 云端当日用量（2026-10-18 修）：网页版 / 其它设备上的消耗记在授权中心
+    // `authority.usage`，**不写入本机 store 的 usage_history**。旧版面板只读本机，
+    // 于是把「云端明明用过」误报成「这个账号还没有任何使用记录」。
+    // 注意：云端只保留**当天**计数（按 usage_date 跨天重置），没有逐日历史。
+    const _usageCloudUsage = (u) => {
+      const auth = ((((u || {}).cloud) || {}).data || {}).authority || {};
+      const raw = auth.usage || {};
+      const items = {};
+      Object.keys(raw).forEach((k) => {
+        const n = Number(raw[k]) || 0;
+        if (n > 0) items[k] = n;
+      });
+      return {
+        date: String(auth.usage_date || ''),
+        items,
+        total: Object.keys(items).reduce((s, k) => s + items[k], 0),
+      };
+    };
+    // 云端用量的一句话明细（无用量返回空串，调用方自行判断是否渲染）
+    const _usageCloudUsageText = (cu) => {
+      const ks = Object.keys((cu || {}).items || {});
+      return ks.length ? ks.map((k) => _usageResLabel(k) + ' ' + cu.items[k]).join('、') : '';
+    };
+    // 云端按天历史（2026-10-18）：授权中心在日切时把前一天归档，保留 366 天。
+    // 数组形态 [{date:"2026-10-18", counts:{download:2},
+    //           details:{download:[{t:"少帅 第5集",p:"douyin.com",at:...}]}}]，**新的在前**。
+    // 老版本云端没有这个字段 ⇒ 返回空数组，面板自动退回「只有当天」的展示。
+    // details（2026-10-19）：具体下载/处理了什么，按天归档，供后台定位。
+    const _usageCloudHistory = (u) => {
+      const rows = ((((u || {}).cloud) || {}).data || {}).usage_history;
+      if (!Array.isArray(rows)) return [];
+      const out = [];
+      rows.forEach((r) => {
+        if (!r || typeof r !== 'object' || !r.date) return;
+        const items = {};
+        Object.keys(r.counts || {}).forEach((k) => {
+          const n = Number(r.counts[k]) || 0;
+          if (n > 0) items[k] = n;
+        });
+        const ks = Object.keys(items);
+        if (!ks.length) return;          // 没有消耗的日子不留空行（0 值/空 counts 一律丢弃）
+        out.push({
+          date: String(r.date),
+          items,
+          details: _cleanDetails(r.details),
+          total: ks.reduce((s, k) => s + items[k], 0),
+        });
+      });
+      return out;
+    };
+
+    // 明细清洗（2026-10-19）：云端/本机同构 {资源: [{t, p, at}]}；无标题的条目丢掉。
+    // 2026-10-20：r = 1 成功（下载完成并保存到本机）/ 0 未完成 / 缺省＝未上报。
+    // 老数据没有 r，必须保留为「undefined」而不是 0，否则会把历史记录误标成失败。
+    const _cleanDetails = (raw) => {
+      const out = {};
+      if (!raw || typeof raw !== 'object') return out;
+      Object.keys(raw).forEach((k) => {
+        const v = raw[k];
+        if (!Array.isArray(v)) return;
+        const items = [];
+        v.slice(-50).forEach((it) => {
+          if (!it || typeof it !== 'object') return;
+          const t = String(it.t || '').slice(0, 120);
+          if (!t) return;
+          const row = { t, p: String(it.p || ''), at: Number(it.at || 0) };
+          if (it.r === 0 || it.r === 1) row.r = it.r;
+          items.push(row);
+        });
+        if (items.length) out[String(k)] = items;
+      });
+      return out;
+    };
+
+    // 明细行 HTML（2026-10-20 用户口径）：「一个记录一行，标题太长可以缩略。
+    //   已完成/未完成，结果放当行最后面显示」。
+    // 行结构：平台标签 | 标题（单行省略，hover 看全文） | 结果标记（贴右端）
+    //   r=1 已完成（下载完成且成品已保存到本机）/ r=0 未完成 / 缺省 未上报
+    // 同标题下过多次不合并 —— 每次下载是一条独立记录，各自有自己的结果。
+    // 平台之间仍相邻成块（用户先前要求「按平台分类，不要堆一起」），块内最新在上。
+    const _usageDetailsByPlatform = (details) => {
+      const det = _cleanDetails(details);
+      const rows = [];
+      Object.keys(det).forEach((res) => {
+        det[res].forEach((it) => {
+          rows.push({
+            t: it.t,
+            p: it.p || '未知平台',
+            at: Number(it.at || 0),
+            st: it.r === 1 ? 'ok' : (it.r === 0 ? 'fail' : 'unk'),
+          });
+        });
+      });
+      if (!rows.length) return '';
+      const byPlatform = {};      // 平台 -> 记录数组（保持首次出现顺序）
+      const order = [];
+      rows.forEach((r) => {
+        if (!byPlatform[r.p]) { byPlatform[r.p] = []; order.push(r.p); }
+        byPlatform[r.p].push(r);
+      });
+      const badge = {
+        ok: '<span class="aud-res ok" title="下载已完成，成品已保存到本机">✅ 已完成</span>',
+        fail: '<span class="aud-res fail" title="下载未完成（失败/取消/被终止），成品没有保存到本机">❌ 未完成</span>',
+        unk: '<span class="aud-res unk" title="这次下载结束时没能回报结果（多为升级前的旧记录）">未上报</span>',
+      };
+      return order.map((p) => byPlatform[p].slice()
+        .sort((a, b) => b.at - a.at)
+        .map((r) => '<div class="aud-row">'
+          + '<span class="aud-row-plat" title="' + esc(p) + '">' + esc(p) + '</span>'
+          + '<span class="aud-row-title" title="' + esc(r.t) + '">' + esc(r.t) + '</span>'
+          + badge[r.st] + '</div>')
+        .join('')).join('');
+    };
     const _USAGE_VIA_LABELS = { pay: '购买', grant: '后台赠送', admin: '后台操作', test: '测试', activate: '激活' };
     const _usageViaLabel = (v) => _USAGE_VIA_LABELS[v] || (v || '—');
     const _usageRows = (rows) => rows.map((r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td></tr>`).join('');
@@ -23409,6 +23943,13 @@ el.dwVidPlayer.hidden = true;
       const dlg = _usageDlg;
       dlg.dataset.uid = uid || '';
       const body = dlg.querySelector('.aud-body');
+      // 2026-10-18 修（错号）：弹窗是**单例复用**的，而账号头原先只在「有使用记录」
+      // 分支里写。空状态分支直接 return ⇒ 顶部会残留**上一次打开那个账号**的名字
+      // 与注册时间（实测：点 2649348580@qq.com，顶部却写着 guodong9@foxmail.com）。
+      // 所以进入时先无条件把账号头刷成本次 uid，加载完再补注册时间。
+      const _uidEsc = esc(uid || '');
+      dlg.querySelector('.aud-user').innerHTML =
+        `<b>${_uidEsc}</b><code class="admin-uid" data-copy="${_uidEsc}" title="点击复制">${_uidEsc}</code>`;
       body.innerHTML = '<div class="admin-empty">加载中…</div>';
       if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
       else dlg.setAttribute('open', '');
@@ -23417,11 +23958,33 @@ el.dwVidPlayer.hidden = true;
       try {
         const r = await adminRequest('/api/admin/users/' + encodeURIComponent(uid) + '/usage');
         if (!r || !r.ok) throw new Error((r && r.error) || '查询失败');
+        // 竞态守卫：连着点了两个账号时，先发的请求可能后返回 —— 结果属于旧账号，
+        // 直接丢弃，否则会把旧账号的数据写进当前弹窗（比残留账号头更严重）。
+        if (dlg.dataset.uid !== (uid || '')) return;
         const u = r.usage || {};
+        // 账号头在**所有分支之前**统一刷新（含注册时间）——空状态分支也要写，
+        // 否则「无使用记录」的账号会顶着上一个用户的标题。
+        dlg.querySelector('.aud-user').innerHTML =
+          `<b>${esc(u.identifier || uid)}</b><code class="admin-uid" data-copy="${esc(uid)}" title="点击复制">${esc(uid)}</code>`
+          + (u.created_at ? ` · 注册于 ${esc(_usageFmtDate(u.created_at))}` : '')
+          + (u.disabled ? ' · <span class="admin-chip is-red">已禁用</span>' : '')
+          + (u.role === 'super'
+              ? ' · <span class="admin-chip is-gold">👑 超管</span>'
+              : ((u.is_admin || u.role === 'admin')
+                  ? ' · <span class="admin-chip is-blue">管理员</span>'
+                  : ''));
         const m = u.membership || {};
         const us0 = u.usage_summary || {};
-        // 全新账号确实什么都不该有 —— 但要讲清「为什么空」，而不是留一片空白
-        if (!us0.days && !us0.total && !(u.activations || []).length
+        const cu0 = _usageCloudUsage(u);   // 云端（网页版 / 其它设备）当日用量
+        const cuH0 = _usageCloudHistory(u); // 云端按天历史（近一年，新的在前）
+        // 全新账号确实什么都不该有 —— 但要讲清「为什么空」，而不是留一片空白。
+        // 2026-10-18 修：判空必须把**云端当日用量**算进来，否则网页版账号
+        // （本机无消耗记录、云端有）会被误报成「没有任何使用记录」。
+        // 2026-10-19 再修（跨天漏判）：只看「当日」仍不够 —— 用户昨天用过、今天没再用，
+        // 云端 usage_history 里有记录但 cu0.total=0，旧判空照样报空。
+        // 实测：guodong9@foxmail.com 10-18 在网页版下载 2 次，面板却显示「从未使用」。
+        if (!us0.days && !us0.total && !cu0.total && !cuH0.length
+            && !(u.activations || []).length
             && !(u.support || {}).total_threads && !m.permanent_credits
             && !Number((m.ai_member || {}).credits_left || 0)) {
           body.innerHTML = '<section class="aud-sec"><h4>这个账号还没有任何使用记录</h4>'
@@ -23436,16 +23999,11 @@ el.dwVidPlayer.hidden = true;
               ['AI 会员', (m.ai_member || {}).active ? '有效' : '无'],
               ['积分', String(m.credits_total != null ? m.credits_total : 0)],
               ['设备指纹', u.device_fp || '—（从未在本机登录）'],
-              ['云端授权', (u.cloud || {}).ok ? '云端有记录' : ((u.cloud || {}).reason || '未拉到')],
+              ['云端授权', (u.cloud || {}).ok ? '云端有档案（权益可查）' : ((u.cloud || {}).reason || '未拉到')],
             ]) + '</tbody></table></section>'
             + _usageCloudDataSec(u);   // 没有使用记录，也可能已有云端资料
           return;
         }
-        dlg.querySelector('.aud-user').innerHTML =
-          `<b>${esc(u.identifier || uid)}</b><code class="admin-uid" data-copy="${esc(uid)}" title="点击复制">${esc(uid)}</code>`
-          + ` · 注册于 ${esc(_usageFmtDate(u.created_at))}`
-          + (u.disabled ? ' · <span class="admin-chip is-red">已禁用</span>' : '')
-          + (u.is_admin ? ' · <span class="admin-chip is-gold">超管</span>' : '');
 
         // 会员与积分（字段名对齐 membership.status()：credits_left 在 ai_member 下，
         // 永久积分是顶层 permanent_credits；device_locked 是一机一码锁，排障关键）
@@ -23466,24 +24024,69 @@ el.dwVidPlayer.hidden = true;
             : '')
           + '</tbody></table></section>';
 
-        // 今日 + 近 N 天配额消耗
+        // 今日 + 近 N 天配额消耗（**本机**口径）
         const us = u.usage_summary || {};
         const today = u.today || {};
         const dayRows = (u.usage_days || []).map((d) => {
           const items = Object.keys(d.items || {})
             .map((k) => `${_usageResLabel(k)} ${d.items[k]}`).join('、') || '未使用';
-          return `<tr><td>${esc(d.date)}</td><td>${d.total}</td><td class="aud-items">${esc(items)}</td></tr>`;
+          // 2026-10-19：本机明细同样按平台分组（与云端口径一致）
+          const detail = _usageDetailsByPlatform(d.details);
+          return `<tr><td>${esc(d.date)}</td><td>${d.total}</td>`
+            + (detail
+              ? '<td class="aud-items">' + detail + '</td>'
+              : `<td class="aud-items">${esc(items)}</td>`)
+            + '</tr>';
         }).join('');
-        h += '<section class="aud-sec"><h4>配额消耗（近 '
+        h += '<section class="aud-sec"><h4>本机配额消耗（近 '
           + (us.days || 0) + ' 天，共 ' + (us.total || 0) + ' 次 / 活跃 ' + (us.active_days || 0) + ' 天）</h4>'
           + '<div class="aud-today">今日 ' + (today.total || 0) + ' 次'
           + (Object.keys(today.items || {}).length
             ? '（' + esc(Object.keys(today.items).map((k) => _usageResLabel(k) + ' ' + today.items[k]).join('、')) + '）' : '')
           + '</div>'
           + (dayRows
-            ? '<div class="aud-table-wrap"><table class="admin-table"><thead><tr><th>日期</th><th>次数</th><th>明细</th></tr></thead><tbody>' + dayRows + '</tbody></table></div>'
-            : '<div class="admin-empty">近 ' + (us.days || 0) + ' 天没有任何使用记录</div>')
+            ? '<div class="aud-table-wrap"><table class="admin-table aud-detail-table"><thead><tr><th>日期</th><th>次数</th><th>明细</th></tr></thead><tbody>' + dayRows + '</tbody></table></div>'
+            : '<div class="admin-empty">近 ' + (us.days || 0) + ' 天本机没有消耗记录</div>')
           + '</section>';
+
+        // 云端当日用量（2026-10-18）：网页版 / 其它设备的消耗只记在授权中心，
+        // 不进本机 usage_history —— 不单独渲染出来就会被误读成「这个号没用过」。
+        const cu = cu0;
+        const cuHist = cuH0;
+        if (cu.total || cuHist.length) {
+          h += '<section class="aud-sec"><h4>云端用量（桌面 App + 网页版 / 其它设备）</h4>';
+          if (cu.total) {
+            h += '<div class="aud-today">' + (cu.date ? esc(cu.date) + ' 当天 ' : '当日 ')
+              + cu.total + ' 次'
+              + (Object.keys(cu.items).length ? '（' + esc(_usageCloudUsageText(cu)) + '）' : '')
+              + '</div>';
+          }
+          if (cuHist.length) {
+            const cuRows = cuHist.map((d) => {
+              const items = Object.keys(d.items)
+                .map((k) => _usageResLabel(k) + ' ' + d.items[k]).join('、') || '—';
+              // 2026-10-19：明细按平台分组渲染；老数据没有明细时退回次数摘要
+              const detail = _usageDetailsByPlatform(d.details);
+              return `<tr><td>${esc(d.date)}</td><td>${d.total}</td>`
+                + (detail
+                  ? '<td class="aud-items">' + detail + '</td>'
+                  : `<td class="aud-items">${esc(items)}</td>`)
+                + '</tr>';
+            }).join('');
+            h += '<div class="aud-table-wrap" style="max-height:420px;overflow:auto">'
+              + '<table class="admin-table aud-detail-table"><thead><tr><th>日期</th><th>次数</th><th>明细</th></tr></thead>'
+              + '<tbody>' + cuRows + '</tbody></table></div>';
+          }
+          h += '<div class="admin-empty">这部分消耗记在授权中心（账号级：桌面 App 登录后与网页版共用同一份），'
+            + '不写入本机记录，所以不会出现在上面的「本机配额消耗」里。<br>'
+            + '明细里每条后面的标记：<b>✅ 已保存</b>＝这次下载已完成、成品确实存到了用户本机；'
+            + '<b>❌ 未完成</b>＝下载失败 / 用户取消 / 被自动终止；<b>未上报</b>＝任务结束时没能回报结果'
+            + '（升级前的旧记录，或后台被强杀）。<br>'
+            + (cuHist.length > 1
+              ? '历史保留近一年（' + cuHist.length + ' 天有记录），满一年自动截断。'
+              : '历史按天累积，满一年自动截断；归档功能上线之前的日期没有存档，无法补录。')
+            + '</div></section>';
+        }
 
         // 激活 / 购买历史
         const acts = u.activations || [];
@@ -24127,11 +24730,21 @@ el.dwVidPlayer.hidden = true;
             : (st.buyable === false
               ? `<span class="admin-chip is-red">${esc(st.reason || '不可购买')}</span>`
               : (st.is_flash ? '<span class="admin-chip is-gold">秒杀中</span>' : ''));
+          // 🔴 2026-10-20：秒杀窗口已过但 mode 仍是 flash_sale 时，必须让管理员看得见
+          //    「这档活动已经结束」。前台此时已按原价卖、秒杀元素也收起了，但后台如果不提示，
+          //    管理员会以为活动还在（这正是用户报「没落回普通无活动模式」的现场）。
+          //    保存套餐配置时会自动切回普通模式（见 savePlans 归一化块）。
+          const _flashOver = (p.mode === 'flash_sale')
+            && (Number(p.flash_end) || 0) > 0
+            && (Number(p.flash_end) || 0) <= Date.now() / 1000;
+          const flashOverChip = _flashOver
+            ? '<span class="admin-chip is-gray" title="秒杀窗口已结束：前台已按原价销售、秒杀元素已收起；点「保存套餐配置」会自动切回普通模式">秒杀已结束</span>'
+            : '';
           const saleBtn = `<button type="button" class="admin-btn admin-btn-sm ${off ? 'admin-btn-primary' : 'admin-btn-soft'} plan-sale-toggle" data-plan="${esc(k)}" data-cat="${esc(cat)}" data-table="${esc(_CAT_TABLE[cat] || cat)}" title="${off ? '重新上架该档（不影响已购买用户权益）' : '立即下架该档：前台隐藏且无法下单，已购用户权益不受影响'}">${off ? '↑ 上架' : '↓ 下架'}</button>`;
           h += `<div class="admin-plan-item${off ? ' is-off' : ''}" data-plan="${esc(k)}">
             <div class="admin-plan-row">
               <span class="admin-plan-name">${esc(p.label || k)} <code class="admin-plan-code">${esc(k)}</code></span>
-              ${statusChip}
+              ${statusChip}${flashOverChip}
               <label>标题<input class="admin-input admin-input-sm plan-label" data-plan="${esc(k)}" value="${esc(p.label || k)}"></label>
               <label>价格¥<input class="admin-input admin-input-sm plan-price" data-plan="${esc(k)}" value="${esc(p.price_cny)}" type="number" step="0.01"></label>
               ${extra}
@@ -24293,24 +24906,69 @@ el.dwVidPlayer.hidden = true;
         const el = plansBox.querySelector(`.cost-val[data-cost="${k}"]`);
         costs[k] = el ? (parseInt(el.value, 10) || 0) : (cfg.credit_costs[k]);
       });
+      // 🔴 2026-10-20：活动结束后必须落回「普通·无活动」模式。
+      //    此前窗口过了只是「效果上」回落（价格回原价、秒杀元素靠 flash_phase=ended 收起），
+      //    **mode 字段永远停在 flash_sale**，后台一直挂着旧秒杀配置；更糟的是秒杀价留空
+      //    （截图那种）会让 flash_phase 变成 'none' 而不是 'ended'，角标压根不会收起。
+      //    这里在写盘前做一次确定性归一（保存即落回，不依赖人工回想）：
+      //    ① 秒杀窗口已过 → mode 切 normal + 清零秒杀三字段 + 清掉活动角标；
+      //    ② 非秒杀模式却留着秒杀字段 → 清零（杜绝「普通档挂限时秒杀」残渣）。
+      //    ⚠️ 参数不全（价格/时间没填完）**不归一**，交给下面的 _flashBad 拦截 —— 否则
+      //       管理员正在填一半的活动会被静默改回普通模式，输入白丢。
+      const _flashFixed = [];
+      const _nowSecSave = Date.now() / 1000;
+      [['下载', dl], ['AI', ai], ['积分包', cp]].forEach(function (pair) {
+        const catName = pair[0]; const group = pair[1];
+        Object.keys(group || {}).forEach(function (k) {
+          const it = group[k];
+          if (!it) return;
+          const fp0 = Number(it.flash_price) || 0;
+          const fs0 = Number(it.flash_start) || 0;
+          const fe0 = Number(it.flash_end) || 0;
+          if (it.mode !== 'flash_sale') {
+            if (fp0 > 0 || fs0 > 0 || fe0 > 0) {
+              it.flash_price = 0; it.flash_start = 0; it.flash_end = 0;
+              _flashFixed.push(catName + '档 ' + k + ' 已清掉残留的秒杀参数');
+            }
+            return;
+          }
+          if (fp0 > 0 && fs0 && fe0 && fe0 <= _nowSecSave) {
+            it.mode = 'normal';
+            it.flash_price = 0; it.flash_start = 0; it.flash_end = 0;
+            if (it.badge && /秒杀|限时|抢购|特价/.test(String(it.badge))) it.badge = '';
+            _flashFixed.push(catName + '档 ' + k + ' 秒杀已结束，已切回普通模式');
+          }
+        });
+      });
       // 🔴 2026-10-17：秒杀价必须低于原价，否则没有价差——卡片不划线、没有「秒杀」观感，
       //    窗口结束后价格回原价（而原价就是秒杀价），看起来「秒杀永远不结束」。
       //    本次线上 1 天档正是「原价=秒杀价=0.1」导致用户误判。保存前拦一道。
+      // 🔴 2026-10-20 补两个洞：秒杀价留空 / 开始≥结束时间（旧版对前者直接 return，
+      //    等于放行「挂秒杀模式按原价卖」）。
       const _flashBad = [];
       [['下载', dl], ['AI', ai], ['积分包', cp]].forEach(function (pair) {
         const catName = pair[0]; const group = pair[1];
         Object.keys(group || {}).forEach(function (k) {
           const it = group[k];
-          if (!it || it.mode !== 'flash_sale' || !(Number(it.flash_price) > 0)) return;
+          if (!it || it.mode !== 'flash_sale') return;
           const base = Number(it.price_cny) || 0;
+          const fp = Number(it.flash_price) || 0;
+          const fs = Number(it.flash_start) || 0;
+          const fe = Number(it.flash_end) || 0;
+          if (!(fp > 0)) {
+            _flashBad.push(catName + '档 ' + k + ' 选了秒杀模式但秒杀价为空（会按原价卖却挂着秒杀角标）');
+            return;
+          }
           if (base <= 0) { _flashBad.push(catName + '档 ' + k + ' 原价为 0，无法判断价差'); return; }
-          if (Number(it.flash_price) >= base) {
+          if (fp >= base) {
             _flashBad.push(catName + '档 ' + k + ' 秒杀价 ¥' + it.flash_price + ' 不低于原价 ¥' + base);
           }
-          if (!it.flash_start || !it.flash_end) {
+          if (!fs || !fe) {
             _flashBad.push(catName + '档 ' + k + ' 缺少秒杀开始/结束时间');
-          } else if (it.flash_end <= Date.now() / 1000) {
-            _flashBad.push(catName + '档 ' + k + ' 秒杀结束时间已过（价格将立即回原价）');
+          } else if (fe <= _nowSecSave) {
+            _flashBad.push(catName + '档 ' + k + ' 秒杀结束时间已过（价格会立即回原价）');
+          } else if (fs >= fe) {
+            _flashBad.push(catName + '档 ' + k + ' 秒杀结束时间必须晚于开始时间');
           }
         });
       });
@@ -24335,8 +24993,10 @@ el.dwVidPlayer.hidden = true;
           loadConfig();
           // 价格唯一真源在授权中心：云端同步成功才算全端生效，未同步要明确告知
           const cloud = r.cloud || {};
-          if (cloud.ok) _adminMsg(plansMsg, '套餐配置已保存，并已同步到云端（网页版同步生效）', false);
-          else _adminMsg(plansMsg, `套餐配置已保存到本机，但云端同步失败（${_cloudReasonLabel(cloud.reason)}）——网页版与实际扣款价暂未变更`, true);
+          // 归一化必须说出来：否则管理员会以为「我刚保存的秒杀配置怎么没了」
+          const _fixNote = _flashFixed.length ? '（' + _flashFixed.join('；') + '）' : '';
+          if (cloud.ok) _adminMsg(plansMsg, '套餐配置已保存，并已同步到云端（网页版同步生效）' + _fixNote, false);
+          else _adminMsg(plansMsg, `套餐配置已保存到本机，但云端同步失败（${_cloudReasonLabel(cloud.reason)}）——网页版与实际扣款价暂未变更` + _fixNote, true);
         }
         else _adminMsg(plansMsg, (r && r.error) || '保存失败', true);
       } catch (e) {
@@ -24353,7 +25013,8 @@ el.dwVidPlayer.hidden = true;
 
     const _needLogin = (msg) => {
       closeAdmin();
-      if (msg) alert(msg);
+      // 2026-10-22：改用轻量 toast（alert 在 pywebview 里是 NSAlert 模态，阻塞且突兀）
+      if (msg) _adminToast(String(msg).replace(/^未授权：/, ''), true);
     };
 
     // 表格操作（事件委托）
@@ -24385,23 +25046,22 @@ el.dwVidPlayer.hidden = true;
       try {
         if (act === 'disable' || act === 'enable') {
           const r = await adminRequest(`/api/admin/users/${uid}/${act}`, { method: 'POST' });
-          if (r && r.ok) { loadUsers(); }
-          else alert((r && r.error) || '操作失败');
+          if (_adminResult(r, act === 'disable' ? '已禁用该账号' : '已启用该账号')) loadUsers();
         } else if (act === 'reset') {
           const npw = (typeof prompt === 'function') ? prompt('为该用户设置新密码（≥6位）：') : null;
           if (!npw) return;
           const r = await adminRequest(`/api/admin/users/${uid}/reset-password`, {
             method: 'POST', body: JSON.stringify({ new_password: npw }),
           });
-          if (r && r.ok) { loadUsers(); }
-          else alert((r && r.error) || '重置失败');
+          if (_adminResult(r, '已重置密码')) loadUsers();
         } else if (act === 'admin' || act === 'unadmin') {
           const flag = act === 'admin';
           const r = await adminRequest(`/api/admin/users/${uid}/set-admin`, {
             method: 'POST', body: JSON.stringify({ is_admin: flag }),
           });
-          if (r && r.ok) { loadUsers(); }
-          else alert((r && r.error) || '操作失败');
+          // 提权/撤权必须**有明确反馈**：此前成功时只静默刷新列表，
+          // 而列表读的是云端数据 —— 云端没同步上就完全看不出变化。
+          if (_adminResult(r, flag ? '已设为管理员' : '已取消管理员')) loadUsers();
         } else if (act === 'usage') {
           openUserUsage(uid);
         } else if (act === 'del') {
@@ -24409,14 +25069,13 @@ el.dwVidPlayer.hidden = true;
           const label = u0.identifier || uid;
           if (!(typeof confirm === 'function') || !confirm(`确定删除账号「${label}」？\n\n删除后该账号立即失效、无法登录，且该手机号/邮箱不能再注册。此操作不可恢复。`)) return;
           const r = await adminRequest(`/api/admin/users/${uid}/delete`, { method: 'POST' });
-          if (r && r.ok) { loadUsers(); loadMembers(); }
-          else alert((r && r.error) || '删除失败');
+          if (_adminResult(r, '已删除账号')) { loadUsers(); loadMembers(); }
         } else if (act === 'credit') {
           const m = (lastMembers || []).find((x) => x.user_id === uid) || { user_id: uid };
           openCreditDlg(m);
         }
       } catch (err) {
-        alert('操作失败：' + (err && err.message ? err.message : '网络错误'));
+        _adminToast('操作失败：' + (err && err.message ? err.message : '网络错误'), true);
       }
     };
     if (userTable) userTable.addEventListener('click', onTableClick);
@@ -24467,9 +25126,8 @@ el.dwVidPlayer.hidden = true;
         const r = await adminRequest('/api/admin/memberships/grant', {
           method: 'POST', body: JSON.stringify({ user_id: uid, code }),
         });
-        if (r && r.ok) { loadMembers(); }
-        else alert((r && r.error) || '赠送失败');
-      } catch (e) { alert('赠送失败：' + (e && e.message ? e.message : '网络错误')); }
+        if (_adminResult(r, '已赠送会员')) loadMembers();
+      } catch (e) { _adminToast('赠送失败：' + (e && e.message ? e.message : '网络错误'), true); }
     });
 
     // 重置统计

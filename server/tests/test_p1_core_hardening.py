@@ -257,6 +257,10 @@ class _FakeTask:
         self.cancel_reason = ""
         self.file_expired = False
         self.filepath = None
+        # 2026-10-19：重试计费带标题与平台（后台「使用详情」定位用）
+        self.title = ""
+        self.url = "https://example.com/v/1"
+        self.platform = "example.com"
 
 
 class _FakeStore:
@@ -271,7 +275,7 @@ class _FakeMembership:
     def __init__(self):
         self.calls = 0
 
-    def use_daily(self, resource, n):
+    def use_daily(self, resource, n, title="", platform=""):
         self.calls += 1
         return {"used": self.calls}
 

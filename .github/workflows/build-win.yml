@@ -323,6 +323,18 @@ jobs:
           gh release upload "$TAG" dist/VideoDownloader-Setup-*.exe --clobber
           gh release view "$TAG" --json assets -q '.assets[].name, .assets[].size'
 
+      # ── 真机断言：包内必备二进制真的能执行（deno / ffmpeg / ffprobe）──
+      # 为什么必须在这里再做一次：`build_win.sh` 里虽然已经硬拦（缺项 exit 1），但那是
+      # **构建机上的静态判断 + 本机冒烟**。这里是包产物在真 Windows runner 上再跑一遍
+      # `deno.exe --version`，能抓到「文件在、但缺 VC++ 运行库 / 架构不对」这类
+      # 只有真 Windows 才暴露的问题——本地 macOS 无模拟器时谁都验不了这一层。
+      # 🔴 与下面 no-window 断言同理放在 Release **之后**：断言保留阻断力，
+      #    但不让它卡住已构建好的包交付。
+      - name: 断言包内必备二进制可执行（真机）
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python desktop/ci_assert_bundle_binaries.py dist/VideoDownloader --platform win
+
       # ── 真机断言：Windows 上「子进程不弹黑窗」补丁确实生效 ──
       # 🔴 放在 Release **之后**：2026-10-18 连挂三轮都是这个附属步骤把后续
       #    Upload/Release 全部 skipped，白跑一轮却拿不到包。断言要保留阻断力，

@@ -45,11 +45,15 @@ def test_source_ratchets() -> None:
           and '_NMW_SIGN_KEY = "cb808529bae6b6be45ecfab29a4889bc"' in dl)
     # 两处分发：probe() 与下载任务执行段（只接一处 = 能解析不能下载）
     check("probe() 分发（host → _nmw_info）",
-          'if "nmwchxx.com" in (host or ""):' in dl
+          "if _is_nmw_host(host):" in dl
           and "return _nmw_info(url, proxy=effective_proxy)" in dl)
     check("任务执行段分发（_task_host → _nmw_info）",
-          'elif "nmwchxx.com" in (_task_host or ""):' in dl
+          "elif _is_nmw_host(_task_host):" in dl
           and "info = _nmw_info(task.url, proxy=effective_proxy)" in dl)
+    check("域名族判定在位（换域仍进解析器，不写死单域）",
+          "def _is_nmw_host(" in dl and "_NMW_KNOWN_HOSTS" in dl)
+    check("链接解析器在位（_nmw_parse_ids）",
+          "def _nmw_parse_ids(" in dl)
     check("episode/url 端点路径正确",
           '"/mw-movie/anonymous/v2/video/episode/url"' in dl)
 
@@ -71,12 +75,47 @@ def _extract_fns(src: str, names: tuple[str, ...]) -> dict:
             if isinstance(n, ast.FunctionDef) and n.name in names}
 
 
-def test_assembly_offline() -> None:
-    print("② 装配逻辑（离线 stub）")
+def test_link_forms() -> None:
+    """域名族 + 链接形态（纯函数，不起网络）。"""
+    print("② 域名族与链接形态")
     src = (SERVER / "downloader.py").read_text(encoding="utf-8")
-    fns = _extract_fns(src, ("_nmw_api", "_nmw_info"))
-    missing = [n for n in ("_nmw_api", "_nmw_info") if n not in fns]
-    check("AST 抽取出 _nmw_api / _nmw_info", not missing)
+    ns: dict = {"re": __import__("re")}
+    exec(src[src.index("_NMW_KNOWN_HOSTS = "):src.index("def _nmw_host(")], ns)
+    for fn in _extract_fns(src, ("_nmw_host", "_is_nmw_host", "_nmw_parse_ids")).values():
+        exec(compile(ast.Module([fn], []), "nmw_parse", "exec"), ns)
+
+    is_nmw, parse, host_of = ns["_is_nmw_host"], ns["_nmw_parse_ids"], ns["_nmw_host"]
+    for h in ("nmwchxx.com", "www.nmwchxx.com", "nmwcchx.com", "nmwchx.com",
+              "chrqj.com", "www.chrqj.com", "m.chrqj.com"):
+        check(f"域名族识别：{h}", is_nmw(h) is True)
+    for h in ("kuaishou.com", "www.douyin.com", "chrqj.net", "", "nmw"):
+        check(f"非本站不误判：{h or '(空)'}", is_nmw(h) is False)
+
+    cases = {
+        "https://nmwchxx.com/vod/play/116537/sid/877419": ("116537", "877419", ""),
+        "https://nmwchxx.com/vod/play/116537/877419": ("116537", "877419", ""),
+        # 老域名 chrqj.com 外链是三段式，中间是「源序号」不是集号：
+        # 若被两段式正则先吃掉，会把 1 当成 nid 解析出错误的集（2026-10-21 补）
+        "https://www.chrqj.com/vod/play/116537/1/877419": ("116537", "877419", ""),
+        "https://chrqj.com/vod/play/116537/sid/877419": ("116537", "877419", ""),
+        "https://nmwchxx.com/vod/play/116537-1-1.html": ("116537", "", "1"),
+        "https://nmwchxx.com/vod/detail/116537": ("116537", "", ""),
+        "https://nmwchxx.com/play?id=116537&nid=877419": ("116537", "877419", ""),
+        "https://nmwchxx.com/search?wd=abc": ("", "", ""),
+    }
+    for u, want in cases.items():
+        check(f"解析 ID：{u.split('/', 3)[-1]}", parse(u) == want)
+    check("host 提取（去端口/大小写）",
+          host_of("https://WWW.NMWCHXX.com:8443/vod/play/1/2") == "www.nmwchxx.com")
+
+
+def test_assembly_offline() -> None:
+    print("③ 装配逻辑（离线 stub）")
+    src = (SERVER / "downloader.py").read_text(encoding="utf-8")
+    names = ("_nmw_api", "_nmw_info", "_nmw_parse_ids", "_nmw_host", "_is_nmw_host")
+    fns = _extract_fns(src, names)
+    missing = [n for n in names if n not in fns]
+    check("AST 抽取出解析器全家桶", not missing)
     if missing:
         return
 
@@ -125,6 +164,10 @@ def test_assembly_offline() -> None:
     sys.modules["requests"] = fake_requests
     sys.modules["uuid"] = fake_uuid
     try:
+        # 常量从源码里真取（别抄一份，抄的会跟着源码一起漂）
+        const_ns: dict = {"re": __import__("re")}
+        exec(src[src.index("_NMW_KNOWN_HOSTS = "):src.index("def _nmw_host(")], const_ns)
+
         ns = {
             "re": __import__("re"),
             "time": types.SimpleNamespace(time=lambda: 1791950306.450),
@@ -135,19 +178,46 @@ def test_assembly_offline() -> None:
             "dict": dict,
             "_NMW_SIGN_KEY": "cb808529bae6b6be45ecfab29a4889bc",
             "_NMW_UA": "UA-TEST",
+            "_NMW_KNOWN_HOSTS": const_ns["_NMW_KNOWN_HOSTS"],
+            "_NMW_HOST_RE": const_ns["_NMW_HOST_RE"],
         }
         for fn in fns.values():
             exec(compile(ast.Module([fn], []), "nmw_fragment", "exec"), ns)
 
-        # ① URL 形态不对 → 明确报错（引导文案在 hint 里）
+        # ① 链接形态：五种写法都要能解析。用户 2026-10-21 第三次报「又不行了」，
+        #    起因就是站点这次给的是 /vod/play/{id}/{nid}（没有 /sid/）。
+        #    chrqj.com 是同一站的老域名（首页 302 → nmwchxx.com），外链是三段式，
+        #    中间那组是「源序号」不是集号 —— 正则顺序错了就会解析出错误的集。
+        forms = [
+            ("/vod/play/116537/sid/877399", "877399"),  # 站内标准
+            ("/vod/play/116537/877399", "877399"),      # 分享/外链（站内 404）
+            ("/vod/play/116537/1/877399", "877399"),    # 老域名三段式（源序号=1）
+            ("/vod/play/116537-1-1.html", "877399"),    # maccms 老模板（集序号=1）
+            ("/vod/detail/116537", "877399"),           # 详情页 → 自动取第一集
+        ]
+        for path, want in forms:
+            captured.clear()
+            info = ns["_nmw_info"]("https://nmwchxx.com" + path)
+            check(f"{path} → 集 ID {want}", f"nid={want}" in captured.get("url", ""))
+            check(f"{path} → 标题可用", info["title"].startswith("少帅"))
+
+        # ①b 老域名链接：API/Referer 都跟着源站走，不写死 nmwchxx.com
+        captured.clear()
+        info = ns["_nmw_info"]("https://www.chrqj.com/vod/play/116537/1/877399")
+        check("chrqj 三段式 → 集 ID 877399", "nid=877399" in captured.get("url", ""))
+        check("chrqj → API 打在源站上", "www.chrqj.com" in captured.get("url", ""))
+        check("chrqj → Referer 用源站", info["http_headers"]["Referer"] == "https://www.chrqj.com/")
+
+        # ② 真取不到任何 ID 才报错（引导文案在 hint 里）
         try:
-            ns["_nmw_info"]("https://nmwchxx.com/vod/detail/116537")
-            check("非播放页链接应抛 ResolveError", False)
+            ns["_nmw_info"]("https://nmwchxx.com/vodplay/abc")
+            check("无 ID 链接应抛 ResolveError", False)
         except _ResolveError as e:
-            check("非播放页链接抛 ResolveError（含引导文案）",
+            check("无 ID 链接抛 ResolveError（含引导文案）",
                   "无法从链接中识别视频 ID" in (str(e) + getattr(e, "hint", "")))
 
-        # ② 正常链路：标题 + 三档清晰度 + best=1080
+        # ③ 正常链路：标题 + 三档清晰度 + best=1080
+        captured.clear()
         info = ns["_nmw_info"]("https://nmwchxx.com/vod/play/116537/sid/877399")
         check("标题 = 片名 + 集名", info["title"] == "少帅 第1集")
         check("三档清晰度按 resolution 降序",
@@ -160,7 +230,7 @@ def test_assembly_offline() -> None:
         check("extractor_key/ext 正确",
               info["extractor_key"] == "NMWChxx" and info["ext"] == "mp4")
 
-        # ③ 签名公式：固定 t → sign 必须与独立计算的 SHA1(MD5(x)) 逐位一致
+        # ④ 签名公式：固定 t → sign 必须与独立计算的 SHA1(MD5(x)) 逐位一致
         t_ms = "1791950306450"
         qs = "clientType=1&id=116537&nid=877399"
         x = f"{qs}&key=cb808529bae6b6be45ecfab29a4889bc&t={t_ms}"
@@ -172,7 +242,7 @@ def test_assembly_offline() -> None:
         check("sign 与独立计算的 SHA1(MD5(x)) 逐位一致（公式锁定）",
               captured["headers"]["sign"] == expect)
 
-        # ④ 接口非 200 → 明确报错（透传服务端 msg）
+        # ⑤ 接口非 200 → 明确报错（透传服务端 msg）
         bad_resp = {"code": 500, "msg": "视频不存在"}
 
         def fake_get_bad(url, headers=None, proxies=None, timeout=None):
@@ -200,6 +270,7 @@ def test_assembly_offline() -> None:
 
 def main() -> int:
     test_source_ratchets()
+    test_link_forms()
     test_assembly_offline()
     print("❌ 存在失败项" if _FAILED else "🎉 金牌影院解析器守卫全部通过")
     return 1 if _FAILED else 0

@@ -1121,8 +1121,8 @@
     <h2 id="pageTitle" class="guide-title"><span class="guide-title-text">🌐 生成网页</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
 
     <p class="uc-tip" style="color:var(--text-mute,#6b7280);font-size:12.5px;">
-      把<b>多个文件合成一个网页</b>（图片 / PDF / 视频 / 音乐…可多选）→ 给出<b>一条在线链接</b> + 二维码。
-      对方<b>点开链接或扫码就能在浏览器里直接看</b>，不用下载、手机也行；本机同时留一份可离线打开的单文件。
+      把<b>多个文件合成一个网页</b>（图片 / PDF / 视频 / 音乐…可多选）→ 给出<b>一条在线链接</b>。
+      对方<b>点开链接就能在浏览器里直接看</b>，不用下载、手机也行。
       <br>代价：内容内嵌进页面会<b>变大约 1/3</b>，单文件限 80MB、合计 200MB，且<b>无有效期</b>（生成后不能设失效时间）。
       <br><span style="color:var(--brand,#2563eb);">提示：图片 / PDF / 音频效果最好；视频需是 H.264 / VP9 / AV1 编码（MKV、MPEG-4 Visual 等在浏览器里播不了）。</span>
       <br><span style="color:var(--brand,#2563eb);">只发<b>一个</b>文件（尤其视频、PDF）？用「📲 生成二维码」更快更保真。</span>
@@ -1134,7 +1134,7 @@
     <ol class="howto-steps">
       <li>点「选择文件」选多个文件（图片 / PDF / 视频 / 音乐）。</li>
       <li>（可选）填「页面标题」，留空用第一个文件名。</li>
-      <li>点「<b>生成网页</b>」，得到一条在线链接 + 二维码，另存一份可离线打开的本地文件。</li>
+      <li>点「<b>生成网页</b>」，得到一条在线链接。</li>
     </ol>
     <p class="howto-note">单文件限 80MB、合计 200MB；内容内嵌会变大约 1/3，且无有效期。只发一个文件用「生成二维码」更保真。</p>
     <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
@@ -1160,32 +1160,17 @@
     </div>
 
     <div id="pageResult" hidden>
-      <div class="share-qr-wrap" id="pageQrWrap" hidden><img id="pageQrImg" alt="网页二维码" /></div>
       <div class="share-url-row" style="margin-top:14px;">
         <input type="text" id="pageLinkInput" readonly placeholder="正在生成在线链接…" />
         <button type="button" class="btn btn-ghost" id="pageCopyLinkBtn">复制链接</button>
         <button type="button" class="btn btn-ghost" id="pageOpenLinkBtn">打开</button>
       </div>
       <div class="share-hint" id="pageResultHint"></div>
-      <div class="pg-local" id="pageLocalRow">
-        <span class="pg-local-tag" id="pageLocalTag">本地文件</span>
-        <input type="text" id="pagePathInput" readonly />
-        <button type="button" class="btn btn-ghost" id="pageCopyPathBtn">复制路径</button>
-        <button type="button" class="btn btn-ghost" id="pageOpenBtn">用浏览器打开</button>
-      </div>
     </div>
 
     <style>
       #pageQueue { margin-top: 10px; }
       .page-tip { color: var(--text-mute,#6b7280); font-size: 12.5px; padding: 6px 2px; }
-      /* 本地文件是次要信息（在线链接才是主产出），所以压成一行小字 */
-      .pg-local { display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center;
-        margin-top:12px; padding-top:11px; border-top:1px dashed var(--border,#e5e7eb); }
-      .pg-local-tag { color:var(--text-mute,#6b7280); font-size:12px; white-space:nowrap; }
-      .pg-local input { flex:1; min-width:210px; max-width:440px; padding:6px 10px;
-        border:1px solid var(--border,#d1d5db); border-radius:8px; font-size:12px;
-        background:transparent; color:inherit; }
-      .pg-local .btn { font-size:12px; padding:5px 11px; }
     </style>
   </section>
 
@@ -2064,8 +2049,8 @@
         </div>
       </div>
       <div class="idp-actions">
-        <button type="button" class="uc-btn primary" id="idpBtn">生成证件照</button>
-        <a class="uc-btn" id="idpDl" hidden>下载结果</a>
+        <button type="button" class="btn btn-primary" id="idpBtn">生成证件照</button>
+        <a class="btn btn-ghost" id="idpDl" hidden>下载结果</a>
       </div>
       <p class="idp-status" id="idpStatus"></p>
       </div>
@@ -3868,11 +3853,13 @@
         <!-- 当前会员状态：下载 / AI 双轨 + 积分余额 -->
         <div class="member-status" id="memberStatus" hidden data-page-node-id="uXft3OfhHVG1EmyRN6vk39"></div>
 
-        <!-- 三轨切换 -->
-        <div class="member-tabs" role="tablist" aria-label="会员类型" data-page-node-id="TTMtaUW5cfR7C3L5UBFMKz">
-          <button type="button" class="member-tab is-active" id="memberTabDl" role="tab" data-page-node-id="k3Ti7dHZZ7gc8yfBXwsFiZ">VIP会员</button>
-          <button type="button" class="member-tab" id="memberTabAi" role="tab" data-page-node-id="pPHWXRYPstCgFhYMHqaxLj">AI 会员</button>
-          <button type="button" class="member-tab" id="memberTabPacks" role="tab" data-page-node-id="ye8RKaAySpWGJ8TvJ9cvFQ">积分包</button>
+        <!-- 三轨切换（外层 wrap 吸顶：弹窗内容下滚时标签栏固定，2026-10-22） -->
+        <div class="member-tabs-wrap">
+          <div class="member-tabs" role="tablist" aria-label="会员类型" data-page-node-id="TTMtaUW5cfR7C3L5UBFMKz">
+            <button type="button" class="member-tab is-active" id="memberTabDl" role="tab" data-page-node-id="k3Ti7dHZZ7gc8yfBXwsFiZ">VIP会员</button>
+            <button type="button" class="member-tab" id="memberTabAi" role="tab" data-page-node-id="pPHWXRYPstCgFhYMHqaxLj">AI 会员</button>
+            <button type="button" class="member-tab" id="memberTabPacks" role="tab" data-page-node-id="ye8RKaAySpWGJ8TvJ9cvFQ">积分包</button>
+          </div>
         </div>
         <!-- 会员公告（2026-10-18）：管理员在后台「会员公告」编辑，云端下发到所有端。
              无内容时整条 hidden —— 不留空白边框，也不占位。 -->
@@ -4180,6 +4167,7 @@
         <button type="button" class="admin-tab" data-admin-view="monitor" data-page-node-id="adminMonTab">运维监控</button>
         <button type="button" class="admin-tab" data-admin-view="recon" data-page-node-id="adminReconTab">每日对账</button>
         <button type="button" class="admin-tab" data-admin-view="demand" data-page-node-id="adminDemandTab">解析需求</button>
+        <button type="button" class="admin-tab" data-admin-view="cookies" data-page-node-id="adminCkTab">Cookie 池</button>
       </nav>
       <div class="admin-body" data-page-node-id="RYA0sEY7fsTbPcGaQp5gmC">
         <section class="admin-view" data-admin-view="users" id="adminViewUsers" data-page-node-id="p6bUVjPAOQ0OpOAa2jjHg7">
@@ -4442,7 +4430,7 @@
         </section>
         <section class="admin-view" data-admin-view="demand" id="adminViewDemand" hidden data-page-node-id="adminDemandView">
           <div class="admin-toolbar" data-page-node-id="adminDemandTb">
-            <span class="admin-count">解析失败自动登记的站点需求（按「站点×天」计数，重试不重复计）</span>
+            <span class="admin-count">解析失败自动登记的站点需求（近 12 周，按「站点×周」计数，重试不重复计）</span>
             <button type="button" id="adminDemandRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminDemandRefresh">刷新</button>
           </div>
           <div class="admin-cfg-section" data-page-node-id="adminDemandSec">
@@ -4452,6 +4440,45 @@
             </div>
             <div id="adminDemandBody" class="admin-table-wrap"></div>
           </div>
+        </section>
+        <!-- Cookie 池（2026-10-19）：公共池是网页版解析的命脉，池里某个站集体失效
+             时症状是「网页版全解析失败」而后台看不见。本页把「哪个站还有效、剩几个
+             账号、每账号存了多少项、多久没更新」摊开，并支持粘贴补注入。
+             🔴 默认只读本机/服务端文件，不联网；「立即校验」才真打平台。 -->
+        <section class="admin-view" data-admin-view="cookies" id="adminViewCookies" hidden data-page-node-id="adminCkView">
+          <div class="admin-toolbar" data-page-node-id="adminCkTb">
+            <span id="adminCkSummary" class="admin-count">加载中…</span>
+            <div class="admin-inline-form">
+              <button type="button" id="adminCkVerify" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="adminCkVerify">立即校验</button>
+              <button type="button" id="adminCkRefresh" class="admin-btn admin-btn-ghost admin-btn-sm" data-page-node-id="adminCkRefresh">刷新</button>
+            </div>
+          </div>
+          <p id="adminCkHint" class="admin-hint"></p>
+
+          <div class="ckp-filter" data-page-node-id="adminCkFilterBar">
+            <label class="ckp-filter-label" for="adminCkPlatformSel">平台筛选</label>
+            <select id="adminCkPlatformSel" class="admin-input admin-input-sm" data-page-node-id="adminCkPlatformSel"></select>
+            <span class="ckp-filter-hint">默认「全部平台」按标签页逐个看；选中具体平台则只展示该平台</span>
+          </div>
+          <div id="adminCkTabs" class="ckp-tabs" data-page-node-id="adminCkTabs"></div>
+
+          <div class="admin-cfg-section" data-page-node-id="adminCkInjectSec">
+            <div class="admin-cfg-head" data-page-node-id="adminCkInjectHead">
+              <h3 data-page-node-id="adminCkInjectTitle">补注入 Cookie</h3>
+              <span class="admin-cfg-hint" data-page-node-id="adminCkInjectHint">登录目标站 → 开发者工具 Network → 复制请求头里的 Cookie；注入前会自动验真，无效的不入池</span>
+            </div>
+            <div class="admin-inline-form" data-page-node-id="adminCkInjectBar">
+              <select id="adminCkDomain" class="admin-input admin-input-sm" data-page-node-id="adminCkDomain"></select>
+              <button type="button" id="adminCkInjectBtn" class="admin-btn admin-btn-primary admin-btn-sm" data-page-node-id="adminCkInjectBtn">注入</button>
+              <span id="adminCkInjectMsg" class="admin-msg" data-page-node-id="adminCkInjectMsg"></span>
+            </div>
+            <textarea id="adminCkHeader" class="admin-input" rows="3"
+                      placeholder="粘贴 Cookie：支持 `Cookie: a=b; c=d`、每行一个 k=v、或 Copy as cURL 的整段"
+                      style="width:100%;resize:vertical;min-height:66px;margin-top:.55rem;font-family:ui-monospace,Menlo,monospace;font-size:.78rem"
+                      data-page-node-id="adminCkHeader"></textarea>
+          </div>
+
+          <div id="adminCkBody" data-page-node-id="adminCkBody"></div>
         </section>
       </div>
     </div>

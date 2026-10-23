@@ -201,12 +201,13 @@ def test_admin_exposes_managed_endpoints() -> None:
                "/api/admin/ai/managed/dashscope",
                "/api/admin/ai/managed/deepseek"):
         check(f"存在 {ep}", ep in admin_src)
-    # 每个 POST 都必须有 require_admin
+    # 每个 POST 都必须有 require_super —— 2026-10-22 权限拆两级后，
+    # 写接口（下发凭据 = 改数据）只有唯一超管能调；管理员是只读的。
     import re
     for m in re.finditer(r'@router\.post\("/api/admin/ai/managed/(\w+)"\)', admin_src):
         body = admin_src[m.end():m.end() + 400]
-        check(f"下发 {m.group(1)} 需要超管鉴权", "require_admin(request)" in body)
-    check("admin_ai_managed（GET）需要超管鉴权",
+        check(f"下发 {m.group(1)} 需要超管鉴权", "require_super(request)" in body)
+    check("admin_ai_managed（GET）管理员即可查看",
           re.search(r'@router\.get\("/api/admin/ai/managed"\)(?:\s|:|\n)*def admin_ai_managed[\s\S]{0,300}require_admin', admin_src)
           is not None)
 

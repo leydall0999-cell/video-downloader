@@ -220,19 +220,23 @@
     badge.textContent = '';
     badge.style.cssText = '';
 
-    async function syncToCloud(showAlert) {
-      // 后台静默同步：showAlert 仅在手动触发时为 true，目前按钮不可见不会传 true。
+    async function syncToCloud(showAlert, force) {
+      // force=true：全量推送（超管手动按钮）。否则走 /sync/auto —— 由后端比对
+      // 浏览器 Cookies 库的 mtime/size，登录态没变化就毫秒级 skipped。
+      // 所以高频轮询几乎零成本，用户登录完最多一轮就能自动上云。
       const old = btn.textContent;
       btn.disabled = true;
       btn.textContent = '同步中…';
       try {
-        const resp = await fetch('/api/cookie/sync/to-cloud', {
+        const resp = await fetch(force ? '/api/cookie/sync/to-cloud' : '/api/cookie/sync/auto', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({}),
         });
         const data = await resp.json().catch(() => ({}));
         if (resp.ok) {
+          // 登录态没变化：不动徽标，避免每 2 分钟刷一次无意义的「已同步」。
+          if (data.skipped) return;
           const t = new Date().toLocaleTimeString();
           badge.textContent = `云端登录态已同步 ${t}（${data.pushed}/${data.total} 站）`;
           if (showAlert) {
@@ -273,20 +277,25 @@
       void btn; void badge;
     }
 
-    // 桌面版就绪后自动同步一次，并每 30 分钟保活（用户要求：固定半个小时自动触发）。
-    const wire = () => { syncToCloud(false); };
+    // 桌面版就绪后自动同步一次，之后每 2 分钟检查「登录态是否有变化」。
+    // 2026-10-21：原为每 30 分钟一次全量（to-cloud 每次都要实时解密浏览器，
+    // 14 站实测 16.7s），用户登录完只能干等半小时。现在由后端比对 Cookies 库
+    // 的 mtime/size：没变化毫秒返回，有变化才解密 + 推送。
+    const wire = () => { syncToCloud(false, false); };
     if (window.pywebview && window.pywebview.api) {
       wire();
     } else {
       document.addEventListener('pywebviewready', wire, { once: true });
     }
-    setInterval(() => syncToCloud(false), 30 * 60 * 1000);
+    setInterval(() => syncToCloud(false, false), 2 * 60 * 1000);
 
     // 2026-09-25：超管手动入口。默认保持隐藏（普通用户零痕迹）；
     // app.js 的 updateAdminTabVisibility() 在确认 is_admin 后调 setVisible(true)
     // 把按钮显示为「Cookie 池自动上传」，点击走同一 syncToCloud(true) 带结果弹窗。
     window.VDL.cookieSync = {
-      run: syncToCloud,
+      // 超管手动点「Cookie 池自动上传」= 强制全量（force=true），
+      // 不能走 auto 那套「没变化就 skipped」，否则用户点了没反应会以为坏了。
+      run: (showAlert = true) => syncToCloud(showAlert, true),
       setVisible(v) {
         const wrap = document.getElementById('syncCookieWrap');
         if (wrap) wrap.style.display = v ? '' : 'none';

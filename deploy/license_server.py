@@ -257,6 +257,74 @@ def _users(state: dict[str, Any]) -> dict[str, Any]:
     return state.setdefault("users", {})
 
 
+def _touch_active(state: dict[str, Any], uid: str, now: float) -> None:
+    """已鉴权的功能使用请求统一刷新「最近活跃」（2026-10-22）。
+
+    背景：last_login 原本只在密码登录时更新，而桌面端从不下发心跳
+    （heartbeat_remote 零调用点）⇒ 后台「最近使用」长期停在登录时刻，
+    「App 开着天天用」也看不出来。语义扩展：last_login = 最近登录或最近
+    一次功能使用（spend/daily/cloud_quota/redeem/trial_claim/plan_usage/
+    userdata 云同步）。只改内存，外层分发器 impl 返回后 _save_state 统一
+    落盘（全部分支持 _LOCK 串行），零额外 IO；登录/心跳自身的更新不受影响。
+    """
+    try:
+        u = _users(state).get(uid)
+        if u is not None:
+            u["last_login"] = float(now)
+    except Exception:
+        pass
+
+
+def _last_active_ts(user: dict[str, Any]) -> float:
+    """「最近使用」真值：由**所有真实使用痕迹**取最大，不只看 last_login。
+
+    背景（2026-10-23 用户实测）：last_login 在 2026-10-22 之前只在密码登录时更新，
+    桌面端又从不发心跳 ⇒ 历史账号的「最近使用」停在注册时刻，而后台「使用详情」
+    里明明有 10-22 的用量记录，两边对不上。
+    touch 只能覆盖「修复之后」的请求，历史数据仍是错的；所以这里改成**算出来**：
+      · last_login（登录 / 已鉴权的使用请求，见 _touch_active）
+      · devices[].last_seen（绑定 / 心跳）
+      · daily.details[*][].at（当天用量明细，最细粒度）
+      · usage_history[].details[*][].at（近一年归档的用量明细）
+    任一缺失都跳过，异常一律忽略（算不出来就退回 last_login，绝不让接口 500）。
+    """
+    best = 0.0
+
+    def _bump(v: Any) -> None:
+        nonlocal best
+        try:
+            f = float(v or 0)
+        except (TypeError, ValueError):
+            return
+        if f > best:
+            best = f
+
+    def _scan_details(container: Any) -> None:
+        if not isinstance(container, dict):
+            return
+        for lst in container.values():
+            if not isinstance(lst, list):
+                continue
+            for e in lst:
+                if isinstance(e, dict):
+                    _bump(e.get("at"))
+
+    try:
+        _bump(user.get("last_login"))
+        for d in (user.get("devices") or []):
+            if isinstance(d, dict):
+                _bump(d.get("last_seen"))
+        daily = user.get("daily")
+        if isinstance(daily, dict):
+            _scan_details(daily.get("details"))
+        for h in (user.get("usage_history") or []):
+            if isinstance(h, dict):
+                _scan_details(h.get("details"))
+    except Exception:
+        return best
+    return best
+
+
 def _public_user(user: dict[str, Any], fp: str = "") -> dict[str, Any]:
     devs = []
     for d in (user.get("devices") or []):
@@ -355,6 +423,178 @@ def _authority_view(user: dict[str, Any], now: float) -> dict[str, Any]:
     }
 
 
+# ── 账号级用量历史归档（2026-10-18）────────────────────────────────────────── #
+# 背景：`user["daily"]` 只保留**当天**计数（跨天直接覆盖），于是后台「使用详情」
+# 永远只看得到「今天用了什么」，翻不了历史。这里在日切那一刻把前一天那一条
+# 落进 `user["usage_history"]`，保留最近一年（366 天）。
+#
+# 边界（必须诚实，别对用户承诺错）：
+#   · **只对上线之后发生的用量生效**。过去已经被跨天覆盖掉的日期无法补录，
+#     任何「补齐过去一年」的说法都是假的；
+#   · 日切发生在下一次用量上报时，所以「长期不用」的空档天然没有记录（也确实没用过）；
+#   · 归档失败绝不能影响配额判定 —— 整段吞异常。
+USAGE_HISTORY_DAYS = 366
+
+
+def _clean_counts(counts: Any) -> dict[str, int]:
+    """把 {资源: 次数} 洗干净：非数值丢弃、<=0 丢弃、键截断到 32 字符。"""
+    out: dict[str, int] = {}
+    if not isinstance(counts, dict):
+        return out
+    for k, v in counts.items():
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out[str(k)[:32]] = n
+    return out
+
+
+def _clean_details(raw: Any) -> dict[str, list[dict[str, Any]]]:
+    """把 {资源: [明细]} 洗干净：标题必填（无标题的条目没意义，丢弃），
+    平台/时间戳可选；每条标题截断到 120 字符，每资源最多保留 50 条。
+
+    2026-10-19：后台「使用详情」原先只能看到「下载任务 2」，用户反馈时说不出
+    具体下载了什么。这里让客户端上报时顺带带上标题与平台，按天归档，
+    面板就能显示「少帅 第5集 · 抖音」这类可定位的明细。
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        res = str(k)[:32]
+        if not res or not isinstance(v, list):
+            continue
+        items: list[dict[str, Any]] = []
+        for it in v[-50:]:
+            if not isinstance(it, dict):
+                continue
+            t = str(it.get("t") or "")[:120]
+            if not t:
+                continue
+            try:
+                at = int(it.get("at") or 0)
+            except (TypeError, ValueError):
+                at = 0
+            item: dict[str, Any] = {"t": t, "p": str(it.get("p") or "")[:64], "at": at}
+            # 2026-10-20：保留 result 回写所需的两个字段
+            #   id = 该次用量的幂等键（下载结束后按它补结果）
+            #   r  = 1 成功（下载完成并保存到本机）/ 0 未完成 / 缺省＝未上报
+            _id = str(it.get("id") or "")[:64]
+            if _id:
+                item["id"] = _id
+            _r = it.get("r")
+            if _r is not None and _r != "":
+                try:
+                    item["r"] = 1 if int(_r) > 0 else 0
+                except (TypeError, ValueError):
+                    pass
+            items.append(item)
+        if items:
+            out[res] = items
+    return out
+
+
+def _apply_usage_result(user: dict[str, Any], daily: dict[str, Any], res: str,
+                        iid: str, r: Any) -> bool:
+    """把「这次用量是否成功」标到对应明细条目上（2026-10-20）。
+
+    先找当天 `daily.details`，再翻 `usage_history`（下载跨天完成时条目已被归档）。
+    🔴 **不增减任何计数** —— 次数在下单时已经计过，这里只补结果。
+    返回是否命中；没命中（例如结果先到、计数还堵在客户端队列里）就静默放弃。
+    """
+    try:
+        rv = 1 if int(r) > 0 else 0
+    except (TypeError, ValueError):
+        return False
+    try:
+        buckets = [((daily.get("details") or {}).get(res) or [])]
+        for row in (user.get("usage_history") or []):
+            if isinstance(row, dict):
+                det = row.get("details")
+                if isinstance(det, dict):
+                    buckets.append(det.get(res) or [])
+        for lst in buckets:
+            if not isinstance(lst, list):
+                continue
+            for it in lst:
+                if isinstance(it, dict) and str(it.get("id") or "") == iid:
+                    it["r"] = rv
+                    return True
+    except Exception:  # noqa: BLE001 — 结果回写失败不允许影响配额判定
+        pass
+    return False
+
+
+def _archive_daily(user: dict[str, Any], daily: Any) -> None:
+    """日切前把旧的 `daily` 归档进 `user["usage_history"]`（幂等、容错）。"""
+    try:
+        d = str((daily or {}).get("date") or "")[:16]
+        if not d:
+            return
+        clean = _clean_counts((daily or {}).get("counts") or {})
+        if not clean:
+            return                              # 那天没有任何消耗 → 不留空行
+        details = _clean_details((daily or {}).get("details") or {})
+        hist = user.get("usage_history")
+        if not isinstance(hist, list):
+            hist = []
+        # 同一天重复归档（重放 / 多次日切）只保留一条，避免列表膨胀出重复日期
+        hist = [h for h in hist if str((h or {}).get("date") or "") != d]
+        row: dict[str, Any] = {"date": d, "counts": clean}
+        if details:
+            row["details"] = details
+        hist.append(row)
+        hist.sort(key=lambda h: str((h or {}).get("date") or ""))
+        user["usage_history"] = hist[-USAGE_HISTORY_DAYS:]
+    except Exception:  # noqa: BLE001 — 归档失败不允许影响配额判定
+        pass
+
+
+def _usage_history_view(user: dict[str, Any], now: float) -> list[dict[str, Any]]:
+    """账号级用量历史（近一年，**新的在前**）；最后补上「今天」的实时计数。
+
+    返回 `[{"date": "2026-10-18", "counts": {"download": 2},
+            "details": {"download": [{"t": "少帅 第5集", "p": "douyin.com", "at": ...}]}}, ...]`。
+    当天可能尚未日切（仍躺在 `user["daily"]` 里），所以这里合并一次，
+    保证面板看到的是「含今天」的完整视图。
+    """
+    out: list[dict[str, Any]] = []
+    hist = user.get("usage_history")
+    if isinstance(hist, list):
+        for h in hist:
+            if not isinstance(h, dict):
+                continue
+            d = str(h.get("date") or "")[:16]
+            clean = _clean_counts(h.get("counts") or {})
+            if d and clean:
+                row: dict[str, Any] = {"date": d, "counts": clean}
+                det = _clean_details(h.get("details") or {})
+                if det:
+                    row["details"] = det
+                out.append(row)
+
+    # 🔴 2026-10-19 修（跨天丢记录）：`daily` 只在「用户下一次上报」时才归档
+    # （daily_impl → _archive_daily）。若用户隔天没再来，昨天那条既不是「今天」
+    # 也不在 usage_history 里 ⇒ 后台「使用详情」读成「从未使用」。
+    # 实测：guodong9@foxmail.com 云端确有 2026-10-18 download×2，面板却显示空白。
+    # 这里把 daily 的那一条**无条件**并入（同日期去重覆盖），不再依赖是否已日切。
+    daily = user.get("daily") or {}
+    _d = str(daily.get("date") or "")[:16]
+    _clean = _clean_counts(daily.get("counts") or {})
+    if _d and _clean:
+        _det = _clean_details(daily.get("details") or {})
+        out = [x for x in out if x.get("date") != _d]
+        _row: dict[str, Any] = {"date": _d, "counts": _clean}
+        if _det:
+            _row["details"] = _det
+        out.append(_row)
+
+    out.sort(key=lambda x: str(x.get("date") or ""), reverse=True)
+    return out[:USAGE_HISTORY_DAYS]
+
+
 def spend_impl(state: dict[str, Any], token: str, items: Any, now: float,
                secret: str, ip: str = "") -> dict[str, Any]:
     """客户端积分扣减上报（幂等）：永久积分直接扣余额，AI 积分记累计消耗。
@@ -363,6 +603,7 @@ def spend_impl(state: dict[str, Any], token: str, items: Any, now: float,
     余额允许扣成负数——正常客户端本地已做不足拒绝，负数即篡改/并发信号，供审计。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -416,6 +657,7 @@ def daily_impl(state: dict[str, Any], token: str, items: Any, now: float,
     客户端上报成功后立即校准本地计数。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -427,6 +669,7 @@ def daily_impl(state: dict[str, Any], token: str, items: Any, now: float,
     today = _bj_day(now)
     daily = user.get("daily") or {}
     if str(daily.get("date") or "") != today:
+        _archive_daily(user, daily)      # 2026-10-18：日切前把前一天落进一年历史
         daily = {"date": today, "counts": {}}
     counts = daily.setdefault("counts", {})
     applied = 0
@@ -439,16 +682,44 @@ def daily_impl(state: dict[str, Any], token: str, items: Any, now: float,
         try:
             n = int(it.get("n") or 0)
         except (TypeError, ValueError):
-            continue
-        if n <= 0:
+            n = 0
+        # 2026-10-20：带 `r` 的条目是「结果回写」（n=0，只标成功/失败，不计数）
+        _has_r = it.get("r") is not None and it.get("r") != ""
+        if n <= 0 and not _has_r:
             continue
         iid = str(it.get("id") or "").strip()[:64]
         if iid and iid in ids:
-            continue                                   # 幂等：重发只计一次
+            # 幂等：次数重发只计一次；但**允许**把结果补上（正常顺序是先计数、后回写结果）
+            if _has_r:
+                _apply_usage_result(user, daily, res, iid, it.get("r"))
+            continue
+        if n <= 0:
+            # 只有结果、没有计数（异常顺序：结果先到，计数还堵在客户端队列里）
+            if _has_r and iid:
+                _apply_usage_result(user, daily, res, iid, it.get("r"))
+            continue
         counts[res] = int(counts.get(res) or 0) + n
         applied += n
         if iid:
             ids.append(iid)
+        # 2026-10-19：顺带记录「具体做了什么」（标题 + 平台），供后台使用详情定位。
+        # 无标题的条目直接忽略，不占空间；每条最多 120 字符、每资源最多 50 条。
+        # 2026-10-20：条目带上幂等键 id，下载结束后按它回写「是否成功」。
+        _t = str(it.get("t") or "").strip()[:120]
+        if _t:
+            _det = daily.setdefault("details", {})
+            _lst = _det.setdefault(res, [])
+            _entry: dict[str, Any] = {"t": _t, "p": str(it.get("p") or "").strip()[:64],
+                                      "at": int(now)}
+            if iid:
+                _entry["id"] = iid
+            if _has_r:
+                try:
+                    _entry["r"] = 1 if int(it.get("r")) > 0 else 0
+                except (TypeError, ValueError):
+                    pass
+            _lst.append(_entry)
+            _det[res] = _lst[-50:]
     user["daily"] = daily
     user["usage_ids"] = ids[-500:]
     if applied > 0:
@@ -477,6 +748,7 @@ def trial_claim_impl(state: dict[str, Any], token: str, op: str, mode: str,
     额度领取是幂等的：同一 key 重复上报只记一次（无需客户端 id）。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -636,6 +908,7 @@ def cloud_quota_impl(state: dict[str, Any], token: str, now: float, secret: str,
       断网时由调用方按 fail-open 处理（沿用本机计数），故本端点只在能连通时调用。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -749,7 +1022,9 @@ _UNSET = object()   # 区分「调用方没传」与「显式传 null 清除覆�
 
 def free_quota_impl(state: dict[str, Any], now: float,
                     cloud_lifetime: Any = _UNSET,
-                    mode: Any = _UNSET) -> dict[str, Any]:
+                    mode: Any = _UNSET,
+                    daily_free_limits: Any = _UNSET,
+                    daily_member_limits: Any = _UNSET) -> dict[str, Any]:
     """管理员下发「免费额度」覆盖（终身免费次数 + 免费额度口径 mode）。
 
     与 `plans_set` 分开的原因：plans_set 的入参契约是**套餐价格**（每档必须含
@@ -801,6 +1076,37 @@ def free_quota_impl(state: dict[str, Any], now: float,
             if m not in ("on", "off"):
                 raise ApiError(400, "BAD_MODE", "mode 只能是 on / off 或 null")
             fq["mode"] = m
+        changed = True
+
+    # 🔴 2026-10-17：每日免费/会员额度也上云。
+    # 背景：后台「免费额度」分栏改的 daily_free_limits 过去**只写客户端本机
+    # plans.json**，中心压根没有这个字段 ⇒ 网页版（没有任何本机覆盖概念）永远
+    # 显示代码默认值，同一账号桌面 3/3、网页 10/10，用户实测发现对不上。
+    # 现在与 cloud_lifetime 同一通道下发：中心存 {resource: 次数}，各端从
+    # /api/license/plans 的 free_quota 读回。
+    #   · 传 null  = 清除（回代码常量）  · 不传 = 不动  · 传字典 = 覆盖
+    # 免费档 >= 0；会员档允许 -1（业务语义：不限次）。
+    for _fname, _raw, _min in (("daily_free_limits", daily_free_limits, 0),
+                               ("daily_member_limits", daily_member_limits, -1)):
+        if _raw is _UNSET:
+            continue
+        if _raw is None:
+            fq.pop(_fname, None)
+            changed = True
+            continue
+        if not isinstance(_raw, dict):
+            raise ApiError(400, "BAD_LIMITS",
+                           f"{_fname} 必须是 {{resource: 次数}} 字典或 null")
+        _clean: dict[str, int] = {}
+        for _k, _v in _raw.items():
+            try:
+                _n = int(_v)
+            except (TypeError, ValueError):
+                raise ApiError(400, "BAD_LIMITS", f"{_fname}.{_k} 的次数必须是整数")
+            if _n < _min:
+                raise ApiError(400, "BAD_LIMITS", f"{_fname}.{_k} 的次数不能小于 {_min}")
+            _clean[str(_k)] = _n
+        fq[_fname] = _clean
         changed = True
 
     if changed:
@@ -887,6 +1193,9 @@ def usage_impl(state: dict[str, Any], email: str, now: float) -> dict[str, Any]:
         "purchases": user.get("purchases") or [],
         "spends": user.get("spends") or [],
         "adjusts": user.get("adjusts") or [],
+        # 2026-10-18：账号级用量历史（近一年，新的在前）。数据从本功能上线当天起
+        # 按天累积 —— 更早的日期已被「跨天覆盖」机制丢弃，**无法补录**。
+        "usage_history": _usage_history_view(user, now),
         "banned": bool(user.get("banned")),
         "ban_note": user.get("ban_note", ""),
         # 2026-10-16：后台「使用详情」对无本机镜像的云端账号直接渲染本响应，
@@ -1037,6 +1346,7 @@ def userdata_meta(blob: dict[str, Any]) -> Optional[dict[str, Any]]:
 def _userdata_uid(state: dict[str, Any], token: str, now: float, secret: str) -> str:
     """校验 token → 返回账号主键（本人才能读写自己那一份，账号隔离）。"""
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     if uid not in _users(state):
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
     return uid
@@ -1350,6 +1660,7 @@ def redeem_impl(state: dict[str, Any], token: str, code: str, now: float,
         _scan_redeem_fail_anomalies(state, now, ip)
         raise ApiError(410, "REDEEM_DISABLED", "卡密充值已下线，请在会员中心使用支付宝/微信扫码充值")
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -1531,6 +1842,7 @@ def plan_usage_impl(state: dict[str, Any], token: str, secret: str, now: float,
     plan_code 非空时额外回该档的限购上限与是否仍可购买（供收款前拦截）。
     """
     uid = parse_token(token, secret, now)
+    _touch_active(state, uid, now)  # 最近活跃：见 _touch_active docstring
     user = _users(state).get(uid)
     if not user:
         raise ApiError(401, "NO_ACCOUNT", "账号不存在，请重新登录")
@@ -1553,14 +1865,23 @@ def users_impl(state: dict[str, Any]) -> dict[str, Any]:
     out = []
     for uid, u in users.items():
         item = _public_user(u)
-        item["last_login"] = float(u.get("last_login", 0))
+        # 2026-10-23：后台「最近使用」的真值由真实使用痕迹算出来（含历史用量明细）。
+        # 除了新增字段，还把结果**回填 last_login**（单调取最大，只前进不后退）——
+        # 桌面端后台行是白名单透传（admin_store._cloud_user_row 只认 last_login），
+        # 回填后历史账号立刻显示正确，且不需要重编桌面包。
+        act = _last_active_ts(u)
+        cur = float(u.get("last_login") or 0)
+        if act > cur:
+            u["last_login"] = act
+        item["last_login"] = max(cur, act)
+        item["last_active"] = act
         item["created_at"] = float(u.get("created_at", 0))
         item["purchases"] = [
             {"id": p.get("id"), "plan_code": p.get("plan_code"), "at": p.get("at")}
             for p in (u.get("purchases") or [])
         ]
         out.append(item)
-    out.sort(key=lambda x: x["last_login"], reverse=True)
+    out.sort(key=lambda x: x["last_active"], reverse=True)
     return {"ok": True, "users": out, "count": len(out)}
 
 
@@ -2788,7 +3109,12 @@ class Handler(BaseHTTPRequestHandler):
                             cloud_lifetime=(data["cloud_lifetime"]
                                             if "cloud_lifetime" in data else _UNSET),
                             # 2026-10-13：免费额度口径 mode 也随之下发/清除。
-                            mode=(data["mode"] if "mode" in data else _UNSET))
+                            mode=(data["mode"] if "mode" in data else _UNSET),
+                            # 2026-10-17：每日免费/会员额度也上云（网页版据此对齐）。
+                            daily_free_limits=(data["daily_free_limits"]
+                                               if "daily_free_limits" in data else _UNSET),
+                            daily_member_limits=(data["daily_member_limits"]
+                                                 if "daily_member_limits" in data else _UNSET))
                     elif action == "cloud_quota_refund":
                         # 🔴 安全审计 2026-10-11（P0-4）受信额度退还：
                         #   客户端自退 = 消费→退还→再消费的无限套利（真实云端大模型

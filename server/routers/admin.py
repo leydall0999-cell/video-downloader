@@ -62,15 +62,33 @@ def _resolve_identifier(user_id: str) -> str:
     """user_id → 账号标识（邮箱/手机号，云端主键）。
 
     云端行的 user_id 就是规范化邮箱；本机行是 u_xxx，需查本机账号表。
+
+    🔴 2026-10-22 修（手机号账号提权「点了没反应」的根因）：
+    入参也可能**本身就是账号标识** —— 云端 uid = 手机号（如 "15638319956"），
+    而面板行的 user_id 恰恰就是云端 uid。旧实现只认「含 @ 的字符串」，其余
+    一律当本机 user_id 去查表 —— 本机 user_id 是 u_xxx，查不到 ⇒ 返回空 ⇒
+    `_cloud_sync("")` 直接跳过云端（notice「未找到对应账号标识，本次仅本机生效」）
+    ⇒ 本机改了、**云端没改**，而面板列表读的是云端数据 ⇒ 用户看到「点了完全没反应」。
+    现在补上「原样当标识」的兜底。
     """
-    uid = (user_id or "").strip()
-    if "@" in uid:
-        return uid.lower()
+    raw = (user_id or "").strip()
+    if not raw:
+        return ""
+    if "@" in raw:
+        return raw.lower()
     try:
         from auth_store import user_identifier
-        return str(user_identifier(uid) or "").strip().lower()
+        ident = str(user_identifier(raw) or "").strip().lower()
+        if ident:
+            return ident
     except Exception:
+        pass
+    # 本机按 user_id 没查到：入参很可能就是账号标识本身（手机号 / 非邮箱标识）。
+    # 云端 uid 就是规范化标识 ⇒ 原样（小写）返回即可。
+    # u_ 开头的是本机 user_id，查不到说明账号已删 ⇒ 返回空。
+    if raw.startswith("u_"):
         return ""
+    return raw.lower()
 
 
 def _cloud_sync(ident: str, op) -> str:
@@ -156,7 +174,34 @@ def require_admin(request: Request) -> None:
     from fastapi import HTTPException
     uid = get_current_user_id(request)
     if not uid or not user_is_admin(uid):
-        raise HTTPException(status_code=401, detail="未授权：需要超级用户权限")
+        raise HTTPException(status_code=401, detail="未授权：需要管理员权限")
+
+
+def require_super(request: Request) -> None:
+    """写操作闸门：只有**唯一超管**放行（2026-10-22 权限拆两级）。
+
+    分工：
+      require_admin —— 能进后台、能看（用户列表 / 会员 / 统计 / 配置只读）
+      require_super —— 能改（设/撤管理员、封号、发权益、改价、改配置、重置密码、删除）
+
+    管理员拿合法 token 调写接口一律 **403**（不是 401）：身份没问题，是权限不够。
+    前端据此提示「仅超级管理员可操作」，而不是把已登录的人踢回登录页。
+
+    🔴 2026-10-22 文案订正：写操作要的是**超级管理员**权限，原文案写「需要管理员权限」
+    会被误解成「管理员就能改」。这里明确区分两级：
+      连后台都进不去 → 401「未授权：需要管理员权限」（先得是管理员）
+      是管理员但不是超管 → 403「仅超级管理员可执行此操作（管理员为只读）」
+    """
+    from fastapi import HTTPException
+    uid = get_current_user_id(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="未授权：请先登录")
+    if not user_is_admin(uid):
+        raise HTTPException(status_code=401, detail="未授权：需要超级管理员权限")
+    from auth_store import user_role
+    if user_role(uid) != "super":
+        raise HTTPException(status_code=403,
+                            detail="仅超级管理员可执行此操作（管理员为只读）")
 
 
 # 凭据来源的中文说法（面板展示用；2026-10-05 探测式改造引入）。
@@ -408,11 +453,19 @@ def admin_list_users(request: Request = None) -> dict[str, Any]:
 
 @router.post("/api/admin/users/{user_id}/set-admin")
 def admin_set_admin(user_id: str, payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     flag = bool(payload.get("is_admin", False))
+    target = _resolve_identifier(user_id)
+    # 🔴 唯一超管不可被降级（2026-10-22 权限拆两级）：超管身份由授权名单 /
+    #    「最早注册」推导，**不由这个接口决定**。允许在这里取消会直接把后台锁死
+    #    （全库无超管 ⇒ 所有写操作 403，且没有入口能恢复）。
+    from auth_store import is_super_identifier
+    if not flag and is_super_identifier(target):
+        return {"ok": False,
+                "error": "超级管理员不可被取消（超管唯一，身份由授权名单决定）"}
     # 自己不能被降权（云端行 user_id 是邮箱，前端 self 判断已由后端 self 字段兜住，
     # 这里再做一次硬拦：误点「取消管理员」会把唯一超管锁在门外）。
-    if not flag and _resolve_identifier(user_id) == _resolve_identifier(get_current_user_id(request)):
+    if not flag and target == _resolve_identifier(get_current_user_id(request)):
         return {"ok": False, "error": "不能取消当前登录账号的管理员权限"}
     return _admin_mutate(
         user_id,
@@ -422,7 +475,7 @@ def admin_set_admin(user_id: str, payload: dict[str, Any] = Body(...), request: 
 
 @router.post("/api/admin/users/{user_id}/disable")
 def admin_disable_user(user_id: str, request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     if _resolve_identifier(user_id) == _resolve_identifier(get_current_user_id(request)):
         return {"ok": False, "error": "不能禁用当前登录的账号"}
     return _admin_mutate(
@@ -433,7 +486,7 @@ def admin_disable_user(user_id: str, request: Request = None) -> dict[str, Any]:
 
 @router.post("/api/admin/users/{user_id}/enable")
 def admin_enable_user(user_id: str, request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     return _admin_mutate(
         user_id,
         lambda uid: set_user_disabled(uid, False),
@@ -442,7 +495,7 @@ def admin_enable_user(user_id: str, request: Request = None) -> dict[str, Any]:
 
 @router.post("/api/admin/users/{user_id}/reset-password")
 def admin_reset_password(user_id: str, payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     new_pw = str(payload.get("new_password") or "")
     if not new_pw or len(new_pw) < 6:
         return {"ok": False, "error": "新密码至少 6 位"}
@@ -455,7 +508,7 @@ def admin_reset_password(user_id: str, payload: dict[str, Any] = Body(...), requ
 @router.post("/api/admin/users/{user_id}/delete")
 def admin_delete_user(user_id: str, request: Request = None) -> dict[str, Any]:
     """删除账号（本机软删除 + 云端销号）：不可删自己；超管不可删。"""
-    require_admin(request)
+    require_super(request)
     me = _resolve_identifier(get_current_user_id(request))
     ident = _resolve_identifier(user_id)
     if user_id == get_current_user_id(request) or (ident and ident == me):
@@ -507,7 +560,7 @@ def _cloud_credit_ops(ident: str, tok: str, delta: int, pool: str) -> list:
 
 @router.post("/api/admin/memberships/grant")
 def admin_grant(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     user_id = str(payload.get("user_id") or "")
     code = str(payload.get("code") or "").strip()
     if not user_id or not code:
@@ -523,7 +576,7 @@ def admin_grant(payload: dict[str, Any] = Body(...), request: Request = None) ->
 
 @router.post("/api/admin/memberships/credits")
 def admin_credits(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     user_id = str(payload.get("user_id") or "")
     try:
         delta = int(payload.get("delta"))
@@ -589,7 +642,7 @@ def admin_stats_install(request: Request = None) -> dict[str, Any]:
 
 @router.post("/api/admin/stats/reset")
 def admin_stats_reset(request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     return reset_stats()
 
 
@@ -600,11 +653,11 @@ def admin_config(request: Request = None) -> dict[str, Any]:
 
 
 # ── 解析需求榜（2026-10-17，Downie 机制本土化第一环）─────────────────────────
-# 解析失败（白名单空白站点 / 未知域名）自动落库后的聚合视图：按「站点×天」计数，
-# 重试免疫。用途：每月挑 Top 站点写成专用提取器——把 Downie「用户报一个写一个」
-# 的十年机制，变成我们可执行的开发排期输入。
+# 解析失败（白名单空白站点 / 未知域名）自动落库后的聚合视图：按「站点×周」计数
+# （2026-10-23 起；原按天），重试免疫。用途：每月挑 Top 站点写成专用提取器——把
+# Downie「用户报一个写一个」的十年机制，变成我们可执行的开发排期输入。
 @router.get("/api/admin/resolve-demand")
-def admin_resolve_demand(days: int = 30, request: Request = None) -> dict[str, Any]:
+def admin_resolve_demand(days: int = 84, request: Request = None) -> dict[str, Any]:
     require_admin(request)
     import resolve_demand
     rows = resolve_demand.demand_summary(days=days)
@@ -613,7 +666,7 @@ def admin_resolve_demand(days: int = 30, request: Request = None) -> dict[str, A
 
 @router.post("/api/admin/config/smtp")
 def admin_config_smtp(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     accounts = payload.get("accounts")
     if not isinstance(accounts, list):
         return {"ok": False, "error": "accounts 必须为数组"}
@@ -622,7 +675,7 @@ def admin_config_smtp(payload: dict[str, Any] = Body(...), request: Request = No
 
 @router.post("/api/admin/config/plans")
 def admin_config_plans(payload: dict[str, Any] = Body(...), request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     out = save_plan_overrides(payload or {})
     # 🔴 2026-10-06 终身免费次数下发中心：放行判定在云端，本机 plans.json 只是缓存。
     #   保存 free_quota（含 cloud_lifetime）后立刻下发，两端口径一致。
@@ -649,7 +702,7 @@ def admin_member_notice_get(request: Request = None) -> dict[str, Any]:
 @router.post("/api/admin/member-notice")
 def admin_member_notice_set(payload: dict[str, Any] = Body(...),
                             request: Request = None) -> dict[str, Any]:
-    require_admin(request)
+    require_super(request)
     enabled = bool(payload.get("enabled", True))
     text = str(payload.get("text") or "").strip()
     if len(text) > 500:
@@ -754,7 +807,7 @@ def admin_ai_set_credit_costs(
     `free_trial` 是免费用户「首次体验」策略（2026-10-05 晚定档：账号首次使用免费一次）。
     同样按字段合并，**只传要改的键**（比如只切 `enabled`）即可，其余保持原值。
     """
-    require_admin(request)
+    require_super(request)
     from fastapi import HTTPException
     from membership import (AI_CREDIT_COSTS, credit_cost_table, free_trial_policy,
                             load_plan_overrides, save_plan_overrides)
@@ -1154,7 +1207,7 @@ def admin_ai_set_volcengine(
     空字符串的字段**保持原值不变**（便于前端只提交改了的那几项，不会把没填
     的 Key 抹掉）；显式传 `"__clear__"` 才清空。
     """
-    require_admin(request)
+    require_super(request)
     from cloud_matting_config import get_cloud_matting_config, save_managed_config
     cur = get_cloud_matting_config()
 
@@ -1180,7 +1233,7 @@ def admin_ai_set_dashscope(
     payload: dict[str, Any] = Body(default={}),
 ) -> dict[str, Any]:
     """超级管理员：下发视觉理解（DashScope / 任意 OpenAI 兼容多模态）凭据。"""
-    require_admin(request)
+    require_super(request)
     from vision_config import get_vision_config, save_managed_vision_config
     cur = get_vision_config()
 
@@ -1209,7 +1262,7 @@ def admin_ai_set_deepseek(
     🔴 这里下发的是**网关地址 + 令牌**，不是 DeepSeek 官方 Key —— 真实 Key 只留在
     ECS 网关侧（`upstream.json`），本机永远不接触上游凭据。
     """
-    require_admin(request)
+    require_super(request)
     from gateway_config import get_gateway_config, save_managed_gateway
     cur = get_gateway_config()
 
@@ -1264,13 +1317,69 @@ def _usage_bundle(uid: str, ident: str, disabled: bool, is_admin: bool,
                 out[str(k)] = n
         return out
 
+    def _details(row: Any) -> dict[str, list[dict[str, Any]]]:
+        """取「资源名 → 明细列表」（2026-10-19：让面板显示下载了什么）。"""
+        out: dict[str, list[dict[str, Any]]] = {}
+        raw = (row or {}).get("details")
+        if not isinstance(raw, dict):
+            return out
+        for k, v in raw.items():
+            if not isinstance(v, list):
+                continue
+            items: list[dict[str, Any]] = []
+            for it in v[-50:]:
+                if not isinstance(it, dict):
+                    continue
+                t = str(it.get("t") or "")[:120]
+                if not t:
+                    continue
+                try:
+                    at = int(it.get("at") or 0)
+                except (TypeError, ValueError):
+                    at = 0
+                _row = {"t": t, "p": str(it.get("p") or "")[:64], "at": at}
+                # 2026-10-20：把「这次是否下载成功」透传给面板
+                # （r=1 成功＝下载完成并保存到本机 / r=0 未完成 / 无 r＝未上报）。
+                # 老数据没有 r ⇒ 保持缺省，面板显示灰色「未上报」，不假装成功。
+                if it.get("r") is not None:
+                    try:
+                        _row["r"] = 1 if int(it.get("r") or 0) > 0 else 0
+                    except (TypeError, ValueError):
+                        pass
+                items.append(_row)
+            if items:
+                out[str(k)[:32]] = items
+        return out
+
     days = []
     for day in sorted(hist.keys(), reverse=True)[:_USAGE_DAYS]:
         items = _counts(hist.get(day))
-        days.append({"date": day, "total": sum(items.values()), "items": items})
-    today_row = (getattr(store, "_state", {}) or {}).get("daily_usage") or {}
-    today_items = _counts(today_row)
-    today = next((d for d in days if d["date"] == _t.strftime("%Y-%m-%d", _t.localtime(now))), None)
+        days.append({"date": day, "total": sum(items.values()), "items": items,
+                     "details": _details(hist.get(day))})
+    # 2026-10-20 修：`usage_history` 只装**已日切**的日子 —— 「今天」的数据还在
+    # `daily_usage` / `daily_details` 里，根本不在 hist 里。旧写法是「遍历 days
+    # 找今天、找到才补明细」，等于永远补不上；更致命的是把 `daily_details`
+    # 这个**字典本身**喂给了 `_details()`（它要的是带 `details` 键的一整行）⇒
+    # 取到 None ⇒ 明细永远为空。这就是「下载记录还是看不到详情」的真身。
+    # 现在：按 `daily_usage["date"]`（真实日期，不硬按今天算）补一行进 days。
+    _state = getattr(store, "_state", {}) or {}
+    _today_details = _details({"details": _state.get("daily_details") or {}})
+    _today_row_raw = _state.get("daily_usage") or {}
+    _live_day = str(_today_row_raw.get("date") or "")[:10]
+    _live_counts = _counts(_today_row_raw)
+    if _live_day and (_live_counts or _today_details):
+        _live = next((d for d in days if d["date"] == _live_day), None)
+        if _live is None:
+            _live = {"date": _live_day, "total": sum(_live_counts.values()),
+                     "items": _live_counts, "details": {}}
+            days.append(_live)
+            days.sort(key=lambda d: str(d.get("date") or ""), reverse=True)
+        if _today_details:
+            _live.setdefault("details", {})
+            for _k, _v in _today_details.items():
+                _live["details"][_k] = _v
+    today_row = _today_row_raw
+    today_items = _live_counts
 
     # ---- 激活 / 购买历史（倒序）----
     meta = (getattr(store, "_state", {}) or {}).get("meta") or {}
@@ -1283,11 +1392,17 @@ def _usage_bundle(uid: str, ident: str, disabled: bool, is_admin: bool,
             "at": float(h.get("at") or 0),
         })
 
+    # 2026-10-22 权限拆两级：弹窗标题的标签要跟着「超管 / 管理员」分开展示
+    from auth_store import is_super_identifier as _is_super_ident
+    _role = ""
+    if is_admin:
+        _role = "super" if _is_super_ident(ident) else "admin"
     return {
         "user_id": uid,
         "identifier": ident,
         "disabled": bool(disabled),
         "is_admin": bool(is_admin),
+        "role": _role,
         "created_at": created_at,
         "membership": st,
         "today": {"date": today_row.get("date") or _t.strftime("%Y-%m-%d"),
@@ -1505,7 +1620,7 @@ def _find_plan_table(code: str) -> str:
 def admin_plan_sale(code: str, payload: dict[str, Any] = Body(...),
                     request: Request = None) -> dict[str, Any]:
     """超级管理员：单个档位快速上架 / 下架（不落其它表单改动）。"""
-    require_admin(request)
+    require_super(request)
     from admin_store import save_plan_overrides as _save
     import membership as M
 

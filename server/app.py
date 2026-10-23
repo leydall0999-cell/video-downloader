@@ -2620,6 +2620,24 @@ def _task_owner(request) -> str:
     return ("d:" + dev[:64]) if dev else ""
 
 
+def _member_store_for_owner(owner_id: str):
+    """按任务归属取生效会员 store —— 给**没有 Request 的后台线程**用（2026-10-20）。
+
+    订阅自动追更跑在 watchdog 线程里，拿不到 Request；而计额度必须落到**订阅主人**
+    的账本上，否则会记到匿名桶里（等于谁登录都看不到自己订阅吃掉的次数）。
+    归属标识与 `_task_owner()` 同源（"u:<uid>" / "d:<device>" / ""），直接交给
+    `user_membership.store_for_owner()` 还原，保证与请求链路的选店逻辑同一份实现。
+
+    取不到时返回 None，调用方按 **fail-open** 放行（宁漏计一次，也不让整轮追更挂掉）。
+    """
+    try:
+        from user_membership import store_for_owner
+        return store_for_owner(owner_id)
+    except Exception:  # noqa: BLE001 - 会员态是尽力而为，绝不因读不到就中断追更
+        logger.exception("按归属取会员 store 失败：owner=%s", owner_id)
+        return None
+
+
 def _require_owned_task(task_id: str, request):
     """取任务并校验归属：非本人任务一律 404（不返回 403，避免任务 id 可枚举）。
 
@@ -3997,6 +4015,9 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
 
     基线策略：仅把"成功创建下载任务"的视频 id 计入 last_video_ids，
     解析失败的 id 不计入（下次 check 仍可重试）；任务最终失败由用户在下载面板手动重试。
+
+    配额（2026-10-20）：每条新视频计 1 次「下载」额度（与手动下载同一份），
+    额度用尽即停本轮、剩余新视频不进基线（下次重试），返回值带 quota_exhausted。
     """
     items = subs_mod.probe_channel(sub.url, sub.cookie, sub.proxy, limit=SUBSCRIBE_PROBE_LIMIT)
     known = set(sub.last_video_ids)
@@ -4004,6 +4025,9 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
     task_ids: list[str] = []
     failed: list[str] = []
     submitted_ids: set[str] = set()
+    quota_exhausted = False
+    # 按订阅主人取账本（后台线程没有 Request，见 _member_store_for_owner）。
+    _mb = _member_store_for_owner(getattr(sub, "owner_id", "") or "")
     for it in fresh:
         if not it.get("url"):
             continue
@@ -4012,12 +4036,31 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
         except (UnsupportedPlatformError, LinkError):
             failed.append(it["title"])
             continue
+        # 🔴 2026-10-20：订阅自动下载与手动下载**计同一份额度**。「使用统计」里
+        #    「订阅追更」那一行写着「与视频下载共用下载额度」，但这里此前**一次都没计过**
+        #    ⇒ 免费档 10 次/日可被订阅完全绕过；且任务没有 usage_ref，不进「使用详情」。
+        #    现在：每下一条先扣 1 次；额度用尽即停本轮，剩余新视频**不进基线**，
+        #    下一轮 check 会重试（与「解析失败下次重试」同一策略）。
+        _ch = None
+        if _mb is not None:
+            try:
+                _ch = _mb.use_daily("download", 1, title=it["title"], platform=platform.name)
+            except Exception:  # noqa: BLE001 - 计额度失败不阻断追更（fail-open）
+                logger.exception("订阅 %s 计下载额度失败（本次放行）", sub.id)
+                _ch = None
+            if _ch is not None and not _ch.get("ok"):
+                quota_exhausted = True
+                break
         task = store.create(
             url=url, title=it["title"], platform=platform.name,
             quality=downloader.quality_label(sub.quality_key), quality_key=sub.quality_key,
             owner_id=getattr(sub, "owner_id", "") or "",
         )
         scheduler.submit(downloader.run_download, task, store, sub.quality_key, sub.cookie, sub.proxy, SINGLE_DOWNLOAD_RETRIES)
+        # ref/账本挂到任务上，结束后由 mark_usage_result 回写成败（与手动下载同口径）
+        if _ch is not None and _ch.get("ref"):
+            task.usage_ref = str(_ch["ref"])
+            task._usage_store = _mb
         task_ids.append(task.id)
         submitted_ids.add(it["id"])
     # 合并基线（保留最近最多 200 条），仅计入成功提交任务的 id
@@ -4026,7 +4069,8 @@ def _run_subscription_check(sub: "subs_mod.Subscription") -> dict:
         if vid not in new_baseline:
             new_baseline.append(vid)
     sub_store.update(sub.id, last_video_ids=new_baseline[:200], last_checked=time.time())
-    return {"sub_id": sub.id, "checked": len(items), "new_videos": fresh, "task_ids": task_ids, "failed": failed}
+    return {"sub_id": sub.id, "checked": len(items), "new_videos": fresh, "task_ids": task_ids,
+            "failed": failed, "quota_exhausted": quota_exhausted}
 
 class SubscribeRequest(BaseModel):
     url: str = Field(min_length=4, max_length=8192)
@@ -4151,6 +4195,10 @@ from routers import auth as _auth_rtr
 app.include_router(_auth_rtr.router)
 from routers import admin as _admin_rtr
 app.include_router(_admin_rtr.router)
+# Cookie 池管理（2026-10-19）：后台可视化「哪个平台还有效、剩几个账号、多久没更新」，
+# 并支持粘贴注入。独立成模块（不动 1500 行的 admin.py），鉴权复用 require_admin。
+from routers import admin_cookies as _admin_cookies_rtr
+app.include_router(_admin_cookies_rtr.router)
 from routers import support as _support_rtr
 app.include_router(_support_rtr.router)
 from routers import system as _system_rtr
@@ -4284,7 +4332,28 @@ def cookie_sync_from_local(payload: dict, request: Request) -> dict:
     if ok is False:
         raise HTTPException(status_code=400, detail="本机 Cookie 无效，未能通过目标站验真")
     added = add_cookie(domain, header, source="local")
-    return {"ok": True, "added": added, "verified": (ok is True)}
+    # 只写本机池不够：解析时的取用顺序是 本机快照(cookie_cache) > 本机池 > 云端池，
+    # 而快照 TTL 有 30 天且命中就不比对浏览器 —— 不刷新它，用户重新登录后
+    # 旧快照仍会生效，表现为「明明同步成功了却还是未登录」。这里 header 已在手，
+    # 写快照是零成本。
+    try:
+        from cookie_cache import _save as _cache_save
+        _cache_save(domain, header)
+    except Exception:
+        pass
+    # 2026-10-21：此前这里只写本机池就返回，但函数名与 docstring 都写着「上报到公共池」，
+    # 调用方看到 added/verified 全 true 会以为已上云（实测云端池毫无变化，白等）。
+    # 现改为：有云端配置就顺手推一次，让「登录后立刻生效」不必等前端 30 分钟定时器。
+    # 边界：本机池写入才是主线，云端失败只降级进 cloud 字段，绝不把本机成功判成失败。
+    cloud: dict | None = None
+    url, token = _cloud_sync_config()
+    if url and token:
+        try:
+            resp = _push_cookie_to_cloud(domain, header, url, token)
+            cloud = {"pushed": bool((resp or {}).get("ok")), "verified": (resp or {}).get("verified")}
+        except Exception as e:  # 网络/限流/云端未就绪：本机已生效，不影响主流程
+            cloud = {"pushed": False, "reason": str(e)[:120]}
+    return {"ok": True, "added": added, "verified": (ok is True), "cloud": cloud}
 
 def _cloud_sync_config() -> tuple[str, str]:
     """返回 (sync_url, token)。优先读 env，其次读本机配置文件。
@@ -4397,6 +4466,135 @@ def _push_cookie_to_cloud(domain: str, header: str, url: str, token: str) -> dic
             raise
     raise last_err or RuntimeError("推送 Cookie 到云端失败")
 
+def _sync_domains_to_cloud(url: str, token: str) -> list[dict]:
+    """按域读取本机浏览器登录态并推送云端池，返回逐域结果。
+
+    to-cloud（定时/超管手动）与 auto（登录态变更触发）共用这一份实现，
+    避免两条入口各写一份循环而漂移（站间 1s 间隔是为避开 Cloudflare 限流）。
+    """
+    import time
+    from cookie_pool import _root_domains
+
+    results: list[dict] = []
+    domains = [d for d in sorted(_root_domains()) if d != "chrqj.com"]
+    for idx, domain in enumerate(domains):
+        try:
+            header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")
+        except Exception:
+            header = None
+        if not header:
+            results.append({"domain": domain, "pushed": False, "reason": _COOKIE_NO_LOGIN})
+            continue
+        # 顺手把刚解密出来的新鲜值刷进本机快照。为什么必须做：cookie_cache 的 TTL
+        # 是 30 天且「命中就直接用、不与浏览器比对」，用户重新登录后旧快照会一直
+        # 挡在新鲜值前面（YouTube 独立链路 2026-09-27 已为此单修过：
+        # SIDCC/__Secure-*PSIDTS 是滚动字段，快照落后即被判未登录）。
+        # 这里 header 本来就已经解密好了，写快照是零成本，不会多一次解密。
+        try:
+            from cookie_cache import _save as _cache_save
+            _cache_save(domain, header)
+        except Exception:
+            pass
+        try:
+            resp = _push_cookie_to_cloud(domain, header, url, token)
+            results.append({
+                "domain": domain,
+                "pushed": bool(resp.get("ok")),
+                "verified": resp.get("verified"),
+            })
+        except Exception as e:
+            results.append({"domain": domain, "pushed": False, "reason": str(e)[:120]})
+        # 连发易触发 Cloudflare 限流，站间间隔 1s（最后一站除外）
+        if idx < len(domains) - 1:
+            time.sleep(1.0)
+    return results
+
+# 浏览器登录态变更检测：登录任何站点都会写 Cookies 库，所以「库文件 mtime/size 变了」
+# 就是「用户刚登录过」最廉价可靠的信号（stat 级，毫秒；不需要解密、不碰钥匙串）。
+_COOKIE_WATCH_STATE = Path.home() / ".videodownloader" / "cookie_sync_state.json"
+
+# 推送结果的 reason 常量：只有「本机压根没登录这个站」才算「无需推送」，
+# 其余（429 / 超时 / 网络错误）都算失败，必须留在下一轮重试。
+# 必须两侧共用同一常量：曾用字面量比较，改字就静默失配、失败判定失效。
+_COOKIE_NO_LOGIN = "本机未登录"
+
+def _cookie_db_signature() -> dict[str, str]:
+    """各浏览器 Cookies 库的 (mtime, size) 快照，key 为库绝对路径。"""
+    import glob
+
+    sig: dict[str, str] = {}
+    for _name, pattern in downloader._BROWSER_COOKIE_PROFILES:
+        for db in glob.glob(os.path.expanduser(pattern)):
+            try:
+                st = os.stat(db)
+            except OSError:
+                continue
+            sig[db] = f"{int(st.st_mtime)}:{st.st_size}"
+    return sig
+
+@app.post("/api/cookie/sync/auto")
+def cookie_sync_auto(request: Request) -> dict:
+    """仅本机(App 端)调用：**登录态有变化才**推送云端池。
+
+    为什么需要这条：to-cloud 每次都要逐域实时解密浏览器（14 站实测 16.7s），
+    所以前端只能 30 分钟跑一轮 —— 用户登录完要干等。而「是否有变化」用
+    Cookies 库的 mtime/size 就能判断（毫秒级），所以前端可以高频调用本接口：
+    没变化立刻返回 skipped，有变化才真解密+推送。
+
+    失败不落盘签名：下次调用会重试，避免一次网络抖动把这一轮变更永久跳过。
+    """
+    ip = (request.client.host if request.client else "") or ""
+    if ip not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="仅允许本机调用")
+    url, token = _cloud_sync_config()
+    if not url or not token:
+        # 与 to-cloud 保持同一句指引：只说「未配置」等于让用户去猜。
+        raise HTTPException(
+            status_code=400,
+            detail="未配置云端同步地址/令牌。请在桌面版环境设置 VDL_COOKIE_SYNC_URL 与 "
+                   "VDL_COOKIE_SYNC_TOKEN，或写入 ~/.videodownloader/cloud_sync.json",
+        )
+
+    sig = _cookie_db_signature()
+    prev: dict[str, str] = {}
+    try:
+        if _COOKIE_WATCH_STATE.exists():
+            prev = json.loads(_COOKIE_WATCH_STATE.read_text(encoding="utf-8")) or {}
+    except Exception:
+        prev = {}
+    if sig and prev == sig:
+        return {"ok": True, "skipped": True, "reason": "浏览器登录态未变化"}
+
+    results = _sync_domains_to_cloud(url, token)
+    pushed = sum(1 for r in results if r.get("pushed"))
+    # 「本机未登录」是正常状态，不算失败；429/超时/网络错误才算。
+    failed = sum(
+        1 for r in results
+        if not r.get("pushed") and r.get("reason") != _COOKIE_NO_LOGIN
+    )
+    # 只有「确实推到过东西，且这一轮没有失败站点」才记签名。
+    # 🔴 为什么必须把 failed 也算进来（2026-10-21 连推压测实测踩到）：
+    # 签名一旦写上，只要浏览器库不再变化就不会再进这个函数，本轮撞 429/超时的域
+    # 就永远不会补推——实测 10 站有登录态、7 站 429，写签名后它们被静默跳过。
+    # 反过来，若全站都失败（pushed=0）也保留旧签名，下一轮重试。
+    if (pushed or not prev) and not failed:
+        try:
+            _COOKIE_WATCH_STATE.parent.mkdir(parents=True, exist_ok=True)
+            # 必须走 atomic_write_json：本仓禁止裸 Path.write_text 写状态文件
+            # （截断/并发会留下半截 JSON，解析失败会被当成「无变化」而反复全量推）。
+            atomic_io.atomic_write_json(_COOKIE_WATCH_STATE, sig, indent=None)
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "skipped": False,
+        "pushed": pushed,
+        "failed": failed,
+        "retry_next": bool(failed),
+        "total": len(results),
+        "results": results,
+    }
+
 @app.post("/api/cookie/sync/to-cloud")
 def cookie_sync_to_cloud(request: Request) -> dict:
     """仅本机(App 端)调用：读取本机浏览器各强反爬站的登录态并推送到网页版公共池。
@@ -4407,8 +4605,6 @@ def cookie_sync_to_cloud(request: Request) -> dict:
     ip = (request.client.host if request.client else "") or ""
     if ip not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="仅允许本机调用")
-    from cookie_pool import _root_domains, is_allowed, _norm_domain
-    import time
     url, token = _cloud_sync_config()
     if not url or not token:
         raise HTTPException(
@@ -4416,28 +4612,7 @@ def cookie_sync_to_cloud(request: Request) -> dict:
             detail="未配置云端同步地址/令牌。请在桌面版环境设置 VDL_COOKIE_SYNC_URL 与 "
                    "VDL_COOKIE_SYNC_TOKEN，或写入 ~/.videodownloader/cloud_sync.json",
         )
-    results = []
-    domains = [d for d in sorted(_root_domains()) if d != "chrqj.com"]
-    for idx, domain in enumerate(domains):
-        try:
-            header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")
-        except Exception:
-            header = None
-        if not header:
-            results.append({"domain": domain, "pushed": False, "reason": "本机未登录"})
-            continue
-        try:
-            resp = _push_cookie_to_cloud(domain, header, url, token)
-            results.append({
-                "domain": domain,
-                "pushed": bool(resp.get("ok")),
-                "verified": resp.get("verified"),
-            })
-        except Exception as e:
-            results.append({"domain": domain, "pushed": False, "reason": str(e)[:120]})
-        # 连发易触发 Cloudflare/Railway 限流，站间间隔 1s（最后一站除外）
-        if idx < len(domains) - 1:
-            time.sleep(1.0)
+    results = _sync_domains_to_cloud(url, token)
     pushed = sum(1 for r in results if r.get("pushed"))
     return {"ok": True, "pushed": pushed, "total": len(results), "results": results}
 
@@ -4478,6 +4653,70 @@ def cookie_contribute(payload: dict, request: Request) -> dict:
         added = True
     logger.info("[cookie_pool] contrib domain=%s ip=%s added=%s ckey=%s", domain, ip, added, bool(ckey))
     return {"ok": True, "added": added, "verified": (ok is True), "ckey": bool(ckey)}
+
+# 浏览器扩展送进来的域名：只允许常规域名形态（字母数字与 . -），长度 ≤ 100。
+# 目的不是白名单（本机缓存允许任意站，只影响用户自己），而是堵路径注入 ——
+# cookie_cache._cache_file 把 "/" 换成 "_"，但没必要让它有机会处理 "/" 本身。
+_PUSH_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.\-]{0,98}[a-z0-9])?$")
+
+@app.post("/api/cookie/browser-push")
+def cookie_browser_push(payload: dict, request: Request) -> dict:
+    """接收浏览器扩展采集到的登录态，写入本机 Cookie 缓存（2026-10-18）。
+
+    为什么要这条通道（与 /api/cookie/sync/from-local 的分工）
+    ------------------------------------------------------
+    from-local 是「App 自己去解密本机浏览器 Cookie 库」：只认 Chrome/Edge/Brave/
+    Chromium 的默认 profile 模式，且 macOS 上会撞钥匙串授权。而浏览器扩展读的是
+    **用户此刻正在用的那个 profile**，多开、便携版、公司策略加密库都能拿到。
+    所以扩展直接把 Cookie 送进来，比 App 自己解密更准。
+
+    安全边界（三条，缺一不可）
+    ------------------------
+      1) 仅本机直连：socket 对端必须环回且未带任何代理头（_is_local_direct 真源）；
+      2) 来源只允许扩展 / 本机页面 / 无 Origin：网页版（https://hanyuxz.top）等
+         外部来源一律拒 —— 否则任意站点都能借用户的浏览器把伪造 Cookie 写进本机
+         缓存，下一次解析就会带着它们去请求目标站；
+      3) 只写 ~/.videodownloader/cookies（本机缓存），**不进公共池**。是否贡献给
+         云端由用户在扩展里显式勾选，另走 /api/cookie/contribute。
+    另外这里**不做验真**：验真要对目标站发请求（12 个站就是十几次网络往返），而这条
+    通道存的是「用户自己机器上的登录态」，存错了只影响他自己、且解析失败会回退到
+    浏览器解密；云端池那条必须验真，因为别人也会用得到。
+    """
+    if not _is_local_direct(request):
+        raise HTTPException(status_code=403, detail="仅允许本机调用")
+    origin = (request.headers.get("origin") or "").strip()
+    if origin and not (_EXT_ORIGIN_RE.match(origin) or _LOCAL_ORIGIN_RE.match(origin)):
+        raise HTTPException(status_code=403, detail="仅允许浏览器扩展调用")
+
+    from cookie_pool import _norm_domain
+    domain = _norm_domain((payload or {}).get("domain") or "")
+    if not domain or not _PUSH_HOST_RE.match(domain):
+        raise HTTPException(status_code=400, detail="domain 不合法")
+    cookie = ((payload or {}).get("cookie") or "").strip()
+    if not cookie or "=" not in cookie:
+        raise HTTPException(status_code=400, detail="cookie 不合法（需为 name=value; … 形式）")
+    if len(cookie) > 8192:
+        raise HTTPException(status_code=400, detail="cookie 过长")
+    if "\r" in cookie or "\n" in cookie:
+        # 防请求头注入：这份字符串会被原样塞进下游请求的 Cookie 头
+        raise HTTPException(status_code=400, detail="cookie 含非法字符")
+
+    from cookie_cache import _save, _cache_file
+    _save(domain, cookie)
+    # _save 全异常吞掉（历史设计：缓存是增强功能，不能影响主链路），
+    # 所以这里回读确认真的落盘了，别对扩展谎报成功。
+    saved = False
+    try:
+        f = _cache_file(domain)
+        if f.exists():
+            saved = (json.loads(f.read_text(encoding="utf-8")).get("header") or "") == cookie
+    except Exception:
+        saved = False
+    if not saved:
+        raise HTTPException(status_code=500, detail="本机缓存写入失败")
+    logger.info("[cookie] browser-push domain=%s bytes=%d platform=%s",
+                domain, len(cookie), (payload or {}).get("platform") or "")
+    return {"ok": True, "saved": True, "domain": domain, "bytes": len(cookie)}
 
 @app.get("/api/cookie/status")
 def cookie_status(url: str = "") -> dict:

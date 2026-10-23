@@ -94,6 +94,8 @@ cd "$SERVER" || exit 1
 
 PASS=0
 FAIL=0
+# 失败套件名清单（2026-10-22）：只有计数没有名字时，偶发失败无法定位。
+FAILED_LIST=""
 
 run_one() {
   local f="$1"
@@ -102,7 +104,7 @@ run_one() {
   if "$PY" "tests/$f" 2>&1; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 }
 
@@ -125,7 +127,7 @@ run_node() {
   if "$NODE" "tests/$f" 2>&1; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 }
 
@@ -146,6 +148,10 @@ run_one test_quality_options.py
 run_one test_quality_member_gate.py          # 清晰度会员门槛：免费档 2K/4K → 402 引导开会员（2026-10-02 用户「免费用户 1080 以上要弹会员」）
 run_one test_quality_member_ui_wiring.py     # 清晰度门槛三端接线：后端两入口都挂门 + 前端弹会员中心（不弹＝用户不知道怎么解锁）
 run_one test_yt_pot_starved.py
+run_one test_youtube_hls_prefer.py         # YouTube 无 POT ⇒ ≤1080p 优先 HLS 混合流（2026-10-19 用户「下载速度慢」）：DASH 无 POT 被 googlevideo 按连接限速（16 连接聚合 ~600KB/s + 硬阻断超时），HLS 单连接 1.5MB/s；含 _pot_usable 代理感知判定 + VDL_YT_JS_RUNTIME=off 开关
+run_one test_yt_fallback_cap.py            # 403 降级链不许超过用户选的清晰度（2026-10-21：选 1080P 显示 398MB、实际下到 641MiB 的 1440P AV1，末环 bv*+ba 无 height 上限）
+run_one test_bundle_binaries.py            # 发布包必备二进制闸门（2026-10-21：deno/ffmpeg/ffprobe 缺任一项 ⇒ 拦发布；判据含 --version 冒烟执行，不许用体积阈值——真包 ffmpeg 是 434KB 共享链接版，体积卡会假拦）
+run_one test_quality_exact.py              # 「选什么清晰度就下什么清晰度」：下载/降级/HLS 三处选择器锁在 [n±3%] 窄区间（上下界成对）、分档按短边（竖屏 1080x1920 不能整档消失）、自动档保留 <=1080
 run_one test_downloader_url_parsing.py
 run_one test_matting_core.py
 run_one test_dewatermark_core.py
@@ -259,9 +265,11 @@ run_one test_quota_refund.py
 # 旧数据迁移 / daily_auto per-resource）—— 🔴 此前**漏登记**，17 项从未进过
 # 构建自验证，等于这批财务守卫只在手动单跑时生效。
 run_one test_quota_cross_end.py
-# 以下三个此前也漏登记（写完从未进过构建自验证），单跑均通过
-run_pytest_root test_license_base.py
-run_pytest_root test_membership_device.py
+# 🔴 2026-10-19：这两行原来写在这里，但 `run_pytest_root` 到第 1099 行才定义 ⇒ 执行到
+#    这里只会打印 "command not found"，**两个用例从未真正跑过**（等于漏登记）。
+#    它们是纯 pytest 写法（无 __main__），用 run_one 当脚本跑会「零断言恒通过」，
+#    所以只能在函数定义之后用 run_pytest_root 登记 —— 见文件末尾。
+# test_license_base.py / test_membership_device.py → 见末尾 run_pytest_root 段
 run_one test_pagetool.py
 run_one test_commentary_output_naming.py
 run_one test_commentary_precheck.py
@@ -311,6 +319,12 @@ run_one test_commentary_style_intensity.py
 #                                        节点删失败必须保留记录、通道根推导（direct 只能上传，
 #                                        删除/探活须用源站根）、上传须透传 X-Expire 且成功后落历史
 run_one test_share_history.py
+#  18b. test_share_quota_keys.py    —— 分享两子功能并入账号级每日配额（2026-10-20 新增）：
+#                                        src 分派（pagegen→share_page / 其余→share_qr）、
+#                                        闸门放行/429/fail-open、**路径校验之后才计数**
+#                                        （第一版曾把闸门放在校验之前，与自己的注释相反）、
+#                                        会员中心功能表必须出现「生成二维码/生成网页」两行
+run_one test_share_quota_keys.py
 #  19. test_login_error_message.py  —— 登录提示不得张冠李戴 + 手机号账号的云端建号（2026-09-22 新增）：
 #                                      本机账号表决定「账号是否存在」（本机区分 BAD_PASSWORD /
 #                                      NO_ACCOUNT，公网仍模糊防枚举）、手机号老账号自愈只在
@@ -463,7 +477,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_sniff_core.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -475,7 +489,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_background_page_scope.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -488,7 +502,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_pagewatch.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -501,7 +515,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_popup_video_page.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -515,7 +529,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_ext_autoreload.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -530,7 +544,56 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_popup_quality_state.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
+echo "=== extension/tests/test_cookie_harvest.js（登录态采集：拼头/登录判据/推送契约，node） ==="
+# 2026-10-18：扩展新增「登录态同步」——按站用 chrome.cookies 拉全量登录态，交给本机
+# App（私密）或云端公共池（共享）。要害都在「拼出来的 Cookie 头能不能直接用」：
+# 同名重复/过期/空值任何一条没滤掉，服务端验真就 400，用户看到的是「同步失败」
+# 而不是「Cookie 无效」；登录判据若用 cna/buvid3 这类游客字段，会把没登录的站
+# 显示成已登录，点同步必被拒。故写成行为测试（chrome.cookies 用桩）。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_cookie_harvest.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
+echo "=== extension/tests/test_cookie_zone.js（登录态面板：按钮闸门/白名单/缺权限文案，node + DOM 桩） ==="
+# 三个真实用户会踩的点：① 扫到已登录却按钮仍灰（以为坏了）/ 没勾同意就能贡献到云端
+# （共享语义被绕过）；② 微博/爱奇艺不在云端白名单，不能让用户点了吃 400；
+# ③ manifest 加 cookies 权限后 Chrome 会停用扩展，文案必须指向「重新启用」，
+# 而不是显示成「没有已登录的平台」（那会逼用户白重登一遍）。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_cookie_zone.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
+  fi
+else
+  echo "⚠️ 跳过（无 node）"
+fi
+
+echo ""
+echo "=== extension/tests/test_cookie_autopush.js（默认自动共享：默认勾选/30 分钟节流/取消即停，node + DOM 桩） ==="
+# 产品策略＝默认自动推云端公共池（与桌面 App 每 30 分钟自动推一致）。三条要害：
+# ① popup.html 的 ckAgree 必须默认带 checked（否则「默认共享」名不副实）；
+# ② 30 分钟节流（popup 每次打开都是新实例，不节流会每次开面板都重推，撞云端每域限流）；
+# ③ 用户取消勾选后既不推、也不写「上次推送时间」（写了会白压 30 分钟，用户以为坏了）。
+if [ -n "$NODE_BIN" ]; then
+  if "$NODE_BIN" "$REPO/extension/tests/test_cookie_autopush.js"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -547,7 +610,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_page_title_lag.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -565,7 +628,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$REPO/extension/tests/test_sniff_meta.js"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -594,7 +657,7 @@ if [ -n "$NODE_BIN" ]; then
   if "$NODE_BIN" "$SERVER/tests/test_platform_count_label.mjs"; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
 else
   echo "⚠️ 跳过（无 node）"
@@ -621,6 +684,20 @@ run_one test_plan_sales_state.py
 #      _usage_bundle 聚合结构（按天倒序/只留>0/激活历史倒序）、store 读失败降级不崩、
 #      路由挂载与 require_admin 门禁。daily_usage 里的 date 字段非数值，必须跳过。
 run_one test_admin_user_usage.py
+
+# 2026-10-22 权限拆两级（超管唯一 / 管理员只读）：
+#   test_admin_roles.py —— 角色判定：名单优先、名单为空兜底最早注册的 is_admin、
+#     名单配多个只认第一个（超管唯一性硬保证）、非 admin 角色为空、未知 uid 不崩。
+#   test_admin_roles_api.py —— 闸门是否真装上：管理员调写接口 403（不是 401）、
+#     超管放行、普通用户 401；并静态扫描 16 个写接口全部 require_super、
+#     11 个只读接口仍 require_admin（管理员要能看），漏一个即后门。
+#   test_admin_roles_e2e.py —— 真起 FastAPI 应用 + 真登录拿 token：
+#     管理员 GET 200 / POST 403（禁用·提权·改 SMTP·重置密码·删 Cookie）、
+#     普通用户 401、超管写权限完好、超管不可被取消。
+run_one test_admin_roles.py
+run_one test_admin_roles_api.py
+run_one test_admin_roles_e2e.py
+run_one test_admin_promote_effect.py   # 提权「点了没反应」的根因：手机号账号的标识解析必须命中（否则云端同步被跳过 + 云端权威回写把本机打回）＋权限文案两级口径（2026-10-22）
 
 #  37. test_plan_mkt_matrix.py —— 营销面板「模式×分组」联动（2026-10-03）：
 #      直接解析 web/app.js 的 PLAN_MODES / _MKT_BY_MODE / data-mkt 三处命名做交叉核对，
@@ -890,6 +967,13 @@ run_one test_local_trust_p3_1.py
 #      （parse_source 仅做「功能白名单」，对非已知平台回退 _generic_platform 并不拦截内部地址）。
 run_one test_subscription_ssrf_p3_2.py
 
+# 59b. test_subscription_download_quota.py —— 订阅追更也计「下载」额度（2026-10-20 新增）：
+#      「使用统计」里「视频下载 / 订阅追更」两行 resource 同为 download（共用一份额度），
+#      但 _run_subscription_check 此前**一条都没计** ⇒ 免费档 10 次/日可被订阅完全绕过，
+#      且订阅任务无 usage_ref、不进「使用详情」。守卫：每条扣 1 次 + 挂 ref；额度用尽即停
+#      且剩余不进基线（下轮重试）；账本异常 fail-open；u:/d: 归属还原；会员 1000/日不误拦。
+run_one test_subscription_download_quota.py
+
 # 55. tests/test_crypto_routes.py（仓库根，非 server/tests）—— 保险箱路由集成（TestClient）：
 #      加密→原件移回收站→库识别加密项→**encfile 播放内容与原文一致**→解密还原→锁定 423→禁用 404。
 #      ⚠️ 安全审计 2026-10-11（P1-7）把解密播放从「落盘临时文件」改成「内存流式解密 + Range」后，
@@ -992,16 +1076,19 @@ run_one test_extension_browser_precision.py
 #     只认 App 的 VDL-Update/ UA、HEAD 预检不计数、路径穿越/缺文件 404、by_day 90 天上限。
 run_one test_update_server_counting.py
 
-# 63.9 test_nmw_extractor.py —— 金牌影院（nmwchxx.com）解析器守卫（2026-10-14）。
+# 63.9 test_nmw_extractor.py —— 金牌影院（nmwchxx.com）解析器守卫（2026-10-14 建，
+#     2026-10-21 扩容：域名族 nmw* 识别 + 四种链接写法全兼容 + API 域名跟随源站）。
 #     平台条目 + CHINA_DOMAINS、probe/任务段两处分发、签名公式
 #     sign=SHA1(MD5("排序参数&key=<key>&t=<毫秒>")) 逐位锁定、标题/清晰度/best 装配
 #     （AST 抽函数 + sys.modules 注入假 requests/uuid，离线跑，不发真实请求）。
 run_one test_nmw_extractor.py
+run_one test_cookie_pool_nmw_family.py     # 金牌影院一族 Cookie 池链路：hardened 双域名/白名单派生/验真派发按域/测试 URL（2026-10-21 收编 chrqj.com 时发现只认老域名）
 
 # 63.10 test_resolve_demand.py —— 解析需求登记守卫（2026-10-17，Downie 机制本土化
 #     第一环）：解析失败（白名单空白站点/未知域名）自动落库 → 管理端「解析需求榜」
-#     按「站点×天」聚合（重试免疫）→ 每月挑 Top 写专用提取器。钉住：字段/60s 同
-#     host 节流/聚合口径/坏行跳过/2MB 截断真生效（截断曾漏写回，守卫抓出）。
+#     按「站点×周」聚合（2026-10-23 起；原按天，重试免疫）→ 每月挑 Top 写专用提取器。
+#     钉住：字段/60s 同 host 节流/聚合口径（含 days_count 兼容别名）/坏行跳过/
+#     2MB 截断真生效（截断曾漏写回，守卫抓出）。
 run_one test_resolve_demand.py
 
 # 63.11 test_member_notice.py —— 会员中心公告守卫（2026-10-18 用户要求）：会员中心
@@ -1042,7 +1129,7 @@ run_root() {
         VDL_DATA_DIR="$d" "$PY" "$REPO/tests/$f" 2>&1; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
   /bin/rm -rf "$d"
 }
@@ -1066,7 +1153,7 @@ run_pytest_root() {
         VDL_DATA_DIR="$d" env -u HTTP_PROXY -u HTTPS_PROXY "$PY" -m pytest "$path" -q 2>&1; then
     PASS=$((PASS+1))
   else
-    FAIL=$((FAIL+1))
+    FAIL=$((FAIL+1)); FAILED_LIST="$FAILED_LIST $f"
   fi
   /bin/rm -rf "$d"
 }
@@ -1127,9 +1214,93 @@ run_pytest_root test_win_version_guard.py # Win7/8 启动即拦截并弹窗引�
 run_pytest_root test_launcher_boot_feedback.py # 后端起不来必须弹窗告知并指日志路径，禁止静默失败
 run_pytest_root test_win_console_stdio_guard.py # 无控制台时 sys.stdout is None ⇒ uvicorn 配置日志即崩（Windows 双击打不开的真因）
 
+#  test_admin_usage_cloud_display.py —— 后台「用户使用详情」必须看得见云端用量
+#    （2026-10-18）：网页版账号的消耗记在授权中心 authority.usage，不进本机
+#    usage_history；旧版判空只读本机 ⇒ 云端明明用过也报「没有任何使用记录」。
+#    用 node 实跑产品代码段 + 静态断言双保险（杜绝「grep 到字符串就算过」）。
+run_one test_admin_usage_cloud_display.py # 云端用量必须渲染，判空必须算云端
+
+#  test_license_usage_history.py —— 授权中心「账号级用量近一年按天历史」（2026-10-18）
+#    日切时把前一天归档进 user["usage_history"]（保留 366 天），usage_impl 一并下发；
+#    桌面 App 与网页版共用同一份账号级 daily，所以两端用量都进这份历史。
+#    边界：只对上线之后发生的用量生效，过去被覆盖的日期无法补录。
+run_one test_license_usage_history.py
+
+#  test_cookie_pool_identity.py —— 公共 Cookie 池的身份去重与入池验真（2026-10-18）
+#    B 站池 1905 条其实是同 1 个账号的 1905 次快照，其中 1902 条是未登录游客态，
+#    而 get_cookie 取「最新一条」⇒ 解析恒 412 只能靠 yt-dlp 兜底。
+#    本用例守住三件事：未登录不得入池 / 同账号只留最新 N 条 / 剔除时按会话验一次
+#    而不是逐条打 1905 次请求（后者必然触发风控）。
+run_pytest_root test_cookie_pool_identity.py # 身份去重 + 入池验真 + 会话级验真预算
+
+#  test_cookie_browser_push.py —— 扩展登录态推送接口 + 本机缓存根域回落（2026-10-18）
+#    ① 扩展（extension/cookie-harvest.js）采集到登录态后 POST /api/cookie/browser-push，
+#       写进 ~/.videodownloader/cookies —— 比 App 自己解密浏览器 Cookie 库更准
+#       （扩展读的是用户此刻正在用的那个 profile）。
+#    ② 只允许本机直连 + 扩展/本机来源：外部站点若能调它，就能借用户浏览器把伪造
+#       Cookie 写进本机缓存，下次解析带着它们去请求目标站。
+#    ③ 扩展按根域推（bilibili.com）、解析按具体域取（www./api.）⇒ 缓存必须能按根域
+#       回落，否则扩展同步等于白做；但精确 host 的缓存必须优先（含 host-only cookie）。
+run_pytest_root test_cookie_browser_push.py # 登录态推送闸门 + 根域回落
+
+#  test_admin_cookies_panel.py —— 超管后台「Cookie 池」页（2026-10-17）
+#    ① 页面看的是「云端公共池」（网页版真在用的那个），不是本机空池；云端不可达才回落
+#       本机并标注来源，绝不冒充成功。
+#    ② 三态口径：valid / invalid / unknown（无探针≠无效），静态旁证只下 invalid 结论，
+#       避免把游客态当「还能用」、也避免把没验过的当「不能删」。
+#    ③ 同一账号多份快照，验真结论要回写「同会话全部 entry_id」，否则页面按最新一份
+#       展示时命中不到缓存，永远显示「未校验」。
+#    ④ 注入必须先验真再入池（无效拒收）、多行粘贴逐行校验防 CRLF 头注入；
+#       云端入口只暴露脱敏信息，且必须带 VDL_COOKIE_SYNC_TOKEN。
+run_pytest_root test_admin_cookies_panel.py # 后台 Cookie 池：概览/校验/注入/删除/云端代理
+
+#  test_usage_details_ledger.py —— 用量明细台账（2026-10-19）
+#    ① use_daily(title/platform) 把「下载了什么」写进 daily_details，供后台定位；
+#    ② 无标题不记、每资源最多 50 条、标题/平台截断（防无限增长）；
+#    ③ 跨天日切时明细随计数一起归档进 usage_history，并清空当日明细；
+#    ④ 上云钩子必须把标题/平台带进 items（授权中心按天归档 details）。
+run_pytest_root test_usage_details_ledger.py
+
+#  test_usage_result_flag.py —— 每次下载「成功了吗」（2026-10-20 用户要求）
+#    ① 后台「使用详情」要能看见每条是否下载成功；成功＝下载完成、成品存到本机；
+#    ② use_daily 返回 ref 并落到明细；任务终态按 ref 回写 r=1/0（幂等、只报最终态）；
+#    ③ 授权中心 n=0 + r 只更新结果、绝不重复计数，跨天归档后也能补上；
+#    ④ 结果缺失显示「未上报」，绝不把老数据/中断当成功或失败。
+run_pytest_root test_usage_result_flag.py
+
+#  补登此前「写了 run_pytest_root 但函数尚未定义」的两个用例（2026-10-19）：它们在
+#  文件前段曾被调用，实际只打了 command not found，从未进过构建自验证。
+run_pytest_root test_license_base.py # 授权中心 base url：云同步配置/环境变量/兜底优先级
+run_pytest_root test_membership_device.py # 设备绑定：激活记账/换机不锁/弱指纹不锁/吊销
+
+# 64. test_cloud_data_card_hidden.mjs —— 会员中心「云端资料」卡片隐藏（2026-10-20 用户要求，
+#      与网页版同步）：只掐展示入口，元素不删（app.js $() 取节点）、文案照常渲染
+#      （恢复显示不用重测），登录自动同步 /api/cloud/sync、/api/userdata/status、
+#      /api/userdata/sync 三条后台链路一个都不能少。开关在 app.js 的 CLOUD_DATA_CARD_VISIBLE。
+run_node test_cloud_data_card_hidden.mjs
+
+# 65. test_cookie_sync_auto.py —— 登录态「自动」同步的两个失点（2026-10-21 用户
+#      「浏览器登录了快手，怎么没自动获取」）：
+#      ① from-local 只写本机池却自称「上报到公共池」⇒ 加 cloud 字段如实回报，
+#         且云端失败不得把本机成功判成失败；
+#      ② 上云原本只有 30min 定时器、每轮要逐域实时解密（14 站 16.7s）⇒ 新增
+#         /api/cookie/sync/auto：先比对浏览器 Cookies 库 mtime/size，没变化毫秒
+#         skipped、有变化才推送；推送全失败不落盘签名（下轮必须能重试）。
+#      ③ 拿到新鲜 header 时刷本机快照：30 天 TTL 的旧快照优先级高于本机池，
+#         不刷它就等于「同步成功但依旧未登录」。
+run_one test_cookie_sync_auto.py
+
+# 分享域 / 极速版域 → 主站登录域（2026-10-21）：chenzhongtech→kuaishou、
+# iesdouyin→douyin、b23.tv→bilibili。这些域自身只有设备指纹（did/didv、ttwid），
+# 不换域取 Cookie = 匿名解析。含「主站不得被误映射」和 B站 CDN 回归。
+run_one test_cookie_share_host_map.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
+if [ -n "$FAILED_LIST" ]; then
+  echo "  失败套件：$FAILED_LIST"
+fi
 echo "========================================="
 if [ "$FAIL" -gt 0 ]; then
   echo "❌ 存在失败用例，构建不应发布"

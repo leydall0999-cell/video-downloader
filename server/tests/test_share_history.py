@@ -360,7 +360,13 @@ def test_upload_path_endpoint_returns_expire():
     try:
         with temp_hist(), _patch(_start_upload=lambda tid, mk, total, name, expire=0:
                                  captured.update(expire=expire,
-                                                 name=name, total=total)):
+                                                 name=name, total=total),
+                                 # 2026-10-22：本用例只锁「expire 收下并回显」。
+                                 # 每日配额闸门（2026-10-20 新增）由
+                                 # test_upload_path_quota_gate_blocks 单独覆盖；
+                                 # 这里必须放行 —— 整套跑下来配额会被前面的用例用尽，
+                                 # 不打桩就会被 429 拦下，与本用例要验的事无关。
+                                 _share_quota_gate=lambda *a, **k: None):
             d = sh.share_upload_path({"path": p, "expire": 30 * 86400})
             assert d["ok"] is True and d["expire"] == 30 * 86400
             assert captured["expire"] == 30 * 86400
@@ -378,6 +384,35 @@ def test_upload_path_rejects_missing_file():
         r = sh.share_upload_path({"path": "/definitely/not/here.png"})
         assert getattr(r, "status_code", None) == 400
         assert json.loads(r.body)["error"] == "file_not_found"
+
+
+def test_upload_path_quota_gate_blocks():
+    """每日配额闸门拒绝：原样返回 429，且绝不启动上传（2026-10-22 补）。
+
+    与 test_upload_path_endpoint_returns_expire 成对——那条把闸门打桩放行专测
+    expire，这条把闸门打桩拒绝专测闸门；合起来才锁住「闸门在启动上传之前」这个顺序
+    （2026-10-20 加闸门时只改了端点，没补这条守卫，配额被前面用例用尽就误红）。
+    """
+    from fastapi.responses import JSONResponse
+    import app as _app
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + b"0" * 100)
+        p = f.name
+    captured: dict = {}
+    _old_prefixes = _app._SHAREABLE_PATH_PREFIXES
+    _pdir = str(Path(p).parent)
+    _app._SHAREABLE_PATH_PREFIXES = (_pdir + os.sep, "/private" + _pdir + os.sep) + _old_prefixes
+    _deny = JSONResponse({"ok": False, "error": "DAILY_LIMIT"}, status_code=429)
+    try:
+        with temp_hist(), _patch(_start_upload=lambda *a, **k: captured.update(started=True),
+                                 _share_quota_gate=lambda *a, **k: _deny):
+            r = sh.share_upload_path({"path": p, "expire": 86400})
+        assert r is _deny, "闸门拒绝时必须原样返回，不得改写"
+        assert getattr(r, "status_code", None) == 429
+        assert not captured, "被配额拦下的请求不得启动上传"
+    finally:
+        _app._SHAREABLE_PATH_PREFIXES = _old_prefixes
+        os.unlink(p)
 
 
 # ---------------------------------------------------------------- runner

@@ -6,7 +6,8 @@
   用于网页版公共服务复用，让访客无需手动粘贴 Cookie。两者存储目录与用途完全分离。
 
 安全 / 合规：
-- 仅允许白名单域（目前 chrqj 系列），绝不收其他网站 Cookie。
+- 仅允许白名单域（金牌影院 chrqj/nmwchxx、B 站、优酷、腾讯系、YouTube 等），
+  绝不收其他网站 Cookie。
 - 存储加密（VDL_COOKIE_ENC_KEY；未配则降级为 600 权限明文），不落明文日志。
 - 入池前用该 Cookie 试一次目标站验真（确认有效才收，垃圾 / 失效直接拒）。
 - 后台定时探测（verify_and_prune）剔除失效项，避免公共池静默失效。
@@ -55,6 +56,10 @@ def _resolve_pool_dir() -> Path:
 _POOL_DIR = _resolve_pool_dir()
 _TTL = 30 * 24 * 3600  # 30 天，超时视为失效
 _LOCK = threading.Lock()
+# 「最近一次使用」的落盘节流窗口：get_cookie 每次解析都会命中，不节流等于
+# 每次解析都重写池文件（读-改-写 + 原子替换）。60s 对「最近一次使用」这个
+# 展示粒度完全够，却能把写放大压到「每条每分钟一次」。
+_USED_MARK_INTERVAL = 60
 
 # 白名单基础集（根域）。实际允许范围由 _root_domains() 动态计算：
 #   = 基础集 + downloader._COOKIE_HARDENED_DOMAINS 派生 + env VDL_COOKIE_POOL_DOMAINS 扩展。
@@ -74,8 +79,7 @@ _POOL_EXTRA_DOMAINS = {"youtube.com"}
 
 logger = logging.getLogger(__name__)
 
-# chrqj 验真用的签名参数（与 yt_dlp_plugins/extractor/chrqj.py 保持一致）
-_CHRQJ_API = "https://www.chrqj.com/mw-movie/anonymous/v2/video/episode/url"
+# 金牌影院验真用的签名参数（chrqj.com / nmwchxx.com 同一站，共用密钥与视频 ID）
 _CHRQJ_SIGN_KEY = "cb808529bae6b6be45ecfab29a4889bc"
 _CHRQJ_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -192,6 +196,112 @@ def _decrypt_item(c: dict) -> str:
     return ""
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# 账号身份 / 会话变体识别（2026-10-18）
+#
+# 背景：池子里同一条「账号」会被反复抓取（buvid 每次刷新都会变），旧逻辑只按
+# 整条 Cookie 的哈希去重 ⇒ 同一账号可以无限堆叠。实测 B 站池 1905 条 = 同 1 个
+# 账号（DedeUserID 2092800535）的 1905 次快照，其中 1902 条是**未登录**游客态，
+# 而 get_cookie 又取「最新一条」⇒ 解析永远拿到废 Cookie，恒 412。
+# 这里改为按「登录身份字段」归一：同账号只留最近几条，同会话只验一次真。
+# ────────────────────────────────────────────────────────────────────────────
+_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
+    "bilibili.com": ("DedeUserID",),
+    "youtube.com": ("SAPISID", "SSID", "HSID"),
+    "douyin.com": ("sid_tt", "sessionid"),
+    "iesdouyin.com": ("sid_tt", "sessionid"),
+    "kuaishou.com": ("userId", "kuaishou.webid"),
+    "xiaohongshu.com": ("web_session",),
+    "youku.com": ("P__yk__uck", "unb", "__ysuid"),
+    "qq.com": ("wxuin", "uin", "vus_session", "wap_sid2"),
+    "tiktok.com": ("sid_tt", "sessionid"),
+    "chenzhongtech.com": ("userId",),
+}
+
+# 会话变体字段：同账号可能同时存在多份「会话」（重新登录会换 SESSDATA），
+# 同一 SESSDATA 的所有快照共享同一有效性 ⇒ 验真按变体做，一次即可代表整组。
+_SESSION_FIELDS: dict[str, tuple[str, ...]] = {
+    "bilibili.com": ("SESSDATA", "bili_jct"),
+    "youtube.com": ("SAPISID", "SSID"),
+}
+
+_MAX_PER_IDENTITY = 3   # 同一账号最多留几条快照
+_MAX_ANON = 5           # 无身份字段的游客 Cookie 每域最多几条
+_MAX_PER_DOMAIN = 30    # 每域总量兜底
+_PRUNE_VERIFY_BUDGET = 8  # 单次探测最多验真几个会话变体（防风控）
+
+
+def _parse_cookie(header: str) -> dict:
+    """把 `k=v; k2=v2` 解析成字典（同名取最后一个，与浏览器行为一致）。"""
+    out: dict = {}
+    for part in (header or "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k:
+            out[k] = v
+    return out
+
+
+def _identity(domain: str, header: str) -> str | None:
+    """返回该 Cookie 的账号身份标识（同账号恒定）；无身份字段则 None。"""
+    d = _strip_sub(domain)
+    fields = _IDENTITY_FIELDS.get(d)
+    if not fields:
+        return None
+    kv = _parse_cookie(header)
+    for f in fields:
+        v = kv.get(f)
+        if v:
+            return "%s:%s=%s" % (d, f, hashlib.sha256(v.encode()).hexdigest()[:10])
+    return None
+
+
+def _session_key(domain: str, header: str) -> str:
+    """返回「会话变体」标识：身份 + 会话字段哈希（无会话字段时退化为身份）。"""
+    d = _strip_sub(domain)
+    ident = _identity(d, header) or "anon"
+    fields = _SESSION_FIELDS.get(d) or ()
+    kv = _parse_cookie(header)
+    if not fields:
+        return ident
+    raw = "|".join("%s=%s" % (f, kv.get(f, "")) for f in fields)
+    return ident + "#" + hashlib.sha256(raw.encode()).hexdigest()[:8]
+
+
+def _entry_identity(domain: str, c: dict) -> str | None:
+    """条目的身份标识（优先读入池时记下的 id，老条目现算）。"""
+    ident = c.get("id")
+    if isinstance(ident, str) and ident:
+        return ident
+    return _identity(domain, _decrypt_item(c))
+
+
+def _cap_cookies(domain: str, cookies: list) -> list:
+    """裁剪：同身份留最新 N 条、游客条目限量、域总量兜底。
+
+    保持既有顺序约定「旧的在前、新的在后」（get_cookie 用 reversed 取最新）。
+    """
+    kept: list = []
+    per_id: dict = {}
+    anon = 0
+    # 按「列表顺序的倒序」取最新：池文件与内存列表都约定「旧的在前、新的在后」，
+    # 用 ts 排序在同一秒内多次入池时不可靠（ts 相同），用顺序才是真实先后。
+    for c in reversed(cookies):
+        ident = _entry_identity(domain, c)
+        if ident:
+            n = per_id.get(ident, 0)
+            if n >= _MAX_PER_IDENTITY:
+                continue
+            per_id[ident] = n + 1
+        else:
+            if anon >= _MAX_ANON:
+                continue
+            anon += 1
+        kept.append(c)
+        if len(kept) >= _MAX_PER_DOMAIN:
+            break
+    return list(reversed(kept))
+
+
 def _save(domain: str, cookies: list) -> bool:
     try:
         _POOL_DIR.mkdir(parents=True, exist_ok=True)
@@ -203,6 +313,16 @@ def _save(domain: str, cookies: list) -> bool:
         payload = []
         for c in cookies:
             item = {"ts": c.get("ts", int(time.time())), "source": c.get("source", "sync")}
+            # 身份标识要一起落盘：否则每次读取都要重新解析 Cookie 才能去重
+            ident = c.get("id") or _identity(domain, _decrypt_item(c))
+            if ident:
+                item["id"] = ident
+            # 「最近一次使用」痕迹必须 survives _save：_save 是按字段白名单重建
+            # 条目的，漏掉 used_ts 会让每次 add/prune 都把使用记录清掉，
+            # 后台「最近一次使用」那一列永远空着。
+            used = int(c.get("used_ts") or 0)
+            if used:
+                item["used_ts"] = used
             header = c.get("header") or ""
             enc = c.get("header_enc") or ""
             if not header and not enc:
@@ -264,12 +384,46 @@ def get_cookie(domain: str) -> str | None:
                 header = _decrypt_item(c)
                 if header:
                     logger.info("[cookie_pool] get hit domain=%s candidate=%s len=%s", domain, d, len(header))
+                    # 记录「最近一次使用」：后台据此判断哪条 Cookie 真在被消耗、
+                    # 哪些常年没人用（补注入 / 清理的唯一依据）。节流见 _mark_used。
+                    _mark_used(f, header)
                     return header
         except Exception as e:
             logger.warning("[cookie_pool] get read error domain=%s file=%s: %s", domain, f, e)
             continue
     logger.info("[cookie_pool] get miss domain=%s", domain)
     return None
+
+
+def _mark_used(f: Path, header: str) -> None:
+    """把这条 Cookie 标记为「刚被用过」（后台「最近一次使用」列的数据源）。
+
+    两个设计约束：
+    1. **节流**：同一条目 60s 内最多落盘一次（_USED_MARK_INTERVAL）。解析高峰
+       期 get_cookie 每秒被打很多次，不节流等于每次都重写池文件。
+    2. **只改一个字段**：不走 _save()——它按 ts/source/id 白名单重建整张表，
+       会把别的字段顺带重写；这里读原文件、只改 used_ts、原样原子写回。
+
+    匹配按**明文**：同文件内明文唯一（add_cookie 按明文去重），解密比对最稳，
+    不依赖 ts/id 在并发写入后发生变化。任何异常都静默吞掉：使用痕迹丢一条
+    无所谓，绝不能让它影响解析主流程。
+    """
+    now = int(time.time())
+    with _LOCK:
+        try:
+            if not f.exists():
+                return
+            data = json.loads(f.read_text())
+            for c in data.get("cookies") or []:
+                if _decrypt_item(c) != header:
+                    continue
+                if now - int(c.get("used_ts") or 0) < _USED_MARK_INTERVAL:
+                    return  # 刚记过，不写盘
+                c["used_ts"] = now
+                atomic_io.atomic_write_text(f, json.dumps(data, ensure_ascii=False))
+                return
+        except Exception:
+            pass
 
 
 def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
@@ -287,6 +441,15 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
     header = (header or "").strip()
     if not header:
         return False
+    # 入池前验真：明确无效（如 B 站未登录游客态）直接拒。
+    # 2026-10-18 前这里没有验真，服务器每 20 分钟抓一次的死 Cookie 全进来了，
+    # 而 get_cookie 取「最新一条」⇒ 永远拿到废的（实测 1905 条里 1902 条无效）。
+    if verify_cookie(domain, header) is False:
+        logger.warning("[cookie_pool] reject-invalid domain=%s source=%s len=%s",
+                       domain, source, len(header))
+        return False
+    ident = _identity(domain, header)
+    now = int(time.time())
     with _LOCK:
         f = _pool_file(domain)
         logger.info("[cookie_pool] add file=%s exists=%s", f, f.exists())
@@ -298,20 +461,33 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
                 cookies = []
         for c in cookies:  # 去重：同明文已存在则仅刷新 ts
             if _decrypt_item(c) == header:
-                c["ts"] = int(time.time())
+                c["ts"] = now
                 c["source"] = source
-                return _save(domain, cookies)
-        cookies.append({"header": header, "ts": int(time.time()), "source": source})
-        ok = _save(domain, cookies)
-        logger.info("[cookie_pool] add saved domain=%s total=%s ok=%s", domain, len(cookies), ok)
+                if ident:
+                    c["id"] = ident
+                return _save(domain, _cap_cookies(domain, cookies))
+        item = {"header": header, "ts": now, "source": source}
+        if ident:
+            item["id"] = ident
+        cookies.append(item)
+        ok = _save(domain, _cap_cookies(domain, cookies))
+        logger.info("[cookie_pool] add saved domain=%s total=%s ident=%s ok=%s",
+                    domain, len(cookies), ident or "-", ok)
         return ok
 
 
-def verify_chrqj(header: str) -> bool | None:
-    """用 Cookie 试一次 chrqj 签名接口。True=有效, False=明确无效, None=无法判定(网络不可达)。"""
+def verify_chrqj(header: str, domain: str = "chrqj.com") -> bool | None:
+    """用 Cookie 试一次金牌影院签名接口。True=有效, False=明确无效, None=无法判定(网络不可达)。
+
+    domain 传实际站域（chrqj.com / nmwchxx.com）：两者是同一站（老域名首页
+    302 → 新域名），API/签名密钥/视频 ID 全共用，但 API 主机与 Referer 要跟着
+    域走，跨域 Referer 有被拒的风险（2026-10-21 实测同对 ID 两边都能出片）。
+    """
     if requests is None:
         return None
     try:
+        d = _strip_sub(domain) or "chrqj.com"
+        base = f"https://www.{d}"
         vid, nid = _CHRQJ_TEST
         params = {"clientType": "1", "id": vid, "nid": nid}
         t = str(int(time.time() * 1000))
@@ -320,22 +496,58 @@ def verify_chrqj(header: str) -> bool | None:
         sign = hashlib.sha1(hashlib.md5(h.encode()).hexdigest().encode()).hexdigest()
         headers = {
             "User-Agent": _CHRQJ_UA,
-            "Referer": "https://www.chrqj.com/",
+            "Referer": f"{base}/",
             "sign": sign,
             "t": t,
             "deviceId": str(uuid.uuid4()),
             "authorization": "",
             "Cookie": header,
         }
-        r = requests.get(_CHRQJ_API, params=params, headers=headers, timeout=10)
+        r = requests.get(f"{base}/mw-movie/anonymous/v2/video/episode/url",
+                         params=params, headers=headers, timeout=10)
         if r.status_code != 200:
             return False
-        d = r.json()
-        if d.get("code") == 200 and (d.get("data") or {}).get("list"):
+        dd = r.json()
+        if dd.get("code") == 200 and (dd.get("data") or {}).get("list"):
             return True
         return False
     except Exception:
         return None
+
+
+_BILI_NAV = "https://api.bilibili.com/x/web-interface/nav"
+
+
+def verify_bilibili(header: str) -> bool | None:
+    """B 站登录态验真：nav 接口 isLogin 为真才算有效。
+
+    背景（2026-10-18）：服务器上的无头浏览器每 20 分钟抓一次 Cookie，抓到的
+    全是「未登录」游客态（只有 buvid 和历史的 DedeUserID，SESSDATA 已失效）；
+    而 B 站既不在结构校验表、也没有测试 URL ⇒ 旧逻辑返回 None（放行）⇒ 1905 条
+    里 1902 条是废的，且 get_cookie 取最新一条 = 永远是废的 ⇒ 解析恒 412。
+
+    返回 False 仅当站点明确回答「未登录」(-101)；网络不可达 / 风控 412 返回
+    None（保留，避免把好 Cookie 误杀）。
+    """
+    if requests is None:
+        return None
+    try:
+        r = requests.get(_BILI_NAV, headers={
+            "Cookie": header,
+            "User-Agent": _CHRQJ_UA,
+            "Referer": "https://www.bilibili.com/",
+        }, timeout=8)
+        if r.status_code != 200:
+            return None
+        d = r.json()
+    except Exception:
+        return None
+    code = d.get("code")
+    if code == 0:
+        return bool((d.get("data") or {}).get("isLogin"))
+    if code == -101:  # 账号未登录
+        return False
+    return None
 
 
 # 站点通用验真用的测试 URL（domain 根域 -> 该站任意一个可解析的视频页）。
@@ -344,6 +556,8 @@ def verify_chrqj(header: str) -> bool | None:
 #   "domain=url;domain2=url2"
 _TEST_URLS = {
     "chrqj.com": "https://www.chrqj.com/vod/play/116537/1/877419",
+    # 金牌影院新域名（同一站）：站内标准形态，供 yt-dlp 通用验真兜底
+    "nmwchxx.com": "https://nmwchxx.com/vod/play/116537/sid/877419",
 }
 
 
@@ -406,6 +620,16 @@ _STRUCTURAL_FIELDS: dict[str, set[str]] = {
         "__Secure-1PSID", "__Secure-3PSID",
         "__Secure-1PAPISID", "__Secure-3PAPISID",
     },
+    # 抖音 / 快手 / TikTok / 小红书：这些站没有联网探针（yt-dlp 试解析在机房
+    # 易被风控而误判 False，会把有效 Cookie 拒之池外）。改为只校验「是否含
+    # 登录态字段」：命中即「结构有效」，后台标「结构校验」，不冒充站点确认。
+    # 🔴 字段只取「登录后才存在」的：小红书 a1 游客也有，绝不能当登录态。
+    "douyin.com": {"sessionid", "sid_tt", "passport_csrf_token"},
+    "iesdouyin.com": {"sessionid", "sid_tt"},
+    "kuaishou.com": {"passToken", "userId", "kuaishou.webid"},
+    "chenzhongtech.com": {"passToken", "userId"},
+    "tiktok.com": {"sessionid", "sid_tt"},
+    "xiaohongshu.com": {"web_session"},
 }
 
 
@@ -490,15 +714,23 @@ def get_ckey(domain: str) -> str | None:
 
 
 def verify_cookie(domain: str, header: str) -> bool | None:
-    """按域分发验真：chrqj 走专属签名验真，其余优先结构校验、再 yt-dlp 通用验真。
+    """按域分发验真：金牌影院一族（chrqj/nmwchxx）走专属签名验真，其余优先结构校验、再 yt-dlp 通用验真。
 
     口径统一为「仅明确无效(False)才拒，无法判定(None)放行」，与
     verify_and_prune 对 None 保留的语义一致。这样 yt-dlp 试解析不稳定的站
     （如优酷 -3007）不会因误判 False 而被拒之池外。
     """
     d = _strip_sub(domain)
-    if d == "chrqj.com":
-        return verify_chrqj(header)
+    # 金牌影院一族（老域名 chrqj.com + 新域名 nmwchxx.com，同一站）走签名验真
+    if d in ("chrqj.com", "nmwchxx.com"):
+        return verify_chrqj(header, d)
+    # B 站：游客态 Cookie 与登录态「长得一样」（都有 DedeUserID/buvid），
+    # 只能问站点本身；这是唯一能区分两者的判据。
+    if d == "bilibili.com":
+        return verify_bilibili(header)
+    # 健康检查探针占位（SID=RELAYTEST 之类），不是真实登录态，永远不该入池
+    if "RELAYTEST" in (header or ""):
+        return False
     # 优先结构校验：命中白名单站关键字段即放行
     s = _structural_check(d, header)
     if s is True:
@@ -508,7 +740,12 @@ def verify_cookie(domain: str, header: str) -> bool | None:
 
 
 def _prune_one(domain: str) -> int:
-    """对单个规范化域文件做剔除，返回剩余有效数。"""
+    """对单个规范化域文件做剔除，返回剩余有效数。
+
+    2026-10-18 起改为「按会话变体验真，每个变体只验一次」：旧实现逐条验真，
+    B 站 1905 条就是 1905 次请求（必然触发 412/封 IP），而且完全没必要——
+    同一 SESSDATA 的所有快照共享同一有效性。顺带按身份裁剪（同账号留最新 3 条）。
+    """
     with _LOCK:
         f = _pool_file(domain)
         if not f.exists():
@@ -517,17 +754,35 @@ def _prune_one(domain: str) -> int:
             cookies = json.loads(f.read_text()).get("cookies", [])
         except Exception:
             return 0
-        kept = []
+        now = time.time()
+        groups: dict = {}
+        order: list = []
         for c in cookies:
             header = _decrypt_item(c)
             if not header:
                 continue
-            if time.time() - c.get("ts", 0) > _TTL:
+            if now - c.get("ts", 0) > _TTL:
                 continue
-            ok = verify_cookie(domain, header)
-            if ok is False:  # 明确无效才剔除；None(网络不可达)保留
+            key = _session_key(domain, header)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append((c, header))
+        kept: list = []
+        budget = _PRUNE_VERIFY_BUDGET
+        for key in order:
+            items = sorted(groups[key], key=lambda x: x[0].get("ts") or 0, reverse=True)
+            ok = None
+            if budget > 0:
+                budget -= 1
+                ok = verify_cookie(domain, items[0][1])
+            if ok is False:  # 明确无效：整个会话变体都是死的，整组丢弃
+                logger.info("[cookie_pool] prune drop domain=%s session=%s n=%s",
+                            domain, key, len(items))
                 continue
-            kept.append(c)
+            kept.extend(item for item, _ in items[:_MAX_PER_IDENTITY])
+        kept.sort(key=lambda x: x.get("ts") or 0)   # 旧的在前，get_cookie 用 reversed 取最新
+        kept = _cap_cookies(domain, kept)
         _save(domain, kept)
         return len(kept)
 

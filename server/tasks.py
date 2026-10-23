@@ -125,6 +125,11 @@ class DownloadTask:
     # 下载他人成品或取消他人任务（IDOR）。空串 = 升级前的历史遗留任务，
     # 为兼容仍可访问；新任务一律由 app._task_owner(request) 写入。
     owner_id: str = ""
+    # 用量明细标识（2026-10-20）：下单时 use_daily 生成，下载结束后按它把
+    # 「是否真的下载完成并保存到本机」回写到账本（本机 + 授权中心）。
+    # 只在本次进程内有效 —— 不写进 _PERSIST_FIELDS：重启后任务已终止，
+    # 再回写没有意义，留空即「结果未上报」（面板显示灰色未上报，而不是假成功）。
+    usage_ref: str = ""
     # 过程展示：结构化步骤 + 文本日志
     steps: list[dict] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)

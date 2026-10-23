@@ -11,9 +11,13 @@
 
 本测试把两端接线一起钉住：
   A. 分享节点必须认识 HTML，并把 /s/<sid> 渲染成页面原件（不是「请下载」空壳）；
-  B. 前端结果区必须是在线链接 + 二维码，且 app.js 的 el 映射真的引用了这些元素；
+  B. 前端结果区必须是在线链接，且 app.js 的 el 映射真的引用了这些元素；
   C. 生成完成后必须触发上传，且该请求带登录 token（否则已登录用户也会 401）；
   D. 不得退化回「只给本地路径 / 把双击打开当主卖点」。
+
+2026-10-23 契约更新（用户要求）：「生成网页」只保留在线链接产出 —— 本机文件
+（路径/复制路径/用浏览器打开/下载 HTML）与二维码已移除，二维码只留在独立的
+「生成二维码」功能里；本机生成本身仍是上传前的必要中间步。
 
 运行：
     cd server && python tests/test_page_link_wiring.py
@@ -58,7 +62,7 @@ def main():
           "Content-Security-Policy" in node_srv)
 
     print("\n[B] 前端：结果区必须有在线链接元素，且 el 映射引用它们")
-    ids = ["pageQrWrap", "pageQrImg", "pageLinkInput", "pageCopyLinkBtn", "pageOpenLinkBtn"]
+    ids = ["pageLinkInput", "pageCopyLinkBtn", "pageOpenLinkBtn"]
     for i in ids:
         check(f'index.html 有 id="{i}"', f'id="{i}"' in index_html)
     missing = [i for i in ids if f"$('{i}')" not in app_js]
@@ -75,11 +79,18 @@ def main():
         check("该请求带 authBearerHeaders()（否则已登录用户也 401）",
               "authBearerHeaders()" in win)
 
-    print("\n[D] 不得退化回「只给本地路径」")
-    check("本地路径已降级为次要行（.pg-local 样式在）", ".pg-local" in index_html)
+    print("\n[D] 只留在线链接：本机文件产出与二维码必须已移除（2026-10-23 用户要求）")
+    gone_html = ["pageQrWrap", "pageQrImg", "pageLocalRow", "pageCopyPathBtn", "pagePathInput", "pageOpenBtn"]
+    check("index.html 不再含本机文件/二维码元素",
+          not [i for i in gone_html if f'id="{i}"' in index_html],
+          f"残留：{[i for i in gone_html if f'id=\"{i}\"' in index_html]}")
+    gone_js = ["pgDownloadHtml", "pageQrImg", "pageCopyPathBtn", "pageLocalTag"]
+    check("app.js 不再引用本机文件/二维码符号",
+          not [s for s in gone_js if s in app_js],
+          f"残留：{[s for s in gone_js if s in app_js]}")
     check("不再把「双击就能打开」当主卖点", "双击就能打开" not in index_html)
-    check("链接成功后用分享节点出二维码",
-          "pageQrImg.src = '/api/share/qr?text='" in app_js)
+    check("结果提示不再让用户发二维码",
+          "把链接或二维码发给别人" not in app_js)
 
     print("\n[E] 分享链接必须固定落在规范源（隔离主域登录态）")
     # 2026-09-30：分享页迁到 share.hanyuxz.top（独立源）。若 public_url 又回到"从哪个域名

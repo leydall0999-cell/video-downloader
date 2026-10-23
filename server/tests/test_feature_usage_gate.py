@@ -216,6 +216,15 @@ def test_rows_have_real_gate() -> None:
             re.search(r'(use_daily|quota_state)\(\s*["\']' + res + r'["\']', wsrc)
             or re.search(r'cloud_quota_gate\([^)]*resource=\s*["\']' + res + r'["\']', wsrc)
         )
+        if not wok:
+            # 🔴 2026-10-20：网页端把转换类资源改成**按目标格式分派** ——
+            #    `cloud_quota_gate(request, resource=_convert_resource(target, ...))`，
+            #    资源名不在调用点做字面量，而在 helper 的 return 分支里。
+            #    判据（两条都要）：① 该 helper 的返回值真被喂给闸门；② helper 里
+            #    确有本资源键的 return —— 只认「文件里出现过这个词」等于开万能通行证。
+            if (re.search(r'cloud_quota_gate\([^)]*resource=\s*_convert_resource\(', wsrc)
+                    and re.search(r'return\s+["\']' + res + r'["\']', wsrc)):
+                wok = True
         check(f'[{r["key"]}] 拦截点在网页版（{cross}）', wok,
               f"web-dev 的 {rel} 里搜不到 use_daily/quota_state(\"{r['resource']}\") —— "
               f"若网页版已改实现，请同步更新 CROSS_END_RESOURCES")

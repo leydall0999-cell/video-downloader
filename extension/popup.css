@@ -153,3 +153,61 @@ button.mini { font-size: 11px; padding: 1px 7px; border-radius: 5px; }
 
 /* 「页面」条目（发送当前页）用的标签色 */
 .chip.page { background: #7c3aed; }
+
+
+/* ---- 登录态同步（2026-10-18）----
+   折叠面板而非新 tab：popup 只有 380×540，多一个 tab 会挤压主列表；
+   折叠状态下只占一行，不点开就不触发任何 Cookie 读取。 */
+.ckz { border-top: 1px solid var(--line); background: #fafbfc; flex: none; }
+.ckz-hd {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px; cursor: pointer; list-style: none;
+  font-size: 12px; color: var(--muted); user-select: none;
+}
+.ckz-hd::-webkit-details-marker { display: none; }
+.ckz-hd::before {
+  content: '▸'; font-size: 10px; color: var(--muted);
+  transition: transform .15s; display: inline-block;
+}
+.ckz[open] > .ckz-hd::before { transform: rotate(90deg); }
+.ckz-title { font-weight: 600; color: var(--fg); }
+.ckz-sub { margin-left: auto; font-size: 11px; }
+.ckz-sub.is-ok { color: var(--ok); }
+.ckz-sub.is-warn { color: var(--warn); }
+
+.ckz-body { padding: 0 12px 10px; max-height: 208px; overflow: auto; }
+.ckz-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.ckz-tip { font-size: 11px; color: var(--muted); }
+
+.ckz-list { display: flex; flex-direction: column; gap: 3px; margin-bottom: 7px; }
+.ckz-row {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; padding: 3px 6px; border-radius: 5px; background: #fff;
+  border: 1px solid var(--line);
+}
+.ckz-row .nm { flex: none; min-width: 76px; }
+.ckz-row .st { font-size: 11px; color: var(--muted); margin-left: auto; }
+.ckz-row.on .st { color: var(--ok); }
+.ckz-row.off { opacity: .62; }
+.ckz-row .tag {
+  font-size: 10px; padding: 0 4px; border-radius: 3px;
+  background: #f3f4f6; color: var(--muted);
+}
+
+.ckz-agree {
+  display: flex; align-items: flex-start; gap: 5px;
+  font-size: 11px; line-height: 1.45; color: var(--muted);
+  margin: 2px 0 8px; cursor: pointer;
+}
+.ckz-agree input { margin-top: 2px; flex: none; }
+
+.ckz-actions { display: flex; gap: 6px; }
+.ckz-actions button { flex: 1; }
+.ckz-actions button:disabled { opacity: .5; cursor: not-allowed; }
+
+.ckz-msg {
+  margin-top: 7px; padding: 5px 8px; border-radius: 5px;
+  font-size: 11px; background: var(--accent-soft); color: var(--accent);
+}
+.ckz-msg.is-err { background: #fef2f2; color: #b91c1c; }
+.ckz-msg.is-ok { background: #ecfdf5; color: #047857; }

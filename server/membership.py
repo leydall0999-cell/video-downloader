@@ -102,6 +102,13 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     "sr_video": 200,          # 视频超分（会员）
     "concat_video": 200,      # 视频拼接（会员）
     "concat_audio": 200,      # 音频拼接（会员）
+    # 🔴 2026-10-20 补齐（网页版 10-19 已加，漏了 App 分支）：分享两个子功能并入
+    # 账号级每日配额 —— 走 use_daily、按天 + 上云，同一账号网页版/桌面端共用，
+    # 且出现在个人中心「使用统计」与管理后台配额面板（此前两处都看不到这两行）。
+    # ⚠️ 刻意不走 cloud_quota_gate 的「终身 N 次」口径：分享吃的是分享节点磁盘，
+    # 不是大模型算力（与网页版 share_token.py 的注释同一理由）。
+    "share_qr": 200,          # 生成二维码（分享链接）（会员）
+    "share_page": 200,        # 生成网页（转在线链接）（会员）
     # 老键：仅用于存量归集与后台对照，不再有写入点
     "app_compute": 200,
 }
@@ -132,6 +139,9 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "sr_video": 5,            # 视频超分 5 次/日
     "concat_video": 5,        # 视频拼接 5 次/日
     "concat_audio": 5,        # 音频拼接 5 次/日
+    # 🔴 2026-10-20 补齐（与网页版 10-19 同值）：分享两个子功能免费 20 次/日
+    "share_qr": 20,           # 生成二维码 免费 20 次/日
+    "share_page": 20,         # 生成网页 免费 20 次/日
     # 老键：存量归集用
     "app_compute": 5,
 }
@@ -322,6 +332,16 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     {"key": "cloud_subtitle",   "name": "字幕提取",     "resource": "cloud_subtitle",   "unit": "次", "free_limit": 3,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕识别 / 提取"},
     {"key": "cloud_subtitle_burn", "name": "字幕烧录",   "resource": "cloud_subtitle_burn", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "网页版：字幕压进画面（独立额度）"},
     {"key": "cloud_subtitle_translate", "name": "字幕翻译", "resource": "cloud_subtitle_translate", "unit": "次", "free_limit": 3, "member_limit": 200, "ai_bonus": 0, "credit_cost": 5, "credit_op": "subtitle_translate", "shared_note": "网页版：字幕翻译（另按 AI 积分计费）"},
+    # 🔴 2026-10-20 补齐（网页版 10-19 已加，漏了 App 分支）：「生成二维码 / 生成网页」
+    # 两个子页签并入账号级每日配额体系（走 use_daily，按天 + 上云 + 与网页版同一
+    # 账号共用）。此前这两行在 App 的会员中心「使用统计」和管理后台配额面板里
+    # **完全不存在**（用户 2026-10-20 截图对比网页版后发现），且 App 侧分享上传
+    # 从不计数 —— 等于网页版在限次、桌面端无限用。
+    # ⚠️ 刻意不走 cloud_quota_gate 的「终身 N 次」口径：分享吃的是分享节点磁盘，
+    # 不是大模型算力；授权中心 _CLOUD_RESOURCES 只认 8 个旧键，未知键会被回退成
+    # cloud_commentary —— 那等于让「生成二维码」去消耗「视频解说」的终身额度。
+    {"key": "share_qr",    "name": "生成二维码", "resource": "share_qr",    "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机文件 → 短链 + 二维码（与网页版同账号共用每日次数）"},
+    {"key": "share_page",  "name": "生成网页",   "resource": "share_page",  "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机文件 → 自包含 HTML → 在线链接（独立额度）"},
 ]
 
 # ── 🔴 纯 AI 积分功能（2026-10-12）──────────────────────────────────────────
@@ -771,6 +791,14 @@ def push_free_quota_to_cloud() -> dict[str, Any]:
             kwargs["cloud_lifetime"] = fq.get("cloud_lifetime")
         if "mode" in fq:
             kwargs["mode"] = fq.get("mode")
+        # 🔴 2026-10-20：每档每日额度（免费/会员）此前**从未下发**。后果：后台把
+        #    「生成二维码」免费次数改成 2，桌面端按本机 plans.json 生效，网页版
+        #    （只读授权中心，没有本机覆盖概念）仍按代码默认 20 显示并放行 ——
+        #    用户实测「改了没生效」。云端 free_quota_overrides 从 10-17 起就缺
+        #    share_qr/share_page 两个键，正是这个漏发造成的。
+        for _lk in ("daily_free_limits", "daily_member_limits"):
+            if _lk in fq:
+                kwargs[_lk] = fq.get(_lk)
         if not kwargs:
             return {"ok": True, "reason": "no_override", "effective": {}}
         import license_client
@@ -1357,6 +1385,9 @@ _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("sr", "高清修复 {v} 次/日"),
     ("sr_video", "视频超分 {v} 次/日"),
     ("bridge", "音视频桥接（合成 / 替换）{v} 次/日"),
+    # 🔴 2026-10-20 补齐（网页版 10-19 已加，漏了 App 分支）：分享两个子功能
+    ("share_qr", "生成二维码 {v} 次/日"),
+    ("share_page", "生成网页 {v} 次/日"),
     # 老键：仅存量归集用，不作为对外权益展示（否则用户看到「视频处理」会以为
     # 转换/压缩/超分还共用一份额度 —— 拆键后已不共用）
 )
@@ -2173,6 +2204,17 @@ class MembershipStore:
             if old_day and old_day != "":
                 hist = self._state.setdefault("usage_history", {})
                 hist[old_day] = {k: int(v) for k, v in du.items() if k != "date"}
+                # 2026-10-19：把当天的「明细」也一起归档（与云端 usage_history 同构：
+                # {资源: [{t, p, at}]}），否则后台翻历史时只剩次数、看不到下载了什么。
+                _det = self._state.get("daily_details") or {}
+                _clean = {k: v[-50:] for k, v in _det.items()
+                          if isinstance(v, list) and v}
+                if _clean:
+                    hist.setdefault(old_day, {})
+                    if isinstance(hist[old_day], dict):
+                        hist[old_day]["details"] = _clean
+                # 无论有没有明细，日切后都要清空 —— 否则昨天的明细会继续挂在新的一天
+                self._state["daily_details"] = {}
                 # 只保留最近 90 天，避免无限增长
                 cutoff = time.strftime("%Y-%m-%d", time.localtime(now - 90 * 86400))
                 for k in list(hist.keys()):
@@ -2227,8 +2269,19 @@ class MembershipStore:
                 "member_limit": mem_limits.get(resource),
                 "free_limit": free_limits.get(resource, 0)}
 
-    def use_daily(self, resource: str, n: int = 1) -> dict[str, Any]:
-        """消耗下载类配额（免费档 resolve 10/日；会员档按表）。超限返回 ok=False。"""
+    def use_daily(self, resource: str, n: int = 1, title: str = "",
+                  platform: str = "", ref: str = "") -> dict[str, Any]:
+        """消耗下载类配额（免费档 resolve 10/日；会员档按表）。超限返回 ok=False。
+
+        title / platform（2026-10-19）：可选，记录「具体做了什么」，例如
+        title="少帅 第5集"、platform="douyin.com"。会随每日配额一起上云，
+        后台「使用详情」据此显示可定位的明细，而不是干巴巴的「下载任务 2」。
+
+        ref（2026-10-20）：本次消耗的唯一标识（运行时生成，随返回值下发）。
+        调用方把它挂到下载任务上，等任务真正**落盘完成**时再调
+        `mark_usage_result(ref, ok)` 回写「这次到底下载成功了没有」——
+        后台「使用详情」要能区分「点了下载但没下成」，而不只是次数。
+        """
         if n <= 0:
             return {"ok": False, "error": "n 必须为正"}
         q = self.quota_state(resource)
@@ -2249,15 +2302,109 @@ class MembershipStore:
             return {"ok": False, "error": f"超出 {resource} 日配额上限 {q['limit']}",
                     "resource": resource, "code": "MEMBER_QUOTA"}
         self._state["daily_usage"][resource] = new_used
+        _ref = str(ref or "").strip()[:64] or _new_usage_ref()
+        self._record_daily_detail(resource, title, platform, _ref)
         self._persist()
         # 异步上云记账（同一账号 App/网页共用每日配额；失败/离线进队列下次心跳补报）
         try:
             from routers.cloud_account import report_usage_async
-            report_usage_async(self, resource, n)
+            report_usage_async(self, resource, n, title=title, platform=platform,
+                               ref=_ref)
         except Exception:
             pass
         return {"ok": True, "resource": resource, "used": new_used,
-                "remaining": q["limit"] - new_used}
+                "remaining": q["limit"] - new_used, "ref": _ref}
+
+    def _record_daily_detail(self, resource: str, title: str, platform: str,
+                             ref: str = "") -> None:
+        """把本次消耗的具体内容记进 `daily_details`（本机兜底，云端才是真源）。
+
+        只保留最近 50 条/资源；无标题不记（无标题的条目对排障没有价值）。
+        ref（2026-10-20）：该条的唯一标识 —— 下载任务结束后按它回写结果
+        （`mark_usage_result`），因此**必须**落在这个条目上。
+        """
+        import time as _t
+        t = str(title or "").strip()[:120]
+        if not t:
+            return
+        try:
+            details = self._state.setdefault("daily_details", {})
+            lst = details.setdefault(str(resource)[:32], [])
+            item = {"t": t, "p": str(platform or "").strip()[:64],
+                    "at": int(_t.time())}
+            if ref:
+                item["id"] = str(ref)[:64]
+            lst.append(item)
+            details[str(resource)[:32]] = lst[-50:]
+        except Exception:  # noqa: BLE001 — 记账明细绝不能影响配额判定
+            pass
+
+    def mark_usage_result(self, ref: str, ok: bool, resource: str = "download",
+                          size: int = 0) -> bool:
+        """回写「这次用量到底有没有真正落到本机」（成功标准＝下载完成并能保存）。
+
+        成功判据由调用方给（下载器里＝任务状态 completed 且成品文件存在），
+        本方法只负责记账：把结果标到当天 / 历史归档里同 id 的明细条目上，
+        再异步上报授权中心 —— 管理员在**别人的**账号上看「使用详情」时读的是云端，
+        所以只写本机不够。
+
+        幂等：同一 ref 重复回写只覆盖为同一结果；不做配额加减（次数早在下单时扣过）。
+        """
+        r = 1 if ok else 0
+        key = str(ref or "").strip()[:64]
+        if not key:
+            return False
+        hit = False
+        try:
+            self._ensure_loaded()
+            for _item in self._iter_detail_items(resource, key):
+                _item["r"] = r
+                if size:
+                    try:
+                        _item["sz"] = int(size)
+                    except (TypeError, ValueError):
+                        pass
+                hit = True
+            if hit:
+                self._persist()
+        except Exception:  # noqa: BLE001 — 回写结果绝不能影响下载本身
+            pass
+        try:
+            from routers.cloud_account import report_usage_result_async
+            report_usage_result_async(self, resource, key, r)
+        except Exception:  # noqa: BLE001
+            pass
+        return hit
+
+    def _iter_detail_items(self, resource: str, ref: str):
+        """遍历当天 + 历史归档里所有同 ref 的明细条目（跨天完成也能标到）。"""
+        res = str(resource)[:32]
+        buckets = []
+        live = self._state.get("daily_details") or {}
+        if isinstance(live, dict):
+            buckets.append((live.get(res) or []))
+        hist = self._state.get("usage_history") or {}
+        if isinstance(hist, dict):
+            for row in hist.values():
+                det = (row or {}).get("details") if isinstance(row, dict) else None
+                if isinstance(det, dict):
+                    buckets.append(det.get(res) or [])
+        for lst in buckets:
+            if not isinstance(lst, list):
+                continue
+            for it in lst:
+                if isinstance(it, dict) and str(it.get("id") or "") == ref:
+                    yield it
+
+
+def _new_usage_ref() -> str:
+    """生成一次用量明细的唯一标识（2026-10-20）。
+
+    用途：把「下单时扣的那 1 次」与「下载结束后回写的成功/失败」对上号。
+    形状 `u<16 hex>`，≤64 字符，天然可作为授权中心的幂等键。
+    """
+    import uuid
+    return "u" + uuid.uuid4().hex[:16]
 
 
 def _date_range_days(period: str, now: float) -> list[str]:

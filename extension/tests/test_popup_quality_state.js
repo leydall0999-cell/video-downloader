@@ -25,6 +25,10 @@ function check(name, cond, extra) {
 }
 
 const POPUP = fs.readFileSync(path.join(__dirname, '..', 'popup.js'), 'utf8');
+// popup.html 里 cookie-harvest.js 先于 popup.js 加载（popup.js 的登录态区直接调
+// VDLCookie.pickReady）。这里照抄同样的加载顺序：漏了会 ReferenceError 崩在 render 里，
+// 看起来像「清晰度回显坏了」，其实是测试环境少喂了一个依赖。
+const HARVEST = fs.readFileSync(path.join(__dirname, '..', 'cookie-harvest.js'), 'utf8');
 
 const QUALITY_OPTIONS = ['best', '2160', '1440', '1080', '720', '480', '360', 'audio'];
 const OPTION_TEXT = {
@@ -140,6 +144,8 @@ function boot() {
   Object.keys(ELS).forEach((k) => delete ELS[k]);
   snapshot = freshSnapshot();
   const ctx = vm.createContext(globalThis);
+  // 顺序与 popup.html 一致：先挂 VDLCookie（cookie-harvest.js 的 UMD 会写 globalThis）
+  vm.runInContext(HARVEST, ctx, { filename: 'cookie-harvest.js' });
   vm.runInContext(POPUP, ctx, { filename: 'popup.js' });
   return ctx;
 }

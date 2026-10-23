@@ -98,8 +98,8 @@ def _email_of(uid: str) -> str:
     return ""
 
 
-def current_member_store(request) -> MembershipStore:
-    """当前生效的会员 store。
+def store_for_uid(uid) -> MembershipStore:
+    """uid → 生效的会员 store（未登录传 None / 空串 → 全局匿名 store）。
 
     本机未登录（auth_store）→ 全局匿名 store。
     已登录 → 用户 store；但该用户自己没权益、而**全局 store 有云端买的会员**时
@@ -109,8 +109,11 @@ def current_member_store(request) -> MembershipStore:
     ⚠️ C 修复（2026-10-04）：回退全局账本前**必须校验归属** —— 全局 store 的
     meta.account.email 须等于当前账号，否则是上一个登录账号残留的权益（跨账号泄漏，
     见 Root C），不能用。无归属/归属不符时一律用该用户自身的 per-user store（即使为空）。
+
+    🔴 2026-10-20：从 `current_member_store()` 抽出来 —— 后台线程（订阅自动追更）
+    没有 Request，只有任务归属标识，必须能脱离请求取同一个 store；两处共用本函数
+    才能保证「请求里看到的会员档」和「后台计额度用的会员档」是同一份。
     """
-    uid = get_current_user_id(request)
     import app
     if not uid:
         return app.member_store
@@ -129,3 +132,22 @@ def current_member_store(request) -> MembershipStore:
                         and _has_benefit(gstore)) else ustore
     _RESOLVE_CACHE[uid] = (now, chosen)
     return chosen
+
+
+def store_for_owner(owner_id: str) -> MembershipStore:
+    """任务归属标识 → 生效 store（后台线程用，无 Request）。
+
+    与 `app._task_owner()` 的前缀一一对应：
+      · "u:<uid>"   已登录账号 → 该账号的 per-user store（含回退全局账本的归属校验）；
+      · "d:<device>" 未登录设备 → 全局匿名 store（额度与 `current_member_store(None)` 同口径）；
+      · ""          历史遗留无归属 → 全局匿名 store。
+    """
+    oid = str(owner_id or "")
+    if oid.startswith("u:") and len(oid) > 2:
+        return store_for_uid(oid[2:])
+    return store_for_uid(None)
+
+
+def current_member_store(request) -> MembershipStore:
+    """当前生效的会员 store（请求上下文版本，等价于 `store_for_uid(get_current_user_id(request))`）。"""
+    return store_for_uid(get_current_user_id(request))

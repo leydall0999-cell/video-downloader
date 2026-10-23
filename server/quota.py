@@ -392,8 +392,16 @@ def _path_lock(path: Path) -> threading.RLock:
         return lk
 
 
-def _flock_acquire(lock_path: Path, timeout: float = 2.0):
-    """取跨进程独占锁；平台不支持 / 超时 → 返回 None（降级为仅进程内锁）。"""
+def _flock_acquire(lock_path: Path, timeout: float = 8.0):
+    """取跨进程独占锁；平台不支持 / 超时 → 返回 None（降级为仅进程内锁）。
+
+    🔴 2026-10-20：超时由 2s 放宽到 8s。构建自校验（4 个进程同时扣终身额度 +
+    构建机满负载）里实测：2s 内抢不到锁就**降级为仅进程内锁**，于是 4 个进程
+    各自读到「还没用满」并各放行 1 次 —— 终身额度被超发（`test_config_atomic_write`
+    的跨进程用例正是这么红的：4 进程共放行 4 次，应恰好 3 次）。
+    真正的持锁临界区只有「读 → 改 → 写回」几毫秒，正常情况 8s 绰绰有余；
+    仍然保留「超时就降级」的兜底，绝不为了记账把用户操作卡死。
+    """
     if _fcntl is None and _msvcrt is None:
         return None
     try:

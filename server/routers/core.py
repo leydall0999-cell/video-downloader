@@ -583,8 +583,16 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=_task_cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, referer=(payload.referer or '').strip(), owner_id=app._task_owner(request))
     app.scheduler.submit(_runner, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
     # 任务创建成功才计费（失败/被拒不烧免费额度）
-    _charged = app.current_member_store(request).use_daily('download', 1)
-    _qs = app.current_member_store(request).quota_state('download')
+    # 2026-10-19：带上标题与平台，后台「使用详情」能显示「下载了什么」而不是干巴巴的次数
+    # 2026-10-20：把这次消耗的 ref 与账本挂到任务上 —— 下载结束后按同一 ref 回写
+    #   「是否真的下载完成并保存到本机」，后台才能看见成功/失败，而不只是次数。
+    _mstore = app.current_member_store(request)
+    _charged = _mstore.use_daily(
+        'download', 1, title=(task.title or task.url), platform=platform.name)
+    if _charged.get("ref"):
+        task.usage_ref = str(_charged["ref"])
+        task._usage_store = _mstore
+    _qs = _mstore.quota_state('download')
     record_event('download', {'platform': platform.name, 'quality': payload.quality})
     return {'task_id': task.id, 'status': task.status,
             'quota': {'subscribed': _qs.get('tier') == 'member',
@@ -634,7 +642,12 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
             continue
         task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, owner_id=app._task_owner(request))
         app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, retries)
-        app.current_member_store(request).use_daily('download', 1)  # 每个成功创建的任务计 1 次下载配额
+        # 每个成功创建的任务计 1 次下载配额（2026-10-20：ref/账本挂任务，供结束后回写结果）
+        _mb = app.current_member_store(request)
+        _ch = _mb.use_daily('download', 1, title=url, platform=platform.name)
+        if _ch.get("ref"):
+            task.usage_ref = str(_ch["ref"])
+            task._usage_store = _mb
         task_ids.append(task.id)
     if not task_ids:
         if quota_exhausted:
@@ -676,6 +689,10 @@ def retry_task(task_id: str, request: app.Request) -> dict:
         raise app.HTTPException(status_code=402, detail='MEMBER_QUOTA|' + _err)
     task.cancel_requested = False
     task.cancel_reason = ''
+    # 2026-10-20：「这次执行是否已回报过结果」是**按次**的 —— 重试/续传是新一轮执行，
+    # 必须清掉旧标志，否则新 ref（重试计费）或旧 ref（续传）都不会再回写结果，
+    # 最终成败永远停在上一轮的 fail 上。续传时 ref 不变，成功会覆盖成「已保存」。
+    task._usage_reported = False
     # 图片任务（kind=image，2026-10-12 P0）没有 .part 断点续传概念 —— 单文件直传，
     # 取消即删半成品，重试就是一次新传输；执行器也要换成 run_image_download。
     _is_image = getattr(task, 'kind', 'video') == 'image'
@@ -689,7 +706,15 @@ def retry_task(task_id: str, request: app.Request) -> dict:
     else:
         app.scheduler.submit(app.downloader.run_download, task, app.store, task.quality_key, task.cookie, task.proxy, app.BATCH_RETRIES_DEFAULT, '', task.concurrent_fragments, task.downloader_type, resume)
     if not resume:
-        app.current_member_store(request).use_daily('download', 1)
+        # 2026-10-19：带上标题与平台，便于后台定位「这次下载的是什么」
+        # 2026-10-20：ref/账本挂任务 —— 重试后同样要能回写「成功/失败」
+        _mb = app.current_member_store(request)
+        _ch = _mb.use_daily(
+            'download', 1, title=(getattr(task, 'title', '') or task.url),
+            platform=getattr(task, 'platform', '') or '')
+        if _ch.get("ref"):
+            task.usage_ref = str(_ch["ref"])
+            task._usage_store = _mb
     return {'task_id': task_id, 'status': 'pending', 'resume': resume}
 
 @router.post('/api/tasks/{task_id}/extract-text')
@@ -1438,7 +1463,7 @@ def app_ops_visits(request: app.Request, limit: int = 100, range: str = ""):
     """
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     if not _ops_admin_key():
         raise app.HTTPException(status_code=401, detail="未配置运维密钥：请在「关于本应用」设置中填写超级管理员密钥")
     try:
@@ -1458,7 +1483,7 @@ def app_ops_events(request: app.Request, limit: int = 200, level: str = "", rang
     """App 内看板代理：本机放行，带密钥去 ECS 拉「错误/异常事件」并转发前端。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     if not _ops_admin_key():
         raise app.HTTPException(status_code=401, detail="未配置运维密钥：请在「关于本应用」设置中填写超级管理员密钥")
     try:
@@ -1515,7 +1540,7 @@ def app_ops_key_verify(payload: dict, request: app.Request):
     """
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     key = (payload.get("key") or "").strip()
     if not key:
         raise app.HTTPException(status_code=400, detail="密钥为空")
@@ -1542,7 +1567,7 @@ def app_license_alerts(request: app.Request, since: float = 0.0,
     """拉取授权中心异常告警（超管账号 + 本机双门禁）。前端 60s 轮询用。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.get(
             f"{_OPS_ECS_BASE}/api/license-alerts",
@@ -1561,7 +1586,7 @@ def app_license_alerts_ack(payload: dict, request: app.Request):
     """确认（已读）告警。ids 为空数组 = 全部确认。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.post(
             f"{_OPS_ECS_BASE}/api/license-alerts/ack",
@@ -1579,7 +1604,7 @@ def app_license_alerts_notify(payload: dict, request: app.Request):
     """macOS 系统通知桥：前端轮询发现新告警时调用，弹系统级通知（免解锁也可见）。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     import subprocess
     title = str(payload.get("title") or "视频工坊·异常告警")[:60]
     body = str(payload.get("body") or "")[:200]
@@ -1602,7 +1627,7 @@ def app_license_risk_top(request: app.Request, limit: int = 50, min_score: int =
     """风险最高的账号列表（看板「风险复核队列」数据源）。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.get(
             f"{_OPS_ECS_BASE}/api/license-risk/top",
@@ -1621,7 +1646,7 @@ def app_license_risk_query(payload: dict, request: app.Request):
     """单账号风险画像（命中信号明细）。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.post(
             f"{_OPS_ECS_BASE}/api/license-risk/query",
@@ -1639,7 +1664,7 @@ def app_license_risk_clear(payload: dict, request: app.Request):
     """人工抹平（确认误报）：清空该账号风险摘要，并写 risk_clear 审计事件。"""
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         resp = app.requests.post(
             f"{_OPS_ECS_BASE}/api/license-risk/clear",
@@ -1675,7 +1700,7 @@ def app_license_recon(payload: dict, request: app.Request):
     """
     _require_local(request)
     if not _ops_requester_is_admin(request):
-        raise app.HTTPException(status_code=403, detail="仅超级管理员账号登录后可用")
+        raise app.HTTPException(status_code=403, detail="仅管理员账号登录后可用（管理员为只读）")
     try:
         days = int(payload.get("days") or _RECON_DAYS_DEFAULT)
     except (TypeError, ValueError):

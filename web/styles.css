@@ -742,7 +742,9 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 /* 进度条：确定态按百分比填充，不确定态流动动画（转换刚开始、尚不知总时长时） */
 .progress { width: 100%; height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; margin: .5rem 0; }
 .progress[hidden] { display: none; }
-.progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--brand), var(--brand-strong)); border-radius: 999px; transition: width .35s ease; }
+/* 进度条用 linear 过渡：ease 在每次跳变的首尾减速，高频小步更新时会显出「停—冲—停」
+   的顿挫感；linear 让连续小步合成匀速移动（上传进度见 mcUploadOne/ucUploadOne）。 */
+.progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--brand), var(--brand-strong)); border-radius: 999px; transition: width .28s linear; }
 .progress.is-indeterminate .progress-fill {
   width: 38%; background: linear-gradient(90deg, transparent, var(--brand), transparent);
   animation: progress-indet 1.1s linear infinite;
@@ -4104,9 +4106,17 @@ details[open].com-vol-card > .com-vol-card-head::after { content: "▾"; }
    ⚠️ 必须用 #memberModal —— 弹窗元素是 `<dialog id="memberModal" class="modal">`，**没有** member-modal 类，
    历史上写成 `.member-modal.modal` 的那条是死规则（永远不匹配，实际一直吃基类 .modal 的 560px）。 */
 #memberModal.modal { width: min(940px, 100% - 2rem); max-width: 940px; }
-.member-card .modal-head { margin-bottom: .85rem; }
-/* 会员中心主体：单列展示状态/套餐/激活码 */
-.member-body { display: block; }
+/* ⚠️ flex 必须限定 [open]：作者样式会覆盖 UA 的 dialog:not([open]){display:none}，
+   裸写 display:flex 会把关闭状态的弹窗永久显示、按文档流挂在页面末尾
+   （2026-10-22 踩坑：所有页面底部挂着会员中心、页面被撑高顶部错乱）。 */
+#memberModal.modal[open] { display: flex; flex-direction: column; }
+/* 2026-10-22「下拉还是滑上去」：不再让 <dialog> 整体滚（标题先被顶走，观感=顶部滑动）。
+   卡片改纵向 flex：.modal-head 标题 + ✕ 常驻；.member-body 自己滚；标签栏 sticky
+   钉在内容区顶部 ⇒ 下拉时顶部区域纹丝不动，只有套餐列表在滚。 */
+.member-card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.member-card .modal-head { flex: none; margin-bottom: .85rem; }
+/* 会员中心主体：单列展示状态/套餐/激活码；滚动容器改为 .member-body 自身 */
+.member-body { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .member-main { width: 100%; }
 /* 独立登录/注册弹窗（参考图二/图三风格） */
 .auth-card {
@@ -4800,6 +4810,15 @@ html.theme-dark .pf-pool-note.is-warn { color: #fbbf24; }
 .member-notice[hidden] { display: none; }
 .member-notice-icon { flex: none; line-height: 1.5; }
 .member-notice-text { flex: 1 1 auto; }
+/* 标签栏吸顶（2026-10-22）：滚动容器是 <dialog> 自身（UA 默认 overflow:auto）。
+   wrap 铺满行宽并垫同色底板 ⇒ 内容从标签栏下方穿过时不穿帮；negative margin
+   抵消 .modal-card 左右 padding（1.25rem），静止时与原布局视觉一致。 */
+.member-tabs-wrap {
+  position: sticky; top: 0; z-index: 6;
+  margin: 0 -1.25rem;
+  padding: .5rem 1.25rem .45rem;
+  background: var(--surface);
+}
 .member-tabs {
   display: flex; gap: .35rem; margin-bottom: .8rem; padding: .25rem;
   background: #f1f2f7; border-radius: var(--radius-md); width: fit-content;
@@ -5129,6 +5148,29 @@ html.theme-dark .sb-tab:hover, html.theme-dark .sb-copy:hover { color: #C7D2FE; 
 .admin-btn-ghost { background: transparent; }
 .admin-btn-danger { background: #fdecec; border-color: transparent; color: #d5304b; font-weight: 500; }
 .admin-btn-danger:hover { background: #fbdcdc; }
+/* ===== 管理员只读视图（2026-10-22 权限拆两级：超管唯一，管理员只能看） =====
+   灰化而不是隐藏：让管理员知道「这里本来有操作，但你没有权限」，
+   比按钮凭空消失更容易理解，也不会让人误以为后台坏了。
+   真正的安全闸门在后端 require_super（写接口一律 403），这里只是视觉层。 */
+.admin-readonly-bar {
+  margin: .55rem 1.2rem .1rem;
+  padding: .55rem .85rem;
+  border-radius: 8px;
+  background: #fff7e6;
+  border: 1px solid #ffe0a3;
+  color: #8a5a00;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+.admin-readonly-bar b { color: #b45309; }
+.admin-readonly-mode .admin-btn-primary,
+.admin-readonly-mode .admin-btn-danger {
+  opacity: .38;
+  pointer-events: none;
+  cursor: not-allowed;
+  filter: grayscale(.35);
+}
+.admin-readonly { color: var(--muted, #8b93a7); font-size: .8rem; }
 /* 设计稿按钮：浅蓝底蓝字实心无边框（禁用/重置密码） */
 .admin-btn-soft { background: #e8f0fe; border-color: transparent; color: #2f6bff; font-weight: 500; }
 .admin-btn-soft:hover { background: #d9e6fd; }
@@ -7248,6 +7290,28 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .admin-usage-dlg .aud-today { font-size: .82rem; color: var(--text-mute, #6b7280); margin-bottom: 6px; }
 .admin-usage-dlg .aud-table-wrap { max-height: 200px; overflow: auto; border: 1px solid var(--line, #e5e7eb); border-radius: 8px; }
 .admin-usage-dlg .aud-items { color: var(--text-mute, #6b7280); white-space: normal; }
+/* ── 明细一条记录一行（2026-10-20）：平台标签 | 标题（单行缩略） | 结果贴右端 ── */
+.admin-usage-dlg .aud-row { display: flex; align-items: center; gap: .5rem; padding: 4px 0; }
+.admin-usage-dlg .aud-row + .aud-row { border-top: 1px dashed var(--line, #e5e7eb); }
+.admin-usage-dlg .aud-row-plat { flex: 0 0 auto; min-width: 4.2rem; max-width: 6.5rem; font-size: .72rem;
+  font-weight: 600; color: var(--text, #1f2937); background: var(--bg-soft, #f3f4f6);
+  border-radius: 4px; padding: 1px 6px; text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-usage-dlg .aud-row-title { flex: 1 1 auto; min-width: 0; font-size: .78rem;
+  color: var(--text, #1f2937); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 明细表固定列宽：.admin-table 的 td 是 nowrap，不锁宽会把表格撑到横向滚动，
+   结果标记被推出视口 —— 缩略也就失效了。 */
+.admin-usage-dlg .aud-detail-table { table-layout: fixed; }
+.admin-usage-dlg .aud-detail-table th:nth-child(1) { width: 6.5rem; }
+.admin-usage-dlg .aud-detail-table th:nth-child(2) { width: 4rem; }
+.admin-usage-dlg .aud-detail-table td.aud-items { white-space: normal; overflow: hidden; }
+/* ── 每条记录的「下载成功与否」标记（2026-10-20），固定贴在当行最后 ──
+   已完成＝下载完成且成品已保存到本机；未完成＝失败/取消/被终止；未上报＝结束时没回报结果。 */
+.admin-usage-dlg .aud-res { flex: 0 0 auto; margin-left: 2px; font-size: .7rem;
+  border-radius: 4px; padding: 0 5px; white-space: nowrap; border: 1px solid transparent; }
+.admin-usage-dlg .aud-res.ok { color: #0f7b3f; background: #e7f7ee; border-color: #b7e6c9; }
+.admin-usage-dlg .aud-res.fail { color: #b42318; background: #fdeceb; border-color: #f6c9c4; }
+.admin-usage-dlg .aud-res.unk { color: #6b7280; background: #f3f4f6; border-color: #e5e7eb; }
 .admin-usage-dlg .aud-thread { border: 1px solid var(--line, #e5e7eb); border-radius: 8px;
   padding: .5rem .6rem; margin-bottom: .45rem; }
 .admin-usage-dlg .aud-thread-h { display: flex; align-items: center; gap: .45rem;
@@ -7334,3 +7398,62 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .admin-trial-chips label { display: inline-flex; align-items: center; gap: .25rem; padding: .18rem .45rem; border: 1px solid var(--border, #e5e7eb); border-radius: 999px; background: var(--surface, #fff); font-size: 12px; cursor: pointer; }
 .admin-trial-chips label input { width: 13px; height: 13px; cursor: pointer; }
 .admin-trial-chips label.is-out { color: var(--text-dim, #9ca3af); text-decoration: line-through; }
+
+/* ---- 后台 · Cookie 池（2026-10-19）--------------------------------------
+   一个平台一块卡：标题行放「账号数 / 有效 / 无效 / 未校验 / 最近更新 / 补注入」，
+   下面才是账号明细。运营扫一眼就够判断「这个站要不要补 Cookie」。
+   状态色只表达「站点确认的结果」：绿=站点说已登录，红=站点说未登录，
+   灰=没验过（不是坏）。 */
+.ckp-block {
+  margin-bottom: 1rem; border: 1px solid var(--line);
+  border-radius: var(--radius-md); overflow: hidden;
+}
+.ckp-hd {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  padding: .6rem .9rem; background: #f7f8fa;
+  border-bottom: 1px solid var(--line); font-size: .85rem;
+}
+.ckp-hd b { font-size: .9rem; }
+.ckp-hd .admin-btn { margin-left: auto; }
+.ckp-meta { color: var(--text-mute); font-size: .78rem; }
+.ckp-chip {
+  font-size: .72rem; padding: .1rem .42rem; border-radius: 999px;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.ckp-chip.ckp-ok { color: var(--success); background: rgba(16, 185, 129, .10); border-color: rgba(16, 185, 129, .25); }
+.ckp-chip.ckp-bad { color: var(--danger); background: rgba(239, 68, 68, .08); border-color: rgba(239, 68, 68, .20); }
+.ckp-chip.ckp-unk { color: var(--text-mute); background: #f1f3f5; border-color: var(--line); }
+.ckp-st { font-weight: 600; }
+.ckp-st.ckp-ok { color: var(--success); }
+.ckp-st.ckp-bad { color: var(--danger); }
+.ckp-st.ckp-unk { color: var(--text-mute); }
+.ckp-note { color: var(--text-mute); font-size: .74rem; }
+.ckp-detail { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 平台筛选 + tab 条（2026-10-19 用户要求「每个平台一个分页，不要排一起」）：
+   默认「全部平台」= tab 条逐个看；下拉选具体平台 = 只渲染那一个块。 */
+.ckp-filter {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  margin-bottom: .6rem;
+}
+.ckp-filter-label { font-size: .82rem; color: var(--text-mute); }
+.ckp-filter select { max-width: 320px; }
+.ckp-filter-hint { font-size: .74rem; color: var(--text-mute); }
+.ckp-tabs {
+  display: flex; flex-wrap: wrap; gap: .4rem;
+  margin-bottom: .8rem; padding-bottom: .2rem;
+}
+.ckp-tab {
+  display: inline-flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+  padding: .34rem .68rem; cursor: pointer; font-size: .8rem;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface, #fff); color: var(--text);
+}
+.ckp-tab:hover { border-color: var(--brand); }
+.ckp-tab.is-on {
+  border-color: var(--brand); background: #eef0ff;
+  color: var(--brand); font-weight: 600;
+}
+.ckp-tab-name { white-space: nowrap; }
+.ckp-tab-meta { color: var(--text-mute); font-size: .72rem; white-space: nowrap; }
+.ckp-tab.is-on .ckp-tab-meta { color: inherit; opacity: .75; }

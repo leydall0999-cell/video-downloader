@@ -1374,7 +1374,8 @@ def test_router_source_wiring():
     check("初始 URL SSRF 校验", "app._assert_safe_url(url)" in src)
     check("建 kind=image 任务", "kind='image'" in src)
     check("提交图片执行器", "image_download.run_image_download" in src)
-    check("按次计费", "use_daily('download', 1)" in src)
+    # 2026-10-19：计费改成带标题与平台（后台「使用详情」要能定位下载了什么）
+    check("按次计费", "use_daily('download', 1, title=url, platform='图片')" in src)
     check("批量上限 50", "MAX_URLS_PER_REQUEST = 50" in src
           and "max_length=MAX_URLS_PER_REQUEST" in src)
     check("配额用尽 402 + MEMBER_QUOTA", "status_code=402" in src and "MEMBER_QUOTA|" in src)
