@@ -270,7 +270,9 @@ def test_g_gate_is_the_single_choke_point() -> None:
         "server/routers/dewatermark.py": "gate_message",
         "server/routers/subtitle.py": "gate_message",
         "server/routers/subtitles.py": "gate_message",
-        "server/routers/quota.py": "charge_commentary_credits",
+        # 🔴 2026-10-23：解说改成「产出成功才扣」，真落账点是 charge_commentary_on_success，
+        # 它内部同样走 gate_message ⇒ 试用逻辑照旧一处生效。
+        "server/routers/quota.py": "charge_commentary_on_success",
     }
     for f, sym in srcs.items():
         check(f"{Path(f).name} 走统一扣费收口", sym in _read(f))

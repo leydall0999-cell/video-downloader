@@ -773,6 +773,16 @@ run_one test_credit_price_display.py
 #       且「每日次数」列仍用「次」（两列不混用）。
 run_one test_commentary_duration_pricing.py
 
+#  42d. test_commentary_fail_no_charge.py —— 解说「失败不扣积分」（2026-10-23 事故修复）。
+#       事故：解说在转写阶段 1 秒崩溃（包内 av 19.0.1 与 faster-whisper 1.2.1 不兼容），
+#       但 AI 积分已在**开跑前**的预检里真扣掉，失败路径只退云端免费次数、没有退积分
+#       通道 ⇒ 用户两次重试白扣 320 积分、一个成片都没拿到。
+#       本守卫钉（行为级，不靠字符串）：① 预检只读——跑完一分不动、被拒也不动；
+#       ② 预检回传账单（op/cost/vision_cost）；③ 只有产出成功才落账，且落账额
+#       = 解说 + 画面理解；④ 同一个 job 重复落账不重复扣；⑤ 失败任务一分不扣；
+#       ⑥ 空账单不误扣；⑦ can_afford(total) 与 gate_message(cost) 同口径。
+run_one test_commentary_fail_no_charge.py
+
 #  43. test_ai_free_trial.py —— 免费用户「首次体验」（2026-10-05 用户定档：
 #      **每个功能各免一次**，口径可在后台改 per_op / once / off）。
 #      背景：上一轮把 AI 积分墙补齐后，积分池为 0 的免费用户**第一次点任何 AI 功能

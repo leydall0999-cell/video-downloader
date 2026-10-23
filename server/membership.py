@@ -1191,8 +1191,13 @@ def spend_for(store: "MembershipStore", op: str, sub: str | None = None,
     return res
 
 
-def can_afford(store: "MembershipStore", op: str, sub: str | None = None) -> str:
+def can_afford(store: "MembershipStore", op: str, sub: str | None = None,
+               total: int | None = None) -> str:
     """**只查不扣**：返回 "" = 付得起；返回人话原因 = 付不起。零副作用。
+
+    🔴 2026-10-23 新增 `total`：按量计价的功能（视频解说按「每半小时」收）本次应收
+    总额不是表内单价 —— 不传总额就会"3 小时的片子只按 1 个单位放行，跑完才发现扣不动"。
+    语义与 `gate_message(cost=...)` 完全一致，两者必须同口径。
 
     🔴 2026-10-06 新增。**绝不能用 `gate_message` 当探针** —— 它会先
     `spend_credits` 真扣积分，余额不够时还会 `trial_consume` 消耗「首次体验」
@@ -1206,7 +1211,7 @@ def can_afford(store: "MembershipStore", op: str, sub: str | None = None) -> str
       4. 否则返回与 gate_message 同措辞的原因（前端直接展示）。
     """
     try:
-        cost = int(credit_cost(op, sub))
+        cost = int(total) if total is not None else int(credit_cost(op, sub))
     except Exception:  # noqa: BLE001
         return ""                      # 单价查不到 → 保守放行，交给事后真扣费兜底
     if cost <= 0:
