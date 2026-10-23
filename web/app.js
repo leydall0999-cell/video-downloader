@@ -10247,6 +10247,21 @@ el.dwVidPlayer.hidden = true;
     el.playlistDownloadBtn.disabled = false;
   };
 
+  // ——— 网盘分享链接识别（2026-10-24）———
+  // 只认百度系：网盘视图当前也只实现了百度。识别范围必须与「真正能解析」的范围一致，
+  // 否则用户被导过去又看到「目前只支持百度网盘」，等于换个地方报错。
+  const isNetDiskShare = (u) => {
+    try {
+      const h = new URL(u, location.href).hostname.toLowerCase();
+      return /^(pan|yun|eyun)\.baidu\.com$/.test(h);
+    } catch (e) { return false; }
+  };
+  // 百度分享文案里的提取码：兼容「提取码: c4c0」「提取码：c4c0」「?pwd=c4c0」三种写法
+  const extractSharePwd = (text) => {
+    const m = String(text || '').match(/(?:提取码|访问码|密码|pwd)\s*[:：=]?\s*([A-Za-z0-9]{4,8})/i);
+    return m ? m[1] : '';
+  };
+
   const handleResolve = async (event) => {
     event.preventDefault();
     const raw = el.input.value.trim();
@@ -10282,6 +10297,21 @@ el.dwVidPlayer.hidden = true;
       return;
     }
     const url = urls[0];
+    // 网盘分享链接（2026-10-24）：主下载框只做「视频解析」，网盘要走专用四步流程
+    // （提取码校验 → 取签名 → 列文件 → 换直链）。若放行到通用解析，用户看到的是
+    // 误导性的「该平台已收录（pan.baidu.com），但暂未实现该站的解析器」——
+    // 他理所当然认为「网盘功能没做」。这里识别到就带着链接/提取码切到「网盘下载」
+    // 并直接发起解析，省掉让用户手动找入口再搬一次。
+    if (isNetDiskShare(url)) {
+      const pwd = extractSharePwd(raw);
+      if (el.sTabCloudDrive && el.cdUrl) {
+        el.sTabCloudDrive.click();                  // 复用侧栏已有的视图切换绑定
+        el.cdUrl.value = url;
+        if (el.cdPwd && pwd) el.cdPwd.value = pwd;
+        if (el.cdResolve) el.cdResolve.click();     // 已有解析逻辑：校验/提示/列表都在里面
+        return;
+      }
+    }
     clearError();
     setLoading(true);
     el.resultPanel.hidden = true;

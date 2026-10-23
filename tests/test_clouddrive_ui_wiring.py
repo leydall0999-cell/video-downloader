@@ -92,3 +92,40 @@ def test_has_styles_for_list():
 def test_compliance_note_present():
     """合规边界要写在界面上：只下自己的/分享给自己的文件，登录态只存本机。"""
     assert "只存这台电脑" in HTML_TXT or "只存本机" in HTML_TXT
+
+
+def test_sidebar_item_lives_in_download_group():
+    """侧栏项必须待在「下载」组里（2026-10-24 用户实测反馈的回归点）。
+
+    它一度被塞进「工具」折叠组 ⇒ 用户在主下载框粘网盘链接报错后，翻遍侧栏也
+    找不到网盘入口（工具组默认折叠）。判据用「该按钮之前最近的分组标题」来定，
+    不依赖行号，挪动文件也不会失效。
+    """
+    idx = HTML_TXT.find('id="sTabCloudDrive"')
+    assert idx > 0, "侧栏没有网盘项"
+    before = HTML_TXT[:idx]
+    title_at = before.rfind("sidebar-group-en")
+    assert title_at > 0, "找不到分组标题"
+    seg = before[title_at:title_at + 200]
+    assert ">下载<" in seg, f"网盘项被挪出了「下载」组，当前所在组：{seg[:80]}"
+
+
+def test_main_input_hands_netdisk_links_over():
+    """主下载框粘网盘链接要交给网盘流程，而不是掉进通用解析。
+
+    真实反馈（2026-10-24）：用户在首页主框粘「链接 + 提取码」的整段分享文案，
+    点解析得到「该平台已收录（pan.baidu.com），但暂未实现该站的解析器」——
+    功能其实做了，只是这条路没接上，用户于是认为「网盘没做」。
+    """
+    assert "const isNetDiskShare" in APP_TXT, "缺少网盘链接识别函数"
+    assert "const extractSharePwd" in APP_TXT, "缺少提取码解析函数"
+    # 识别逻辑必须真的用在主解析流程里（函数定义了没调用 = 打了白工）
+    body = APP_TXT.split("const handleResolve =")[1].split("const startDownload")[0]
+    assert "isNetDiskShare(" in body, "主解析没有调用网盘识别"
+    assert "el.cdUrl.value = url" in body, "主解析没有把链接搬到网盘输入框"
+    assert "el.cdResolve.click()" in body, "主解析没有自动触发网盘解析"
+    # 提取码要能吃下百度分享文案里的三种写法
+    pwd_fn = APP_TXT.split("const extractSharePwd")[1].split("const handleResolve")[0]
+    for token in ("提取码", "pwd"):
+        assert token in pwd_fn, f"提取码识别漏了 {token} 写法"
+
