@@ -397,22 +397,16 @@
 
   <div id="downloadView" data-page-node-id="xfGe7CUNBEVDFIKRLvD50O">
 
-  <!-- V7 页头（2026-10-23 全站改版）：原 hero 大标题收敛为「返回 + 标题 + 副标 + 右侧操作」 -->
-  <div class="ph">
-    <button type="button" class="ph-back" title="返回首页" aria-label="返回首页">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
-    </button>
-    <div class="ph-tt">
-      <div class="ph-title">视频下载</div>
-      <div class="ph-sub">支持 100+ 平台 · 每行一个可批量解析</div>
-    </div>
-    <div class="ph-actions">
-      <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
-      <a href="#subtitle" class="chip" onclick="window.VDL && window.VDL.switchView('subtitle'); return false;">本地视频？去「创作」提取</a>
-    </div>
-  </div>
-  <h1 class="sr-only">视频下载 · 粘贴链接，直接保存视频</h1>
-
+  <section class="hero" data-page-node-id="lajk8S2sg6Wn51Sw7Faseg">
+    <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
+    <h1 data-page-node-id="JmxthMwGxuREFDmKd0QJOV">粘贴链接，直接保存视频</h1>
+    <p data-page-node-id="S4ywX7Uc9DoIGtqRxkoHFU">支持 YouTube、哔哩哔哩、抖音等主流平台，自动识别清晰度，全程显示下载进度。</p>
+    <p class="hero-link-wrap" data-page-node-id="52iPn7XM86PCEI5e6VVl3Z">
+      <span class="hero-note" data-page-node-id="qBeV8UzyuATK5KvFK8RI7m">支持链接直接提取字幕</span>
+      <span class="hero-sep" data-page-node-id="2aXjyYcnNaaQZlKB4OqUEM">·</span>
+      <a href="#subtitle" class="hero-link" onclick="window.VDL && window.VDL.switchView('subtitle'); return false;" data-page-node-id="BtB8KaBvO6AlT4TiU81Sjw">本地视频？去「创作」提取</a>
+    </p>
+  </section>
 
   <!-- 输入区 -->
 <details class="howto" data-howto="download">
@@ -543,10 +537,6 @@
 
   <!-- 解析结果 -->
   <section class="panel result-panel" id="resultPanel" hidden aria-live="polite" data-page-node-id="ccua6maT4Nyd6YBZwhxudM">
-    <div class="card-head">
-      <div class="l"><h3>解析结果</h3></div>
-      <div class="r">选好清晰度后点「开始下载」</div>
-    </div>
     <div class="video-card" data-page-node-id="fJPNdfsqKuV3H5eDDE9oJi">
       <div class="thumb-box" data-page-node-id="GcWB7DsDKxh6PfJxrMTGDp">
         <img id="videoThumb" alt="" loading="lazy" data-page-node-id="c2KiFJvJqCEBN0N5RfBCYa" />
@@ -685,20 +675,8 @@
   </div><!-- /#downloadView -->
 
   <!-- 上传转换视图（多文件批量：参考 DataTool 风格，每个文件单独一行 + 独立输出格式） -->
-  <section id="uploadConvertView" class="panel vpage" hidden aria-labelledby="ucTitle" data-page-node-id="6uneMZqJOufq3Nxadr155J">
-    <div class="ph">
-      <button type="button" class="ph-back" title="返回首页" aria-label="返回首页">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
-      </button>
-      <div class="ph-tt">
-        <div class="ph-title">视频格式转换</div>
-        <div class="ph-sub">批量处理 · 支持 MP4 / MOV / MKV / WebM / MP3 / GIF</div>
-      </div>
-      <div class="ph-actions">
-        <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
-      </div>
-    </div>
-    <h2 id="ucTitle" class="sr-only" data-page-node-id="pH0M1R1kluC0SRfuqfEuvf">视频格式转换</h2>
+  <section id="uploadConvertView" class="panel" hidden aria-labelledby="ucTitle" data-page-node-id="6uneMZqJOufq3Nxadr155J">
+    <h2 id="ucTitle" class="guide-title" data-page-node-id="pH0M1R1kluC0SRfuqfEuvf"><span class="guide-title-text">视频格式转换</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
 
     <!-- 桥接已独立为「媒体处理 → 视频/音频桥接」，此处保留入口提示 -->
     <p class="uc-tip" id="ucBridgeHint" style="margin-top:4px;color:var(--text-mute,#6b7280);font-size:12.5px;" data-page-node-id="K6Sz6BB9Ycuaph7IucHFGD">
@@ -724,8 +702,6 @@
     <div class="howto-foot"><button type="button" class="howto-close">✕ 关闭引导</button><span class="howto-foot-hint">需要时点页面右上角的问号按钮重新打开</span></div>
   </div>
 </details>
-    <div class="split c-560-380 v8-split">
-    <div class="v8-col v8-left">
     <div class="uc-toolbar" data-page-node-id="Q2uqptrXpfoPemdyj01v93">
       <button type="button" class="btn btn-primary" id="ucAddBtn" data-page-node-id="NtDAmx3SmtFpXL2TXbvd4g">添加文件</button>
       <input type="file" id="ucFileInput" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.ts,.wmv,.mp3,.m4a,.aac,.wav" multiple hidden data-page-node-id="DLs1HtsjH23SqqfgtWcrG8" />
@@ -739,8 +715,6 @@
     <!-- 空状态提示 -->
     <div class="uc-empty" id="ucEmpty" data-page-node-id="JjvpeKv82JlEsb6QG8KsUs">点击「添加文件」选择 1 个或多个视频，可同时设置不同输出格式。</div>
 
-    </div><!-- /.v8-left -->
-    <div class="v8-col v8-right">
     <!-- 批量参数 + 操作区（仅当有文件时显示） -->
     <div class="uc-bulk" id="ucBulk" data-page-node-id="IUnl6EdVVG2lme6r4IqVdX">
       <h3 class="card-title" data-page-node-id="wmaCvI3zIGktm9aqoCdSKJ">批量参数（可应用到所有未开始的项）</h3>
@@ -809,8 +783,6 @@
       </div>
     </div>
 
-    </div><!-- /.v8-right -->
-    </div><!-- /.v8-split -->
     <span class="convert-status" id="ucStatus" aria-live="polite" data-page-node-id="1YnMufAQhFKJgaSvDPxENl"></span>
   </section>
 
@@ -1430,20 +1402,8 @@
   <!-- 去水印视图（需求文档模块二：图片/PDF/视频去水印 + 一键抠图）。
        2026-09-08 子模式全部拎到侧栏独立入口（图片/PDF/视频/抠图），
        视图内 dw-tabs 切换按钮行已按用户要求删除 -->
-  <section id="dwView" class="panel vpage" hidden aria-labelledby="dwTitle" data-page-node-id="5YWnQhsPLEkWUNBG5XIkaF">
-    <div class="ph">
-      <button type="button" class="ph-back" title="返回首页" aria-label="返回首页">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
-      </button>
-      <div class="ph-tt">
-        <div class="ph-title">智能去水印</div>
-        <div class="ph-sub">图片 / PDF / 视频 · 多框选 + 消除笔</div>
-      </div>
-      <div class="ph-actions">
-        <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>
-      </div>
-    </div>
-    <h2 id="dwTitle" class="sr-only" data-page-node-id="l31BKkWDVYjj3GL7kaF2dR">智能去水印</h2>
+  <section id="dwView" class="panel" hidden aria-labelledby="dwTitle" data-page-node-id="5YWnQhsPLEkWUNBG5XIkaF">
+    <h2 id="dwTitle" class="guide-title" data-page-node-id="l31BKkWDVYjj3GL7kaF2dR"><span class="guide-title-text">图片去水印</span><button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button></h2>
 
     <!-- 图片模式 -->
     <div id="dwImgPane" data-page-node-id="btcEN9SoUAW0tcRBZNCGUE">
@@ -2197,15 +2157,6 @@
 
   <!-- 个人中心视图（左侧 tab 栏入口，整页承载记录/改密） -->
   <section id="profileView" class="panel profile-panel" hidden aria-labelledby="profileTitle" data-page-node-id="Jm7dPa7AMEwLwlCahO2HSH">
-    <div class="ph">
-      <button type="button" class="ph-back" title="返回首页" aria-label="返回首页">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
-      </button>
-      <div class="ph-tt">
-        <div class="ph-title">个人中心</div>
-        <div class="ph-sub">账号 · 会员权益 · 积分 · 使用统计</div>
-      </div>
-    </div>
     <div class="profile-body" data-page-node-id="vOlIH5sJpb9BJE6Sbo6Xzp">
       <!-- 个人资料总览：卡片式展示会员 / 积分 / 今日使用（参考权益资产页布局） -->
       <div class="um-panel" id="profileOverviewPanel" data-page-node-id="jJN1HQSQVe3L3U8AGfBfb9">
@@ -2565,16 +2516,9 @@
   </section>
 
   <!-- 媒体库视图（桌面版功能） -->
-  <section id="libraryView" class="panel vpage" hidden aria-labelledby="libTitle" data-page-node-id="7mJMihIEKTHBEBBFGCjIpI">
+  <section id="libraryView" class="panel" hidden aria-labelledby="libTitle" data-page-node-id="7mJMihIEKTHBEBBFGCjIpI">
     <div class="lib-head" data-page-node-id="T6nr5gPCEF6WGgetjt61f3">
-      <button type="button" class="ph-back" title="返回首页" aria-label="返回首页">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
-      </button>
-      <div class="ph-tt">
-        <div class="ph-title">媒体库</div>
-        <div class="ph-sub">下载与处理过的文件都在这里</div>
-      </div>
-      <h2 id="libTitle" class="sr-only" data-page-node-id="AqFvNXFBIEifCelmNzOH1z">媒体库</h2>
+      <h2 id="libTitle" class="guide-title" data-page-node-id="AqFvNXFBIEifCelmNzOH1z">我的媒体库</h2>
       <div class="lib-head-actions" data-page-node-id="8q8Woic9NbJdkchhRB0rDt">
         <button type="button" class="btn btn-ghost btn-sm" id="libCleanup" hidden data-page-node-id="nsXkSPyVTAlwpwoq4kDs5z">🧹 自动清理</button>
         <button type="button" class="btn btn-ghost btn-sm" id="libCrypto" hidden data-page-node-id="Dtdm85MklO5z5NbG14zQEu">🔐 保险箱</button>

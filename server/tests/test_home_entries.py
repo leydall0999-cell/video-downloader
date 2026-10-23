@@ -93,16 +93,12 @@ def main():
     check(f"侧栏 {len(side_visible)} 个主功能已全部出现在首页", not missing, f"首页缺失：{missing}")
 
     print("\n[C] 分组结构与侧栏分组名一致")
-    # 2026-10-23 V5 改版：分组标题从 h3.home-group-title 改为 .v5-group-head > b。
-    home_groups = re.findall(r'<div class="v5-group-head">[\s\S]*?<b>([^<]+)</b>', block)
+    home_groups = re.findall(r'class="home-group-emoji"[^>]*>[^<]*</span>([^<]+)</h3>', block)
     side_groups = re.findall(r'class="sidebar-group-en"[^>]*>([^<]+)</span>', html)
     check("首页解析出 5 个分组", len(home_groups) == 5, f"实际 {home_groups}")
-    for want in ("创作", "下载", "转换", "工具", "其他"):
+    for want in ("下载", "创作", "转换", "工具", "媒体库"):
         check(f"首页有「{want}」分组", want in home_groups)
-    # 「其他」= 设计稿对侧栏「媒体库」组的改名（V5 首页只此一项，别自造新名）
-    _GROUP_ALIAS = {"其他": "媒体库"}
-    unknown = [g for g in home_groups
-               if g not in side_groups and _GROUP_ALIAS.get(g) not in side_groups]
+    unknown = [g for g in home_groups if g not in side_groups]
     check("首页分组名都来自侧栏（没有自造分组名）", not unknown, f"未知：{unknown}")
 
     print("\n[D] 点击仍是事件委托（新增卡片不用再写 JS）")
@@ -113,7 +109,7 @@ def main():
     print("\n[E] 分组样式齐备（否则卡片平铺成一片、看不出分组）")
     # 必须匹配到规则块本体（带 {）——只查子串会被 .home-group-title::before 之类的
     # 派生选择器蒙混过关（2026-09-30 变异测试实测：删掉规则本体仍绿）。
-    for sel in (".home-groups {", ".v5-group-head {", ".v5-grid {", ".v5-card {"):
+    for sel in (".home-groups {", ".home-group-title {", ".home-group .home-grid {"):
         check(f"styles.css 有规则块 {sel}", sel in css)
 
     print("")
