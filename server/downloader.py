@@ -1347,6 +1347,26 @@ def _build_aria2c_args(concurrency: int) -> list[str]:
     # -x 每服务器最大连接 / -s 分片数 / -j 整体并行下载数 / -k 最小分片大小
     return ["-x", n, "-s", n, "-j", n, "-k", "1M", "--continue=true", "--max-tries=5"]
 
+
+# —— 百度网盘直链（2026-10-24 本机实测）——
+# 限速是服务端按**账号总带宽**给的，不是按连接：1 连接 78.8 KB/s，4/8/16 连接
+# 80.9/61.0/36.6 KB/s（8/16 连还会被掐断、拿不满字节）。多连接在这里是纯负优化。
+# 但**客户端身份**能拿到更高限速档：curl 默认 UA 77 KB/s、Chrome 81 KB/s，而
+# 老 PC 客户端的 P2SP 标识 ~145 KB/s（1.5MB 交替 A/B 两轮一致）。
+# ⌁ 同一 UA 复测出现过 166 / 66 的跳变，疑似「账号+UA 分桶、桶内配额用多降档」，
+#   所以这是榨取而非破解，对外不承诺固定倍数。
+# ⇒ 网盘直链一律：单连接（禁 aria2c、禁分片并发）+ P2SP UA。
+_NETDISK_UA = "netdisk;P2SP;2.2.60.26"
+_NETDISK_HOST_RE = re.compile(r"(?:^|\.)(?:baidupcs\.com|pcs\.baidu\.com)$")
+
+
+def _is_netdisk_direct(url_or_host: str) -> bool:
+    """是否百度网盘直链（d.pcs.baidu.com → 302 → *.baidupcs.com）。"""
+    h = (url_or_host or "").strip().lower()
+    if "://" in h:
+        h = _host_of(h) or ""
+    return bool(h) and bool(_NETDISK_HOST_RE.search(h))
+
 def _has_partial(workdir: Path | None) -> bool:
     """工作目录里是否残留可续传的部分文件（.part / .aria2 控制文件 / .FragN 分片）。"""
     if not workdir or not workdir.is_dir():
@@ -5471,6 +5491,12 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
     # 页面 origin，不覆盖必 403。
     if (getattr(task, "referer", "") or "").strip():
         options.setdefault("http_headers", {})["Referer"] = task.referer.strip()
+    if _is_netdisk_direct(_task_host):
+        # 百度按账号限速，但**请求身份**决定限速档：浏览器身份 ~78 KB/s，
+        # 老 PC 客户端的 P2SP 标识 ~145 KB/s（1.5MB 交替 A/B 两轮一致）。
+        # 同时禁掉分片并发，配合上面的单连接。
+        options.setdefault("http_headers", {})["User-Agent"] = _NETDISK_UA
+        options["concurrent_fragment_downloads"] = 1
     # 断点续传：保留 .part 分片的前提下，显式开启 continue 让 yt-dlp 从上次中断处接上。
     # aria2c 分支已在 _build_aria2c_args 内置 --continue=true；此处覆盖原生下载器场景。
     if resume:
@@ -5481,6 +5507,11 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
     #   - 显式 "aria2c" → 有就用，无则警告回退；显式 "native" → 强制原生。
     _a2 = _aria2c_path()
     _dl_choice = (downloader_type or VDL_DOWNLOADER).strip().lower()
+    if _is_netdisk_direct(_task_host):
+        # 网盘直链多连接是负优化（实测 4/8/16 连接比单连接更慢，且会被掐断拿不满字节）
+        # ⇒ 强制原生单连接，连用户显式选 aria2c 也一起兜住。
+        logger.info("[网盘] 直链强制单连接下载（多连接实测更慢）")
+        _dl_choice = "native"
     if _dl_choice == "aria2c" and _is_windows():
         # 🔴 Windows 一律不用 aria2c，**包括调用方显式指定**（2026-10-18 用户实测）。
         # 桌面版是 --windowed 的 GUI 进程，Windows 会给它 fork 的 aria2c.exe 新建控制台

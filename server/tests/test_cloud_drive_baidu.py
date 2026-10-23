@@ -371,12 +371,26 @@ def test_router_resolve_error_flags_credential():
     assert out["need_credential"] is True
 
 
-def test_login_cookie_prefers_cache_over_stored():
-    """扩展推送的本机缓存优先于手动保存的 BDUSS。"""
+def test_login_cookie_prefers_stored_over_cache():
+    """手动保存的 BDUSS 优先于本机缓存（2026-10-24 改序）。
+
+    原因：百度限速按账号等级，用户为了跑满带宽会去网盘页填**会员账号**的 BDUSS；
+    若缓存优先，会被本机 Chrome 里那个非会员账号盖掉 ⇒ 表现成「填了没反应」。
+    显式指定的账号必须赢过自动抓取的缓存。
+    """
     rt = _router()
     with mock.patch("cookie_cache.peek_cached_cookie_header",
                     return_value="BDUSS=from-cache"), \
          mock.patch.object(rt, "get_baidu_bduss", return_value="BDUSS=stored"):
+        assert rt._baidu_login_cookie() == "BDUSS=stored"
+
+
+def test_login_cookie_uses_cache_when_no_stored():
+    """没手动保存时仍用本机缓存（装了扩展的用户零配置）。"""
+    rt = _router()
+    with mock.patch("cookie_cache.peek_cached_cookie_header",
+                    return_value="BDUSS=from-cache"), \
+         mock.patch.object(rt, "get_baidu_bduss", return_value=""):
         assert rt._baidu_login_cookie() == "BDUSS=from-cache"
 
 

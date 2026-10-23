@@ -1180,6 +1180,9 @@ run_pytest_root test_cloud_drive_baidu.py
 # 网盘下载「前端接线」守卫：HTML id / switchView 互斥 / 三端点 / 下载带 cookie
 # （少任何一处都会变成「点了没反应」或「解析成功却下载失败」，后端测试发现不了）
 run_pytest_root test_clouddrive_ui_wiring.py
+# 网盘直链下载策略：强制单连接 + 客户端身份 UA（2026-10-24 实测：百度按账号总带宽
+# 限速，4/8/16 连接比单连接更慢且会被掐断；P2SP 身份 ~145 KB/s vs 浏览器 ~78 KB/s）
+run_pytest_root test_netdisk_download_options.py
 run_pytest_root test_commentary_config.py
 run_pytest_root test_commentary_routes.py
 run_pytest_root test_commentary_stash.py

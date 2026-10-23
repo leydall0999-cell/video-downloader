@@ -36,13 +36,20 @@ class CloudDriveCredentialReq(BaseModel):
 
 
 def _baidu_login_cookie() -> str:
-    """取百度登录态：本机 cookie 缓存 → 手动保存的 BDUSS → 实时解密浏览器。
+    """取百度登录态：手动保存的 BDUSS → 本机 cookie 缓存 → 实时解密浏览器。
 
-    顺序说明：扩展推送/浏览器同步的缓存命中最快也最新，放第一；
-    手动粘贴的 BDUSS 是没装扩展用户的兜底；
+    顺序说明（2026-10-24 改：**手动优先**）：
+    用户在网盘页「保存登录态」里填的 BDUSS 是**显式指定账号**，必须盖过自动抓的
+    缓存 —— 否则他想用会员账号下载时，会被本机 Chrome 缓存里的非会员账号盖掉，
+    界面表现就是「填了会员 BDUSS，速度没变」（百度限速按账号等级，非会员 ~80KB/s）。
+    没填才用缓存（扩展推送/浏览器同步，命中快）；
     最后才实时解密浏览器 —— Chrome 156 起 cookie 走应用绑定加密（ABE），
     这条路大概率失败且慢，只在前面全空时试一次。
     """
+    stored = get_baidu_bduss() or ""
+    if stored:
+        return stored
+
     try:
         import cookie_cache
         for host in _BAIDU_HOSTS:
@@ -51,10 +58,6 @@ def _baidu_login_cookie() -> str:
                 return got
     except Exception:  # noqa: BLE001
         pass
-
-    stored = get_baidu_bduss() or ""
-    if stored:
-        return stored
 
     try:
         import cookie_cache
