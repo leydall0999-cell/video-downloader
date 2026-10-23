@@ -1163,6 +1163,13 @@ run_root test_bilibili_cookie_fix.py
 run_root test_bilibili_url_normalize.py
 run_pytest_root test_cdp_sniffer.py
 run_pytest_root test_chrqj_extractor.py
+# 网盘（百度）解析：新接口四步 verify→tplconfig→list→sharedownload
+# （sharedownload 必须 form 编码 —— 改回 json= 百度会 errno=2，本用例是回归防护）、
+# 登录态三态、路由层登录态取用顺序（2026-10-23 接入）
+run_pytest_root test_cloud_drive_baidu.py
+# 网盘下载「前端接线」守卫：HTML id / switchView 互斥 / 三端点 / 下载带 cookie
+# （少任何一处都会变成「点了没反应」或「解析成功却下载失败」，后端测试发现不了）
+run_pytest_root test_clouddrive_ui_wiring.py
 run_pytest_root test_commentary_config.py
 run_pytest_root test_commentary_routes.py
 run_pytest_root test_commentary_stash.py
