@@ -67,7 +67,13 @@
     { id: 'weibo', name: '微博', domain: 'weibo.com',
       url: 'https://weibo.com/', keys: ['SUB'], cloud: false },
     { id: 'iqiyi', name: '爱奇艺', domain: 'iqiyi.com',
-      url: 'https://www.iqiyi.com/', keys: ['P00001'], cloud: false }
+      url: 'https://www.iqiyi.com/', keys: ['P00001'], cloud: false },
+    // 百度网盘（2026-10-23 接入）：domain 用根域 baidu.com，BDUSS 挂在根域下，
+    // chrome.cookies.getAll 会连带 pan.baidu.com 等子域。
+    // **cloud 必须为 false**：BDUSS 等于完整网盘权限（比视频站 cookie 敏感得多），
+    // 只推本机、绝不进云端公共池。
+    { id: 'baidupan', name: '百度网盘', domain: 'baidu.com',
+      url: 'https://pan.baidu.com/', keys: ['BDUSS'], cloud: false }
   ];
 
   var CLOUD_BASE = 'https://hanyuxz.top';

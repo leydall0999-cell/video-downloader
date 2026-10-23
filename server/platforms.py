@@ -64,6 +64,13 @@ SUPPORTED_PLATFORMS: tuple[Platform, ...] = (
     Platform("netease", "网易云音乐", ("music.163.com",), "🎼"),
     Platform("pearvideo", "梨视频", ("pearvideo.com",), "🍐"),
     Platform("haokan", "好看视频", ("haokan.baidu.com",), "🅱️"),
+    # 百度网盘：除网页域名外，把直链下载 CDN 域名也纳入，使 parse_source 放行
+    # d.pcs.baidu.com 等直链（下载走现有 /api/download + cookie=BDUSS，复用下载器）。
+    # 注：这些 CDN 域名不在 CHINA_DOMAINS 内 → _base_options 不会强加 Referer，
+    # 而 BDUSS cookie 对所有 host 都注入，故百度 dlink 下载恰好「带 BDUSS、无 Referer」。
+    Platform("baidupan", "百度网盘", ("pan.baidu.com", "yun.baidu.com",
+                                      "d.pcs.baidu.com", "c.pcs.baidu.com",
+                                      "ncc.pae.baidu.com", "pcs.baidu.com"), "☁️"),
     Platform("pipix", "皮皮虾", ("pipix.com",), "🦐"),
     Platform("weishi", "微视", ("weishi.qq.com",), "🎬"),
     Platform("huya", "虎牙直播", ("huya.com",), "🎮"),

@@ -928,6 +928,19 @@
     idpPickedName: $('idpPickedName'),
     idpPickedClear: $('idpPickedClear'),
     idpReset: $('idpReset'),
+    // 网盘下载（2026-10-23 新增）：百度网盘分享链接 → 直链 → 本地落盘
+    clouddriveView: $('clouddriveView'),
+    cdUrl: $('cdUrl'),
+    cdPwd: $('cdPwd'),
+    cdResolve: $('cdResolve'),
+    cdStatus: $('cdStatus'),
+    cdList: $('cdList'),
+    cdCookie: $('cdCookie'),
+    cdCookieSave: $('cdCookieSave'),
+    cdCookieState: $('cdCookieState'),
+    cdCredBox: $('cdCredBox'),
+    tabCloudDrive: $('tabCloudDrive'),
+    sTabCloudDrive: $('sTabCloudDrive'),
     idpBtn: $('idpBtn'),
     idpDl: $('idpDl'),
     idpStatus: $('idpStatus'),
@@ -16611,6 +16624,7 @@ el.dwVidPlayer.hidden = true;
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
     const isIdPhoto = view === 'idphoto';   // 证件照（2026-10-10 竞品对标水印云）
+    const isCd = view === 'clouddrive';     // 网盘下载（2026-10-23 新增）
     const isHome = view === 'home';   // 2026-09-12 首页：产品热门功能快捷入口（默认落地页）
     const isProfile = view === 'profile';                  // 个人资料总览
     const isProfilePurchases = view === 'profile_purchases';
@@ -16619,7 +16633,7 @@ el.dwVidPlayer.hidden = true;
     const isProfileAbout = view === 'profile_about';
     const isProfileSupport = view === 'profile_support';   // 客服消息工作台（仅超管）
     const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout || isProfileSupport;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isPage || isSt || isAppIntro || isBridge || isProfileGroup || isHome || isIdPhoto;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isPage || isSt || isAppIntro || isBridge || isProfileGroup || isHome || isIdPhoto || isCd;
     if (el.homeView) el.homeView.hidden = !isHome;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -16639,6 +16653,7 @@ el.dwVidPlayer.hidden = true;
     if (!isDw) dwStopAllVideos();
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.idphotoView) el.idphotoView.hidden = !isIdPhoto;
+    if (el.clouddriveView) el.clouddriveView.hidden = !isCd;
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
     if (el.profileView) el.profileView.hidden = !isProfileGroup;
     if (el.profileOverviewPanel) el.profileOverviewPanel.hidden = !isProfile;
@@ -16647,7 +16662,8 @@ el.dwVidPlayer.hidden = true;
     if (el.profileSecurityPanel) el.profileSecurityPanel.hidden = !isProfileSecurity;
     if (el.profileAboutPanel) el.profileAboutPanel.hidden = !isProfileAbout;
     if (el.profileSupportPanel) el.profileSupportPanel.hidden = !isProfileSupport;
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isBridge && !isProfileGroup && !isIdPhoto);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isBridge && !isProfileGroup && !isIdPhoto && !isCd);
+    if (el.tabCloudDrive) el.tabCloudDrive.classList.toggle('is-active', isCd);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -17177,6 +17193,154 @@ el.dwVidPlayer.hidden = true;
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabSr) el.tabSr.addEventListener('click', () => switchView('sr'));
   if (el.tabPage) el.tabPage.addEventListener('click', () => switchView('page'));   // 生成网页（2026-09-30）
+  if (el.tabCloudDrive) el.tabCloudDrive.addEventListener('click', () => switchView('clouddrive'));   // 网盘下载（2026-10-23）
+
+  // ===================== 网盘下载（2026-10-23 新增）=====================
+  // 定位：只下载「自己网盘里的文件 / 别人分享给你的文件」到本地，不批量抓取、不破解限速。
+  // 解析走后端 /api/cloud-drive/resolve（百度新接口四步），下载复用现有 /api/download 队列。
+  const cdSetStatus = (msg, isErr) => {
+    if (!el.cdStatus) return;
+    el.cdStatus.textContent = msg || '';
+    el.cdStatus.hidden = !msg;
+    el.cdStatus.classList.toggle('is-error', !!isErr);
+  };
+
+  const cdFmtSize = (n) => {
+    let v = Number(n) || 0;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+    return i === 0 ? `${Math.round(v)} B` : `${v.toFixed(1)} ${units[i]}`;
+  };
+
+  const cdDownload = async (f) => {
+    if (!f || !f.dlink) return;
+    try {
+      const data = await request('/api/download', {
+        method: 'POST',
+        body: JSON.stringify({
+          url: f.dlink,
+          quality: 'best',
+          title: f.name || '',
+          cookie: f.cookie || '',   // 百度 dlink 匿名下载会被拒（error 31326），必须带登录态
+          proxy: '',
+          extract_script: '',
+          format_id: '',
+          concurrent_fragments: 0,
+          downloader: 'native',
+          play_url: '',
+          watch_options: [],
+          is_hls: false,
+        }),
+      });
+      if (!data || !data.task_id) {
+        cdSetStatus('下载创建失败：' + ((data && data.detail) || '未知错误'), true);
+        return;
+      }
+      const refs = createTaskCard(data.task_id, { title: f.name || '(未命名)', platform: '百度网盘' });
+      trackTask(data.task_id, refs);
+      switchView('download');   // 回到下载页看进度
+      cdSetStatus('已加入下载队列：' + (f.name || ''), false);
+    } catch (e) {
+      cdSetStatus('下载创建失败：' + (e && e.message ? e.message : e), true);
+    }
+  };
+
+  const cdRender = (files, needLogin) => {
+    if (!el.cdList) return;
+    el.cdList.innerHTML = '';
+    (files || []).forEach((f) => {
+      const li = document.createElement('li');
+      li.className = 'cd-item';
+      const name = document.createElement('span');
+      name.className = 'cd-item-name';
+      name.textContent = f.name || '(未命名)';
+      const size = document.createElement('span');
+      size.className = 'cd-item-size';
+      size.textContent = cdFmtSize(f.size);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-sm btn-primary';
+      btn.textContent = '下载';
+      btn.addEventListener('click', () => cdDownload(f));
+      li.appendChild(name);
+      li.appendChild(size);
+      li.appendChild(btn);
+      el.cdList.appendChild(li);
+    });
+    if (needLogin) {
+      cdSetStatus('已读到文件，但下载需要百度登录态：装了扩展并在浏览器登录过百度网盘会自动带上；否则在下面「百度登录态」里粘贴 BDUSS。', true);
+      if (el.cdCredBox) el.cdCredBox.open = true;
+    }
+  };
+
+  const cdResolve = async () => {
+    const url = ((el.cdUrl && el.cdUrl.value) || '').trim();
+    if (!url) { cdSetStatus('请先粘贴网盘分享链接', true); return; }
+    if (!/pan\.baidu\.com|yun\.baidu\.com/.test(url)) {
+      cdSetStatus('目前只支持百度网盘分享链接（pan.baidu.com）', true);
+      return;
+    }
+    const pwd = ((el.cdPwd && el.cdPwd.value) || '').trim();
+    if (el.cdResolve) el.cdResolve.disabled = true;
+    cdSetStatus('正在解析…', false);
+    try {
+      const data = await request('/api/cloud-drive/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ url, pwd }),
+      });
+      if (!data || data.ok !== true) {
+        cdSetStatus((data && data.error) || '解析失败', true);
+        cdRender([], false);
+        return;
+      }
+      const files = data.files || [];
+      cdRender(files, !!data.need_login);
+      if (!data.need_login) cdSetStatus(`解析到 ${files.length} 个文件`, false);
+    } catch (e) {
+      cdSetStatus('解析失败：' + (e && e.message ? e.message : e), true);
+    } finally {
+      if (el.cdResolve) el.cdResolve.disabled = false;
+    }
+  };
+
+  const cdSaveCookie = async () => {
+    const v = ((el.cdCookie && el.cdCookie.value) || '').trim();
+    if (!v) {
+      if (el.cdCookieState) el.cdCookieState.textContent = '请先粘贴 BDUSS';
+      return;
+    }
+    try {
+      const data = await request('/api/cloud-drive/credential', {
+        method: 'POST',
+        body: JSON.stringify({ bduss: v }),
+      });
+      if (data && data.ok) {
+        if (el.cdCookieState) el.cdCookieState.textContent = '已保存到本机';
+        if (el.cdCookie) el.cdCookie.value = '';
+      } else if (el.cdCookieState) {
+        el.cdCookieState.textContent = (data && data.error) || '保存失败';
+      }
+    } catch (e) {
+      if (el.cdCookieState) el.cdCookieState.textContent = '保存失败';
+    }
+  };
+
+  const cdRefreshCredState = async () => {
+    if (!el.cdCookieState) return;
+    try {
+      const data = await request('/api/cloud-drive/credential/status');
+      el.cdCookieState.textContent = (data && data.set)
+        ? '当前状态：已就绪（可以下载）'
+        : '当前状态：未检测到（只能看列表，下载会失败）';
+    } catch (e) { /* 老版本后端没有这些端点：静默忽略 */ }
+  };
+
+  if (el.cdResolve) el.cdResolve.addEventListener('click', cdResolve);
+  if (el.cdCookieSave) el.cdCookieSave.addEventListener('click', cdSaveCookie);
+  if (el.cdPwd) el.cdPwd.addEventListener('keydown', (e) => { if (e.key === 'Enter') cdResolve(); });
+  if (el.cdUrl) el.cdUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') cdResolve(); });
+  cdRefreshCredState();
 
 // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
   const _sidebarPairs = [
@@ -17191,6 +17355,7 @@ el.dwVidPlayer.hidden = true;
     [el.sTabDwVideo, 'dwvideo'],
     [el.sTabMatting, 'matting'],
     [el.sTabIdPhoto, 'idphoto'],
+    [el.sTabCloudDrive, 'clouddrive'],   // 网盘下载（2026-10-23 新增）
     [el.sTabSubscribe, 'subscribe'],
     [el.sTabTorrent, 'torrent'],
     [el.sTabMusicConvert, 'musicconvert'],

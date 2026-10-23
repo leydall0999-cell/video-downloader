@@ -119,6 +119,8 @@
       <button type="button" class="sidebar-item" data-view="matting" id="sTabMatting" title="一键抠图" data-page-node-id="MyN34NwHfszkvoykDJkeVV"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="a4M4KH8TIDejZAmNgW7i5z">✂️</span><span class="sidebar-item-label" data-page-node-id="BnBlDIvawoG4zEgWQKqEpJ">一键抠图</span></button>
       <!-- 证件照（2026-10-10 竞品对标水印云）：上传生活照 → 抠人像 → 换标准底色 → 按规格出图 -->
       <button type="button" class="sidebar-item" data-view="idphoto" id="sTabIdPhoto" title="证件照" data-page-node-id="sTabIdPhoto2026a"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="sTabIdPhotoIc2026a">🪪</span><span class="sidebar-item-label" data-page-node-id="sTabIdPhotoLb2026a">证件照</span></button>
+      <!-- 网盘下载（2026-10-23 新增）：百度网盘分享链接 → 直链 → 本地落盘 -->
+      <button type="button" class="sidebar-item" data-view="clouddrive" id="sTabCloudDrive" title="网盘下载" data-page-node-id="sTabCloudDrive2026a"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="sTabCdIc2026a">☁️</span><span class="sidebar-item-label" data-page-node-id="sTabCdLb2026a">网盘下载</span></button>
     </div>
 
     <!-- 2026-09-08 媒体库移到侧栏最后（用户要求） -->
@@ -175,6 +177,7 @@
         <button type="button" class="tab" data-view="page" id="tabPage" data-page-node-id="pAgeTabTop2026en01">🌐 生成网页</button>
     <button type="button" class="tab" data-view="dw" id="tabDw" data-page-node-id="N9RTDjwHrnMXbYAvIzTCdO">🧽 图片去水印</button>
     <button type="button" class="tab" data-view="idphoto" id="tabIdPhoto">🪪 证件照</button>
+    <button type="button" class="tab" data-view="clouddrive" id="tabCloudDrive">☁️ 网盘下载</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe" data-page-node-id="rSafkSMroVCsnxtt3WE7up">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden data-page-node-id="bOI6hQq4T7ILw9Ning6dVw">🧲 种子</button>
     <button type="button" class="tab" data-view="profile" id="tabProfile" data-page-node-id="pnXFpJysLDFdRNWE1BgTwg">👤 个人中心</button>
@@ -241,7 +244,7 @@
       <section class="v5-group" style="--g1:#2F7DF6;--g2:#06B6D4">
         <div class="v5-group-head">
           <span class="v5-gicon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7"/><path d="M5.2 6.8L8 9.6l2.8-2.8"/><path d="M3 12.6h10"/></svg></span>
-          <b>下载</b><em>3 项</em>
+          <b>下载</b><em>4 项</em>
         </div>
         <div class="v5-grid cols-4">
           <button type="button" class="v5-card" data-view="download">
@@ -263,6 +266,14 @@
             <span class="v5-cardtxt">
               <span class="v5-card-title">种子下载</span>
               <span class="v5-card-desc">磁力 / BT 离线下载</span>
+            </span>
+          </button>
+          <!-- 网盘下载（2026-10-23 新增）：百度网盘分享链接 → 本地落盘 -->
+          <button type="button" class="v5-card" data-view="clouddrive">
+            <span class="v5-tile" aria-hidden="true">盘</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">网盘下载</span>
+              <span class="v5-card-desc">百度网盘分享直接下</span>
             </span>
           </button>
         </div>
@@ -2153,6 +2164,42 @@
       </div>
       </div>
     </div>
+  </section>
+
+  <!-- 网盘下载视图（2026-10-23 新增）：百度网盘分享链接 → 解析出文件 → 用现有下载器落盘。
+       定位：只下载「自己的网盘文件 / 别人分享给你的文件」，不做批量抓取、不破解限速。 -->
+  <section id="clouddriveView" class="panel" hidden aria-labelledby="cdTitle">
+    <h2 id="cdTitle" class="guide-title"><span class="guide-title-text">网盘下载</span></h2>
+
+    <div class="cd-form">
+      <label class="uc-field cd-field-url">
+        <span class="uc-label">网盘分享链接</span>
+        <input type="text" id="cdUrl" spellcheck="false" placeholder="粘贴百度网盘分享链接，例如 https://pan.baidu.com/s/1xxxx" />
+      </label>
+      <label class="uc-field cd-field-pwd">
+        <span class="uc-label">提取码</span>
+        <input type="text" id="cdPwd" maxlength="8" spellcheck="false" placeholder="链接没给就留空" />
+      </label>
+      <button type="button" class="btn btn-primary" id="cdResolve">解析</button>
+    </div>
+
+    <p class="cd-status" id="cdStatus" hidden></p>
+    <ul class="cd-list" id="cdList"></ul>
+
+    <details class="howto cd-cred" id="cdCredBox">
+      <summary class="howto-head"><span class="howto-ic" aria-hidden="true">🔑</span><span class="howto-title">百度登录态（真正下载时需要）</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+      <div class="howto-body">
+        <p class="cd-hint">看文件列表不登录也能用，但<b>下载文件必须带百度登录态</b>（匿名会被百度拒绝）。装了我们的浏览器扩展、并在浏览器里登录过百度网盘的，会自动带上、不用填；没有的话：浏览器打开 pan.baidu.com 登录后，把 Cookie 里 <b>BDUSS</b> 那一段粘到下面。只存这台电脑，不会上传。</p>
+        <label class="uc-field">
+          <span class="uc-label">BDUSS（或整段 Cookie）</span>
+          <input type="password" id="cdCookie" spellcheck="false" placeholder="BDUSS=......" />
+        </label>
+        <div class="cd-cred-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="cdCookieSave">保存登录态</button>
+          <span class="cd-cred-state" id="cdCookieState"></span>
+        </div>
+      </div>
+    </details>
   </section>
 
   <!-- 个人中心视图（左侧 tab 栏入口，整页承载记录/改密） -->

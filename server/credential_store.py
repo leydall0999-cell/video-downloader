@@ -156,3 +156,36 @@ def resolve_token(acc: Optional[dict]) -> str:
     if t:
         return t
     return get_token(str(acc.get("email") or ""))
+
+
+# —— 百度网盘登录态（完整 Cookie 头，或用户只粘贴的裸 BDUSS）——
+# 复用同一套 Keychain/文件回落机制，用合成账号键隔离，避免污染真实 token 命名空间。
+# 继承 VDL_DATA_DIR 隔离：测试环境下 Keychain 走 .test 命名空间，绝不碰真实凭据。
+# 敏感度说明：BDUSS 等于完整网盘权限 ⇒ 只落本机，**绝不进云端公共 Cookie 池**
+# （对比视频平台 cookie 可进池，百度条目在扩展侧标记为 cloud:false）。
+_BAIDU_BDUSS_KEY = "baidu_pan_bduss@vdl"
+
+
+def set_baidu_bduss(bduss: str) -> str:
+    """保存百度网盘登录态。返回落点：'keychain' / 'file' / 'none'。
+
+    接受两种输入：
+    - 完整 Cookie 头：`BDUSS=xxx; BAIDUID=yyy; ...`（扩展同步/浏览器复制的常见形态）
+    - 裸 BDUSS 值：`xxx`（用户常只粘这一段）→ 自动补 `BDUSS=` 前缀
+    """
+    bduss = (bduss or "").strip()
+    if not bduss:
+        return "none"
+    if "=" not in bduss:          # 只粘了 BDUSS 的值，补成合法 Cookie 头
+        bduss = f"BDUSS={bduss}"
+    return set_token(_BAIDU_BDUSS_KEY, bduss)
+
+
+def get_baidu_bduss() -> str:
+    """读取百度网盘 BDUSS（空串表示未设置）。"""
+    return get_token(_BAIDU_BDUSS_KEY)
+
+
+def clear_baidu_bduss() -> None:
+    """清除已保存的百度网盘 BDUSS。"""
+    delete_token(_BAIDU_BDUSS_KEY)
