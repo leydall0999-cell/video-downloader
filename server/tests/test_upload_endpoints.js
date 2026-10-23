@@ -217,6 +217,46 @@ function makePool(origin, opts = {}) {
   ok('每条路径都在起 worker 前等端点探测（6.5s 超时兜底）× 5 处',
     (SRC.match(/6500/g) || []).length >= 5, `${(SRC.match(/6500/g) || []).length} 处`);
 
+  console.log('\n【8】分片计划：片数对齐并发路数（修「后面速度好慢」的尾段掉速）');
+  // 反例：15.18MB/2MB=8 片、6 路 ⇒ 前 6 片跑满，最后 2 片只剩 2 路，尾段只剩 1/3 吞吐。
+  const iPlan = SRC.indexOf('const ucPlanChunks = (size, lanes) => {');
+  ok('app.js 里有 ucPlanChunks（分片计划统一入口）', iPlan > 0);
+  const PLAN_BLOCK = iPlan > 0 ? SRC.slice(iPlan, SRC.indexOf('const UC_POLL_INTERVAL', iPlan)) : '';
+  const planChunks = iPlan > 0
+    ? new Function('UC_CHUNK_SIZE', 'UC_BIG_CHUNK_SIZE', PLAN_BLOCK + '\nreturn ucPlanChunks;')(2 * 1024 * 1024, 4 * 1024 * 1024)
+    : () => ({ chunkSize: 0, totalChunks: 0 });
+  const util = (p, L) => (p.chunkSize * (p.totalChunks - 1) + 1) / (p.chunkSize * L * Math.ceil(p.totalChunks / L));
+  for (const [size, name] of [[5 * 1024 * 1024, '5MB'], [15.18 * 1024 * 1024, '15.18MB（截图那个文件）'],
+                              [100 * 1024 * 1024, '100MB'], [2.5 * 1024 ** 3, '2.5GB']]) {
+    const p = planChunks(size, 6);
+    ok(`${name}：片数是 6 的整数倍（6 路同时收尾）`, p.totalChunks % 6 === 0, `${p.totalChunks} 片`);
+    ok(`${name}：按 chunkSize 切片正好 ${p.totalChunks} 片`,
+      Math.ceil(size / p.chunkSize) === p.totalChunks, `${Math.ceil(size / p.chunkSize)} vs ${p.totalChunks}`);
+    ok(`${name}：单片不超上限（>2GB 才放宽到 4MB）`,
+      p.chunkSize <= (size > 2 * 1024 ** 3 ? 4 * 1024 * 1024 : 2 * 1024 * 1024), `${p.chunkSize} 字节`);
+  }
+  const p15 = planChunks(15.18 * 1024 * 1024, 6);
+  ok('15.18MB 通道利用率从 58% 提到 90%+（旧:8 片只跑满 1.33 轮）', util(p15, 6) >= 0.9, `${(util(p15, 6) * 100).toFixed(0)}%`);
+  ok('不足一轮但够大（1.5MB）按路数均分，别只用 1 路', planChunks(1.5 * 1024 * 1024, 6).totalChunks === 6);
+  ok('600KB 仍单片直传（不为凑路数发 6 个请求）', planChunks(600 * 1024, 6).totalChunks === 1);
+  ok('单路（lanes=1）退化成分片不拆（与旧版一致）', planChunks(15.18 * 1024 * 1024, 1).totalChunks === 8);
+  ok('片数上限 9999（后端分片文件名 %04d）', planChunks(200 * 1024 ** 3, 6).totalChunks <= 9999);
+  ok('视频转码 + 视频拼接两条路径都走 ucPlanChunks',
+    (SRC.match(/const \{ chunkSize, totalChunks \} = ucPlanChunks\(file\.size, UC_CHUNK_CONCURRENCY\)/g) || []).length === 2);
+  ok('旧的「直接按 2MB 切片」写法已清零',
+    !/const totalChunks = Math\.max\(1, Math\.ceil\(file\.size \/ chunkSize\)\);\s*\n\s*const uploadId = item\._uploadId = '(uc|mc)'/.test(SRC));
+
+  console.log('\n【9】分片看门狗：链路「连接还在、字节不动」时不能白占一条通道 5 分钟');
+  ok('按「多久没有新字节」判活（25s 无进展即 abort）',
+    /lastMoveAt = Date\.now\(\)/.test(SRC) && /Date\.now\(\) - lastMoveAt > 25000/.test(SRC));
+  ok('只在页面前台判活（后台 tab 被限流是正常现象，误杀会变成死循环重试）',
+    /document\.visibilityState === 'visible' && Date\.now\(\) - lastMoveAt > 25000/.test(SRC));
+  ok('进度事件无条件刷新心跳（onProgress 为空时也要判活）',
+    /xhr\.upload\.addEventListener\('progress', \(ev\) => \{\s*\n\s*lastMoveAt = Date\.now\(\);/.test(SRC));
+  ok('abort 时区分「卡死」与「用户取消」（否则重试逻辑会把取消也当故障）',
+    /stalled \? '分片卡住/.test(SRC) && /: '已取消'/.test(SRC));
+  ok('定时器随请求结束清理（不泄漏 interval）', /clearInterval\(wd\)/.test(SRC));
+
   console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error('测试运行异常:', e); process.exit(1); });

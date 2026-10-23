@@ -2338,6 +2338,22 @@
   const UC_BIG_CHUNK_SIZE = 4 * 1024 * 1024;    // >2GB 文件单片 4MB（控请求数；后端单片上限 64MB，分片文件名 %04d 到 9999 片 ⇒ 4MB 可覆盖 ~39GB）
   const UC_CHUNK_CONCURRENCY = 6;               // 单文件分片并发路数（每路落在不同端口 origin 上，各自独立限速桶）
   const UC_CHUNK_RETRIES = 3;                   // 单片失败重试次数（路数变多 ⇒ 抖动暴露面变大，放宽一档）
+
+  // 分片计划：分片数对齐并发路数，消掉「尾段掉速」。
+  // 反例（改造前）：15.18MB / 2MB = 8 片、6 路 ⇒ 前 6 片跑满，最后 2 片只剩 2 路在跑，
+  //   尾段吞吐只剩 1/3 —— 用户看到的就是「前面挺快，后面越来越慢」。
+  // 对齐后：8 片 → 12 片（每片约 1.27MB），两轮都跑满 6 路，所有路同时收尾。
+  // 不足一轮的文件按路数均分（每路都有活干，但 <6×256KB 的小文件仍单片直传，不为凑数发 6 个请求）。
+  // >2GB 仍用 4MB 大分片压请求数。片数上限 9999（后端分片文件名 up_<id>.p%04d）。
+  const ucPlanChunks = (size, lanes) => {
+    const L = Math.max(1, lanes || 1);
+    const base = size > 2 * 1024 * 1024 * 1024 ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
+    let n = Math.max(1, Math.ceil(size / base));
+    if (n >= L) n = Math.ceil(n / L) * L;             // 排队场景：取整到路数倍数
+    else if (size >= L * 256 * 1024) n = L;           // 不足一轮：按路数均分
+    n = Math.min(n, 9999);
+    return { chunkSize: Math.max(1, Math.ceil(size / n)), totalChunks: n };
+  };
   const UC_POLL_INTERVAL = 1500;                // 转码状态轮询间隔 ms（批量/无损直转进度更实时）
   // ═══════════════════════════════════════════════════════════════════════════
   // 上传端点池：绕开「CF 按 HTTP 连接限速」的唯一手段。
@@ -2737,12 +2753,28 @@
     xhr.setRequestHeader('X-Device-Id', deviceId());
     xhr.timeout = 300000;   // 5 分钟单片超时（防后台 tab 限流/网络静默断网卡死；后台 tab 限流可压到 ~100KB/s，32MB 分片需 5+ 分钟）
     if (xhrs) xhrs.add(xhr);
-    const cleanup = () => { if (xhrs) xhrs.delete(xhr); };
-    if (onProgress) {
+    // 卡死看门狗：xhr.timeout 是「总时长」（5 分钟），链路偶发「连接还在、字节不动」时
+    // 一条 lane 会被白占 5 分钟；6 路少一路就是掉 1/6 速度，尾段只剩这种卡片时观感就是
+    // 「越到后面越慢」。这里改按「多久没有新字节」判活：25 秒无进展即 abort，
+    // 交给上层重试（重试会换端点，见 ucPickEndpoint 的 attempt>0 分支）。
+    let wd = 0, lastMoveAt = Date.now(), stalled = false;
+    const cleanup = () => { if (xhrs) xhrs.delete(xhr); clearInterval(wd); };
+    // xhr.upload 在真浏览器里恒存在；测试桩/XHR 替代实现可能没有，判一下不打紧
+    if (xhr.upload && xhr.upload.addEventListener) {
       xhr.upload.addEventListener('progress', (ev) => {
-        if (ev.lengthComputable) onProgress(ev.loaded);
+        lastMoveAt = Date.now();               // 有字节在动就不算卡死（与 onProgress 是否为空无关）
+        if (onProgress && ev.lengthComputable) onProgress(ev.loaded);
       });
     }
+    wd = setInterval(() => {
+      // 只在页面前台判活：后台 tab 本身就被浏览器限流（可压到 ~100KB/s），这时「25 秒没动静」
+      // 是正常现象，误杀会变成「后台不断重试、最后报分片失败」。后台靠 timeout + 切回前台续传。
+      if (document.visibilityState === 'visible' && Date.now() - lastMoveAt > 25000) {
+        stalled = true;
+        clearInterval(wd);
+        try { xhr.abort(); } catch (e) { /* ignore */ }
+      }
+    }, 3000);
     xhr.addEventListener('load', () => {
       cleanup();
       if (xhr.status >= 200 && xhr.status < 300) resolve();
@@ -2759,7 +2791,7 @@
     });
     xhr.addEventListener('error', () => { cleanup(); reject(new Error('网络错误')); });
     xhr.addEventListener('timeout', () => { cleanup(); reject(new Error('分片超时（5 分钟无响应，可能是网络断/后台 tab 限流；切回前台后会自动续传）')); });
-    xhr.addEventListener('abort', () => { cleanup(); reject(new Error('已取消')); });
+    xhr.addEventListener('abort', () => { cleanup(); reject(new Error(stalled ? '分片卡住（25 秒无进展，已换通道重试）' : '已取消')); });
     xhr.send(form);
   });
 
@@ -2776,8 +2808,8 @@
     renderUcList();
     const file = item.file;
     // >2GB 大文件用 64MB 分片（减少请求数）；否则 32MB
-    const chunkSize = file.size > 2 * 1024 * 1024 * 1024 ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
-    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+    // 分片计划对齐 6 路并发（见 ucPlanChunks）：片数是路数整数倍，尾段不会只剩 1–2 路在跑
+    const { chunkSize, totalChunks } = ucPlanChunks(file.size, UC_CHUNK_CONCURRENCY);
     const uploadId = item._uploadId = 'uc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     let uploadedBytes = 0;          // 已成功分片的累计字节
     const done = new Set();          // 已成功分片 index（重试去重）
@@ -3146,8 +3178,8 @@
     item._removed = false; item._xhrs = new Set(); item._chStats = ucChStats();
     mcRender();
     const file = item.file;
-    const chunkSize = file.size > 2 * 1024 * 1024 * 1024 ? UC_BIG_CHUNK_SIZE : UC_CHUNK_SIZE;
-    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+    // 同 ucUploadOne：分片数对齐 6 路并发，消尾段掉速
+    const { chunkSize, totalChunks } = ucPlanChunks(file.size, UC_CHUNK_CONCURRENCY);
     const uploadId = item._uploadId = 'mc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     let uploadedBytes = 0; const done = new Set(); const inFlight = new Map();
     const t0 = performance.now(); let lastBytes = 0, lastT = t0;

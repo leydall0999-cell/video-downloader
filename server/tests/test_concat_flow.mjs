@@ -33,6 +33,13 @@ const END = appJs.indexOf('\n  // 事件绑定', START);
 assert.ok(START > 0 && END > START, 'app.js 应包含「视频拼接」区块且其后有「事件绑定」锚点');
 const mcBlock = appJs.slice(START, END);
 
+// 分片计划 ucPlanChunks 定义在拼接区块**之前**，直接切片拿不到 —— 原样带进来，
+// 免得测试里再抄一份切分逻辑（抄了就跟实现分叉，改坏了测不出来）。
+const PLAN_START = appJs.indexOf('const ucPlanChunks = (size, lanes) => {');
+const PLAN_END = appJs.indexOf('const UC_POLL_INTERVAL', PLAN_START);
+assert.ok(PLAN_START > 0 && PLAN_END > PLAN_START, 'app.js 应包含 ucPlanChunks（分片计划）且在 UC_POLL_INTERVAL 之前');
+const planBlock = appJs.slice(PLAN_START, PLAN_END);
+
 // ===== 假时钟 =====
 function makeClock() {
   let now = 0; let seq = 1;
@@ -142,7 +149,7 @@ function runScenario() {
     'ucPickEndpoint', 'ucUploadChunk', 'ucLastProgressByItem', 'UC_UPLOAD_ENDPOINTS', 'UC_CHUNK_SIZE',
     'UC_BIG_CHUNK_SIZE', 'UC_CHUNK_CONCURRENCY', 'UC_CHUNK_RETRIES', 'UC_POLL_INTERVAL', 'UC_EXT_OF',
     'deviceId', 'window', 'FormData', 'fetch', 'XMLHttpRequest', 'request', 'localStorage',
-    'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', `"use strict";\n${mcBlock}`)(
+    'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', `"use strict";\n${planBlock}\n${mcBlock}`)(
     sandbox.document, sandbox.console, sandbox.performance, sandbox.Date, sandbox.ucFormatSize,
     sandbox.ucFormatSpeed, sandbox.ucChStats, sandbox.ucPickEndpoint, sandbox.ucUploadChunk,
     sandbox.ucLastProgressByItem, sandbox.UC_UPLOAD_ENDPOINTS, sandbox.UC_CHUNK_SIZE, sandbox.UC_BIG_CHUNK_SIZE,
