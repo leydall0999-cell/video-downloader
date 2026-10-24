@@ -38,31 +38,46 @@ def test_html_proids_ids_js_reads():
     """app.js 通过 $('xxx') 取的所有元素，HTML 里必须真的存在。"""
     for i in ("clouddriveView", "cdUrl", "cdPwd", "cdResolve", "cdStatus",
               "cdList", "cdCookie", "cdCookieSave", "cdCookieState",
-              "cdCredBox", "tabCloudDrive", "sTabCloudDrive"):
+              "cdCredBox", "tabCloudDrive", "cdSlot"):
         assert _has_html_id(i), f"index.html 缺少 id={i}"
         assert f"$('{i}')" in APP_TXT, f"app.js 没有取 ${i}"
 
 
-def test_both_entries_switch_the_view():
-    """顶部 tab 与侧栏 item 都要能切到网盘视图（少一个 = 桌面端找不到入口）。"""
-    assert 'data-view="clouddrive"' in HTML_TXT
-    assert "switchView('clouddrive')" in APP_TXT
-    assert "[el.sTabCloudDrive, 'clouddrive']" in APP_TXT
+def test_netdisk_is_inline_mode_not_a_view():
+    """网盘是下载页内的第三种类型（2026-10-24），不再是独立视图。
+
+    判据：
+    - #clouddriveView 有挂载点 cdSlot，且启动时被 appendChild 搬进下载页；
+    - setDownloadMode 认识 'netdisk' 并用 mode-netdisk 类控制让位；
+    - switchView 把 'clouddrive' 翻译成「下载页 + 网盘模式」，不会真的切走。
+    """
+    assert 'id="cdSlot"' in HTML_TXT, "index.html 缺网盘挂载点 cdSlot"
+    assert "el.cdSlot.appendChild(el.clouddriveView)" in APP_TXT, "启动时未把网盘面板搬进下载页"
+    assert "_nd = dlMode === 'netdisk'" in APP_TXT, "setDownloadMode 不认 netdisk"
+    assert "classList.toggle('mode-netdisk'" in APP_TXT, "缺 mode-netdisk 切换"
+    assert "if (view === 'clouddrive')" in APP_TXT, "switchView 未拦截 clouddrive"
+    # 旧路子必须彻底断掉：侧栏项已删，且网盘面板不再随视图显隐
+    assert 'id="sTabCloudDrive"' not in HTML_TXT, "侧栏网盘项已要求删除"
+    assert "el.clouddriveView.hidden = !isCd" not in APP_TXT, "网盘面板不该再随视图显隐"
 
 
-def test_switch_view_excludes_download_view():
-    """进网盘视图时必须把下载视图隐藏掉，否则两个 panel 会同时显示。"""
+def test_no_double_panel_when_netdisk_mode():
+    """网盘内联化（2026-10-24）后仍不能出现「两块面板同时显示」。
+
+    以前靠 `el.clouddriveView.hidden = !isCd` 让两块 panel 互斥；现在网盘面板
+    本身就在下载页里，互斥改由 CSS 的 mode-netdisk 保证：进入网盘模式时，
+    视频/图片的输入内容、结果区、顶部大标题与视频引导都要让位。
+    """
     assert "const isCd = view === 'clouddrive'" in APP_TXT
-    assert "el.clouddriveView.hidden = !isCd" in APP_TXT
-    # downloadView.hidden 那一行必须带上 isCd
+    assert "el.clouddriveView.hidden = !isCd" not in APP_TXT, "网盘面板不该再随视图显隐"
+    for rule in ("#downloadView.mode-netdisk .result-panel",
+                 "#downloadView.mode-netdisk #resolveForm > *:not(.mode-switch)",
+                 "#downloadView.mode-netdisk .input-panel > *:not(form)"):
+        assert rule in CSS_TXT, f"styles.css 缺少互斥规则：{rule}"
+    # 顶部「下载」tab 仍要能容纳网盘模式（clouddrive 已被翻译成 download）
     dl_line = [ln for ln in APP_TXT.splitlines()
                if "el.downloadView.hidden =" in ln]
     assert dl_line, "找不到 downloadView.hidden 赋值行"
-    assert "isCd" in dl_line[0], "downloadView 没有随网盘视图隐藏（会双屏）"
-    # 顶部「下载」高亮态也要排除网盘视图
-    act_line = [ln for ln in APP_TXT.splitlines()
-                if "el.tabDownload.classList.toggle('is-active'" in ln]
-    assert act_line and "!isCd" in act_line[0]
 
 
 def test_resolve_and_download_endpoints():
@@ -94,20 +109,17 @@ def test_compliance_note_present():
     assert "只存这台电脑" in HTML_TXT or "只存本机" in HTML_TXT
 
 
-def test_sidebar_item_lives_in_download_group():
-    """侧栏项必须待在「下载」组里（2026-10-24 用户实测反馈的回归点）。
+def test_mode_switch_has_three_options():
+    """「视频下载 / 图片下载 / 网盘下载」三个并列选项必须都在切换器里。
 
-    它一度被塞进「工具」折叠组 ⇒ 用户在主下载框粘网盘链接报错后，翻遍侧栏也
-    找不到网盘入口（工具组默认折叠）。判据用「该按钮之前最近的分组标题」来定，
-    不依赖行号，挪动文件也不会失效。
+    2026-10-24 用户要求：网盘不能藏在侧栏（要翻折叠组才找得到），也不能
+    点一下跳到另一个页面；它必须和视频/图片并排，点了就地切换。
     """
-    idx = HTML_TXT.find('id="sTabCloudDrive"')
-    assert idx > 0, "侧栏没有网盘项"
-    before = HTML_TXT[:idx]
-    title_at = before.rfind("sidebar-group-en")
-    assert title_at > 0, "找不到分组标题"
-    seg = before[title_at:title_at + 200]
-    assert ">下载<" in seg, f"网盘项被挪出了「下载」组，当前所在组：{seg[:80]}"
+    idx = HTML_TXT.find('class="mode-switch"')
+    assert idx > 0, "找不到下载类型切换器"
+    block = HTML_TXT[idx:idx + 900]
+    for label in ("视频下载", "图片下载", "网盘下载"):
+        assert label in block, f"切换器里缺少「{label}」"
 
 
 def test_main_input_hands_netdisk_links_over():

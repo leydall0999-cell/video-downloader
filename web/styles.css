@@ -264,6 +264,18 @@ img { max-width: 100%; display: block; }
 }
 .mode-btn:hover:not(.is-active) { color: var(--text); }
 .mode-btn.is-active { background: var(--brand); color: #fff; box-shadow: 0 2px 8px rgba(79, 70, 229, .28); }
+/* 网盘模式（2026-10-24）：网盘是本页第三种下载类型，切到它时视频/图片的
+   输入区与结果区让位，只显示 #cdSlot 里的网盘面板；切回来自动恢复。
+   ⚠️ 卡片本身（.input-panel）必须留着 —— 「视频/图片/网盘」这个切换控件就在里面，
+   整块藏掉会把切换器一起藏了，用户切到网盘后就再也回不去。所以只藏内容。 */
+#downloadView.mode-netdisk .result-panel { display: none; }
+#downloadView.mode-netdisk .input-panel > *:not(form) { display: none; }
+#downloadView.mode-netdisk #resolveForm > *:not(.mode-switch) { display: none; }
+/* 顶部大标题和「怎么用 · 视频下载」引导讲的是视频，网盘模式下要一起让位，
+   否则用户看到的是「粘贴视频链接」却要下网盘。 */
+#downloadView.mode-netdisk > .hero,
+#downloadView.mode-netdisk > details,
+#downloadView.mode-netdisk > .guide { display: none; }
 .image-mode-note {
   margin: 0 0 .85rem; font-size: .82rem; line-height: 1.65; color: var(--text-mute);
   background: #f6f7fc; border: 1px dashed var(--line); border-radius: 12px; padding: .6rem .85rem;

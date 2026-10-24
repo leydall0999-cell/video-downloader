@@ -90,7 +90,6 @@
       <button type="button" class="sidebar-item" data-view="torrent" id="sTabTorrent" hidden title="种子下载" data-page-node-id="HcpxUtLnRuA4dAjM25qFpQ"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="uQeWBMcTRZBenq8MSkJ8yB">🧲</span><span class="sidebar-item-label" data-page-node-id="Mhiug7fU66erkKtdN0ZlaN">种子下载</span></button>
       <!-- 网盘下载（2026-10-24 从「工具」组挪来）：粘网盘分享链接 → 直链 → 本地落盘。
            放「下载」组符合用户预期 —— 他把它和视频下载当成同一件事。 -->
-      <button type="button" class="sidebar-item" data-view="clouddrive" id="sTabCloudDrive" title="网盘下载" data-page-node-id="sTabCloudDrive2026a"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="sTabCdIc2026a">☁️</span><span class="sidebar-item-label" data-page-node-id="sTabCdLb2026a">网盘下载</span></button>
     </div>
 
     <div class="sidebar-group collapsed" data-page-node-id="oGNPcDBf4wIfQGye48HiqH">
@@ -547,6 +546,12 @@
       <button type="button" class="alert-close" id="alertClose" aria-label="关闭" data-page-node-id="KfEjk7uZEqjEWvnKifAqZ4">×</button>
     </div>
   </section>
+
+  <!-- 网盘面板挂载点（2026-10-24）：
+       网盘不是「另一个页面」，而是本页的第三种下载类型。启动时由 app.js 把
+       #clouddriveView 整块移到这里（元素对象不变，原有 id/事件全部继续可用），
+       这样点「网盘下载」不需要跳转、解析结果也直接出现在当前页。 -->
+  <div id="cdSlot"></div>
 
   <!-- 解析结果 -->
   <section class="panel result-panel" id="resultPanel" hidden aria-live="polite" data-page-node-id="ccua6maT4Nyd6YBZwhxudM">

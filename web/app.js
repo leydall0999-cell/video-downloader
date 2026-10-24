@@ -931,6 +931,7 @@
     idpReset: $('idpReset'),
     // 网盘下载（2026-10-23 新增）：百度网盘分享链接 → 直链 → 本地落盘
     clouddriveView: $('clouddriveView'),
+    cdSlot: $('cdSlot'),
     cdUrl: $('cdUrl'),
     cdPwd: $('cdPwd'),
     cdResolve: $('cdResolve'),
@@ -941,7 +942,8 @@
     cdCookieState: $('cdCookieState'),
     cdCredBox: $('cdCredBox'),
     tabCloudDrive: $('tabCloudDrive'),
-    sTabCloudDrive: $('sTabCloudDrive'),
+    // sTabCloudDrive 已删除（2026-10-24）：网盘入口改为下载页内的第三种类型，
+    // 侧栏不再单独占一项。
     idpBtn: $('idpBtn'),
     idpDl: $('idpDl'),
     idpStatus: $('idpStatus'),
@@ -1770,18 +1772,29 @@
       loading ? (_img ? '下载中…' : '解析中…') : (_img ? '下载图片' : '解析链接');
   };
 
-  /** 切换下载类型（视频 / 图片）：改占位符、按钮文案、图片提示与批量入口可见性。 */
+  /** 切换下载类型（视频 / 图片 / 网盘）：改占位符、按钮文案、提示与面板可见性。 */
   const setDownloadMode = (mode) => {
-    dlMode = mode === 'image' ? 'image' : 'video';
+    dlMode = mode === 'image' || mode === 'netdisk' ? mode : 'video';
     const _img = dlMode === 'image';
+    const _nd = dlMode === 'netdisk';
     if (el.modeVideoBtn) {
-      el.modeVideoBtn.classList.toggle('is-active', !_img);
-      el.modeVideoBtn.setAttribute('aria-selected', String(!_img));
+      el.modeVideoBtn.classList.toggle('is-active', !_img && !_nd);
+      el.modeVideoBtn.setAttribute('aria-selected', String(!_img && !_nd));
     }
     if (el.modeImageBtn) {
       el.modeImageBtn.classList.toggle('is-active', _img);
       el.modeImageBtn.setAttribute('aria-selected', String(_img));
     }
+    if (el.modeNetdiskBtn) {
+      el.modeNetdiskBtn.classList.toggle('is-active', _nd);
+      el.modeNetdiskBtn.setAttribute('aria-selected', String(_nd));
+    }
+    // 网盘模式（2026-10-24）：网盘是本页的第三种类型，不是另一个页面。
+    // 用 downloadView 上的 class 把视频/图片的输入区、结果区让位，
+    // 只留 #cdSlot 里的网盘面板；切回来时原面板自动恢复（不碰 hidden 状态，
+    // 否则会把「本来就没结果」和「被网盘模式藏起来」两种情况搞混）。
+    if (el.downloadView) el.downloadView.classList.toggle('mode-netdisk', _nd);
+    if (el.clouddriveView) el.clouddriveView.hidden = !_nd;
     if (el.imageModeNote) el.imageModeNote.hidden = !_img;
     // 图片模式：批量面板是视频概念（统一画质/并发），隐藏避免误导；
     // 图片本身就是每行一个的批量，输入框即批量。
@@ -1792,6 +1805,14 @@
     }
     setLoading(false);
   };
+
+  // 把网盘面板搬进下载页（2026-10-24）：网盘是本页的第三种下载类型，不跳页。
+  // 移动的是**同一个 DOM 节点**，所以 #cdUrl / #cdResolve / #cdList 等引用和
+  // 已经绑好的事件全部继续有效，不需要重新初始化；只是父节点变了。
+  if (el.cdSlot && el.clouddriveView) {
+    el.cdSlot.appendChild(el.clouddriveView);
+    el.clouddriveView.hidden = true;
+  }
 
   // ------------------------------------------------------------------ 渲染
 
@@ -10305,8 +10326,8 @@ el.dwVidPlayer.hidden = true;
     // 并直接发起解析，省掉让用户手动找入口再搬一次。
     if (isNetDiskShare(url)) {
       const pwd = extractSharePwd(raw);
-      if (el.sTabCloudDrive && el.cdUrl) {
-        el.sTabCloudDrive.click();                  // 复用侧栏已有的视图切换绑定
+      if (el.cdUrl) {
+        setDownloadMode('netdisk');                 // 就地切到网盘模式，不跳页
         el.cdUrl.value = url;
         if (el.cdPwd && pwd) el.cdPwd.value = pwd;
         if (el.cdResolve) el.cdResolve.click();     // 已有解析逻辑：校验/提示/列表都在里面
@@ -16291,16 +16312,16 @@ el.dwVidPlayer.hidden = true;
   // 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）
   if (el.modeVideoBtn) el.modeVideoBtn.addEventListener('click', () => setDownloadMode('video'));
   if (el.modeImageBtn) el.modeImageBtn.addEventListener('click', () => setDownloadMode('image'));
-  // 网盘下载（2026-10-24）：作为「视频下载 / 图片下载」的第三个并列选项，但它是
-  // 独立视图（产出是网盘文件列表，不是平台解析结果），所以只切视图、不改 dlMode，
-  // 避免污染视频/图片两态（占位符、批量面板、按钮文案都绑在 dlMode 上）。
+  // 网盘下载（2026-10-24）：作为「视频下载 / 图片下载」的第三个并列选项。
+  // 它是**本页的第三种下载类型**，不是另一个页面 —— 不跳转，解析结果直接出现在
+  // 当前页下方的 #cdSlot 里。
   if (el.modeNetdiskBtn) {
     el.modeNetdiskBtn.addEventListener('click', () => {
-      switchView('clouddrive');
+      setDownloadMode('netdisk');
       if (el.cdUrl) {
         try {
           el.cdUrl.focus();
-        } catch (_) { /* 视图刚切换，聚焦失败不影响功能 */ }
+        } catch (_) { /* 聚焦失败不影响功能 */ }
       }
     });
   }
@@ -16652,6 +16673,13 @@ el.dwVidPlayer.hidden = true;
   }, true);
 
   function switchView(view) {
+    // 网盘不再是独立视图（2026-10-24）：它是下载页的第三种下载类型。
+    // 顶部 tab / 侧栏的 data-view="clouddrive" 一律翻译成「下载页 + 网盘模式」，
+    // 这样无论从哪里点进来都不会跳到另一个页面。
+    if (view === 'clouddrive') {
+      view = 'download';
+      setDownloadMode('netdisk');
+    }
     const isLib = view === 'library';
     const isSub = view === 'subscribe';
     const isTor = view === 'torrent';
@@ -16697,7 +16725,8 @@ el.dwVidPlayer.hidden = true;
     if (!isDw) dwStopAllVideos();
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.idphotoView) el.idphotoView.hidden = !isIdPhoto;
-    if (el.clouddriveView) el.clouddriveView.hidden = !isCd;
+    // 网盘面板的显隐由 setDownloadMode('netdisk') 控制：它已经是下载页内的
+    // 第三种下载类型，不再随视图切换而显隐（2026-10-24 改为内联）。
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
     if (el.profileView) el.profileView.hidden = !isProfileGroup;
     if (el.profileOverviewPanel) el.profileOverviewPanel.hidden = !isProfile;
@@ -17399,7 +17428,6 @@ el.dwVidPlayer.hidden = true;
     [el.sTabDwVideo, 'dwvideo'],
     [el.sTabMatting, 'matting'],
     [el.sTabIdPhoto, 'idphoto'],
-    [el.sTabCloudDrive, 'clouddrive'],   // 网盘下载（2026-10-23 新增）
     [el.sTabSubscribe, 'subscribe'],
     [el.sTabTorrent, 'torrent'],
     [el.sTabMusicConvert, 'musicconvert'],
