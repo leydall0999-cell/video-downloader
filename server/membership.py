@@ -45,6 +45,13 @@ DOWNLOAD_PLANS: dict[str, dict[str, Any]] = {
     "download_year":       {"price_cny": 179.00, "days": 365,  "label": "VIP会员·1年",   "saving": 0.50, "best": True},
 }
 
+# 🔴 2026-10-24 用户定档：开通 VIP 会员赠 300 积分（此前是 0，「会员中心」里永远显示 0 积分）。
+#    落「永久积分」池而不是 AI 订阅池：AI 池在 AI 会员到期时会被清零（见 status/apply_cloud），
+#    会员档送的积分不该跟着被清。
+#    ⚠️ 现在按「每买一次送一次」执行，短档（1 天 ¥1.90）理论上可以反复买来攒积分 —— 已向用户说明；
+#    若以后要按档位差异化，给 DOWNLOAD_PLANS 各档加一个 credits 字段即可（本函数读 get 回退）。
+VIP_MEMBER_CREDITS = 300
+
 # AI member: 积分池大小
 AI_PLANS: dict[str, dict[str, Any]] = {
     "ai_5500":   {"price_cny": 49.90, "days": 30, "credits": 5500,  "label": "AI 积分月会员"},
@@ -1013,7 +1020,7 @@ _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (
     {"key": "quality", "text": "清晰度：1080P 及以上全部开放（>1080P 需会员）"},
     {"key": "devices", "text": "同一账号 2 台设备同时在线"},
     {"key": "speed", "text": "高速通道 · 全速不限速"},
-    {"key": "no_credits", "text": "不含积分额度：抠图等功能需另购积分包"},
+    {"key": "no_credits", "text": f"开通即赠 {VIP_MEMBER_CREDITS} 积分：抠图等功能可直接用（永久有效）"},
     {"key": "support", "text": "优先客服支持"},
 )
 
@@ -1404,7 +1411,15 @@ class MembershipStore:
             cur = float(st["download_member"].get("expire_at", 0) or 0)
             new_exp = max(now, cur) + int(info.get("days") or 0) * 86400
             st["download_member"].update({"active": True, "plan": code, "expire_at": new_exp})
-            result.update({"kind": "download_member", "expire_at": new_exp})
+            # 2026-10-24：VIP 会员赠 300 积分（进永久池，不随会员到期清零）
+            bonus = int(info.get("credits") or VIP_MEMBER_CREDITS or 0)
+            if bonus > 0:
+                st["permanent_credits"]["total"] = int(st["permanent_credits"].get("total", 0)) + bonus
+                st["permanent_credits"].setdefault("packs", []).append({
+                    "pack": f"vip_bonus:{code}", "amount": bonus, "bought_at": now,
+                })
+            result.update({"kind": "download_member", "expire_at": new_exp,
+                           "credits_added": bonus})
         elif code in _ai_plans:
             info = _ai_plans[code]
             cur = float(st["ai_member"].get("expire_at", 0) or 0)

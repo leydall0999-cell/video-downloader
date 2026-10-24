@@ -88,6 +88,7 @@ run_one test_web_auth_hardening_f02_f03.py
 run_one test_worker_proxy_direct.py
 run_one test_peer_overseas_fallback.py
 run_one test_member_download_quota.py
+run_one test_vip_bonus_credits.py         # VIP 会员赠 300 积分：发放/累加/不串池/到期不清/文案同源（2026-10-24 用户定档）
 run_one test_youtube_unavailable_vs_bot.py
 run_one test_youtube_shortlink_scope.py
 run_one test_yt_warp_proxy.py              # YouTube 专属出口代理：VDL_PROXY_YT(WARP) 分流、googlevideo 同代理、国内站不受影响（2026-10-01）

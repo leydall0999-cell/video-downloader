@@ -8646,7 +8646,7 @@
       return `<div class="pf-plan${pl.best ? ' is-best' : ''}${dis ? ' is-off' : ''}">
         ${mkBadge}${badge}${offBadge}
         <div class="pf-plan-name">${escHtml(pl.label || code)}</div>
-        <div class="pf-plan-price">${flash}<span>¥</span><span class="pf-price-now${phase === 'active' ? ' is-flash' : ''}">${price}</span></div>
+        <div class="pf-plan-price">${flash}<span class="pf-price-cur">¥</span><span class="pf-price-now${phase === 'active' ? ' is-flash' : ''}">${price}</span></div>
         <div class="pf-plan-meta">${escHtml(meta)}</div>
         ${extra}${desc}${save}
         <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}"${dis ? ' disabled title="' + escHtml(st.reason || '暂不可购买') + '"' : ''}>${dis ? escHtml(st.reason || '暂不可购买') : '立即开通'}</button>
@@ -8812,7 +8812,7 @@
     return `<div class="pf-plan${pl.best ? ' is-best' : ''}${dis ? ' is-off' : ''}">
       ${mkBadge}${badge}${offBadge}
       <div class="pf-plan-name">${escHtml(pl.label || code)}</div>
-      <div class="pf-plan-price">${flash}<span>¥</span><span class="pf-price-now${phase === 'active' ? ' is-flash' : ''}">${price}</span></div>
+      <div class="pf-plan-price">${flash}<span class="pf-price-cur">¥</span><span class="pf-price-now${phase === 'active' ? ' is-flash' : ''}">${price}</span></div>
       <div class="pf-plan-meta">${escHtml(meta || '')}</div>
       ${extra}${desc}${save}
       <button type="button" class="pf-ov-btn pf-plan-buy" data-code="${escHtml(code)}"${dis ? ' disabled title="' + escHtml(st.reason || '暂不可购买') + '"' : ''}>${dis ? escHtml(st.reason || '暂不可购买') : '立即开通'}</button>

@@ -2129,8 +2129,20 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 }
 .pf-plan.is-best { border-color: var(--brand); background: rgba(79, 70, 229, .05); }
 .pf-plan-name { font-size: .84rem; font-weight: 600; padding-right: 3rem; }
-.pf-plan-price { font-size: 1.25rem; font-weight: 800; color: var(--brand); line-height: 1.1; }
-.pf-plan-price > span { font-size: .78rem; font-weight: 500; color: var(--text-mute); margin-right: 1px; }
+/* 🔴 2026-10-24 修「价格不够突出」：原来 `.pf-plan-price > span` 把「¥」和
+   **数字**一起压成 .78rem/500/灰字（实测 12.48px），容器字号再大也没用 ——
+   屏幕上价格看起来像脚注。现在 ¥ 用相对字号（em）当上标，数字单独放大加粗成主视觉。 */
+.pf-plan-price {
+  display: flex; align-items: baseline; gap: .1rem;
+  font-size: 1.25rem; font-weight: 800; color: var(--brand); line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+/* :not(.pf-price-now) 必须留着 —— 数字本身也是 span 子元素，
+   否则这条（优先级更高）会反把数字压成上标大小（第一版就是这么错的实测 15.12px） */
+.pf-plan-price > span:not(.pf-price-now) { font-size: .46em; font-weight: 600; color: var(--text-mute); }
+/* ¥ 走「上标」而不是贴着字号底部：align-self 让它贴行盒顶部，再按自身 em 微调 */
+.pf-plan-price > .pf-price-cur { align-self: flex-start; margin-top: .34em; font-weight: 700; }
+.pf-plan-price .pf-price-now { font-size: 1em; font-weight: 900; color: inherit; letter-spacing: -.02em; }
 /* 秒杀 / 限量 / 活动（2026-10-03） */
 .pf-plan-badge.is-flash { background: #e11d48; }
 .pf-plan-badge.is-off { background: #64748b; }
@@ -2242,9 +2254,12 @@ html.theme-dark .mem-notice { background: #2a2110; border-color: #7c4a1e; border
 }
 .mem-benefits li::before { content: '✓ '; color: var(--success); }
 .mem-tracks .pf-plans { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .7rem; }
-.mem-tracks .pf-plan { padding: .85rem .9rem .8rem; gap: .5rem; }
-.mem-tracks .pf-plan-price { font-size: 1.55rem; }
-.mem-tracks .pf-plan-buy { width: 100%; }
+.mem-tracks .pf-plan { padding: .9rem .95rem .85rem; gap: .5rem; }
+/* 会员页：价格是这一屏的主角（2026-10-24 用户反馈「价格不够突出」），
+   抬到 36px / 900，¥ 上标约 15px；按钮沉到卡片底部，价格与按钮之间不再空一大片 */
+.mem-tracks .pf-plan-price { font-size: 2.25rem; }
+.mem-tracks .pf-plan-price > span:not(.pf-price-now) { font-size: .42em; }
+.mem-tracks .pf-plan-buy { width: 100%; margin-top: auto; }
 @media (max-width: 560px) {
   .mem-tracks .pf-plans { grid-template-columns: 1fr; }
   .mem-top { align-items: flex-start; }
@@ -2494,21 +2509,34 @@ html.theme-dark .mem-notice { background: #2a2110; border-color: #7c4a1e; border
 .hp-ghost:hover > svg { transform: translateY(2px); }
 .hp-ghost:active { transform: translateY(0); }
 /* 纯文字提示（2026-10-24 用户明确：只做文字提示，不做按钮）。
-   整条不设底色/边框/圆角/内边距/箭头 —— 就是 hero 里的一行说明文字；
-   只有「桌面版」是普通文字链接（下划线），点它去 /download。 */
+   第一版做得太素（19.8px 黑字，一眼滑过去），用户反馈「提示太不明显」⇒
+   仍保持「一行字」的形态，但加三处着力点：① 左侧 3px 色条（引用块式，不是边框盒子）
+   ② 前面一个显示器图标 ③ 字号抬到 22–24px，「桌面版」加荧光底色 + 下划线。
+   依然不设：整块底色、整圈边框、圆角、投影、悬停整条位移 —— 那些才是按钮外观。 */
 .hp-hint {
-  margin-top: 1.05rem;
-  font-size: clamp(1.05rem, 1.5vw, 1.24rem); font-weight: 800;
-  letter-spacing: -.012em; line-height: 1.55; color: #1f2433;
+  display: flex; align-items: flex-start; gap: .62rem;
+  margin-top: 1.2rem; padding-left: .95rem;
+  border-left: 3px solid #6366f1;
+  font-size: clamp(1.18rem, 1.9vw, 1.5rem); font-weight: 800;
+  letter-spacing: -.015em; line-height: 1.42; color: #161a27;
+}
+.hp-hint-ic {
+  flex: none; width: 1.16em; height: 1.16em; margin-top: .1em;
+  color: #4f46e5;
 }
 .hp-hint a { color: inherit; text-decoration: none; }
 .hp-hint b {
   color: var(--brand, #4f46e5); font-weight: 800;
+  /* 荧光笔式底色：只铺字的下一半，看起来像被划了一道，不像按钮 */
+  background: linear-gradient(180deg, rgba(99,102,241,0) 56%, rgba(99,102,241,.17) 56%);
   /* 用真实下划线而不是 border-bottom：带 offset 才能落在字底之下，不压住「版」字的脚 */
-  text-decoration: underline; text-decoration-thickness: 2px;
-  text-decoration-color: rgba(79,70,229,.4); text-underline-offset: 4px;
+  text-decoration: underline; text-decoration-thickness: 2.5px;
+  text-decoration-color: rgba(79,70,229,.45); text-underline-offset: 4px;
 }
-.hp-hint a:hover b { text-decoration-color: currentColor; }
+.hp-hint a:hover b {
+  text-decoration-color: currentColor;
+  background: linear-gradient(180deg, rgba(99,102,241,0) 52%, rgba(99,102,241,.28) 52%);
+}
 .hp-hint a:focus-visible {
   outline: 3px solid rgba(99,102,241,.45); outline-offset: 3px; border-radius: 3px;
 }

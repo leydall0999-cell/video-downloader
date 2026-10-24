@@ -86,8 +86,11 @@ ok(/16\.2 MB\/s/.test(home), '网盘任务条必须展示 16.2 MB/s（用实测�
 // 「想体验全部功能请到桌面版」= 一行纯文字提示。
 // 2026-10-24 用户第二次明确：「只做文字提示，不做按钮」⇒ 去掉底色/边框/圆角/箭头，
 // 整条就是普通说明文字，只有「桌面版」保持为文字链接（下划线）可点去 /download。
-ok(/<p class="hp-hint">想体验全部功能请到<a href="\/download"><b>桌面版<\/b><\/a><\/p>/.test(home),
-  '「想体验全部功能请到桌面版」必须是纯文字提示（hp-hint 段落 + 「桌面版」文字链接），不能做成按钮');
+// 结构仍是「一行字」：<p class="hp-hint"> 里只有图标 + 一句话，其中「桌面版」是文字链接。
+// 2026-10-24 二次调整加了图标（用户嫌不显眼），但整条不得变成 <a> 按钮。
+ok(/<p class="hp-hint">\s*<svg class="hp-hint-ic"[\s\S]{0,400}?<span>想体验全部功能请到<a href="\/download"><b>桌面版<\/b><\/a><\/span>\s*<\/p>/.test(home),
+  '「想体验全部功能请到桌面版」必须是纯文字提示（p.hp-hint + 图标 + 「桌面版」文字链接），不能做成按钮');
+ok(!/<a class="hp-hint"/.test(home), '提示条不得整条变成 <a>（那是按钮外观，用户只要文字）');
 // CTA 区「有点击欲望」的三条落地：主按钮更大更厚、有扫光、副按钮有方向图标
 ok(/class="hp-btn hp-primary" id="homeStartBtn">\s*<span>开始使用<\/span>/.test(home),
   '主按钮「开始使用」必须带图标结构（不再是纯文字）');
@@ -113,17 +116,30 @@ ok(/#homeView\s*\{[^}]*margin-top/.test(cssNoComment),
   '#homeView 需要与顶栏留出间距（margin-top），否则首页卡片贴住导航');
 // 大字提示条：字号必须显著大于正文（0.92rem 的 lede），否则用户要的「大字」没做到
 const hintRule = (cssNoComment.match(/\.hp-hint\s*\{[^}]*\}/) || [''])[0];
-ok(/font-size:\s*clamp\(1\.0[0-9]?rem/.test(hintRule) || /font-size:\s*1\.[0-9]+rem/.test(hintRule),
-  '.hp-hint 字号必须放大（≥1.05rem）—— 用户要求「大字」写这行提示');
+// 2026-10-24 二次调整：用户先说「只做文字不做按钮」（第一版 19.8px 太素），
+//    紧接着又反馈「提示太不明显」⇒ 要求「显眼」但不「像按钮」。所以断言改成两头夹：
+//    ① 必须够大（clamp 上限 ≥1.45rem ≈ 23px，比第一版 1.24rem 明显抬一档）
+//    ② 必须有文字级强调：左侧色条 + 显示器图标
+//    ③ 仍然禁止按钮外观：圆角 / 投影 / 整圈边框 / 整块底色 / 悬停整条位移
+const hintMaxRem = (() => {
+  const m = hintRule.match(/font-size:\s*clamp\([^,]+,[^,]+,\s*([\d.]+)rem\)/);
+  return m ? parseFloat(m[1]) : NaN;
+})();
+ok(Number.isFinite(hintMaxRem) && hintMaxRem >= 1.45,
+  `.hp-hint 字号上限须 ≥1.45rem（实测 ${hintMaxRem}rem）—— 1.24rem 版用户反馈「太不明显」`);
 ok(/font-weight:\s*[78]00/.test(hintRule), '.hp-hint 必须加粗（用户要求「大字」提示）');
+ok(/border-left:\s*3px solid/.test(hintRule),
+  '.hp-hint 缺左侧色条 —— 纯黑字没有视觉着力点，用户会滑过去看不到');
+ok(/class="hp-hint-ic"/.test(home) && /\.hp-hint-ic\s*\{[^}]*color:/.test(cssNoComment),
+  '提示条必须带显示器图标（hp-hint-ic）且有着色 —— 图标是「这行是重点」的最快信号');
 // 用户 2026-10-24 明确：「只做文字提示，不做按钮」—— 这条反过来钉死，防止以后又被做成按钮。
-ok(!/(^|[^-\w])background\s*:/.test(hintRule), '.hp-hint 不得有底色（那是按钮外观，用户只要文字提示）');
 ok(!/border-radius\s*:/.test(hintRule), '.hp-hint 不得有圆角（会变成胶囊按钮）');
-ok(!/(^|[^-\w])border\s*:/.test(hintRule) && !/border-left\s*:/.test(hintRule),
-  '.hp-hint 不得有边框/左色条（用户明确不要按钮）');
 ok(!/box-shadow\s*:/.test(hintRule), '.hp-hint 不得有投影（按钮才需要托起来）');
-ok(!/(^|[^-\w])padding\s*:/.test(hintRule), '.hp-hint 不得有内边距（会把文字撑成一个盒子）');
-ok(!/display:\s*inline-flex/.test(hintRule), '.hp-hint 不能是 flex 盒子（会被当成控件）');
+ok(!/(^|[^-\w])border\s*:/.test(hintRule),
+  '.hp-hint 不得有整圈边框（只允许左侧色条 border-left）');
+ok(!/(^|[^-\w])background\s*:/.test(hintRule),
+  '.hp-hint 本身不得有整块底色（荧光底只能铺在「桌面版」文字上，不能整条铺成色块）');
+ok(!/display:\s*inline-flex/.test(hintRule), '.hp-hint 不能是 inline-flex 胶囊（会被当成控件）');
 ok(!/\.hp-hint:hover\s*\{[^}]*transform\s*:/.test(cssNoComment),
   '.hp-hint 悬停不能让整条位移/放大（那是按钮的反馈，用户只要文字）');
 ok(!/hp-hint\s*>\s*i/.test(cssNoComment),
