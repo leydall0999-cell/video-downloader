@@ -98,10 +98,13 @@
     });
   }
 
-  // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
+  // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到默认视图。
   // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
+  // 🔴 2026-10-24：默认视图改为「有首页元素就停首页，没有就停下载」——
+  //    桌面壳（app-dev 的 index.html 没有 #homeView）与网页版共用本文件，
+  //    不能写死 'home'，否则桌面端启动会把下载页藏起来变成空白。
   let bootViewSet = false;
-  setTimeout(() => { try { if (!bootViewSet) switchView('home'); } catch (_) {} }, 0);
+  setTimeout(() => { try { if (!bootViewSet) switchView(el.homeView ? 'home' : 'download'); } catch (_) {} }, 0);
 
   // 启动即强制隐藏全局错误提示框，确保「打开默认不显示」（即使带缓存的旧 DOM 残留 hidden 被改动）
   try { const _ab = document.getElementById('alertBox'); if (_ab) _ab.hidden = true; } catch (_) {}
@@ -7239,6 +7242,9 @@
   }, true);
 
   function switchView(view) {
+    // 首帧兜底标记（<head> 里的 data-boot）只负责第一次绘制；
+    // 一旦进入正常切换流程就撤掉，显示权交回给各视图的 hidden 属性。
+    try { document.documentElement.removeAttribute('data-boot'); } catch (_) {}
     applyWebTabs();
     const isHome = view === 'home';            // 首页（2026-10-24 新增）：功能简介页，独立于「下载视频」
     const isLib = view === 'library';
@@ -11435,7 +11441,7 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       //    仍由后面的查询守卫保护，本改动只去掉「用户什么都没做时的重复进入」。
       if (!bootViewSet && !document.querySelector('.tab.is-active:not(#tabDownload):not(#tabHome)')) {
         const _hashView = (location.hash || '').replace(/^#view=/, '');
-        switchView(_hashView || 'home');
+        switchView(_hashView || (el.homeView ? 'home' : 'download'));
       }
       bootViewSet = true; // 标记初始化已设置视图，阻止 setTimeout 兜底覆盖
       initSubUI();
@@ -11470,9 +11476,10 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshNodeInfo(); });
   // 默认视图（2026-10-24 起改到「首页」）：先落地功能简介页，点「开始使用」再进下载。
   // 支持 #view=xxx 直达（下载/音乐转换/图片转换/字幕/个人中心等）。
+  // 无 #homeView 的宿主（桌面壳）自动回落到下载页，避免下载页被藏成空白。
   try {
     const _hashView0 = (location.hash || '').replace(/^#view=/, '');
-    switchView(_hashView0 || 'home');
+    switchView(_hashView0 || (el.homeView ? 'home' : 'download'));
     bootViewSet = true;
   } catch (_) {}
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示

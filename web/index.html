@@ -18,6 +18,26 @@
     document.write('<link rel="stylesheet" href="styles.css?v=' + encodeURIComponent(v) + '">');
   })();
 </script>
+<script>
+  // 首帧视图（2026-10-24）：网页版静态默认就是「首页」，浏览器第一次绘制直接落在首页，
+  // 不再出现「先绘制下载页 → 再切首页」的闪屏。
+  // 只有深链需要首帧避开首页：#view=download 直接给下载页，其它 #view=xxx 先藏首页
+  // （交给 app.js 切换，宁可空白一帧也不要闪出错误内容）。
+  // ⚠️ 这里不判断桌面壳：桌面端加载的是 app-dev 自己的 index.html（没有 #homeView，
+  //    下载页本来就不是 hidden），不需要也不该由本文件兜底；app.js 按「有无 #homeView」
+  //    决定默认视图，比按壳标志更可靠。
+  // switchView() 会清掉 data-boot，把显示权交回给 hidden 属性。
+  (function () {
+    var hash = (location.hash || '').replace(/^#view=/, '');
+    if (!hash) return;
+    document.documentElement.setAttribute('data-boot', hash === 'download' ? 'download' : 'other');
+  })();
+</script>
+<style>
+  /* 首帧兜底：仅在 data-boot 存在时生效，正常情况下（首页）这两条规则完全不参与。 */
+  html[data-boot] #homeView { display: none !important; }
+  html[data-boot="download"] #downloadView { display: block !important; }
+</style>
 </head>
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
@@ -64,7 +84,7 @@
 
   <!-- 首页（2026-10-24 新增）：功能简介页。「下载视频」页保持原样，互不影响。
        类名统一 hp- 前缀，避开站内已有的 .hero / .hero-note / .panel。 -->
-  <section id="homeView" hidden aria-labelledby="homeTitle">
+  <section id="homeView" aria-labelledby="homeTitle">
     <div class="hp-hero">
       <div class="hp-hero-in">
         <div class="hp-hero-l">
@@ -188,7 +208,10 @@
     </div>
   </section>
 
-  <div id="downloadView">
+  <!-- 下载视频页（2026-10-24）：默认 hidden —— 首帧由静态标记决定，网页版必须直接是「首页」。
+       否则浏览器会先绘制本页、等 app.js 执行后再切首页，用户会看到「先跳下载再跳首页」的闪屏。
+       桌面壳 / #view=download 的首帧兜底由 <head> 里的 data-boot 规则处理。 -->
+  <div id="downloadView" hidden>
 
   <section class="hero">
     <button type="button" class="howto-btn" title="查看操作引导（可随时重新查看）" aria-label="查看操作引导">?</button>

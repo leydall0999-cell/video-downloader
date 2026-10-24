@@ -49,8 +49,10 @@ const hvEnd = indexHtml.indexOf('<div id="downloadView"', hvStart);
 ok(hvEnd > hvStart, '#homeView 应紧邻在 #downloadView 之前（切片右边界）');
 const home = indexHtml.slice(hvStart, hvEnd);
 
-ok(/<section id="homeView" hidden/.test(indexHtml),
-  '#homeView 必须带 hidden（默认由 switchView 决定显隐，避免两页同屏）');
+// 显隐必须由 switchView 统管（避免两页同屏）；但**静态默认是可见**（首帧即首页，见第 ⑤ 段），
+// 不能要求 #homeView 自带 hidden —— 那正是「先闪下载页」的成因。
+ok(/el\.homeView\.hidden = !isHome;/.test(appJs),
+  '首页显隐未纳入 switchView 统管（会与下载页同屏）');
 // 下载页结构不许被改动：首页切片里不得出现下载页的核心控件
 ['id="urlInput"', 'id="resolveBtn"', 'id="downloadBtn"'].forEach((s) => {
   ok(!home.includes(s), `首页切片里出现下载页控件 ${s} —— 两页被混在一起了`);
@@ -143,8 +145,36 @@ ok(!_hideList.includes('tabHome'), 'tabHome 不得被列入网页版隐藏清单
 ok(!/id="tabHome"[^>]*\shidden/.test(nav), 'tabHome 不能自带 hidden 属性');
 
 // 默认落地页 = 首页（两处：同步兜底 + 异步重套用），且都必须带深链回落
-ok(/if \(!bootViewSet\) switchView\('home'\)/.test(appJs), '同步兜底的默认视图必须是首页');
-ok(/switchView\(_hashView \|\| 'home'\)/.test(appJs),
+// 🔴 2026-10-24：默认视图改为「有 #homeView 就 home，否则 download」——
+//    桌面壳与网页版共用 web/app.js，但桌面 index.html 没有首页元素，写死 home 会把下载页藏成空白。
+ok(/if \(!bootViewSet\) switchView\(el\.homeView \? 'home' : 'download'\)/.test(appJs),
+  '同步兜底的默认视图必须是首页（无 #homeView 的宿主回落 download）');
+ok(/switchView\(_hashView \|\| \(el\.homeView \? 'home' : 'download'\)\)/.test(appJs),
   '异步回落的默认视图必须是首页（且保留 #view=x 深链优先）');
+
+/* ---------------- ⑤ 首帧：静态 HTML 就落在首页（不能等 JS 来切） ---------------- */
+// 用户实测：打开 hanyuxz.top「先跳转下载页、再跳转首页」，很怪。
+// 根因：静态 HTML 里 #homeView 带 hidden、#downloadView 不带 —— 浏览器第一次绘制画的就是下载页，
+//       等 app.js 执行完 switchView('home') 才切走，于是出现闪屏。
+// 红线：首页的可见性必须由**静态标记**决定，不依赖 JS 执行时机。
+const _homeTag = (indexHtml.match(/<section id="homeView"[^>]*>/) || [''])[0];
+ok(_homeTag && !/\shidden[\s>]/.test(_homeTag),
+  '首帧闪屏：静态 HTML 里 #homeView 不能带 hidden（否则浏览器首帧画的是下载页，JS 再切回去 = 闪一下）');
+const _dlTag = (indexHtml.match(/<div id="downloadView"[^>]*>/) || [''])[0];
+ok(_dlTag && /\shidden[\s>]/.test(_dlTag),
+  '首帧闪屏：静态 HTML 里 #downloadView 必须带 hidden（否则下载页先被绘制出来）');
+// 桌面壳 / #view=download 需要首帧回到下载页：head 里用 data-boot 标记 + 内联样式兜底，
+// 且必须在样式表之前就生效（内联 style，不能放 styles.css —— 外部样式到达前已经绘制过一帧）。
+ok(/html\[data-boot\] #homeView \{ display: none !important; \}/.test(indexHtml),
+  '深链的首帧兜底样式缺失（data-boot 规则）');
+ok(/html\[data-boot="download"\] #downloadView \{ display: block !important; \}/.test(indexHtml),
+  '深链 #view=download 首帧未把下载页放出来（下载页静态是 hidden，会白屏）');
+ok(/data-boot', hash === 'download' \? 'download' : 'other'/.test(indexHtml),
+  '首帧脚本必须只按深链分流（不能按桌面壳 —— 桌面端加载的是另一份无 #homeView 的 HTML，兜底反而会闪）');
+ok(/switchView\(_hashView0 \|\| \(el\.homeView \? 'home' : 'download'\)\)/.test(appJs),
+  '同步 boot 落地的默认视图必须是首页（无 #homeView 时回落 download）');
+// data-boot 只管第一次绘制，进入正常切换后必须撤掉，否则会与 hidden 属性打架
+ok(/document\.documentElement\.removeAttribute\('data-boot'\)/.test(appJs),
+  'switchView 未清除 data-boot 首帧标记 —— 首帧样式会一直压着后续切换');
 
 console.log(`✅ 首页回归守卫生效（web-dev）：独立 section / 默认落地 / 22 项能力 / 文案一字不改 / ${usedCls.size} 个 hp- 类全有样式 / 接线齐备（共 ${n} 项断言）`);

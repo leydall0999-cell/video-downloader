@@ -88,11 +88,15 @@ assert.ok(/let bootViewSet = false;/.test(appJs),
   'boot 竞态保护标志 bootViewSet 丢失（会员页会被启动竞态弹回下载）');
 // 🔴 2026-10-24：默认视图从 'download' 改为 'home'（新增首页）。断言不得再写死视图名，
 //    改为「从源码取默认视图 → 校验兜底受 !bootViewSet 保护 + 该视图 tab 在排除清单里」。
-//    正则本身要求 `if (!bootViewSet) switchView('X')` 这个形态存在，所以「保护被删」仍会红。
-const _defaultViewMatch = appJs.match(/if \(!bootViewSet\) switchView\('([A-Za-z]+)'\)/);
+//    正则本身要求 `if (!bootViewSet) switchView(...)` 这个形态存在，所以「保护被删」仍会红。
+// 🔴 2026-10-24 二次更新：默认视图改为「有 #homeView 就 home，否则 download」
+//    （桌面壳共用 web/app.js，但它的 index.html 没有首页元素，写死 home 会把下载页藏成空白）。
+const _defaultViewMatch = appJs.match(/if \(!bootViewSet\) switchView\(el\.homeView \? '([A-Za-z]+)' : '([A-Za-z]+)'\)/);
 assert.ok(_defaultViewMatch,
-  'setTimeout 兜底必须受 !bootViewSet 保护，否则会覆盖用户已选视图');
+  '默认视图必须带「有 #homeView 就首页、否则下载」的回落 —— 写死 \'home\' 会让没有首页元素的宿主（桌面壳）把下载页藏成空白');
 const DEFAULT_VIEW = _defaultViewMatch[1];
+assert.ok(_defaultViewMatch[2] === 'download',
+  '无 #homeView 的宿主（桌面壳）必须回落到 download，否则下载页会被藏成空白');
 const _defaultTabId = 'tab' + DEFAULT_VIEW.charAt(0).toUpperCase() + DEFAULT_VIEW.slice(1);
 assert.ok(/bootViewSet = true;/.test(appJs),
   'bootViewSet 必须真被置位，否则兜底恒触发（等于没有保护）');
