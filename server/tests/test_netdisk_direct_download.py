@@ -87,12 +87,19 @@ class TestSourcing(unittest.TestCase):
                       "run_download 没有网盘直链短路，会继续走 yt-dlp 解析")
         self.assertIn("_download_netdisk_direct(", head)
 
-    def test_direct_download_uses_p2sp_ua_and_cookie(self):
-        """直链下载必须带 P2SP 客户端身份与登录态（否则百度 403）。"""
+    def test_direct_download_headers(self):
+        """直链下载的三个硬要求（2026-10-24 实测，缺一即 403）：
+
+        1) 必须带 Range —— 裸 GET 会被判"无权限/过期"（伪错误码 31326/31360）；
+        2) 不能用 P2SP 那个 UA —— 同一链接 P2SP UA 403、浏览器 UA 206；
+        3) 必须带登录态 Cookie。
+        """
         src = _src()
         idx = src.find("def _download_netdisk_direct(")
         body = src[idx:idx + 3000]
-        self.assertIn("_NETDISK_UA", body)
+        self.assertIn('"Range": "bytes=0-"', body, "缺 Range：百度会直接 403")
+        self.assertIn("_NETDISK_DOWNLOAD_UA", body, "必须用浏览器 UA，不能用 P2SP")
+        self.assertNotIn('"User-Agent": _NETDISK_UA', body, "P2SP UA 会被 403")
         self.assertIn('headers["Cookie"] = cookie', body)
         # 单连接：不允许出现并发下载器参数
         self.assertNotIn("concurrent_fragments", body)

@@ -1366,6 +1366,15 @@ def _build_aria2c_args(concurrency: int) -> list[str]:
 #   所以这是榨取而非破解，对外不承诺固定倍数。
 # ⇒ 网盘直链一律：单连接（禁 aria2c、禁分片并发）+ P2SP UA。
 _NETDISK_UA = "netdisk;P2SP;2.2.60.26"
+# 🔴 下载直链**不能**用上面那个 P2SP 身份（2026-10-24 实测，同一链接交替验证）：
+#   P2SP UA + Range → 403 {"error_code":31326,"user is not authorized"}
+#   浏览器 UA + Range → 206 正常，SVIP 账号 3.70 MB/s（非会员 ~120 KB/s，31 倍）
+# 而且**必须带 Range**：不带 Range 的裸 GET 一律 403，错误码会伪装成
+# 31326「无权限」或 31360「直链过期」——极具误导性，别再往"账号权限/私密分享"方向查。
+_NETDISK_DOWNLOAD_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 _NETDISK_HOST_RE = re.compile(r"(?:^|\.)(?:baidupcs\.com|pcs\.baidu\.com)$")
 
 
@@ -5783,7 +5792,12 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
         return
     workdir.mkdir(parents=True, exist_ok=True)
 
-    headers = {"User-Agent": _NETDISK_UA}
+    headers = {
+        "User-Agent": _NETDISK_DOWNLOAD_UA,
+        # 🔴 必需，不能省：百度 CDN 对不带 Range 的 GET 直接 403，
+        # 且把原因伪装成 31326「无权限」/ 31360「直链过期」，极难排查。
+        "Range": "bytes=0-",
+    }
     if cookie:
         headers["Cookie"] = cookie
     proxies = {"http": proxy, "https": proxy} if proxy else None
