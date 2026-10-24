@@ -216,6 +216,7 @@
     // 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）
     modeVideoBtn: $('modeVideoBtn'),
     modeImageBtn: $('modeImageBtn'),
+    modeNetdiskBtn: $('modeNetdiskBtn'),
     imageModeNote: $('imageModeNote'),
     // 正版素材库入口 & 下载用途确认
     consentModal: $('consentModal'),
@@ -16290,6 +16291,19 @@ el.dwVidPlayer.hidden = true;
   // 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）
   if (el.modeVideoBtn) el.modeVideoBtn.addEventListener('click', () => setDownloadMode('video'));
   if (el.modeImageBtn) el.modeImageBtn.addEventListener('click', () => setDownloadMode('image'));
+  // 网盘下载（2026-10-24）：作为「视频下载 / 图片下载」的第三个并列选项，但它是
+  // 独立视图（产出是网盘文件列表，不是平台解析结果），所以只切视图、不改 dlMode，
+  // 避免污染视频/图片两态（占位符、批量面板、按钮文案都绑在 dlMode 上）。
+  if (el.modeNetdiskBtn) {
+    el.modeNetdiskBtn.addEventListener('click', () => {
+      switchView('clouddrive');
+      if (el.cdUrl) {
+        try {
+          el.cdUrl.focus();
+        } catch (_) { /* 视图刚切换，聚焦失败不影响功能 */ }
+      }
+    });
+  }
   el.batchBtn.addEventListener('click', () => {
     const urls = el.batchInput.value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
     if (!urls.length) { showError('请先粘贴至少一个视频链接'); return; }
