@@ -887,6 +887,15 @@ run_node test_placeholder_contrast.mjs
 #      「只在注释里保留 closest([hidden])」三个自证/定位类用例。
 run_node test_howto_guide.mjs
 
+# 50. test_commentary_source_restore.mjs —— 解说页「切走再回来，原视频没了」（2026-10-24
+#      用户报障）：loadCommentary() 历来无条件清预览（2026-09-18 为修黑屏残留覆层），
+#      从没做过恢复 ⇒ 侧栏切走再点回、或点「刷新」，选中/拖入的源视频就成空占位。
+#      守卫钉死：① 清前必须捞走 pick 与 File 对象；② 恢复必须排在 refreshComSource()
+#      之后（选项是那一刻才重建的，提前恢复会静默失败）；③ 媒体库下拉与本地文件两个
+#      入口都要记账，取消选择要清账；④ 真刷新后本地文件拿不回来必须明示重选；
+#      ⑤ loadedmetadata→comFeatherDetect 自动探测链必须还在（羽化绿条靠它回来）。
+run_node test_commentary_source_restore.mjs
+
 # 49. test_task_ownership_p0_2.py —— P0-2 下载任务/订阅源 越权隔离（安全审计 2026-10-11）：
 #      此前 `_require_task` 只按 id 取、`/api/tasks` 直接 `store.list_all()` 返回**全站**任务，
 #      攻击者拿到/枚举到 task_id 即可读标题、拉成片、取消/暂停他人任务；订阅源同理。

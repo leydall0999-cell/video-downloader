@@ -1187,6 +1187,12 @@
   let comPreviewUrl = null;    // 预览视频 URL（本地文件为 objectURL，需释放）
   let comPreviewW = 0;         // 源视频宽度（像素，0=未加载）
   let comPreviewH = 0;         // 源视频高度（像素，0=未加载）
+  // 2026-10-24：记住「当前选的源」。此前 loadCommentary() 每次进解说页都无条件
+  // setupComPreview(null)（那是 2026-09-18 为修黑屏残留覆层加的），用户切到别的页
+  // 再回来（或点「刷新」）就只剩空占位 —— 报障「看不到原视频文件了，重新加载也没用」。
+  // 切视图不重载页面，File 对象还在，两类源都能恢复；真刷新/重启只剩媒体库档可恢复
+  // （本地文件受浏览器安全限制拿不回 File 对象，只能提示重选）。
+  let comLastPick = null;      // { kind:'library'|'local', id, name }
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
   let resolved = null;
@@ -12417,6 +12423,11 @@ el.dwVidPlayer.hidden = true;
     el.comStatus.hidden = true;
     el.comFileStatus.hidden = true;
     el.comEta.hidden = true;
+    // 2026-10-24：清之前先把「上次选的源」与本地 File 对象捞出来。selectedLocalFile
+    // 是整个页面唯一持有 File 对象的地方，跟着一起清就再也恢复不了（切视图不重载页面，
+    // 对象还在；真刷新才没）。
+    const _pick = comLastPick || comReadLastPick();
+    const _localFile = selectedLocalFile;
     el.comSource.value = '';
     selectedLocalFile = null;
     setupComPreview(null);
@@ -12436,6 +12447,56 @@ el.dwVidPlayer.hidden = true;
     loadVolumeConfig();
     comLoadVoiceSample();   // 「我的音色」当前态（回填路径/文字稿/徽标）
     comRefreshTtsStatus();
+    // 恢复源视频（必须在 refreshComSource 之后：媒体库下拉选项是那时才重建的）。
+    // 羽化带不用管：loadedmetadata 会自己再跑一次探测，绿条随之回来。
+    try { comRestoreLastPick(_pick, _localFile); } catch (e) { console.warn('[com] restore pick failed', e); }
+  };
+
+  /** 把「上次选的源」写进 localStorage（真刷新/重启后仍能恢复媒体库档）。 */
+  const comSaveLastPick = (pick) => {
+    comLastPick = pick || null;
+    try {
+      if (pick && pick.kind === 'library' && pick.id) {
+        localStorage.setItem('vdl_com_last_pick', JSON.stringify(pick));
+      } else {
+        localStorage.removeItem('vdl_com_last_pick');
+      }
+    } catch (_) { /* 隐私模式/禁用存储：忽略，内存态仍有效 */ }
+  };
+  const comReadLastPick = () => {
+    try {
+      const raw = localStorage.getItem('vdl_com_last_pick');
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      return (p && p.kind === 'library' && p.id) ? p : null;
+    } catch (_) { return null; }
+  };
+
+  /** 恢复上次选的源：媒体库档直接回放；本地文件只有 File 对象还在时才能恢复。 */
+  const comRestoreLastPick = (pick, localFile) => {
+    if (!pick) return;
+    if (pick.kind === 'local') {
+      if (!localFile) {
+        // 真刷新/重启：File 对象拿不回来（浏览器安全限制），明说，别留个空屏让人猜
+        if (el.comFileStatus) {
+          el.comFileStatus.hidden = false;
+          el.comFileStatus.textContent = `刷新后无法自动读回本地文件，请重新选择「${pick.name || '上次的视频'}」`;
+        }
+        return;
+      }
+      selectedLocalFile = localFile;
+      el.comSource.value = '';
+      setupComPreview(URL.createObjectURL(localFile), localFile.name);
+      comProbeLocalDuration(localFile).then((sec) => comRunPrecheck({ durationSec: sec }));
+      return;
+    }
+    // 媒体库档：选项里还有这条才恢复（被删/归档就安静留空，不报错刷屏）
+    if (![...el.comSource.options].some((o) => o.value === pick.id)) return;
+    el.comSource.value = pick.id;
+    const opt = el.comSource.options[el.comSource.selectedIndex];
+    setupComPreview(`/api/library/file/${encodeURIComponent(pick.id)}?play=1`,
+      (opt && opt.textContent) || pick.name || '');
+    comRunPrecheck({ fileId: pick.id });
   };
 
   /** 加载解说(配音/音量)手动设置并回填滑块。 */
@@ -15077,11 +15138,14 @@ el.dwVidPlayer.hidden = true;
       // ?play=1：内联播放模式（后端按扩展名给 video/mp4 等正确 MIME）。
       // 🔴 不带它时后端回 application/octet-stream + attachment，WKWebView 拒解码 ⇒ 预览恒黑屏。
       setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}?play=1`, opt ? opt.textContent : '');
+      // 记住这次选择：切页/刷新后要能恢复（2026-10-24 用户报障）
+      comSaveLastPick({ kind: 'library', id: el.comSource.value, name: opt ? opt.textContent : '' });
       // 立刻预检：交给后端 ffprobe 探测真实时长（含裁剪折算），不通过当场提示
       comRunPrecheck({ fileId: el.comSource.value });
     } else {
       setupComPreview(null);
       comClearPrecheck();
+      comSaveLastPick(null);
     }
   });
 
@@ -15198,6 +15262,9 @@ el.dwVidPlayer.hidden = true;
     el.comFileStatus.hidden = true;
     el.comSource.value = '';
     setupComPreview(URL.createObjectURL(file), file.name);
+    // 记住这次选择（只进内存）：切页回来能原样恢复；真刷新后 File 对象没了，
+    // comRestoreLastPick 会提示重选而不是留个空屏。
+    comSaveLastPick({ kind: 'local', id: '', name: file.name });
     // 立刻预检（本地读元数据，零成本、不上传）：超时长或额度不够当场说清楚，
     // 绝不等到转写与脚本跑完才报「额度不足」——那时用户已白等十几分钟。
     comProbeLocalDuration(file).then((sec) => comRunPrecheck({ durationSec: sec }));
