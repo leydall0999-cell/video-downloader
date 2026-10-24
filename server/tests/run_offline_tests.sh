@@ -134,6 +134,7 @@ run_node test_concat_flow.mjs              # 视频拼接面板状态机：防�
 run_node test_app_intro_entries.mjs        # 网页版「更多功能」页：24 项能力/5 组/标签与入口一致（2026-09-30）
 run_node test_platform_count_label.mjs     # 平台数对外口径：两端徽章走 fmtPlatformCount，116→100+（2026-09-30）
 run_node test_member_page.mjs              # 网页版会员购买页：免登录可见价目/三轨/登录后自动续单/弹窗在顶层（2026-09-30）
+run_node test_home_page.mjs                # 网页版首页（新落地页）：独立 section/默认落地/22 项能力全列/文案一字不改/hp-* 类全有样式（2026-10-24）
 run_node test_profile_login_single.mjs     # 个人中心未登录：页内登录表单优先，禁止与全局登录弹窗同屏（2026-10-08 用户反馈）
 run_node test_auth_modal_width.mjs         # 登录弹窗定宽 400 无右侧留白 + 登录方式文案「电话号码/QQ邮箱」（2026-10-08 用户反馈）
 run_node test_notice_modal.mjs             # 下单失败/活动限购改用弹窗：禁回退成「只写页面底部状态行」（2026-10-09 用户反馈）

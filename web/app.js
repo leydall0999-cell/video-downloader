@@ -101,7 +101,7 @@
   // 兜底：若 IIFE 末尾因同步抛错未能设置默认视图，事件循环最后切到最安全的下载视图。
   // 注意：不能无条件切 commentary，否则网页版刷新会先闪一下「视频解说」再被覆盖。
   let bootViewSet = false;
-  setTimeout(() => { try { if (!bootViewSet) switchView('download'); } catch (_) {} }, 0);
+  setTimeout(() => { try { if (!bootViewSet) switchView('home'); } catch (_) {} }, 0);
 
   // 启动即强制隐藏全局错误提示框，确保「打开默认不显示」（即使带缓存的旧 DOM 残留 hidden 被改动）
   try { const _ab = document.getElementById('alertBox'); if (_ab) _ab.hidden = true; } catch (_) {}
@@ -237,8 +237,10 @@
     openFolderBtn: $('openFolderBtn'),
     // 媒体库（桌面版功能）
     tabs: $('tabs'),
+    tabHome: $('tabHome'),
     tabDownload: $('tabDownload'),
     tabLibrary: $('tabLibrary'),
+    homeView: $('homeView'),
     downloadView: $('downloadView'),
     libraryView: $('libraryView'),
     libRefresh: $('libRefresh'),
@@ -7238,6 +7240,7 @@
 
   function switchView(view) {
     applyWebTabs();
+    const isHome = view === 'home';            // 首页（2026-10-24 新增）：功能简介页，独立于「下载视频」
     const isLib = view === 'library';
     const isSub = view === 'subscribe';
     const isTor = view === 'torrent';
@@ -7252,7 +7255,8 @@
     const isMem = view === 'member';          // 会员（公开购买页，2026-09-30）
     const isShare = view === 'share';         // 分享（合并视图：二维码/网页 子页签，2026-09-30）
     const isAnyExtra = isMusic || isImage || isSt || isProfile || isMem || isShare;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isAnyExtra;
+    el.downloadView.hidden = isHome || isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isAnyExtra;
+    if (el.homeView) el.homeView.hidden = !isHome;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
     el.torrentView.hidden = !isTor;
@@ -7268,7 +7272,8 @@
     if (el.shareView) el.shareView.hidden = !isShare;
     if (el.shareQrView) el.shareQrView.hidden = !(isShare && _sharePane === 'shareqr');
     if (el.pageGenView) el.pageGenView.hidden = !(isShare && _sharePane === 'pagegen');
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isAnyExtra);
+    if (el.tabHome) el.tabHome.classList.toggle('is-active', isHome);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isHome && !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isAnyExtra);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -10246,7 +10251,18 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
     }
   };
 
+  if (el.tabHome) el.tabHome.addEventListener('click', () => switchView('home'));
   el.tabDownload.addEventListener('click', () => switchView('download'));
+  // 首页 CTA：切到下载页并聚焦输入框（用户点「开始使用」就是想直接粘链接）
+  const homeGoDownload = () => {
+    switchView('download');
+    try { if (el.input) el.input.focus(); } catch (_e) { /* 聚焦失败不影响切换 */ }
+  };
+  const homeStartBtn = $('homeStartBtn');
+  if (homeStartBtn) homeStartBtn.addEventListener('click', homeGoDownload);
+  document.querySelectorAll('#homeView [data-goto="download"]').forEach((b) => {
+    b.addEventListener('click', homeGoDownload);
+  });
   if (el.tabLibrary) el.tabLibrary.addEventListener('click', () => switchView('library'));
   if (el.tabCommentary) el.tabCommentary.addEventListener('click', () => switchView('commentary'));
   el.tabUploadConvert.addEventListener('click', () => switchView('uploadconvert'));
@@ -11417,9 +11433,9 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
       //    操作引导的 howtoAutoOpen 会按「已读」把刚首见展开的引导条**当场收回去**
       //    （实测：冷启动 ~2s 处 open=true → ~2.4s 被收走）。用户已切到别的视图时
       //    仍由后面的查询守卫保护，本改动只去掉「用户什么都没做时的重复进入」。
-      if (!bootViewSet && !document.querySelector('.tab.is-active:not(#tabDownload)')) {
+      if (!bootViewSet && !document.querySelector('.tab.is-active:not(#tabDownload):not(#tabHome)')) {
         const _hashView = (location.hash || '').replace(/^#view=/, '');
-        switchView(_hashView || 'download');
+        switchView(_hashView || 'home');
       }
       bootViewSet = true; // 标记初始化已设置视图，阻止 setTimeout 兜底覆盖
       initSubUI();
@@ -11452,11 +11468,11 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   };
   setInterval(refreshNodeInfo, 10 * 60 * 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshNodeInfo(); });
-  // 兜底默认视图（节点信息未加载时）：停在核心下载视图，两个 profile 都不会 404。
-  // 支持 #view=xxx 直达（音乐转换/图片转换/字幕/个人中心等）
+  // 默认视图（2026-10-24 起改到「首页」）：先落地功能简介页，点「开始使用」再进下载。
+  // 支持 #view=xxx 直达（下载/音乐转换/图片转换/字幕/个人中心等）。
   try {
     const _hashView0 = (location.hash || '').replace(/^#view=/, '');
-    switchView(_hashView0 || 'download');
+    switchView(_hashView0 || 'home');
     bootViewSet = true;
   } catch (_) {}
   // 启动即确保全局错误提示框隐藏，没错误就完全不显示

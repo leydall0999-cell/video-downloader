@@ -170,10 +170,18 @@ ok(appJsCode.indexOf('try { howtoApplyClosed(); }') < howtoFnStart
   '缺少启动时的 howtoApplyClosed() 调用 —— 冷启动时已关闭的引导条会先闪一下再消失');
 
 // 🔴 init 的 /api/nodes 异步回调会再 switchView 一次默认视图：同步兜底已经进入过
-//    download（首见展开+写已读），二次进入会按「已读」把刚展开的引导**当场收走**
+//    默认视图（首见展开+写已读），二次进入会按「已读」把刚展开的引导**当场收走**
 //    （真机实测：冷启动 ~2s 展开 → ~2.4s 被收走）。异步重套用必须以 !bootViewSet 为前置。
-ok(/if \(!bootViewSet && !document\.querySelector\('\.tab\.is-active:not\(#tabDownload\)'\)\)/.test(appJsCode),
+// 2026-10-24：默认视图由 download 改为 home（新增首页），视图名不再写死 ——
+//    断言「异步重套用带 !bootViewSet 前置 + 排除清单含默认视图 tab」。
+const _asyncGuard = appJsCode.match(
+  /if \(!bootViewSet && !document\.querySelector\('\.tab\.is-active((?::not\(#[A-Za-z]+\))+)'\)\)/);
+ok(!!_asyncGuard,
   'init 异步回调里的默认视图重套用缺 !bootViewSet 前置 —— 同视图二次进入会触发已读收起，冷启动首见展开被当场收走（实测过的缺陷）');
+const _defView = (appJsCode.match(/if \(!bootViewSet\) switchView\('([A-Za-z]+)'\)/) || [])[1] || 'download';
+const _defTab = '#tab' + _defView.charAt(0).toUpperCase() + _defView.slice(1);
+ok(_asyncGuard[1].includes(_defTab),
+  `异步重套用的排除清单缺 ${_defTab} —— 用户停在默认页时会被二次进入，引导当场收起`);
 
 /* ---------------- ⑤ 样式必须能折叠成一行 ---------------- */
 const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, '');

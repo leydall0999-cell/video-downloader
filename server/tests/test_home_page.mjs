@@ -1,0 +1,133 @@
+// 网页版「首页」回归守卫（2026-10-24 新增功能简介页）
+//
+// 背景：用户要求把 hanyuxz.top 的默认落地页从「下载视频」改成独立的**功能简介首页**
+//   （优先级：① 视频自动解说 ② 视频下载 ③ 百度网盘下载），且「下载视频」页必须原样不动。
+//   参考 downie.cn / gopeed.com 的信息层级。
+//
+// 改坏即红的四条红线：
+//   ① 首页是独立 section（#homeView），不与 #downloadView 混排、不改变下载页结构；
+//   ② 默认落地 = 首页（tabHome 排第一且 is-active），深链 #view=x 仍可用；
+//   ③ 首页用到的每个 hp-* 类都必须在 styles.css 有规则 —— 否则是「白板页」（无样式的裸 HTML）；
+//   ④ 用户点名的文案一字不改：高速下载（不是满速）、体验会员级别网速、
+//      「想体验全部功能请到桌面版」必须是大字提示（hp-hint）且「桌面版」加粗。
+//
+// 说明：与 test_member_page.mjs 同法——源码切片 + 结构断言，不做 DOM 运行时。
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const indexHtml = readFileSync(join(repoRoot, 'web', 'index.html'), 'utf8');
+const appJs = readFileSync(join(repoRoot, 'web', 'app.js'), 'utf8');
+const stylesCss = readFileSync(join(repoRoot, 'web', 'styles.css'), 'utf8');
+
+let n = 0;
+const ok = (cond, msg) => { assert.ok(cond, msg); n += 1; };
+const eq = (a, b, msg) => { assert.equal(a, b, msg); n += 1; };
+
+/* ---------------- ① 导航：首页 tab 排第一且默认高亮 ---------------- */
+const navStart = indexHtml.indexOf('<nav class="tabs"');
+const navEnd = indexHtml.indexOf('</nav>', navStart);
+ok(navStart > 0 && navEnd > navStart, '找不到 #tabs 导航（切片失败）');
+const nav = indexHtml.slice(navStart, navEnd);
+
+const tabHomeIdx = nav.indexOf('id="tabHome"');
+const tabDlIdx = nav.indexOf('id="tabDownload"');
+ok(tabHomeIdx > 0, '缺少「首页」tab（#tabHome）');
+ok(tabDlIdx > 0, '「下载视频」tab（#tabDownload）不能丢');
+ok(tabHomeIdx < tabDlIdx, '「首页」tab 必须排在「下载视频」之前（默认落地页）');
+ok(/class="tab is-active" data-view="home" id="tabHome"/.test(nav),
+  '「首页」tab 必须是默认高亮（class 含 is-active, data-view="home"）');
+ok(!/class="tab is-active" data-view="download"/.test(nav),
+  '「下载视频」tab 不能再带 is-active —— 否则会与首页同时高亮');
+
+/* ---------------- ② 首页 section 本体 ---------------- */
+const hvStart = indexHtml.indexOf('id="homeView"');
+ok(hvStart > 0, '缺少 #homeView（独立首页 section）');
+const hvEnd = indexHtml.indexOf('<div id="downloadView"', hvStart);
+ok(hvEnd > hvStart, '#homeView 应紧邻在 #downloadView 之前（切片右边界）');
+const home = indexHtml.slice(hvStart, hvEnd);
+
+ok(/<section id="homeView" hidden/.test(indexHtml),
+  '#homeView 必须带 hidden（默认由 switchView 决定显隐，避免两页同屏）');
+// 下载页结构不许被改动：首页切片里不得出现下载页的核心控件
+['id="urlInput"', 'id="resolveBtn"', 'id="downloadBtn"'].forEach((s) => {
+  ok(!home.includes(s), `首页切片里出现下载页控件 ${s} —— 两页被混在一起了`);
+});
+
+// 三张卡片：视频自动解说（桌面端）/ 视频下载 / 百度网盘下载
+eq((home.match(/class="hp-card /g) || []).length, 3, '首页必须恰好 3 张能力卡（解说/下载/网盘）');
+ok(/<h3>视频自动解说<\/h3>/.test(home), '第一张卡必须是「视频自动解说」（用户指定优先级 ①）');
+ok(/<h3>视频下载<\/h3>/.test(home), '缺少「视频下载」卡');
+ok(/<h3>百度网盘下载<\/h3>/.test(home), '缺少「百度网盘下载」卡');
+ok(/class="hp-badge">桌面端</.test(home), '解说卡必须标「桌面端」徽章（网页版暂未提供该能力）');
+ok(/<a href="\/download">下载客户端 →<\/a>/.test(home), '解说卡必须引导到 /download（网页版做不到，不能给个死按钮）');
+
+// 全功能清单：10 项网页可用 + 12 项桌面独有 = 22
+const capItems = home.match(/<li><span class="hp-cap-ic">/g) || [];
+eq(capItems.length, 22, `全功能清单必须列全 22 项（网页 10 + 桌面 12），实际 ${capItems.length}`);
+ok(home.includes('桌面客户端独有'), '全功能清单必须区分「桌面客户端独有」（否则等于骗用户网页版能用）');
+ok(home.includes('怎么用') && home.includes('已知限制'), '首页必须含「怎么用」与「已知限制」（诚实说明能力边界）');
+
+/* ---------------- ③ 用户点名文案（一字不改） ---------------- */
+ok(home.includes('百度网盘分享链接高速下载'), '主副标题必须写「高速下载」（用户明确改为高速，不是满速）');
+ok(!home.includes('满速'), '不得再出现「满速下载」（用户 2026-10-24 要求改成「高速下载」）');
+ok(home.includes('体验会员级别网速'), '网盘卡必须写「体验会员级别网速」（用户指定文案）');
+ok(!home.includes('需登录百度账号'), '不得出现「需登录百度账号」（用户要求去掉）');
+ok(/16\.2 MB\/s/.test(home), '网盘任务条必须展示 16.2 MB/s（用实测速度，不用 3.6 的旧数字）');
+
+// 「想体验全部功能请到桌面版」= 大字提示条，且「桌面版」加粗
+ok(/<p class="hp-hint">想体验全部功能请到<b>桌面版<\/b><\/p>/.test(home),
+  '缺少「想体验全部功能请到桌面版」大字提示（必须用 hp-hint 且「桌面版」加粗）');
+
+/* ---------------- ④ 首页每个 hp-* 类都必须有样式（防白板） ---------------- */
+const cssNoComment = stylesCss.replace(/\/\*[\s\S]*?\*\//g, '');
+const usedCls = new Set();
+(home.match(/class="([^"]+)"/g) || []).forEach((m) => {
+  m.slice(7, -1).split(/\s+/).forEach((c) => { if (c.startsWith('hp-')) usedCls.add(c); });
+});
+ok(usedCls.size >= 20, `首页应使用足量 hp- 类（实际 ${usedCls.size}），类名可能被改成无前缀而撞车`);
+const missing = [...usedCls].filter((c) => !new RegExp('\\.' + c + '(?![\\w-])').test(cssNoComment));
+eq(missing.length, 0, `以下 hp- 类在 styles.css 里没有规则（会渲染成白板）：${missing.join(', ')}`);
+
+ok(/#homeView\s*\{[^}]*margin-top/.test(cssNoComment),
+  '#homeView 需要与顶栏留出间距（margin-top），否则首页卡片贴住导航');
+// 大字提示条：字号必须显著大于正文（0.92rem 的 lede），否则用户要的「大字」没做到
+const hintRule = (cssNoComment.match(/\.hp-hint\s*\{[^}]*\}/) || [''])[0];
+ok(/font-size:\s*clamp\(1\.0[0-9]?rem/.test(hintRule) || /font-size:\s*1\.[0-9]+rem/.test(hintRule),
+  '.hp-hint 字号必须放大（≥1.05rem）—— 用户要求「大字」写这行提示');
+ok(/font-weight:\s*[78]00/.test(hintRule), '.hp-hint 必须加粗（用户要求「大字」提示）');
+
+/* ---------------- ⑤ app.js 接线（漏一处就是「点了没反应」） ---------------- */
+ok(/tabHome:\s*\$\('tabHome'\)/.test(appJs), 'el 表未登记 tabHome');
+ok(/homeView:\s*\$\('homeView'\)/.test(appJs), 'el 表未登记 homeView');
+
+const svStart = appJs.indexOf('function switchView');
+ok(svStart > 0, '找不到 switchView');
+const svEnd = appJs.indexOf('\n}', appJs.indexOf('el.tabHome', svStart));
+const sv = appJs.slice(svStart, svEnd > svStart ? svEnd : svStart + 4000);
+
+ok(/const isHome = view === 'home'/.test(sv), 'switchView 未识别 home 视图');
+ok(/if \(el\.homeView\) el\.homeView\.hidden = !isHome/.test(sv), 'switchView 未切换 homeView 显隐');
+ok(/el\.downloadView\.hidden = isHome \|\|/.test(sv),
+  'isHome 未并入 downloadView 隐藏条件 —— 首页与下载页会同屏叠着');
+ok(/el\.tabHome\.classList\.toggle\('is-active', isHome\)/.test(sv), 'switchView 未切换首页 tab 高亮');
+
+ok(/el\.tabHome\.addEventListener\('click', \(\) => switchView\('home'\)\)/.test(appJs),
+  '首页 tab 未绑定点击 —— 点了没反应');
+ok(/querySelectorAll\('#homeView \[data-goto="download"\]'\)/.test(appJs),
+  '首页卡片上的「去下载」跳转未接线（data-goto 处理器缺失）');
+// 网页版 tab 由 applyWebTabs 只隐藏「桌面端专属」那几个；首页必须不在那张清单里，
+// 且 HTML 里不能自带 hidden（否则入口直接消失、用户永远点不到）
+const _hideList = (appJs.match(/\[([^\]]*'tabLibrary'[^\]]*)\]\.forEach/) || [])[1] || '';
+ok(_hideList.includes('tabLibrary'), '找不到网页版 tab 隐藏清单（applyWebTabs 结构变了）');
+ok(!_hideList.includes('tabHome'), 'tabHome 不得被列入网页版隐藏清单 —— 首页入口会消失');
+ok(!/id="tabHome"[^>]*\shidden/.test(nav), 'tabHome 不能自带 hidden 属性');
+
+// 默认落地页 = 首页（两处：同步兜底 + 异步重套用），且都必须带深链回落
+ok(/if \(!bootViewSet\) switchView\('home'\)/.test(appJs), '同步兜底的默认视图必须是首页');
+ok(/switchView\(_hashView \|\| 'home'\)/.test(appJs),
+  '异步回落的默认视图必须是首页（且保留 #view=x 深链优先）');
+
+console.log(`✅ 首页回归守卫生效（web-dev）：独立 section / 默认落地 / 22 项能力 / 文案一字不改 / ${usedCls.size} 个 hp- 类全有样式 / 接线齐备（共 ${n} 项断言）`);

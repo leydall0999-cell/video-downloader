@@ -36,7 +36,8 @@
          app.js 的 applyWebTabs 保留为幂等兜底（只隐藏桌面专属 tab，从不反向隐藏本导航）。 -->
     <nav class="tabs" id="tabs" aria-label="功能导航">
       <div class="tabs-inner">
-        <button type="button" class="tab is-active" data-view="download" id="tabDownload">下载视频</button>
+        <button type="button" class="tab is-active" data-view="home" id="tabHome">首页</button>
+        <button type="button" class="tab" data-view="download" id="tabDownload">下载视频</button>
         <button type="button" class="tab" data-view="uploadconvert" id="tabUploadConvert">视频处理</button>
         <button type="button" class="tab" data-view="dw" id="tabDw">去水印</button>
         <button type="button" class="tab" data-view="musicconvert" id="tabMusicConvert">音乐转换</button>
@@ -60,6 +61,149 @@
 </header>
 
 <main id="main" class="wrap">
+
+  <!-- 首页（2026-10-24 新增）：功能简介页。「下载视频」页保持原样，互不影响。
+       类名统一 hp- 前缀，避开站内已有的 .hero / .hero-note / .panel。 -->
+  <section id="homeView" hidden aria-labelledby="homeTitle">
+    <div class="hp-hero">
+      <div class="hp-hero-in">
+        <div class="hp-hero-l">
+          <span class="hp-kicker"><i></i>一个页面，三件事都办完</span>
+          <h1 id="homeTitle">视频下载、<em>AI 自动解说</em><br />百度网盘文件，全在这里</h1>
+          <p class="hp-lede">粘贴链接就能下视频，AI 自动生成解说词并配音出片，支持百度网盘分享链接高速下载。不用装软件，不用转存，不用来回切站点。</p>
+          <div class="hp-chips">
+            <span class="hp-chip"><i class="c-ai"></i>AI 自动解说</span>
+            <span class="hp-chip"><i class="c-dl"></i>100+ 平台下载</span>
+            <span class="hp-chip"><i class="c-pan"></i>百度网盘直连</span>
+          </div>
+          <div class="hp-actions">
+            <button type="button" class="hp-btn hp-primary" id="homeStartBtn">开始使用 →</button>
+            <a class="hp-btn hp-ghost" href="/download">下载桌面版</a>
+          </div>
+          <p class="hp-hint">想体验全部功能请到<b>桌面版</b></p>
+        </div>
+
+        <div class="hp-slice" aria-hidden="true">
+          <div class="hp-slice-head"><i></i><i></i><i></i><span>任务</span></div>
+          <div class="hp-task"><span class="hp-tk c-ai">AI</span>
+            <div class="hp-task-b"><div class="hp-task-r"><b>旅行vlog_成片.mp4</b><span>解说合成 68%</span></div>
+            <div class="hp-bar"><i class="c-ai" style="width:68%"></i></div></div></div>
+          <div class="hp-task"><span class="hp-tk c-dl">↓</span>
+            <div class="hp-task-b"><div class="hp-task-r"><b>哔哩哔哩 · 4K 原画</b><span class="ok">已完成</span></div>
+            <div class="hp-bar"><i class="c-dl" style="width:100%"></i></div></div></div>
+          <div class="hp-task"><span class="hp-tk c-pan">☁</span>
+            <div class="hp-task-b"><div class="hp-task-r"><b>百度网盘 · 素材包.zip</b><span class="hot">16.2 MB/s</span></div>
+            <div class="hp-bar"><i class="c-pan" style="width:58%"></i></div></div></div>
+          <div class="hp-slice-foot">三件事，同一个账号做完</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hp-sec">
+      <div class="hp-sec-head"><h2>你现在能做的三件事</h2><span>点任意一张进入对应功能</span></div>
+      <div class="hp-cards">
+        <article class="hp-card c-ai">
+          <span class="hp-badge">桌面端</span>
+          <span class="hp-ic c-ai">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9.2" y="2.6" width="5.6" height="10.2" rx="2.8"/><path d="M6.2 11.6a5.8 5.8 0 0 0 11.6 0"/><path d="M12 17.4v2.8"/><path d="M9.2 20.2h5.6"/></svg>
+          </span>
+          <h3>视频自动解说</h3>
+          <p class="hp-card-p">传一个视频，自动识别字幕、写解说词、配音，直接出成片。</p>
+          <ul class="hp-list">
+            <li>自动识别语音生成字幕，按时间轴对齐全片</li>
+            <li>解说词可改，配音音色可选</li>
+            <li>长视频走云端，短视频本机跑</li>
+          </ul>
+          <div class="hp-card-foot"><a href="/download">下载客户端 →</a><span>桌面端功能</span></div>
+        </article>
+
+        <article class="hp-card c-dl">
+          <span class="hp-ic c-dl">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v8"/><path d="m8.8 12.2 3.2 3.3 3.2-3.3"/></svg>
+          </span>
+          <h3>视频下载</h3>
+          <p class="hp-card-p">贴链接就下，支持 100+ 平台，最高原画，可批量。</p>
+          <ul class="hp-list">
+            <li>YouTube / 哔哩哔哩 / 抖音 / 快手 / 小红书 等</li>
+            <li>自动识别清晰度，原画与 4K 可选</li>
+            <li>一次贴多条链接批量下，断点可续</li>
+          </ul>
+          <div class="hp-card-foot"><button type="button" class="hp-go" data-goto="download">去下载 →</button><span>免费可用</span></div>
+        </article>
+
+        <article class="hp-card c-pan">
+          <span class="hp-ic c-pan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 17.5a4 4 0 0 1-.6-7.95 5.6 5.6 0 0 1 10.8-.62A3.7 3.7 0 0 1 17.3 17.5"/><path d="M12 12.5v5.5"/><path d="m9.8 15.3 2.2 2.2 2.2-2.2"/></svg>
+          </span>
+          <h3>百度网盘下载</h3>
+          <p class="hp-card-p">粘分享链接和提取码，文件直接存到本地，不用先转存。</p>
+          <ul class="hp-list">
+            <li>识别分享链接，提取码可一起粘贴</li>
+            <li>列出文件后逐个或整批下载，文件名不乱码</li>
+            <li>体验会员级别网速</li>
+          </ul>
+          <div class="hp-card-foot"><button type="button" class="hp-go" data-goto="download">去下载 →</button></div>
+        </article>
+      </div>
+    </div>
+
+    <div class="hp-sec">
+      <div class="hp-sec-head"><h2>还有这些</h2><span>同一套账号，不用另外开</span></div>
+      <div class="hp-caps">
+        <div class="hp-cap-head"><i class="web"></i>网页版直接能用</div>
+        <ul class="hp-cap-grid">
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v8"/><path d="m8.8 12.2 3.2 3.3 3.2-3.3"/></svg></span>视频下载</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m4 17 5-4.6 4 3.6 3-2.6 4 3.6"/></svg></span>图片下载</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 17.5a4 4 0 0 1-.6-7.95 5.6 5.6 0 0 1 10.8-.62A3.7 3.7 0 0 1 17.3 17.5"/><path d="M12 12.5v5.5"/><path d="m9.8 15.3 2.2 2.2 2.2-2.2"/></svg></span>百度网盘下载</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7 9.5h6"/><path d="M7 13h9"/><path d="M7 16h4"/></svg></span>AI 字幕转录</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5h13"/><path d="m14.2 5.6 3 2.9-3 2.9"/><path d="M20 15.5H7"/><path d="m9.8 12.6-3 2.9 3 2.9"/></svg></span>视频格式转换</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.8" y="8" width="7.2" height="8" rx="1.6"/><rect x="14" y="8" width="7.2" height="8" rx="1.6"/><path d="M10 12h4"/></svg></span>视频拼接</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17.5V6.6l10-1.9v10.9"/><circle cx="6.6" cy="17.6" r="2.5"/><circle cx="16.6" cy="15.8" r="2.5"/></svg></span>音乐转换</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="11.5" height="9.5" rx="1.8"/><path d="M7.5 18.8H19a2 2 0 0 0 2-2V9.4"/><path d="m5.5 13 3-2.6 2.6 2.2 2-1.6"/></svg></span>图片转换</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4.6 16.2 7-7a1.8 1.8 0 0 1 2.6 0l3.5 3.5a1.8 1.8 0 0 1 0 2.6l-4.4 4.4H7.1z"/><path d="M13.6 20.6h6.6"/></svg></span>图片 / PDF 去水印</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="3.2" width="6.8" height="6.8" rx="1.4"/><rect x="14" y="3.2" width="6.8" height="6.8" rx="1.4"/><rect x="3.2" y="14" width="6.8" height="6.8" rx="1.4"/><path d="M14 14h3v3h-3z"/><path d="M20.2 20.4h.6"/></svg></span>生成二维码 / 链接</li>
+        </ul>
+        <div class="hp-cap-head app"><i class="app"></i>桌面客户端独有<span>装「视频工坊」客户端即可解锁</span></div>
+        <ul class="hp-cap-grid">
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9.2" y="2.6" width="5.6" height="10.2" rx="2.8"/><path d="M6.2 11.6a5.8 5.8 0 0 0 11.6 0"/><path d="M12 17.4v2.8"/><path d="M9.2 20.2h5.6"/></svg></span>视频自动解说成片</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.4" stroke-dasharray="3 3"/><path d="m8.4 15.6 7.2-7.2"/></svg></span>视频去水印（多选区）</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.8" r="3.4"/><path d="M5.2 20a6.8 6.8 0 0 1 13.6 0" stroke-dasharray="3 3"/></svg></span>AI 一键抠图</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15.4v-5a6 6 0 1 0-12 0v5l-1.8 1.9h15.6z"/><path d="M10 20.2a2 2 0 0 0 4 0"/></svg></span>订阅追更</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 3.6v7.2a5.6 5.6 0 0 0 11.2 0V3.6"/><path d="M6.4 3.6h4.2v3.2H6.4z"/><path d="M13.4 3.6h4.2v3.2h-4.2z"/></svg></span>种子下载</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.4 3.6h3.1a1.9 1.9 0 1 1 3.8 0h3.3a1 1 0 0 1 1 1v3.2a1.9 1.9 0 1 1 0 3.8v3.3a1 1 0 0 1-1 1h-3.9a1.9 1.9 0 1 0-3.8 0H7.6a1 1 0 0 1-1-1v-3.9a1.9 1.9 0 1 0 0-3.8V4.6a1 1 0 0 1 1-1z"/></svg></span>浏览器扩展嗅探</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4.4h4.6"/><path d="M20 9V4.4h-4.6"/><path d="M4 15v4.6h4.6"/><path d="M20 15v4.6h-4.6"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/></svg></span>高效压缩</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2v3.4"/><path d="M12 17.4v3.4"/><path d="M3.2 12h3.4"/><path d="M17.4 12h3.4"/><path d="m6.4 6.4 2.4 2.4"/><path d="m15.2 15.2 2.4 2.4"/><path d="m17.6 6.4-2.4 2.4"/><path d="m8.8 15.2-2.4 2.4"/></svg></span>高清修复</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.4"/><circle cx="9" cy="10" r="2.1"/><path d="M5.8 16.4a3.4 3.4 0 0 1 6.4 0"/><path d="M14.4 9.4h3.4"/><path d="M14.4 13h3.4"/></svg></span>证件照制作</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.2" y="5" width="17.6" height="14" rx="2.2"/><path d="M7.6 5v14"/><path d="M16.4 5v14"/><path d="M3.2 9.2h4.4"/><path d="M3.2 14.8h4.4"/></svg></span>抽帧 / 预览图 / 铃声</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 7a2.2 2.2 0 0 1 2.2-2.2h3.9l2 2.1h7.3A2.2 2.2 0 0 1 20.8 9v8.2a2.2 2.2 0 0 1-2.2 2.2H5.4a2.2 2.2 0 0 1-2.2-2.2z"/></svg></span>本地媒体库</li>
+          <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.2" y="10.2" width="15.6" height="9.6" rx="2.2"/><path d="M8.2 10.2V7.4a3.8 3.8 0 0 1 7.6 0v2.8"/><path d="M12 14v2.2"/></svg></span>保险箱加密</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="hp-sec">
+      <div class="hp-how">
+        <div>
+          <h2>怎么用</h2>
+          <ol class="hp-steps">
+            <li><i>1</i><span>进入「下载视频」页，把视频或网盘分享链接粘到输入框。</span></li>
+            <li><i>2</i><span>点「解析链接」。网盘链接会自动识别提取码，视频会自动识别标题与清晰度。</span></li>
+            <li><i>3</i><span>选好画质（或直接选文件），点「开始下载」。</span></li>
+            <li><i>4</i><span>完成后在任务卡上点「保存文件」即可取回本地。</span></li>
+          </ol>
+        </div>
+        <div>
+          <h2>已知限制</h2>
+          <ul class="hp-limits">
+            <li>会员 / 付费视频（如腾讯视频部分片源）受版权保护，无法解析，约 20 秒内会明确提示。</li>
+            <li>爱奇艺等部分平台受上游提取器限制，可能解析失败。</li>
+            <li>直播内容暂不支持下载；非视频站点会被直接拦下。</li>
+            <li>百度网盘下载已按会员档位优化，实际速度仍受百度账号自身权益影响。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <div id="downloadView">
 

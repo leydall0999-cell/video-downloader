@@ -86,12 +86,22 @@ assert.ok(/if \(isMem\) memRender\(\);/.test(sv), 'switchView 未在进入会员
 //    ④ 保留「用户已选非默认视图则不覆盖」这一原始意图。
 assert.ok(/let bootViewSet = false;/.test(appJs),
   'boot 竞态保护标志 bootViewSet 丢失（会员页会被启动竞态弹回下载）');
-assert.ok(/if \(!bootViewSet\) switchView\('download'\)/.test(appJs),
+// 🔴 2026-10-24：默认视图从 'download' 改为 'home'（新增首页）。断言不得再写死视图名，
+//    改为「从源码取默认视图 → 校验兜底受 !bootViewSet 保护 + 该视图 tab 在排除清单里」。
+//    正则本身要求 `if (!bootViewSet) switchView('X')` 这个形态存在，所以「保护被删」仍会红。
+const _defaultViewMatch = appJs.match(/if \(!bootViewSet\) switchView\('([A-Za-z]+)'\)/);
+assert.ok(_defaultViewMatch,
   'setTimeout 兜底必须受 !bootViewSet 保护，否则会覆盖用户已选视图');
+const DEFAULT_VIEW = _defaultViewMatch[1];
+const _defaultTabId = 'tab' + DEFAULT_VIEW.charAt(0).toUpperCase() + DEFAULT_VIEW.slice(1);
 assert.ok(/bootViewSet = true;/.test(appJs),
   'bootViewSet 必须真被置位，否则兜底恒触发（等于没有保护）');
-assert.ok(/!document\.querySelector\('\.tab\.is-active:not\(#tabDownload\)'\)/.test(appJs),
+// 排除清单必须同时含「下载」与「当前默认视图」的 tab —— 少一个就会把用户弹回默认页
+const _notChain = (appJs.match(/\.tab\.is-active((?::not\(#[A-Za-z]+\))+)/) || [])[1] || '';
+assert.ok(_notChain.includes('#tabDownload'),
   'boot 需尊重「用户已选中非默认视图」这一原始意图（不得覆盖用户选择）');
+assert.ok(_notChain.includes('#' + _defaultTabId),
+  `默认视图 tab 未纳入排除清单（#${_defaultTabId} 缺失）—— 用户停在默认页/已选视图时会被重复覆盖`);
 // 2026-10-01 放宽：点击处理里允许附带埋点等额外语句（箭头函数可有花括号块），
 // 只要仍然调用 switchView('member') 即视为已接线 —— 守卫本意是「点击能切到会员页」。
 assert.ok(/if \(el\.tabMember\) el\.tabMember\.addEventListener\('click', \(\) => \{?\s*switchView\('member'\)/.test(appJs),
