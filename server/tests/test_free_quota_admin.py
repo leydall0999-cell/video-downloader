@@ -627,10 +627,18 @@ def test_commentary_vision_charged_at_every_entry():
           "所有 precheck 入口都传了 vision=payload.vision")
     check(src.count("vision=bool(vision)") == n_up,
           "所有上传入口都传了 vision=vision")
-    # 预检侧必须有条件扣费（不能只在某个分支扣）
+    # 🔴 2026-10-23「失败不扣积分」改契约为**账单制**：预检不再真扣任何积分，
+    # vision 成本改由 `commentary_billing` 算进账单，`charge_commentary_on_success`
+    # 在产出成功后与解说一并扣。任一侧漏掉 ⇒ 勾了画面理解就等于白嫖。
     q = (_SERVER / "routers" / "quota.py").read_text(encoding="utf-8")
-    check("_charge_optional(request, \"commentary_vision\"" in q,
-          "precheck_or_raise 里按 vision 开关扣 commentary_vision")
+    _bill_body = q.split("def commentary_billing(")[1].split("\ndef ")[0]
+    check('"commentary_vision"' in _bill_body and "vision_cost" in _bill_body,
+          "账单按 vision 开关计入 commentary_vision 成本", _bill_body[:120])
+    _chg_body = q.split("def charge_commentary_on_success(")[1].split("\ndef ")[0]
+    check('"commentary_vision"' in _chg_body and "vision_cost" in _chg_body,
+          "落账时按 vision_cost>0 一并扣 commentary_vision", _chg_body[:120])
+    check("_charge_optional(request, \"commentary_vision\"" not in q,
+          "预检里已无「开跑前真扣」的 commentary_vision（失败不扣积分）")
     check("if vision:" in q, "扣费有 vision 条件判断（不开就不扣）")
 
 

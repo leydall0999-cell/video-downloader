@@ -1345,7 +1345,45 @@ def _aria2c_path() -> str | None:
 def _build_aria2c_args(concurrency: int) -> list[str]:
     n = str(_clamp_concurrency(concurrency))
     # -x 每服务器最大连接 / -s 分片数 / -j 整体并行下载数 / -k 最小分片大小
-    return ["-x", n, "-s", n, "-j", n, "-k", "1M", "--continue=true", "--max-tries=5"]
+    #
+    # --enable-cookie=true 必须显式打开：aria2 默认关闭 cookie 支持，此时它把
+    # yt-dlp 传进来的 --header="Cookie: ..." 收进内部 cookieStorage 却**不发送**，
+    # 请求头里根本没有 Cookie 一行 ⇒ 需要登录态的源（百度网盘直链等）直接 403。
+    # 2026-10-24 实测：不加该开关 d.pcs.baidu.com 返回 403 且抓包无 Cookie 头，
+    # 加上后 Cookie 正常随请求发出。
+    return [
+        "-x", n, "-s", n, "-j", n, "-k", "1M",
+        "--continue=true", "--max-tries=5", "--enable-cookie=true",
+    ]
+
+
+# —— 百度网盘直链（2026-10-24 本机实测）——
+# 限速是服务端按**账号总带宽**给的，不是按连接：1 连接 78.8 KB/s，4/8/16 连接
+# 80.9/61.0/36.6 KB/s（8/16 连还会被掐断、拿不满字节）。多连接在这里是纯负优化。
+# 但**客户端身份**能拿到更高限速档：curl 默认 UA 77 KB/s、Chrome 81 KB/s，而
+# 老 PC 客户端的 P2SP 标识 ~145 KB/s（1.5MB 交替 A/B 两轮一致）。
+# ⌁ 同一 UA 复测出现过 166 / 66 的跳变，疑似「账号+UA 分桶、桶内配额用多降档」，
+#   所以这是榨取而非破解，对外不承诺固定倍数。
+# ⇒ 网盘直链一律：单连接（禁 aria2c、禁分片并发）+ P2SP UA。
+_NETDISK_UA = "netdisk;P2SP;2.2.60.26"
+# 🔴 下载直链**不能**用上面那个 P2SP 身份（2026-10-24 实测，同一链接交替验证）：
+#   P2SP UA + Range → 403 {"error_code":31326,"user is not authorized"}
+#   浏览器 UA + Range → 206 正常，SVIP 账号 3.70 MB/s（非会员 ~120 KB/s，31 倍）
+# 而且**必须带 Range**：不带 Range 的裸 GET 一律 403，错误码会伪装成
+# 31326「无权限」或 31360「直链过期」——极具误导性，别再往"账号权限/私密分享"方向查。
+_NETDISK_DOWNLOAD_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+_NETDISK_HOST_RE = re.compile(r"(?:^|\.)(?:baidupcs\.com|pcs\.baidu\.com)$")
+
+
+def _is_netdisk_direct(url_or_host: str) -> bool:
+    """是否百度网盘直链（d.pcs.baidu.com → 302 → *.baidupcs.com）。"""
+    h = (url_or_host or "").strip().lower()
+    if "://" in h:
+        h = _host_of(h) or ""
+    return bool(h) and bool(_NETDISK_HOST_RE.search(h))
 
 def _has_partial(workdir: Path | None) -> bool:
     """工作目录里是否残留可续传的部分文件（.part / .aria2 控制文件 / .FragN 分片）。"""
@@ -5471,6 +5509,12 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
     # 页面 origin，不覆盖必 403。
     if (getattr(task, "referer", "") or "").strip():
         options.setdefault("http_headers", {})["Referer"] = task.referer.strip()
+    if _is_netdisk_direct(_task_host):
+        # 百度按账号限速，但**请求身份**决定限速档：浏览器身份 ~78 KB/s，
+        # 老 PC 客户端的 P2SP 标识 ~145 KB/s（1.5MB 交替 A/B 两轮一致）。
+        # 同时禁掉分片并发，配合上面的单连接。
+        options.setdefault("http_headers", {})["User-Agent"] = _NETDISK_UA
+        options["concurrent_fragment_downloads"] = 1
     # 断点续传：保留 .part 分片的前提下，显式开启 continue 让 yt-dlp 从上次中断处接上。
     # aria2c 分支已在 _build_aria2c_args 内置 --continue=true；此处覆盖原生下载器场景。
     if resume:
@@ -5481,6 +5525,11 @@ def _download_options(task: DownloadTask, quality_key: str, reporter: _ProgressR
     #   - 显式 "aria2c" → 有就用，无则警告回退；显式 "native" → 强制原生。
     _a2 = _aria2c_path()
     _dl_choice = (downloader_type or VDL_DOWNLOADER).strip().lower()
+    if _is_netdisk_direct(_task_host):
+        # 网盘直链多连接是负优化（实测 4/8/16 连接比单连接更慢，且会被掐断拿不满字节）
+        # ⇒ 强制原生单连接，连用户显式选 aria2c 也一起兜住。
+        logger.info("[网盘] 直链强制单连接下载（多连接实测更慢）")
+        _dl_choice = "native"
     if _dl_choice == "aria2c" and _is_windows():
         # 🔴 Windows 一律不用 aria2c，**包括调用方显式指定**（2026-10-18 用户实测）。
         # 桌面版是 --windowed 的 GUI 进程，Windows 会给它 fork 的 aria2c.exe 新建控制台
@@ -5672,6 +5721,156 @@ def _retry_matrix(downloader_type: str) -> list[tuple[str, bool]]:
     matrix.append((downloader_type, True))
     return matrix
 
+class _NetdiskCanceled(Exception):
+    """网盘直链下载被用户取消 / 看门狗终止。"""
+
+
+# Content-Type → 扩展名（只在解析阶段没给到带扩展名的文件名时兜底）
+_NETDISK_EXT_BY_CT = {
+    "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/mp4": ".m4a",
+    "audio/aac": ".aac", "audio/flac": ".flac", "audio/wav": ".wav",
+    "video/mp4": ".mp4", "video/x-matroska": ".mkv", "video/webm": ".webm",
+    "application/pdf": ".pdf", "application/zip": ".zip",
+    "application/x-rar-compressed": ".rar", "application/x-7z-compressed": ".7z",
+    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+    "text/plain": ".txt",
+}
+
+
+def _safe_filename(name: str, fallback: str = "网盘文件") -> str:
+    """清掉路径分隔符与控制字符，避免落盘越界。"""
+    n = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", (name or "").strip())
+    n = n.strip(" .")
+    return n[:180] or fallback
+
+
+def _netdisk_output_name(task: DownloadTask, content_type: str, final_url: str) -> str:
+    """决定网盘文件的落盘名。
+
+    🔴 优先用解析阶段拿到的**真实文件名**（通常自带扩展名，如 "008.xxx.mp3"）。
+    只有它没带扩展名时才按 Content-Type 补一个 —— 绝不能让 yt-dlp 那套
+    「按视频猜 .mp4」的逻辑生效，否则 mp3 会被存成 mp4。
+    """
+    title = _safe_filename(getattr(task, "title", "") or "")
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    ct_ext = _NETDISK_EXT_BY_CT.get(ctype, "")
+    if title:
+        tail = title.rsplit(".", 1)[-1].lower() if "." in title else ""
+        if tail and 1 <= len(tail) <= 5 and tail.isalnum():
+            return title
+        return title + ct_ext
+    base = ""
+    try:
+        base = (final_url or task.url).split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+    except Exception:  # noqa: BLE001
+        base = ""
+    base = _safe_filename(base, "网盘文件")
+    if ct_ext and not base.lower().endswith(ct_ext):
+        return base + ct_ext
+    return base
+
+
+def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
+                             cookie: str = "", proxy: str = "") -> None:
+    """百度网盘直链 → 按文件流式下载（**不经过 yt-dlp 解析**）。
+
+    🔴 为什么必须绕开 yt-dlp：`d.pcs.baidu.com` 的 dlink 会被 generic 提取器
+    当成「媒体页面」处理，2026-10-24 实测后果：
+      ① 标题被替换成直链路径段 ⇒ 用户看到 `3eab43fb6m1795...` 这种乱码文件名；
+      ② 扩展名按视频猜成 `.mp4` ⇒ 实际是 mp3 的文件被存成 mp4；
+      ③ 少数情况提取阶段直接失败，界面报「视频解析失败 [generic] …」。
+
+    网盘本来就是「给一条直链、下一个文件」，没有清晰度/格式可选，不需要解析。
+    约束（与 v1.0.88 的网盘策略一致）：单连接、P2SP 客户端身份、手动带 Cookie；
+    requests 的手动 header 在 302 跳转后仍会携带，所以跨到 *.baidupcs.com 也不会 403。
+    """
+    import requests  # 与本文件其它路径一致：延迟导入，避免拖慢启动
+
+    workdir = Path(task.workdir) if task.workdir else None
+    if workdir is None:
+        store.update(task.id, status="failed", error="任务缺少工作目录")
+        return
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    headers = {
+        "User-Agent": _NETDISK_DOWNLOAD_UA,
+        # 🔴 必需，不能省：百度 CDN 对不带 Range 的 GET 直接 403，
+        # 且把原因伪装成 31326「无权限」/ 31360「直链过期」，极难排查。
+        "Range": "bytes=0-",
+    }
+    if cookie:
+        headers["Cookie"] = cookie
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    part = workdir / "netdisk.part"
+    started = time.time()
+    last_push = 0.0
+
+    store.update(task.id, status="downloading", progress=0.0, speed=0.0, eta=0)
+    task.add_step("下载文件", "running", "连接中…")
+
+    try:
+        with requests.get(task.url, headers=headers, proxies=proxies, stream=True,
+                          timeout=(15, 60), allow_redirects=True) as r:
+            if r.status_code >= 400:
+                raise RuntimeError(f"HTTP {r.status_code}")
+            total = int(r.headers.get("Content-Length") or 0)
+            if total:
+                store.update(task.id, total_bytes=total, filesize=total)
+            done = 0
+            with open(part, "wb") as fh:
+                for chunk in r.iter_content(256 * 1024):
+                    if not chunk:
+                        continue
+                    if task.cancel_requested or task.is_finished:
+                        raise _NetdiskCanceled()
+                    fh.write(chunk)
+                    done += len(chunk)
+                    now = time.time()
+                    if now - last_push >= 0.5:
+                        last_push = now
+                        elapsed = max(now - started, 0.001)
+                        speed = done / elapsed
+                        store.update(
+                            task.id,
+                            downloaded_bytes=done,
+                            progress=round(done / total * 100.0, 1) if total else 0.0,
+                            speed=round(speed, 1),
+                            eta=int((total - done) / speed) if (total and speed > 0) else 0,
+                        )
+            out_name = _netdisk_output_name(task, r.headers.get("Content-Type", ""), r.url)
+    except _NetdiskCanceled:
+        part.unlink(missing_ok=True)
+        if not task.is_finished:
+            store.update(task.id, status="canceled", error="已取消")
+        return
+    except Exception as exc:  # noqa: BLE001
+        part.unlink(missing_ok=True)
+        msg = str(exc)[:200]
+        task.add_step("下载文件", "error", msg)
+        store.update(
+            task.id, status="failed", error="网盘下载失败",
+            hint=(f"百度直链下载失败：{msg}。直链有效期 8 小时且必须带登录态；"
+                  "如果中途切换过百度账号或登录态失效，重新点一次「解析网盘」再下载。"),
+        )
+        return
+
+    out = workdir / out_name
+    try:
+        if out.exists():
+            out.unlink()
+        part.replace(out)
+    except OSError as exc:
+        store.update(task.id, status="failed", error="保存文件失败", hint=str(exc)[:200])
+        return
+
+    size = out.stat().st_size
+    task.add_step("下载文件", "done", f"输出文件：{out.name}")
+    task.log(f"网盘下载完成：{out.name}（{size} 字节）")
+    store.update(task.id, status="completed", progress=100.0, filepath=out,
+                 filename=out.name, filesize=size, downloaded_bytes=size,
+                 total_bytes=size, speed=0.0, eta=0)
+
+
 def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0, format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> None:
     """在后台线程执行，全部异常都写回任务状态，不向外抛。
 
@@ -5684,6 +5883,15 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
     健壮性：内置「停滞看门狗 + 整体硬超时」，防止站点/CDN 假死让任务永久挂起、
     占满并发槽拖垮后续所有下载（典型如 m3u8 流慢速 trickle 不触发 socket_timeout）。
     """
+    # 网盘直链（2026-10-24）：跳过 yt-dlp 解析，按文件直接下载。
+    # 走 yt-dlp 会把标题换成直链路径段、扩展名猜成 .mp4（mp3 被存成 mp4），
+    # 少数情况还会在 generic 提取阶段直接失败。
+    if _is_netdisk_direct(task.url):
+        _download_netdisk_direct(task, store,
+                                 cookie=(cookie or task.cookie or ""),
+                                 proxy=(proxy or task.proxy or ""))
+        return
+
     stop = threading.Event()
     last = {"bytes": 0, "disk": 0, "ts": time.time()}
     _workdir = Path(task.workdir) if task.workdir else None

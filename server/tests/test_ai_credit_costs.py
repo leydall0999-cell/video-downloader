@@ -96,14 +96,40 @@ def test_b_every_model_call_has_cost_entry() -> None:
     #   变异测试实测：把调用删掉后，`def charge_commentary_credits(` 的**定义处**
     #   仍在 2000 字符窗口内，宽正则照样匹配 ⇒ 守卫假绿了一次。
     quota_src = (REPO / "server" / "routers" / "quota.py").read_text(encoding="utf-8")
-    check("quota.py 定义了 charge_commentary_credits",
-          "def charge_commentary_credits" in quota_src)
+    app_src = (REPO / "server" / "app.py").read_text(encoding="utf-8")
+    cmon_src = (REPO / "server" / "routers" / "commentary.py").read_text(encoding="utf-8")
+    check("quota.py 定义了 charge_commentary_on_success（产出后落账）",
+          "def charge_commentary_on_success" in quota_src)
     _m = re.search(r"def precheck_or_raise\(.*?(?=\ndef |\Z)", quota_src, re.S)
     check("找到 precheck_or_raise 函数体（用于精确定位）", _m is not None)
     _body = _m.group(0) if _m else ""
-    check("precheck_or_raise **函数体内**真的调用了 charge_commentary_credits（解说扣费生效点）",
-          "charge_commentary_credits(" in _body,
-          "函数定义了但没被调用 ⇒ 解说仍然免费（变异 A 实测过这个坑）")
+    # 🔴 2026-10-23「失败不扣积分」事故：解说在转写阶段 1 秒崩溃，但积分已在**开跑前**
+    # 的预检里真扣掉了，失败路径只退云端免费次数、**没有任何退积分通道** ⇒ 用户两次
+    # 重试白扣 320 积分、一个成片都没拿到。现在预检只能做**只读**校验。
+    check("precheck_or_raise 内**不再真扣费**（无 charge_commentary_credits / gate_message 调用）",
+          "charge_commentary_credits(" not in _body and "gate_message(" not in _body,
+          "预检真扣 ⇒ 任务失败时积分已扣且无处可退（2026-10-23 事故复现）")
+    check("precheck_or_raise 改用只读校验 _assert_commentary_affordable",
+          "_assert_commentary_affordable(" in _body,
+          "只读校验缺失 ⇒ 余额不足的用户要白等十几分钟才在产出后被告知")
+    check("precheck_or_raise 产出账单 commentary_billing 并回传给调用方",
+          "commentary_billing(" in _body and 'res["billing"]' in _body)
+    _mem_src = (REPO / "server" / "membership.py").read_text(encoding="utf-8")
+    check("只读校验 can_afford 支持 total（按量计价才不会「长片只按 1 个单位放行」）",
+          "def can_afford" in _mem_src and "total" in
+          _mem_src.split("def can_afford")[1].split("\ndef ")[0])
+    # 落账必须挂在「产出成功」的分支上：两个 worker 都要接，缺一个就漏扣
+    check("app.py 定义了 _commentary_charge_on_success（统一落账口）",
+          "def _commentary_charge_on_success" in app_src)
+    for _fn, _need in (("_commentary_run(", 2), ("_commentary_run_http(", 1)):
+        _fm = re.search(r"def " + re.escape(_fn) + r".*?(?=\ndef |\Z)", app_src, re.S)
+        _fb = _fm.group(0) if _fm else ""
+        check(f"{_fn} 成功分支挂了 _commentary_charge_on_success（≥{_need} 处）",
+              _fb.count("_commentary_charge_on_success(") >= _need,
+              f"实测 {_fb.count('_commentary_charge_on_success(')} 处 ⇒ 该链路产出后不扣费")
+    check("账单随 job 落库（4 个解说入口都要带 billing）",
+          cmon_src.count('"billing"') >= 4,
+          f"实测 {cmon_src.count(chr(34) + 'billing' + chr(34))} 处")
     check("扣费不足时抛 402 MEMBER_QUOTA",
           "MEMBER_QUOTA|" in quota_src and "status_code=402" in quota_src)
 

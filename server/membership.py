@@ -109,6 +109,12 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     # 不是大模型算力（与网页版 share_token.py 的注释同一理由）。
     "share_qr": 200,          # 生成二维码（分享链接）（会员）
     "share_page": 200,        # 生成网页（转在线链接）（会员）
+    # 🔴 2026-10-23 补齐（用户：「使用统计里漏了证件照」）：证件照此前**完全不计数也不
+    #    计费**，等于免费无限次，可底层每次都真跑一遍人像抠图（几十秒 CPU/模型）。
+    #    现并入账号级每日配额，独立键 `idphoto`：免费 5 次/日、会员 200 次/日、不扣积分
+    #    （与视频拼接 / 图片转换同一口径；用户 2026-10-23 选定「每日免费次数」而不是扣积分）。
+    #    计数点在 routers/idphoto.py 的 make（发起即计一次；render 微调不计次）。
+    "idphoto": 200,           # 证件照（会员）
     # 老键：仅用于存量归集与后台对照，不再有写入点
     "app_compute": 200,
 }
@@ -142,6 +148,8 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     # 🔴 2026-10-20 补齐（与网页版 10-19 同值）：分享两个子功能免费 20 次/日
     "share_qr": 20,           # 生成二维码 免费 20 次/日
     "share_page": 20,         # 生成网页 免费 20 次/日
+    # 🔴 2026-10-23：证件照免费档 5 次/日（与视频拼接 / 图片转换同档），会员 200 次/日
+    "idphoto": 5,             # 证件照 免费 5 次/日
     # 老键：存量归集用
     "app_compute": 5,
 }
@@ -342,6 +350,10 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     # cloud_commentary —— 那等于让「生成二维码」去消耗「视频解说」的终身额度。
     {"key": "share_qr",    "name": "生成二维码", "resource": "share_qr",    "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机文件 → 短链 + 二维码（与网页版同账号共用每日次数）"},
     {"key": "share_page",  "name": "生成网页",   "resource": "share_page",  "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "本机文件 → 自包含 HTML → 在线链接（独立额度）"},
+    # 🔴 2026-10-23 用户反馈「使用统计里漏了证件照」：证件照此前没有任何计数/配额/积分
+    #    记录（底层每次都真跑一遍人像抠图），个人中心「使用统计」与管理后台配额面板
+    #    两处都看不到。现并入每日配额体系：免费 5 次/日、会员 200 次/日、不扣积分。
+    {"key": "idphoto",     "name": "证件照",     "resource": "idphoto",     "unit": "次", "free_limit": 5,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "上传生活照 → 换底色 → 出标准规格（含冲印排版）；预览里拖动微调不重复计次"},
 ]
 
 # ── 🔴 纯 AI 积分功能（2026-10-12）──────────────────────────────────────────
@@ -1179,8 +1191,13 @@ def spend_for(store: "MembershipStore", op: str, sub: str | None = None,
     return res
 
 
-def can_afford(store: "MembershipStore", op: str, sub: str | None = None) -> str:
+def can_afford(store: "MembershipStore", op: str, sub: str | None = None,
+               total: int | None = None) -> str:
     """**只查不扣**：返回 "" = 付得起；返回人话原因 = 付不起。零副作用。
+
+    🔴 2026-10-23 新增 `total`：按量计价的功能（视频解说按「每半小时」收）本次应收
+    总额不是表内单价 —— 不传总额就会"3 小时的片子只按 1 个单位放行，跑完才发现扣不动"。
+    语义与 `gate_message(cost=...)` 完全一致，两者必须同口径。
 
     🔴 2026-10-06 新增。**绝不能用 `gate_message` 当探针** —— 它会先
     `spend_credits` 真扣积分，余额不够时还会 `trial_consume` 消耗「首次体验」
@@ -1194,7 +1211,7 @@ def can_afford(store: "MembershipStore", op: str, sub: str | None = None) -> str
       4. 否则返回与 gate_message 同措辞的原因（前端直接展示）。
     """
     try:
-        cost = int(credit_cost(op, sub))
+        cost = int(total) if total is not None else int(credit_cost(op, sub))
     except Exception:  # noqa: BLE001
         return ""                      # 单价查不到 → 保守放行，交给事后真扣费兜底
     if cost <= 0:
@@ -1388,6 +1405,8 @@ _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     # 🔴 2026-10-20 补齐（网页版 10-19 已加，漏了 App 分支）：分享两个子功能
     ("share_qr", "生成二维码 {v} 次/日"),
     ("share_page", "生成网页 {v} 次/日"),
+    # 2026-10-23：证件照并入每日配额（此前无任何计数，等于免费无限次）
+    ("idphoto", "证件照 {v} 次/日"),
     # 老键：仅存量归集用，不作为对外权益展示（否则用户看到「视频处理」会以为
     # 转换/压缩/超分还共用一份额度 —— 拆键后已不共用）
 )

@@ -385,7 +385,10 @@ def create_commentary(payload: app.CommentaryRequest, request: app.Request) -> d
     # 历史缺口：此入口与本地拖拽入口都没有校验，用户要等转写+脚本全跑完才被告知
     # 额度不够，白等十几分钟且拿到废片（2026-09-15 用户实测反馈）。
     from routers.quota import precheck_or_raise
-    precheck_or_raise(request, _effective_duration(src_path, payload.trim_start, payload.trim_end,
+    # 🔴 2026-10-23「失败不扣积分」：预检已**不再真扣费**，只回一份账单（只读校验余额）。
+    # 账单必须随身带进 job，跑成功后由 app._commentary_charge_on_success 落账；
+    # 任务失败时那份账单就自然作废 ⇒ 没产出就不扣分。
+    _pre = precheck_or_raise(request, _effective_duration(src_path, payload.trim_start, payload.trim_end,
                                                 payload.drama_start_sec, payload.drama_end_sec),
                       vision=bool(payload.vision))
 
@@ -393,7 +396,8 @@ def create_commentary(payload: app.CommentaryRequest, request: app.Request) -> d
     _title = app._commentary_title(payload, src_path, request)
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
-                                   "steps": [], "logs": [], "src_path": src_path, "title": _title}
+                                   "steps": [], "logs": [], "src_path": src_path, "title": _title,
+                                   "billing": (_pre or {}).get("billing") or {}}
     app.executor.submit(app._commentary_run, job_id, src_path, payload.vertical, payload.voice or app.COMMENTARY_VOICE,
                     trim_start=payload.trim_start, trim_end=payload.trim_end,
                     mode=payload.mode, commentary_type=payload.commentary_type,
@@ -511,11 +515,12 @@ def create_commentary_upload(
         file.file.close()
 
     # 服务端二次校验：免费用户上传 > 30 分钟视频直接拦截（前端主拦截，此处防绕过；探测失败则 fail-open）
+    _bill = {}   # 预检失败会抛，异常分支下保持空账 ⇒ 不会误扣
     try:
         from routers.quota import assert_upload_allowed
         _dur = _effective_duration(dest, trim_start, trim_end,
                                    drama_start_sec, drama_end_sec)
-        assert_upload_allowed(request, _dur, vision=bool(vision))
+        _bill = assert_upload_allowed(request, _dur, vision=bool(vision))   # 只拿账单，产出成功才扣（2026-10-23）
     except app.HTTPException:
         raise
     except Exception:
@@ -539,7 +544,7 @@ def create_commentary_upload(
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "progress": [],
                                    "steps": [], "logs": [], "src_path": str(dest), "title": final_title,
-                                   "src_filename": src_filename}
+                                   "src_filename": src_filename, "billing": _bill or {}}
     app.executor.submit(app._commentary_run, job_id, str(dest), vertical, voice or app.COMMENTARY_VOICE,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
                     vision=vision, tts_provider=tts_provider,
@@ -604,11 +609,12 @@ def create_script_only_upload(
         file.file.close()
 
     # 服务端二次校验：免费用户上传 > 30 分钟视频直接拦截（前端主拦截，此处防绕过；探测失败则 fail-open）
+    _bill = {}   # 预检失败会抛，异常分支下保持空账 ⇒ 不会误扣
     try:
         from routers.quota import assert_upload_allowed
         _dur = _effective_duration(dest, trim_start, trim_end,
                                    drama_start_sec, drama_end_sec)
-        assert_upload_allowed(request, _dur, vision=bool(vision))
+        _bill = assert_upload_allowed(request, _dur, vision=bool(vision))   # 只拿账单，产出成功才扣（2026-10-23）
     except app.HTTPException:
         raise
     except Exception:
@@ -633,7 +639,8 @@ def create_script_only_upload(
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
                                    "progress": [], "steps": [], "logs": [], "src_path": src_path,
-                                   "title": final_title, "src_filename": src_filename}
+                                   "title": final_title, "src_filename": src_filename,
+                                   "billing": _bill or {}}
     app.executor.submit(app._commentary_run, job_id, src_path, vertical, voice or app.COMMENTARY_VOICE, script_only=True,
                     trim_start=trim_start, trim_end=trim_end, mode=mode,
                     commentary_type=commentary_type, highlight_source=highlight_source,
@@ -1007,7 +1014,8 @@ def create_script_only(payload: app.CommentaryRequest, request: app.Request) -> 
     # 前置闸门（本地拖拽 / 下载库主路径）：这是「不能等做完才说额度不够」的关键点——
     # 免费用户跑一条超能力的片子，若在此放行，会白等十几分钟后才失败并产出废片。
     from routers.quota import precheck_or_raise
-    precheck_or_raise(request, _effective_duration(src_path, payload.trim_start, payload.trim_end,
+    # 同上：只拿账单不扣费，成功产出后才落账（2026-10-23）
+    _pre = precheck_or_raise(request, _effective_duration(src_path, payload.trim_start, payload.trim_end,
                                                 payload.drama_start_sec, payload.drama_end_sec),
                       vision=bool(payload.vision))
 
@@ -1015,7 +1023,8 @@ def create_script_only(payload: app.CommentaryRequest, request: app.Request) -> 
     _title = app._commentary_title(payload, src_path, request)
     with app._commentary_lock:
         app.commentary_jobs[job_id] = {"status": "running", "error": "", "output_path": "", "script_path": "",
-                                   "progress": [], "src_path": src_path, "title": _title}
+                                   "progress": [], "src_path": src_path, "title": _title,
+                                   "billing": (_pre or {}).get("billing") or {}}
     app.executor.submit(app._commentary_run, job_id, src_path, payload.vertical, payload.voice or app.COMMENTARY_VOICE,
                     script_only=True, trim_start=payload.trim_start, trim_end=payload.trim_end,
                     mode=payload.mode, commentary_type=payload.commentary_type,

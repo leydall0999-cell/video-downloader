@@ -216,6 +216,7 @@
     // 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）
     modeVideoBtn: $('modeVideoBtn'),
     modeImageBtn: $('modeImageBtn'),
+    modeNetdiskBtn: $('modeNetdiskBtn'),
     imageModeNote: $('imageModeNote'),
     // 正版素材库入口 & 下载用途确认
     consentModal: $('consentModal'),
@@ -928,6 +929,21 @@
     idpPickedName: $('idpPickedName'),
     idpPickedClear: $('idpPickedClear'),
     idpReset: $('idpReset'),
+    // 网盘下载（2026-10-23 新增）：百度网盘分享链接 → 直链 → 本地落盘
+    clouddriveView: $('clouddriveView'),
+    cdSlot: $('cdSlot'),
+    cdUrl: $('cdUrl'),
+    cdPwd: $('cdPwd'),
+    cdResolve: $('cdResolve'),
+    cdStatus: $('cdStatus'),
+    cdList: $('cdList'),
+    cdCookie: $('cdCookie'),
+    cdCookieSave: $('cdCookieSave'),
+    cdCookieState: $('cdCookieState'),
+    cdCredBox: $('cdCredBox'),
+    tabCloudDrive: $('tabCloudDrive'),
+    // sTabCloudDrive 已删除（2026-10-24）：网盘入口改为下载页内的第三种类型，
+    // 侧栏不再单独占一项。
     idpBtn: $('idpBtn'),
     idpDl: $('idpDl'),
     idpStatus: $('idpStatus'),
@@ -1181,6 +1197,7 @@
   let dlMode = 'video';
   const URL_PLACEHOLDER_VIDEO = '粘贴视频链接，每行一个可批量下载（例如 https://www.bilibili.com/video/BV1...）';
   const URL_PLACEHOLDER_IMAGE = '粘贴图片直链，每行一个可批量下载；也支持小红书等平台的分享链接（自动抓页面里的图）';
+  const URL_PLACEHOLDER_NETDISK = '粘贴百度网盘分享链接（提取码可以一起粘，会自动识别），例如 https://pan.baidu.com/s/1xxxx 提取码: c4c0';
   const trackers = new Map();
   // 正在删除的任务 ID 集合：防止 syncMissingCards 在 DELETE 生效前把卡片重建回来
   const _deletingIds = new Set();
@@ -1752,21 +1769,44 @@
     el.resolveBtn.disabled = loading;
     // 按钮文案随下载类型切换（图片模式是「下载图片」，没有解析阶段）
     const _img = dlMode === 'image';
+    const _nd = dlMode === 'netdisk';
     el.resolveBtn.querySelector('.btn-label').textContent =
-      loading ? (_img ? '下载中…' : '解析中…') : (_img ? '下载图片' : '解析链接');
+      loading ? (_img ? '下载中…' : '解析中…')
+              : (_nd ? '解析网盘' : (_img ? '下载图片' : '解析链接'));
   };
 
-  /** 切换下载类型（视频 / 图片）：改占位符、按钮文案、图片提示与批量入口可见性。 */
+  /** 切换下载类型（视频 / 图片 / 网盘）：改占位符、按钮文案、提示与面板可见性。 */
   const setDownloadMode = (mode) => {
-    dlMode = mode === 'image' ? 'image' : 'video';
+    dlMode = mode === 'image' || mode === 'netdisk' ? mode : 'video';
     const _img = dlMode === 'image';
+    const _nd = dlMode === 'netdisk';
     if (el.modeVideoBtn) {
-      el.modeVideoBtn.classList.toggle('is-active', !_img);
-      el.modeVideoBtn.setAttribute('aria-selected', String(!_img));
+      el.modeVideoBtn.classList.toggle('is-active', !_img && !_nd);
+      el.modeVideoBtn.setAttribute('aria-selected', String(!_img && !_nd));
     }
     if (el.modeImageBtn) {
       el.modeImageBtn.classList.toggle('is-active', _img);
       el.modeImageBtn.setAttribute('aria-selected', String(_img));
+    }
+    if (el.modeNetdiskBtn) {
+      el.modeNetdiskBtn.classList.toggle('is-active', _nd);
+      el.modeNetdiskBtn.setAttribute('aria-selected', String(_nd));
+    }
+    // 网盘模式（2026-10-24）：网盘是本页的第三种类型，不是另一个页面。
+    // 用 downloadView 上的 class 把视频/图片的输入区、结果区让位，
+    // 只留 #cdSlot 里的网盘面板；切回来时原面板自动恢复（不碰 hidden 状态，
+    // 否则会把「本来就没结果」和「被网盘模式藏起来」两种情况搞混）。
+    if (el.downloadView) el.downloadView.classList.toggle('mode-netdisk', _nd);
+    if (el.clouddriveView) {
+      if (!_nd) {
+        el.clouddriveView.hidden = true;
+      } else {
+        // 进网盘模式时，只有已经有文件列表/状态才把面板露出来；
+        // 否则保持跟视频模式「还没解析」时一样的干净页面（只有输入框）。
+        const hasList = el.cdList && el.cdList.children.length > 0;
+        const hasStatus = el.cdStatus && el.cdStatus.textContent.trim();
+        el.clouddriveView.hidden = !(hasList || hasStatus);
+      }
     }
     if (el.imageModeNote) el.imageModeNote.hidden = !_img;
     // 图片模式：批量面板是视频概念（统一画质/并发），隐藏避免误导；
@@ -1774,10 +1814,19 @@
     if (el.batchToggle) el.batchToggle.hidden = _img;
     if (_img && el.batchBox && !el.batchBox.hidden) el.batchBox.hidden = true;
     if (el.input) {
-      el.input.placeholder = _img ? URL_PLACEHOLDER_IMAGE : URL_PLACEHOLDER_VIDEO;
+      el.input.placeholder = _nd ? URL_PLACEHOLDER_NETDISK
+        : (_img ? URL_PLACEHOLDER_IMAGE : URL_PLACEHOLDER_VIDEO);
     }
     setLoading(false);
   };
+
+  // 把网盘面板搬进下载页（2026-10-24）：网盘是本页的第三种下载类型，不跳页。
+  // 移动的是**同一个 DOM 节点**，所以 #cdUrl / #cdResolve / #cdList 等引用和
+  // 已经绑好的事件全部继续有效，不需要重新初始化；只是父节点变了。
+  if (el.cdSlot && el.clouddriveView) {
+    el.cdSlot.appendChild(el.clouddriveView);
+    el.clouddriveView.hidden = true;
+  }
 
   // ------------------------------------------------------------------ 渲染
 
@@ -8186,24 +8235,18 @@
     return { w: Math.max(1, spec.w * k), h: Math.max(1, spec.h * k) };
   };
 
-  // 拖动时本地先动（即时反馈）；松手才请求后端出真图并清掉本地位移
-  const idpApplyOff = () => {
-    if (!el.idpPreview) return;
-    if (!idpOff.x && !idpOff.y) {
-      el.idpPreview.style.transform = '';
-      return;
-    }
-    const d = idpSingleDisplay();
-    el.idpPreview.style.transform =
-      `translate(${(idpOff.x * d.w).toFixed(1)}px, ${(idpOff.y * d.h).toFixed(1)}px)`;
-  };
+  // 🔴 拖动时**不能**给整张预览图套 translate —— 预览是「整版排版图」（多张 + 白边），
+  // 平移它等于把整张照片连同白边一起推走，观感是「拖整张」而不是「拖人」。2026-10-23 用户反馈。
+  // 现在改为：拖动过程中按新位置重合成真图（复用已抠好的 RGBA，几百毫秒），
+  // 于是背景/白边巍然不动、只有人像在动，且所见即所得。位移换算仍由 idpSingleDisplay 提供。
 
-  const idpRenderZoom = async () => {
+  const idpRenderZoom = async (opts) => {
+    const live = !!(opts && opts.live);       // live = 拖动过程中的中间帧（静默 + 预载防闪）
     if (!idpJob) return;
     const seq = idpRenderSeq + 1;
     idpRenderSeq = seq;
     const z = idpZoomFactor();
-    idpSetStatus(`正在按 ${Math.round(z * 100)}% 重新出图…`, false);
+    if (!live) idpSetStatus(`正在按 ${Math.round(z * 100)}% 重新出图…`, false);
     try {
       const fd = new FormData();
       fd.append('zoom', String(z));
@@ -8216,15 +8259,52 @@
       idpOff.x = Number(d.ox) || 0;
       idpOff.y = Number(d.oy) || 0;
       if (Number(d.width)) idpSheetW = Number(d.width);
-      el.idpPreview.style.transform = '';       // 真图本身已含位移，清掉本地预览位移
+      el.idpPreview.style.transform = '';       // 真图本身已含位移，清掉任何残留的本地位移
       const url = `/api/idphoto/${idpJob}/file?t=${Date.now()}`;
-      el.idpPreview.src = url;
-      el.idpDl.href = url;
-      idpSetStatus(`已按 ${Math.round(z * 100)}% 重新出图 ✅`, false);
+      if (live) {
+        // 中间帧：先在内存里把新图加载完再换 src，避免拖动时浏览画布闪白
+        const pre = new Image();
+        const swap = () => {
+          if (seq !== idpRenderSeq) return;     // 加载期间又拖了，交给更新的帧
+          el.idpPreview.src = url;
+          el.idpDl.href = url;
+        };
+        pre.onload = swap;
+        pre.onerror = swap;
+        pre.src = url;
+      } else {
+        el.idpPreview.src = url;
+        el.idpDl.href = url;
+        idpSetStatus(`已按 ${Math.round(z * 100)}% 重新出图 ✅`, false);
+      }
     } catch (error) {
       if (seq !== idpRenderSeq) return;
-      idpSetStatus('调整失败：' + ((error && error.message) || '未知错误'), true);
+      if (!live) idpSetStatus('调整失败：' + ((error && error.message) || '未知错误'), true);
     }
+  };
+
+  // 拖动中的实时重绘：节流 110ms + 单并发（同一时刻只飞一个请求，完成时若有新位置再补一帧），
+  // 避免快速拖动打出一串请求把后端 PIL 合成排队排到松手之后。
+  let idpLiveTimer = 0;
+  let idpLiveBusy = false;
+  let idpLiveDirty = false;
+  const idpKickLive = async () => {
+    if (!idpJob) return;
+    if (idpLiveBusy) { idpLiveDirty = true; return; }
+    idpLiveBusy = true;
+    await idpRenderZoom({ live: true });
+    idpLiveBusy = false;
+    if (idpLiveDirty) {
+      idpLiveDirty = false;
+      idpKickLive();
+    }
+  };
+  const idpScheduleOff = () => {
+    if (!idpJob || idpLiveTimer) return;
+    idpLiveTimer = setTimeout(() => {
+      idpLiveTimer = 0;
+      idpKickLive();
+    }, 110);
   };
 
   // 边拖边出图：input 时先更新数字，停手 350ms 再请求（避免拖动过程打一串请求）
@@ -8260,13 +8340,15 @@
       if (!idpDrag) return;
       idpOff.x = idpDrag.ox + (e.clientX - idpDrag.sx) / idpDrag.w;
       idpOff.y = idpDrag.oy + (e.clientY - idpDrag.sy) / idpDrag.h;
-      idpApplyOff();
+      idpScheduleOff();
     });
     const idpDragEnd = (e) => {
       if (!idpDrag) return;
       idpDrag = null;
       el.idpPreview.classList.remove('is-dragging');
       try { el.idpPreview.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      clearTimeout(idpLiveTimer);           // 松手：撤掉待发的中间帧，直接出最终图
+      idpLiveTimer = 0;
       idpRenderZoom();
     };
     el.idpPreview.addEventListener('pointerup', idpDragEnd);
@@ -8409,7 +8491,14 @@
       idpSetStatus(`完成 ✅ ${spec.name} ${spec.w}×${spec.h}${d.layout > 1 ? ` · ${d.layout} 张排版` : ''}`
         + '　·　可在预览上拖动 / 滚轮微调', false);
     } catch (error) {
-      idpSetStatus('失败：' + ((error && error.message) || '未知错误'), true);
+      const _m = (error && error.message) || '';
+      // 每日次数用完（2026-10-23 起证件照也进每日配额）：与其他功能同一套会员墙交互
+      if (_m.indexOf('MEMBER_QUOTA|') === 0) {
+        try { if (typeof openMemberCenter === 'function') openMemberCenter(); } catch (_) { /* 会员中心未就绪 */ }
+        idpSetStatus(_m.split('|').slice(1).join('|') || '今日证件照次数已用完，明天再来', true);
+        return;
+      }
+      idpSetStatus('失败：' + (_m || '未知错误'), true);
     } finally {
       el.idpBtn.disabled = false;
     }
@@ -10417,6 +10506,21 @@ el.dwVidPlayer.hidden = true;
     el.playlistDownloadBtn.disabled = false;
   };
 
+  // ——— 网盘分享链接识别（2026-10-24）———
+  // 只认百度系：网盘视图当前也只实现了百度。识别范围必须与「真正能解析」的范围一致，
+  // 否则用户被导过去又看到「目前只支持百度网盘」，等于换个地方报错。
+  const isNetDiskShare = (u) => {
+    try {
+      const h = new URL(u, location.href).hostname.toLowerCase();
+      return /^(pan|yun|eyun)\.baidu\.com$/.test(h);
+    } catch (e) { return false; }
+  };
+  // 百度分享文案里的提取码：兼容「提取码: c4c0」「提取码：c4c0」「?pwd=c4c0」三种写法
+  const extractSharePwd = (text) => {
+    const m = String(text || '').match(/(?:提取码|访问码|密码|pwd)\s*[:：=]?\s*([A-Za-z0-9]{4,8})/i);
+    return m ? m[1] : '';
+  };
+
   const handleResolve = async (event) => {
     event.preventDefault();
     const raw = el.input.value.trim();
@@ -10452,6 +10556,21 @@ el.dwVidPlayer.hidden = true;
       return;
     }
     const url = urls[0];
+    // 网盘分享链接（2026-10-24）：主下载框只做「视频解析」，网盘要走专用四步流程
+    // （提取码校验 → 取签名 → 列文件 → 换直链）。若放行到通用解析，用户看到的是
+    // 误导性的「该平台已收录（pan.baidu.com），但暂未实现该站的解析器」——
+    // 他理所当然认为「网盘功能没做」。这里识别到就带着链接/提取码切到「网盘下载」
+    // 并直接发起解析，省掉让用户手动找入口再搬一次。
+    if (isNetDiskShare(url)) {
+      const pwd = extractSharePwd(raw);
+      if (el.cdUrl) {
+        setDownloadMode('netdisk');                 // 就地切到网盘模式，不跳页
+        el.cdUrl.value = url;
+        if (el.cdPwd && pwd) el.cdPwd.value = pwd;
+        if (el.cdResolve) el.cdResolve.click();     // 已有解析逻辑：校验/提示/列表都在里面
+        return;
+      }
+    }
     clearError();
     setLoading(true);
     el.resultPanel.hidden = true;
@@ -16524,6 +16643,19 @@ el.dwVidPlayer.hidden = true;
   // 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）
   if (el.modeVideoBtn) el.modeVideoBtn.addEventListener('click', () => setDownloadMode('video'));
   if (el.modeImageBtn) el.modeImageBtn.addEventListener('click', () => setDownloadMode('image'));
+  // 网盘下载（2026-10-24）：作为「视频下载 / 图片下载」的第三个并列选项。
+  // 它是**本页的第三种下载类型**，不是另一个页面 —— 不跳转，解析结果直接出现在
+  // 当前页下方的 #cdSlot 里。
+  if (el.modeNetdiskBtn) {
+    el.modeNetdiskBtn.addEventListener('click', () => {
+      setDownloadMode('netdisk');
+      if (el.cdUrl) {
+        try {
+          el.cdUrl.focus();
+        } catch (_) { /* 聚焦失败不影响功能 */ }
+      }
+    });
+  }
   el.batchBtn.addEventListener('click', () => {
     const urls = el.batchInput.value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
     if (!urls.length) { showError('请先粘贴至少一个视频链接'); return; }
@@ -16872,6 +17004,13 @@ el.dwVidPlayer.hidden = true;
   }, true);
 
   function switchView(view) {
+    // 网盘不再是独立视图（2026-10-24）：它是下载页的第三种下载类型。
+    // 顶部 tab / 侧栏的 data-view="clouddrive" 一律翻译成「下载页 + 网盘模式」，
+    // 这样无论从哪里点进来都不会跳到另一个页面。
+    if (view === 'clouddrive') {
+      view = 'download';
+      setDownloadMode('netdisk');
+    }
     const isLib = view === 'library';
     const isSub = view === 'subscribe';
     const isTor = view === 'torrent';
@@ -16888,6 +17027,7 @@ el.dwVidPlayer.hidden = true;
     const isAppIntro = view === 'appIntro';
     const isBridge = view === 'bridge';
     const isIdPhoto = view === 'idphoto';   // 证件照（2026-10-10 竞品对标水印云）
+    const isCd = view === 'clouddrive';     // 网盘下载（2026-10-23 新增）
     const isHome = view === 'home';   // 2026-09-12 首页：产品热门功能快捷入口（默认落地页）
     const isProfile = view === 'profile';                  // 个人资料总览
     const isProfilePurchases = view === 'profile_purchases';
@@ -16896,7 +17036,7 @@ el.dwVidPlayer.hidden = true;
     const isProfileAbout = view === 'profile_about';
     const isProfileSupport = view === 'profile_support';   // 客服消息工作台（仅超管）
     const isProfileGroup = isProfile || isProfilePurchases || isProfileCredits || isProfileSecurity || isProfileAbout || isProfileSupport;
-    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isPage || isSt || isAppIntro || isBridge || isProfileGroup || isHome || isIdPhoto;
+    el.downloadView.hidden = isLib || isSub || isTor || isCom || isUp || isDw || isMusic || isImage || isCp || isSr || isShare || isPage || isSt || isAppIntro || isBridge || isProfileGroup || isHome || isIdPhoto || isCd;
     if (el.homeView) el.homeView.hidden = !isHome;
     el.libraryView.hidden = !isLib;
     el.subscribeView.hidden = !isSub;
@@ -16916,6 +17056,8 @@ el.dwVidPlayer.hidden = true;
     if (!isDw) dwStopAllVideos();
     if (el.bridgeView) el.bridgeView.hidden = !isBridge;
     if (el.idphotoView) el.idphotoView.hidden = !isIdPhoto;
+    // 网盘面板的显隐由 setDownloadMode('netdisk') 控制：它已经是下载页内的
+    // 第三种下载类型，不再随视图切换而显隐（2026-10-24 改为内联）。
     if (el.appIntroView) el.appIntroView.hidden = !isAppIntro;
     if (el.profileView) el.profileView.hidden = !isProfileGroup;
     if (el.profileOverviewPanel) el.profileOverviewPanel.hidden = !isProfile;
@@ -16924,7 +17066,8 @@ el.dwVidPlayer.hidden = true;
     if (el.profileSecurityPanel) el.profileSecurityPanel.hidden = !isProfileSecurity;
     if (el.profileAboutPanel) el.profileAboutPanel.hidden = !isProfileAbout;
     if (el.profileSupportPanel) el.profileSupportPanel.hidden = !isProfileSupport;
-    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isBridge && !isProfileGroup && !isIdPhoto);
+    if (el.tabDownload) el.tabDownload.classList.toggle('is-active', !isLib && !isSub && !isTor && !isCom && !isUp && !isDw && !isAppIntro && !isMusic && !isImage && !isCp && !isSr && !isShare && !isPage && !isSt && !isBridge && !isProfileGroup && !isIdPhoto && !isCd);
+    if (el.tabCloudDrive) el.tabCloudDrive.classList.toggle('is-active', isCd);
     if (el.tabLibrary) el.tabLibrary.classList.toggle('is-active', isLib);
     if (el.tabSubscribe) el.tabSubscribe.classList.toggle('is-active', isSub);
     if (el.tabTorrent) el.tabTorrent.classList.toggle('is-active', isTor);
@@ -17457,6 +17600,157 @@ el.dwVidPlayer.hidden = true;
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabSr) el.tabSr.addEventListener('click', () => switchView('sr'));
   if (el.tabPage) el.tabPage.addEventListener('click', () => switchView('page'));   // 生成网页（2026-09-30）
+  if (el.tabCloudDrive) el.tabCloudDrive.addEventListener('click', () => switchView('clouddrive'));   // 网盘下载（2026-10-23）
+
+  // ===================== 网盘下载（2026-10-23 新增）=====================
+  // 定位：只下载「自己网盘里的文件 / 别人分享给你的文件」到本地，不批量抓取、不破解限速。
+  // 解析走后端 /api/cloud-drive/resolve（百度新接口四步），下载复用现有 /api/download 队列。
+  const cdSetStatus = (msg, isErr) => {
+    if (!el.cdStatus) return;
+    el.cdStatus.textContent = msg || '';
+    el.cdStatus.hidden = !msg;
+    el.cdStatus.classList.toggle('is-error', !!isErr);
+  };
+
+  const cdFmtSize = (n) => {
+    let v = Number(n) || 0;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+    return i === 0 ? `${Math.round(v)} B` : `${v.toFixed(1)} ${units[i]}`;
+  };
+
+  const cdDownload = async (f) => {
+    if (!f || !f.dlink) return;
+    try {
+      const data = await request('/api/download', {
+        method: 'POST',
+        body: JSON.stringify({
+          url: f.dlink,
+          quality: 'best',
+          title: f.name || '',
+          cookie: f.cookie || '',   // 百度 dlink 匿名下载会被拒（error 31326），必须带登录态
+          proxy: '',
+          extract_script: '',
+          format_id: '',
+          concurrent_fragments: 0,
+          downloader: 'native',
+          play_url: '',
+          watch_options: [],
+          is_hls: false,
+        }),
+      });
+      if (!data || !data.task_id) {
+        cdSetStatus('下载创建失败：' + ((data && data.detail) || '未知错误'), true);
+        return;
+      }
+      const refs = createTaskCard(data.task_id, { title: f.name || '(未命名)', platform: '百度网盘' });
+      trackTask(data.task_id, refs);
+      switchView('download');   // 回到下载页看进度
+      cdSetStatus('已加入下载队列：' + (f.name || ''), false);
+    } catch (e) {
+      cdSetStatus('下载创建失败：' + (e && e.message ? e.message : e), true);
+    }
+  };
+
+  const cdRender = (files, needLogin) => {
+    if (!el.cdList) return;
+    el.cdList.innerHTML = '';
+    (files || []).forEach((f) => {
+      const li = document.createElement('li');
+      li.className = 'cd-item';
+      const name = document.createElement('span');
+      name.className = 'cd-item-name';
+      name.textContent = f.name || '(未命名)';
+      const size = document.createElement('span');
+      size.className = 'cd-item-size';
+      size.textContent = cdFmtSize(f.size);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-sm btn-primary';
+      btn.textContent = '下载';
+      btn.addEventListener('click', () => cdDownload(f));
+      li.appendChild(name);
+      li.appendChild(size);
+      li.appendChild(btn);
+      el.cdList.appendChild(li);
+    });
+    if (needLogin) {
+      cdSetStatus('已读到文件，但下载需要百度登录态：装了扩展并在浏览器登录过百度网盘会自动带上；否则在下面「百度登录态」里粘贴 BDUSS。', true);
+      if (el.cdCredBox) el.cdCredBox.open = true;
+    }
+  };
+
+  const cdResolve = async () => {
+    // 解析一开始就把网盘面板（状态 + 文件列表 + 登录态）露出来，
+    // 这样「解析中 / 失败原因」都看得见。
+    if (el.clouddriveView) el.clouddriveView.hidden = false;
+    const url = ((el.cdUrl && el.cdUrl.value) || '').trim();
+    if (!url) { cdSetStatus('请先粘贴网盘分享链接', true); return; }
+    if (!/pan\.baidu\.com|yun\.baidu\.com/.test(url)) {
+      cdSetStatus('目前只支持百度网盘分享链接（pan.baidu.com）', true);
+      return;
+    }
+    const pwd = ((el.cdPwd && el.cdPwd.value) || '').trim();
+    if (el.cdResolve) el.cdResolve.disabled = true;
+    cdSetStatus('正在解析…', false);
+    try {
+      const data = await request('/api/cloud-drive/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ url, pwd }),
+      });
+      if (!data || data.ok !== true) {
+        cdSetStatus((data && data.error) || '解析失败', true);
+        cdRender([], false);
+        return;
+      }
+      const files = data.files || [];
+      cdRender(files, !!data.need_login);
+      if (!data.need_login) cdSetStatus(`解析到 ${files.length} 个文件`, false);
+    } catch (e) {
+      cdSetStatus('解析失败：' + (e && e.message ? e.message : e), true);
+    } finally {
+      if (el.cdResolve) el.cdResolve.disabled = false;
+    }
+  };
+
+  const cdSaveCookie = async () => {
+    const v = ((el.cdCookie && el.cdCookie.value) || '').trim();
+    if (!v) {
+      if (el.cdCookieState) el.cdCookieState.textContent = '请先粘贴 BDUSS';
+      return;
+    }
+    try {
+      const data = await request('/api/cloud-drive/credential', {
+        method: 'POST',
+        body: JSON.stringify({ bduss: v }),
+      });
+      if (data && data.ok) {
+        if (el.cdCookieState) el.cdCookieState.textContent = '已保存到本机';
+        if (el.cdCookie) el.cdCookie.value = '';
+      } else if (el.cdCookieState) {
+        el.cdCookieState.textContent = (data && data.error) || '保存失败';
+      }
+    } catch (e) {
+      if (el.cdCookieState) el.cdCookieState.textContent = '保存失败';
+    }
+  };
+
+  const cdRefreshCredState = async () => {
+    if (!el.cdCookieState) return;
+    try {
+      const data = await request('/api/cloud-drive/credential/status');
+      el.cdCookieState.textContent = (data && data.set)
+        ? '当前状态：已就绪（可以下载）'
+        : '当前状态：未检测到（只能看列表，下载会失败）';
+    } catch (e) { /* 老版本后端没有这些端点：静默忽略 */ }
+  };
+
+  if (el.cdResolve) el.cdResolve.addEventListener('click', cdResolve);
+  if (el.cdCookieSave) el.cdCookieSave.addEventListener('click', cdSaveCookie);
+  if (el.cdPwd) el.cdPwd.addEventListener('keydown', (e) => { if (e.key === 'Enter') cdResolve(); });
+  if (el.cdUrl) el.cdUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') cdResolve(); });
+  cdRefreshCredState();
 
 // 侧栏（桌面端）：10 个 .sidebar-item 也触发同视图切换
   const _sidebarPairs = [
@@ -25198,6 +25492,157 @@ el.dwVidPlayer.hidden = true;
     if (adminToken()) { /* loadAll 在 openAdmin 内触发 */ }
   };
   try { initAdmin(); } catch (_) { /* 后台面板缺失不影响主流程 */ }
+
+  /* ==========================================================================
+   * 首页 V5（2026-10-23 按 Ardot 设计稿 9:1 重建）
+   *  - 主推横幅：选视频 / 拖入 / 粘贴链接 / 看示例（全部接到真实流程，不做假按钮）
+   *  - 创作组大卡的「上次：…」取真实解说历史；取不到就保持隐藏（不编数据）
+   * ========================================================================== */
+  (function initHomeV5() {
+    const hero = document.getElementById('v5Hero');
+    if (!hero) return;
+    const pickBtn = document.getElementById('v5HeroPick');
+    const demoBtn = document.getElementById('v5HeroDemo');
+    const heroInput = document.getElementById('v5HeroInput');
+    const hint = hero.querySelector('.v5-hero-hint');
+    const hintDefault = hint ? hint.textContent : '';
+    const comFile = document.getElementById('comFileInput');
+
+    // 横幅提示位临时改成一句话说明（3.6s 后复原），不新增浮层
+    let hintTimer = null;
+    const flashHint = (text) => {
+      if (!hint) return;
+      hint.textContent = text;
+      hint.style.color = 'rgba(255,255,255,.98)';
+      hint.style.fontWeight = '600';
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(() => {
+        hint.textContent = hintDefault;
+        hint.style.color = '';
+        hint.style.fontWeight = '';
+      }, 3600);
+    };
+
+    // 带文件进入视频解说：切视图 → 塞进 #comFileInput → 触发原生 change（走原有上传逻辑）
+    const openCommentaryWithFile = (file) => {
+      switchView('commentary');
+      if (!file || !comFile) return;
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        comFile.files = dt.files;
+        comFile.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (_e) {
+        // 极老 WebKit 没有 DataTransfer 构造器：退回「选择视频」让用户自己挑
+        flashHint('这个文件没能自动带入，请在解说页点「📁 从本地文件生成」');
+        if (comFile) comFile.click();
+      }
+    };
+
+    if (pickBtn) {
+      pickBtn.addEventListener('click', () => {
+        switchView('commentary');
+        if (comFile) comFile.click();
+      });
+    }
+
+    // 整块横幅都是投放区
+    ['dragenter', 'dragover'].forEach((t) => {
+      hero.addEventListener(t, (e) => { e.preventDefault(); hero.classList.add('is-dragover'); });
+    });
+    ['dragleave', 'dragend', 'drop'].forEach((t) => {
+      hero.addEventListener(t, () => hero.classList.remove('is-dragover'));
+    });
+    hero.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) openCommentaryWithFile(f);
+    });
+
+    // 粘贴链接：视频解说只吃本地文件 ⇒ 把链接带到「下载」页，下载完再回来解说（真路径，不假装能直连）
+    const handoffToDownload = (url) => {
+      switchView('download');
+      const box = document.getElementById('urlInput');
+      if (box) {
+        box.value = url;
+        try { box.focus(); box.setSelectionRange(url.length, url.length); } catch (_e) { /* ignore */ }
+      }
+      flashHint('视频解说需要本地文件：链接已填进「下载」页，下载完成后回这里拖入即可');
+    };
+
+    if (heroInput) {
+      heroInput.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const v = String(heroInput.value || '').trim();
+        if (!v) return;
+        e.preventDefault();
+        handoffToDownload(v);
+        heroInput.value = '';
+      });
+      // 直接粘贴链接（Ctrl/⌘+V）也走同一条路
+      heroInput.addEventListener('paste', (e) => {
+        const txt = (e.clipboardData && e.clipboardData.getData('text')) || '';
+        const v = txt.trim();
+        if (!/^https?:\/\//i.test(v)) return;         // 普通文本留给用户继续编辑
+        e.preventDefault();
+        handoffToDownload(v);
+        heroInput.value = '';
+      });
+    }
+
+    // 看示例成片：本地没有随包示例视频 ⇒ 打开解说页并展开「怎么用 · 视频解说」的步骤说明
+    if (demoBtn) {
+      demoBtn.addEventListener('click', () => {
+        switchView('commentary');
+        const d = document.querySelector('#commentaryView details.howto');
+        if (d) {
+          d.open = true;
+          try { d.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_e) { /* ignore */ }
+        }
+        flashHint('示例：解说页已打开「怎么用」步骤，按 01→04 走一遍就是成片');
+      });
+    }
+
+    // ---- 创作组大卡的「上次：…」----
+    const fmtMtime = (ts) => {
+      const n = Number(ts);
+      if (!n) return '';
+      const d = new Date(n < 1e12 ? n * 1000 : n);
+      if (isNaN(d.getTime())) return '';
+      const p = (x) => String(x).padStart(2, '0');
+      return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    };
+    const setLast = (view, text) => {
+      const node = document.querySelector(`.v5-last[data-last-for="${view}"]`);
+      if (!node || !text) return;
+      node.textContent = text;
+      node.title = text;
+      node.hidden = false;
+    };
+    const loadLastUsed = async () => {
+      try {
+        const data = await request('/api/commentary/list');
+        const items = (data && data.items) || [];
+        if (!items.length) return;
+        // 服务端按 mtime 倒序；再兜一层排序，避免字段缺失时取错
+        const top = items.slice().sort((a, b) => Number(b.mtime || 0) - Number(a.mtime || 0))[0];
+        const name = String(top.name || '').replace(/\.(mp4|mov|mkv|webm)$/i, '');
+        const when = fmtMtime(top.mtime);
+        setLast('commentary', '上次：' + name + (when ? ' · ' + when : ''));
+      } catch (_e) { /* 没登录/没历史 ⇒ 保持隐藏 */ }
+    };
+    // 首页懒加载：切到 home 时才拉一次，避免拖慢启动
+    let lastLoaded = false;
+    const onceLoad = () => {
+      if (lastLoaded) return;
+      lastLoaded = true;
+      loadLastUsed();
+    };
+    if (!document.getElementById('homeView').hidden) onceLoad();
+    document.querySelectorAll('[data-view="home"]').forEach((b) => {
+      b.addEventListener('click', onceLoad);
+    });
+  })();
 
   // Phase 2：暴露共享 helper 到 window.VDL，供 web/js/desktop-app.js（桌面版专属脚本）复用。
   // 仅追加命名空间，不改变任何现有运行时行为；web 与 app 共享这些基础能力。

@@ -103,6 +103,11 @@ check('node 侧 module.exports 可用', typeof V.buildCookieHeader === 'function
     ],
     'weibo.com': [
       { name: 'SUB', value: 'weibo-sub-cookie-value', domain: '.weibo.com', path: '/' }
+    ],
+    // 百度网盘（2026-10-23 接入）：BDUSS 挂在根域，cloud=false 只给本机
+    'baidu.com': [
+      { name: 'BDUSS', value: 'bduss-cookie-value-long', domain: '.baidu.com', path: '/' },
+      { name: 'BAIDUID', value: 'guest-only-baiduid', domain: '.baidu.com', path: '/' }
     ]
   };
   const stub = {
@@ -114,17 +119,23 @@ check('node 侧 module.exports 可用', typeof V.buildCookieHeader === 'function
   V.harvest(stub, r => { out = r; });
   const byId = {};
   (out || []).forEach(x => { byId[x.id] = x; });
-  check('12 个平台全部返回', out && out.length === V.PLATFORMS.length, out && out.length);
+  check('13 个平台全部返回（含 2026-10-23 新增的百度网盘）',
+        out && out.length === V.PLATFORMS.length, out && out.length);
   check('B站判为已登录', byId.bilibili && byId.bilibili.loggedIn === true, byId.bilibili);
   check('B站 header 含 SESSDATA 与游客字段', byId.bilibili && byId.bilibili.header.indexOf('SESSDATA=') !== -1, byId.bilibili && byId.bilibili.header);
   check('YouTube 只有游客 Cookie → 未登录', byId.youtube && byId.youtube.loggedIn === false, byId.youtube);
   check('微博已登录但 cloud=false', byId.weibo && byId.weibo.loggedIn === true && byId.weibo.cloud === false, byId.weibo);
+  check('百度网盘：有 BDUSS 判为已登录，且 cloud=false（不进公共池）',
+        byId.baidupan && byId.baidupan.loggedIn === true && byId.baidupan.cloud === false, byId.baidupan);
+  check('百度网盘 header 含 BDUSS',
+        byId.baidupan && byId.baidupan.header.indexOf('BDUSS=') !== -1, byId.baidupan && byId.baidupan.header);
 
   // pickReady
   const ready = V.pickReady(out, { cloud: true });
   check('cloud 过滤掉微博', ready.every(x => x.cloud === true) && ready.length === 1, ready.map(x => x.id));
   const readyAll = V.pickReady(out);
-  check('不限定 cloud 时含微博', readyAll.length === 2, readyAll.map(x => x.id));
+  // 2026-10-23：百度网盘加入 PLATFORMS 且样本里已登录 ⇒ 不限定 cloud 时应为 3 个
+  check('不限定 cloud 时含微博与百度', readyAll.length === 3, readyAll.map(x => x.id));
 }
 
 // ---- 7) harvest：getAll 抛异常 / runtime.lastError 都要降级成 error 而非中断 ----

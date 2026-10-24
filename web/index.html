@@ -88,6 +88,8 @@
       <button type="button" class="sidebar-item" data-view="download" id="sTabDownload" title="下载" data-page-node-id="RD7sJH1xlTEoU9fIcE6wQs"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="Im9jJmDAQ97CbjtjDB7Tnc">⬇️</span><span class="sidebar-item-label" data-page-node-id="X48PzKX6f3qyNCCChfPVAK">下载</span></button>
       <button type="button" class="sidebar-item" data-view="subscribe" id="sTabSubscribe" title="订阅追更" data-page-node-id="Fe7Ao5XjfiM43rPKXFDwvV"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="uwGJYwjbSgaHBIcWK38w0u">🔔</span><span class="sidebar-item-label" data-page-node-id="KmkUl2bvkaReBzVDFRQpJg">订阅追更</span></button>
       <button type="button" class="sidebar-item" data-view="torrent" id="sTabTorrent" hidden title="种子下载" data-page-node-id="HcpxUtLnRuA4dAjM25qFpQ"><span class="sidebar-item-icon" aria-hidden="true" data-page-node-id="uQeWBMcTRZBenq8MSkJ8yB">🧲</span><span class="sidebar-item-label" data-page-node-id="Mhiug7fU66erkKtdN0ZlaN">种子下载</span></button>
+      <!-- 网盘下载（2026-10-24 从「工具」组挪来）：粘网盘分享链接 → 直链 → 本地落盘。
+           放「下载」组符合用户预期 —— 他把它和视频下载当成同一件事。 -->
     </div>
 
     <div class="sidebar-group collapsed" data-page-node-id="oGNPcDBf4wIfQGye48HiqH">
@@ -175,134 +177,224 @@
         <button type="button" class="tab" data-view="page" id="tabPage" data-page-node-id="pAgeTabTop2026en01">🌐 生成网页</button>
     <button type="button" class="tab" data-view="dw" id="tabDw" data-page-node-id="N9RTDjwHrnMXbYAvIzTCdO">🧽 图片去水印</button>
     <button type="button" class="tab" data-view="idphoto" id="tabIdPhoto">🪪 证件照</button>
+    <button type="button" class="tab" data-view="clouddrive" id="tabCloudDrive">☁️ 网盘下载</button>
     <button type="button" class="tab" data-view="subscribe" id="tabSubscribe" data-page-node-id="rSafkSMroVCsnxtt3WE7up">🔔 订阅追更</button>
     <button type="button" class="tab" data-view="torrent" id="tabTorrent" hidden data-page-node-id="bOI6hQq4T7ILw9Ning6dVw">🧲 种子</button>
     <button type="button" class="tab" data-view="profile" id="tabProfile" data-page-node-id="pnXFpJysLDFdRNWE1BgTwg">👤 个人中心</button>
   </nav>
 
-  <section id="homeView" class="panel" hidden aria-labelledby="homeTitle" data-page-node-id="jc6GG5GG4bxpHtdKB40AR6">
-    <div class="home-hero" data-page-node-id="EIcWlZl8EZsYESA2dfn8MV">
-      <h1 class="home-title" id="homeTitle" data-page-node-id="OXniqcAqfZ9BI1TqeewscQ">视频工坊</h1>
-      <p class="home-sub" data-page-node-id="FIqFLPfbFPjgjSUtfX8pHX">不止是下载工具，更懂视频精修加工</p>
+  <section id="homeView" class="panel home-v5" hidden aria-labelledby="homeTitle" data-page-node-id="jc6GG5GG4bxpHtdKB40AR6">
+    <!-- ===== V5 主推横幅：AI 视频解说 ===== -->
+    <div class="v5-hero" id="v5Hero">
+      <div class="v5-hero-left">
+        <div class="v5-hero-tags">
+          <span class="v5-hero-tag solid">AI 视频解说</span>
+          <span class="v5-hero-src">
+            <span class="v5-hero-tag ghost">本地视频</span>
+            <span class="v5-hero-tag ghost">视频链接</span>
+            <span class="v5-hero-tag ghost">字幕文件</span>
+          </span>
+        </div>
+        <h2 class="v5-hero-title">把一段视频，讲成一个故事</h2>
+        <p class="v5-hero-sub">自动转写语音、提炼解说词、配乐加字幕，最后一次合成为成片，全程不用剪辑软件。</p>
+        <div class="v5-hero-inputrow">
+          <label class="sr-only" for="v5HeroInput">视频解说素材</label>
+          <input id="v5HeroInput" class="v5-hero-input" type="text" autocomplete="off" placeholder="拖入本地视频，或粘贴视频链接" />
+          <button type="button" class="v5-hero-btn primary" id="v5HeroPick">选择视频</button>
+          <button type="button" class="v5-hero-btn ghost" id="v5HeroDemo">看示例成片</button>
+        </div>
+        <p class="v5-hero-hint">支持 MP4 / MOV / MKV · 最长 2 小时 · 解说词可逐段改写，随时重新生成</p>
+      </div>
+      <ol class="v5-hero-steps">
+        <li><b>01</b><span>转写语音</span></li>
+        <li><b>02</b><span>提炼解说词</span></li>
+        <li><b>03</b><span>配乐与字幕</span></li>
+        <li><b>04</b><span>合成成片</span></li>
+      </ol>
     </div>
-    <h2 class="guide-title" data-page-node-id="0meKD4BVcLbwo34Ce2ItiB">热门功能快捷入口</h2>
-    <div class="home-groups" id="homeGrid" data-page-node-id="I6lxx6EAvB6JbcXR7UIvlm">
-      <div class="home-group">
-        <h3 class="home-group-title"><span class="home-group-emoji" aria-hidden="true">🎨</span>创作</h3>
-        <div class="home-grid">
-          <button type="button" class="home-card" data-view="commentary">
-            <span class="home-card-icon" aria-hidden="true">🎬</span>
-            <span class="home-card-title">视频解说</span>
-            <span class="home-card-desc">自动转写 · 提炼解说词成片</span>
-          </button>
-          <button type="button" class="home-card" data-view="subtitle">
-            <span class="home-card-icon" aria-hidden="true">📝</span>
-            <span class="home-card-title">本地字幕提取</span>
-            <span class="home-card-desc">本地 AI 语音识别生成字幕</span>
-          </button>
-        </div>
-      </div>
 
-      <div class="home-group">
-        <h3 class="home-group-title"><span class="home-group-emoji" aria-hidden="true">⬇</span>下载</h3>
-        <div class="home-grid">
-          <button type="button" class="home-card" data-view="download">
-            <span class="home-card-icon" aria-hidden="true">⬇️</span>
-            <span class="home-card-title">视频下载</span>
-            <span class="home-card-desc">支持国内外主流视频一键下载</span>
+    <h2 class="v5-sec-title" id="homeTitle">热门功能快捷入口</h2>
+
+    <div class="home-groups" id="homeGrid">
+      <section class="v5-group" style="--g1:#4F46E5;--g2:#6366F1">
+        <div class="v5-group-head">
+          <span class="v5-gicon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2" y="3" width="12" height="9" rx="2"/><path d="M7 6.2l3 1.8-3 1.8z" fill="currentColor" stroke="none"/></svg></span>
+          <b>创作</b><em>2 项 · AI 生成</em>
+        </div>
+        <div class="v5-grid cols-2">
+          <button type="button" class="v5-card lg" data-view="commentary">
+            <span class="v5-tile" aria-hidden="true">解</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">视频解说</span>
+              <span class="v5-card-desc">自动转写 · 提炼解说词成片</span>
+            </span>
+            <span class="v5-last" data-last-for="commentary" hidden></span>
           </button>
-          <button type="button" class="home-card" data-view="subscribe">
-            <span class="home-card-icon" aria-hidden="true">🔔</span>
-            <span class="home-card-title">订阅追更</span>
-            <span class="home-card-desc">频道更新自动下载</span>
+          <button type="button" class="v5-card lg" data-view="subtitle">
+            <span class="v5-tile" aria-hidden="true">幕</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">本地字幕提取</span>
+              <span class="v5-card-desc">本地 AI 语音识别生成字幕</span>
+            </span>
+            <span class="v5-last" data-last-for="subtitle" hidden></span>
           </button>
         </div>
-      </div>
-      <div class="home-group">
-        <h3 class="home-group-title"><span class="home-group-emoji" aria-hidden="true">🔄</span>转换</h3>
-        <div class="home-grid">
-          <button type="button" class="home-card" data-view="uploadconvert">
-            <span class="home-card-icon" aria-hidden="true">🔁</span>
-            <span class="home-card-title">视频格式转换</span>
-            <span class="home-card-desc">MP4 / MOV / WebM 互转</span>
+      </section>
+
+      <section class="v5-group" style="--g1:#2F7DF6;--g2:#06B6D4">
+        <div class="v5-group-head">
+          <span class="v5-gicon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7"/><path d="M5.2 6.8L8 9.6l2.8-2.8"/><path d="M3 12.6h10"/></svg></span>
+          <b>下载</b><em>4 项</em>
+        </div>
+        <div class="v5-grid cols-4">
+          <button type="button" class="v5-card" data-view="download">
+            <span class="v5-tile" aria-hidden="true">载</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">视频下载</span>
+              <span class="v5-card-desc">支持国内外主流平台</span>
+            </span>
           </button>
-          <button type="button" class="home-card" data-view="musicconvert">
-            <span class="home-card-icon" aria-hidden="true">🎵</span>
-            <span class="home-card-title">音乐转换</span>
-            <span class="home-card-desc">MP3 / FLAC / WAV 互转</span>
+          <button type="button" class="v5-card" data-view="subscribe">
+            <span class="v5-tile" aria-hidden="true">追</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">订阅追更</span>
+              <span class="v5-card-desc">频道更新自动下载</span>
+            </span>
           </button>
-          <button type="button" class="home-card" data-view="imageconvert">
-            <span class="home-card-icon" aria-hidden="true">🖼️</span>
-            <span class="home-card-title">图片转换</span>
-            <span class="home-card-desc">JPG / PNG / WebP / HEIC 互转</span>
-          </button>
-          <button type="button" class="home-card" data-view="compress">
-            <span class="home-card-icon" aria-hidden="true">🗜️</span>
-            <span class="home-card-title">高效压缩</span>
-            <span class="home-card-desc">视觉无损 / 极致档，体积更轻</span>
-          </button>
-          <button type="button" class="home-card" data-view="sr">
-            <span class="home-card-icon" aria-hidden="true">✨</span>
-            <span class="home-card-title">高清修复</span>
-            <span class="home-card-desc">快速放大 / AI 超分重建细节</span>
-          </button>
-          <button type="button" class="home-card" data-view="share">
-            <span class="home-card-icon" aria-hidden="true">📲</span>
-            <span class="home-card-title">生成二维码</span>
-            <span class="home-card-desc">本机文件 → 短链，扫码即看</span>
-          </button>
-          <button type="button" class="home-card" data-view="page">
-            <span class="home-card-icon" aria-hidden="true">🌐</span>
-            <span class="home-card-title">生成网页</span>
-            <span class="home-card-desc">多个文件合成一个在线网页</span>
+          <button type="button" class="v5-card" data-view="torrent">
+            <span class="v5-tile" aria-hidden="true">种</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">种子下载</span>
+              <span class="v5-card-desc">磁力 / BT 离线下载</span>
+            </span>
           </button>
         </div>
-      </div>
-      <div class="home-group">
-        <h3 class="home-group-title"><span class="home-group-emoji" aria-hidden="true">🧰</span>工具</h3>
-        <div class="home-grid">
-          <button type="button" class="home-card" data-view="dw">
-            <span class="home-card-icon" aria-hidden="true">🧽</span>
-            <span class="home-card-title">图片去水印</span>
-            <span class="home-card-desc">框选水印区域，AI 智能消除</span>
+      </section>
+
+      <section class="v5-group" style="--g1:#06B6D4;--g2:#22D3EE">
+        <div class="v5-group-head">
+          <span class="v5-gicon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 5.5h11"/><path d="M2.5 10.5h11"/><path d="M10.5 3.5l2 2-2 2"/><path d="M5.5 8.5l-2 2 2 2"/></svg></span>
+          <b>转换</b><em>7 项</em>
+        </div>
+        <div class="v5-grid cols-4">
+          <button type="button" class="v5-card" data-view="uploadconvert">
+            <span class="v5-tile" aria-hidden="true">转</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">视频格式转换</span>
+              <span class="v5-card-desc">MP4 / MOV / WebM 互转</span>
+            </span>
           </button>
-          <button type="button" class="home-card" data-view="dwpdf">
-            <span class="home-card-icon" aria-hidden="true">📄</span>
-            <span class="home-card-title">PDF 去水印</span>
-            <span class="home-card-desc">批量去除文档水印</span>
+          <button type="button" class="v5-card" data-view="musicconvert">
+            <span class="v5-tile" aria-hidden="true">乐</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">音乐转换</span>
+              <span class="v5-card-desc">MP3 / FLAC / WAV 互转</span>
+            </span>
           </button>
-          <button type="button" class="home-card" data-view="dwvideo">
-            <span class="home-card-icon" aria-hidden="true">🎞️</span>
-            <span class="home-card-title">视频去水印</span>
-            <span class="home-card-desc">去除视频平台水印标识</span>
+          <button type="button" class="v5-card" data-view="imageconvert">
+            <span class="v5-tile" aria-hidden="true">图</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">图片转换</span>
+              <span class="v5-card-desc">JPG / PNG / WebP / HEIC</span>
+            </span>
           </button>
-          <button type="button" class="home-card" data-view="matting">
-            <span class="home-card-icon" aria-hidden="true">✂️</span>
-            <span class="home-card-title">一键抠图</span>
-            <span class="home-card-desc">矩形 / 套索选区，秒级抠出主体</span>
+          <button type="button" class="v5-card" data-view="compress">
+            <span class="v5-tile" aria-hidden="true">压</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">高效压缩</span>
+              <span class="v5-card-desc">视觉无损 / 极致档</span>
+            </span>
           </button>
-          <button type="button" class="home-card" data-view="bridge">
-            <span class="home-card-icon" aria-hidden="true">🔗</span>
-            <span class="home-card-title">视频/音频桥接</span>
-            <span class="home-card-desc">视频与音频互相合成 / 替换</span>
+          <button type="button" class="v5-card" data-view="sr">
+            <span class="v5-tile" aria-hidden="true">修</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">高清修复</span>
+              <span class="v5-card-desc">快速放大 / AI 超分</span>
+            </span>
           </button>
-          <button type="button" class="home-card" data-view="idphoto">
-            <span class="home-card-icon" aria-hidden="true">🪪</span>
-            <span class="home-card-title">证件照</span>
-            <span class="home-card-desc">抠人像换底色，一寸二寸一键出图</span>
+          <button type="button" class="v5-card" data-view="share">
+            <span class="v5-tile" aria-hidden="true">码</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">生成二维码</span>
+              <span class="v5-card-desc">本机文件 → 短链</span>
+            </span>
+          </button>
+          <button type="button" class="v5-card" data-view="page">
+            <span class="v5-tile" aria-hidden="true">页</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">生成网页</span>
+              <span class="v5-card-desc">多文件合成一个页面</span>
+            </span>
           </button>
         </div>
-      </div>
-      <div class="home-group">
-        <h3 class="home-group-title"><span class="home-group-emoji" aria-hidden="true">🗂</span>媒体库</h3>
-        <div class="home-grid">
-          <button type="button" class="home-card" data-view="library">
-            <span class="home-card-icon" aria-hidden="true">📚</span>
-            <span class="home-card-title">媒体库</span>
-            <span class="home-card-desc">集中管理已下载 / 已处理文件</span>
+      </section>
+
+      <section class="v5-group" style="--g1:#6366F1;--g2:#818CF8">
+        <div class="v5-group-head">
+          <span class="v5-gicon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 12.8L8.4 7.6"/><path d="M8.4 7.6l.6-3.6 3.4-1.2 1.2 1.2-1.2 3.4z"/></svg></span>
+          <b>工具</b><em>6 项</em>
+        </div>
+        <div class="v5-grid cols-4">
+          <button type="button" class="v5-card" data-view="dw">
+            <span class="v5-tile" aria-hidden="true">图</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">图片去水印</span>
+              <span class="v5-card-desc">框选区域 · AI 智能消除</span>
+            </span>
+          </button>
+          <button type="button" class="v5-card" data-view="dwpdf">
+            <span class="v5-tile" aria-hidden="true">P</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">PDF 去水印</span>
+              <span class="v5-card-desc">批量去除文档水印</span>
+            </span>
+          </button>
+          <button type="button" class="v5-card" data-view="dwvideo">
+            <span class="v5-tile" aria-hidden="true">V</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">视频去水印</span>
+              <span class="v5-card-desc">去除平台水印标识</span>
+            </span>
+          </button>
+          <button type="button" class="v5-card" data-view="matting">
+            <span class="v5-tile" aria-hidden="true">抠</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">一键抠图</span>
+              <span class="v5-card-desc">矩形 / 套索选区</span>
+            </span>
+          </button>
+          <button type="button" class="v5-card" data-view="bridge">
+            <span class="v5-tile" aria-hidden="true">桥</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">视频/音频桥接</span>
+              <span class="v5-card-desc">音视频合成 / 替换</span>
+            </span>
+          </button>
+          <button type="button" class="v5-card" data-view="idphoto">
+            <span class="v5-tile" aria-hidden="true">证</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">证件照</span>
+              <span class="v5-card-desc">抠人像换底色 · 一寸二寸</span>
+            </span>
           </button>
         </div>
-      </div>
+      </section>
+
+      <section class="v5-group" style="--g1:#16A34A;--g2:#15803D">
+        <div class="v5-group-head">
+          <span class="v5-gicon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="2.2" width="4.6" height="4.6" rx="1.2"/><rect x="9.2" y="2.2" width="4.6" height="4.6" rx="1.2"/><rect x="2.2" y="9.2" width="4.6" height="4.6" rx="1.2"/><rect x="9.2" y="9.2" width="4.6" height="4.6" rx="1.2"/></svg></span>
+          <b>其他</b><em>1 项</em>
+        </div>
+        <div class="v5-grid cols-4">
+          <button type="button" class="v5-card" data-view="library">
+            <span class="v5-tile" aria-hidden="true">库</span>
+            <span class="v5-cardtxt">
+              <span class="v5-card-title">媒体库</span>
+              <span class="v5-card-desc">集中管理已下载 / 已处理文件</span>
+            </span>
+          </button>
+        </div>
+      </section>
     </div>
   </section>
 
@@ -339,6 +431,7 @@
       <div class="mode-switch" role="tablist" aria-label="下载类型" data-page-node-id="mDswImg20261012a">
         <button type="button" class="mode-btn is-active" id="modeVideoBtn" data-mode="video" role="tab" aria-selected="true" data-page-node-id="mDswImg20261012b">视频下载</button>
         <button type="button" class="mode-btn" id="modeImageBtn" data-mode="image" role="tab" aria-selected="false" data-page-node-id="mDswImg20261012c">图片下载</button>
+        <button type="button" class="mode-btn" id="modeNetdiskBtn" data-mode="netdisk" role="tab" aria-selected="false" data-page-node-id="mDswNd20261024a">网盘下载</button>
       </div>
       <p class="image-mode-note" id="imageModeNote" hidden data-page-node-id="mDswImg20261012d">粘贴<b>图片直链</b>（每行一个，可批量）；也可以直接粘贴<b>小红书 / 微博 / 知乎等平台的分享链接</b>，会自动打开页面把里面的图片逐张抓下来。多数内容平台页面里的原图地址就是无水印原图；抖音图集与素材站预览图可能仍带水印。请仅下载您有权获取的图片。</p>
       <div class="input-row" data-page-node-id="pmW4kt6qA8q4CF4DijI2Rt">
@@ -445,6 +538,12 @@
       <button type="button" class="alert-close" id="alertClose" aria-label="关闭" data-page-node-id="KfEjk7uZEqjEWvnKifAqZ4">×</button>
     </div>
   </section>
+
+  <!-- 网盘面板挂载点（2026-10-24）：
+       网盘不是「另一个页面」，而是本页的第三种下载类型。启动时由 app.js 把
+       #clouddriveView 整块移到这里（元素对象不变，原有 id/事件全部继续可用），
+       这样点「网盘下载」不需要跳转、解析结果也直接出现在当前页。 -->
+  <div id="cdSlot"></div>
 
   <!-- 解析结果 -->
   <section class="panel result-panel" id="resultPanel" hidden aria-live="polite" data-page-node-id="ccua6maT4Nyd6YBZwhxudM">
@@ -2064,6 +2163,42 @@
       </div>
       </div>
     </div>
+  </section>
+
+  <!-- 网盘下载视图（2026-10-23 新增）：百度网盘分享链接 → 解析出文件 → 用现有下载器落盘。
+       定位：只下载「自己的网盘文件 / 别人分享给你的文件」，不做批量抓取、不破解限速。 -->
+  <section id="clouddriveView" class="panel" hidden aria-labelledby="cdTitle">
+    <h2 id="cdTitle" class="guide-title"><span class="guide-title-text">网盘下载</span></h2>
+
+    <div class="cd-form">
+      <label class="uc-field cd-field-url">
+        <span class="uc-label">网盘分享链接</span>
+        <input type="text" id="cdUrl" spellcheck="false" placeholder="粘贴百度网盘分享链接，例如 https://pan.baidu.com/s/1xxxx" />
+      </label>
+      <label class="uc-field cd-field-pwd">
+        <span class="uc-label">提取码</span>
+        <input type="text" id="cdPwd" maxlength="8" spellcheck="false" placeholder="链接没给就留空" />
+      </label>
+      <button type="button" class="btn btn-primary" id="cdResolve">解析</button>
+    </div>
+
+    <p class="cd-status" id="cdStatus" hidden></p>
+    <ul class="cd-list" id="cdList"></ul>
+
+    <details class="howto cd-cred" id="cdCredBox">
+      <summary class="howto-head"><span class="howto-ic" aria-hidden="true">🔑</span><span class="howto-title">百度登录态（真正下载时需要）</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
+      <div class="howto-body">
+        <p class="cd-hint">看文件列表不登录也能用，但<b>下载文件必须带百度登录态</b>（匿名会被百度拒绝）。装了我们的浏览器扩展、并在浏览器里登录过百度网盘的，会自动带上、不用填；没有的话：浏览器打开 pan.baidu.com 登录后，把 Cookie 里 <b>BDUSS</b> 那一段粘到下面。只存这台电脑，不会上传。<b>填了就以这里填的账号为准</b>（盖过浏览器里自动读到的那个）—— 百度限速是按账号等级给的，想跑满带宽就把<b>会员账号</b>的 BDUSS 填进来。</p>
+        <label class="uc-field">
+          <span class="uc-label">BDUSS（或整段 Cookie）</span>
+          <input type="password" id="cdCookie" spellcheck="false" placeholder="BDUSS=......" />
+        </label>
+        <div class="cd-cred-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="cdCookieSave">保存登录态</button>
+          <span class="cd-cred-state" id="cdCookieState"></span>
+        </div>
+      </div>
+    </details>
   </section>
 
   <!-- 个人中心视图（左侧 tab 栏入口，整页承载记录/改密） -->

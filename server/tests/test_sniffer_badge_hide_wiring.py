@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""嗅探面板「入口徽标按状态隐藏」接线守卫（2026-10-02，纯源码级离线）。
+"""嗅探面板「入口徽标常显」接线守卫（2026-10-23 改契约，纯源码级离线）。
 
-背景（用户反馈）：扩展装了之后，顶栏的「🔍 浏览器嗅探」徽标 + 右侧抽屉面板成了
-纯诊断信息，用户问「是不是不需要了，可以隐藏」。设计取舍：
+历史：2026-10-02 用户说「这个是不是不需要了，可以隐藏」，于是做成
+「扩展在线且无待办（全自动模式）→ 收起徽标；离线或 needs_setup → 露出来」。
 
-  * 扩展**在线且无待办**（全自动模式）→ 收起入口徽标（不再占顶栏）；
-  * 扩展**不在线**（没装 / 浏览器没开）→ 徽标自动回来，因为那是「CDP 兜底嗅探」
-    与「首次下载扩展」的**唯一入口**，不能一并藏掉；
-  * 扩展在线**但还有待办**（浏览器里加载的不是受管目录那个 / 版本落后 / 磁盘已更新
-    待重载，即 update-status 的 needs_setup）→ **也必须露出来**。否则扩展一连上就把
-    入口收走，而「迁移到受管目录」「更新扩展」的引导**全在那个面板里**，用户反而无路
-    可走（2026-10-02 自检发现的自相矛盾）。
+2026-10-23 用户反馈「嗅探是隐藏了吗」——自动收起让入口凭空消失，用户找不到点。
+现契约改为 **徽标一律常显**：🔍 浏览器嗅探 固定在顶栏，点开即面板。
+面板内部仍按扩展状态切换「CDP 兜底 / 下载扩展」等按钮，与徽标显隐无关。
 
-本守卫锁住这条契约，尤其防止后人「顺手改成无条件隐藏」（会让无扩展用户无路可走），
-防止「为了藏徽标把面板 DOM 一起删了」（会让 sniffQuality 取不到 qualitySel 而炸、
-并丢掉扩展状态/清晰度下拉），也防止漏掉 needs_setup 这一项（入口把引导自己藏死）。
+本守卫锁住新契约，防止后人「顺手」把显隐条件加回去（历史 bug 会复发）：
+  * applyBadgeVisibility 里必须是恒 false（hidden=false），不得读 snifferExtOnline；
+  * 因此 snifferExtOnline / snifferNeedsAttention 仍照旧计算（面板状态 + 回退用），
+    不允许因为不参与显隐就删掉；
+  * 面板 DOM、扩展自动回流轮询、清晰度下拉必须保留（常显≠拆功能）；
+  * 源码注释里要留「常显」与回退写法，别让后人再猜一遍。
 
 运行：python3 test_sniffer_badge_hide_wiring.py   （仓库根或本目录均可）
 """
@@ -44,8 +43,19 @@ def _src():
         return f.read()
 
 
+def _code_lines(src):
+    """去掉整行注释与行尾注释后的代码行（避免「注释里写着旧写法」也被判通过）。"""
+    out = []
+    for line in src.splitlines():
+        s = line.strip()
+        if s.startswith("//"):
+            continue
+        out.append(line.split("//")[0])
+    return out
+
+
 def _section(src, start_marker, end_marker):
-    """取 start_marker 到其后第一个 end_marker 之间的片段（找不到返回整段）。"""
+    """取 start_marker 到其后第一个 end_marker 之间的片段（找不到返回空串）。"""
     i = src.find(start_marker)
     if i < 0:
         return ""
@@ -55,79 +65,80 @@ def _section(src, start_marker, end_marker):
 
 def main():
     print("=" * 68)
-    print("嗅探面板「入口徽标按状态隐藏」接线守卫")
+    print("嗅探面板「入口徽标常显」接线守卫")
     print("=" * 68)
     src = _src()
+    code = "\n".join(_code_lines(src))
 
-    print("\n① 状态与判定函数")
+    print("\n① 徽标恒显：applyBadgeVisibility 不得读扩展状态")
+    seg = _section(src, "const applyBadgeVisibility = () => {", "\n    };")
+    seg_code = "\n".join(_code_lines(seg))
+    check("定义了 applyBadgeVisibility", bool(seg_code.strip()))
+    check("函数体里 hidden 恒为 false",
+          "badgeBtn.hidden = false;" in seg_code, seg_code.strip()[:120])
+    check("函数体不再引用 snifferExtOnline / snifferNeedsAttention",
+          ("snifferExtOnline" not in seg_code) and ("snifferNeedsAttention" not in seg_code),
+          "显隐条件被加回＝「嗅探是隐藏了吗」会复发")
+
+    print("\n①b 全文件代码里没有任何「按状态隐藏」的写法")
+    bad = [l.strip() for l in _code_lines(src) if re.search(r"badgeBtn\.hidden\s*=\s*!!", l)]
+    check("没有 badgeBtn.hidden = !!<状态> 形式的赋值", not bad, bad[:3])
+    # 徽标创建处也必须常显
+    check("创建处即 hidden=false（不等 ready 事件）",
+          "badgeBtn.hidden = false;" in src.split("const applyBadgeVisibility")[0])
+
+    print("\n①c 状态仍照旧计算（面板状态与回退要用，不许顺手删）")
     check("定义了状态变量 snifferExtOnline",
           "let snifferExtOnline = false;" in src)
     check("定义了状态变量 snifferNeedsAttention",
           "let snifferNeedsAttention = false;" in src)
-    check("applyBadgeVisibility 同时看「在线」与「有无待办」两个条件",
-          "badgeBtn.hidden = !!snifferExtOnline && !snifferNeedsAttention;" in src)
-    check("旧的「只看在线」判定已移除",
-          "badgeBtn.hidden = !!snifferExtOnline; };" not in src)
+    check("refreshAutoStatus 把 needs_setup 写进 snifferNeedsAttention",
+          "snifferNeedsAttention = !!(autoSt && autoSt.needs_setup);" in src)
+    check("needs_setup 变化后仍重新走一次 applyBadgeVisibility（保持单一出口）",
+          bool(re.search(r"renderAutoRow\(\);\s*\n\s*applyBadgeVisibility\(\);", src)))
 
-    print("\n② renderStatus 用扩展在线状态驱动徽标")
-    # 取 renderStatus 定义段
-    seg = _section(src, "const renderStatus = (st) => {", "\n    const KIND_LABEL")
+    print("\n② renderStatus 仍同步扩展在线状态")
+    seg_rs = _section(src, "const renderStatus = (st) => {", "\n    const KIND_LABEL")
     check("renderStatus 拿到了 extOnline 判定",
-          "const extOnline = !!(st && st.ext_online) && !cdpBusy;" in seg)
+          "const extOnline = !!(st && st.ext_online) && !cdpBusy;" in seg_rs)
     check("renderStatus 把 extOnline 同步进 snifferExtOnline",
-          "snifferExtOnline = extOnline;" in seg)
+          "snifferExtOnline = extOnline;" in seg_rs)
     check("renderStatus 调用了 applyBadgeVisibility()",
-          "applyBadgeVisibility();" in seg)
-    # 顺序：先赋值再调用，否则会用上一帧的旧值
-    i_set = seg.find("snifferExtOnline = extOnline;")
-    i_call = seg.find("applyBadgeVisibility();")
-    check("先赋值后调用（避免用上一帧旧值）",
-          0 <= i_set < i_call, f"set@{i_set} call@{i_call}")
+          "applyBadgeVisibility();" in seg_rs)
 
-    print("\n②b 面板关闭时也必须能拿到扩展状态（否则冷启动徽标隐藏不生效）")
-    # renderStatus 原本只在「打开面板」时被调用；若没有常驻轮询，冷启动时 snifferExtOnline
-    # 永远是 false → 徽标一直挂着。故必须有独立的状态轮询。
+    print("\n②b 冷启动也要能拿到扩展状态（面板关着时同样成立）")
     check("定义了常驻状态轮询 refreshStatusOnly",
           "const refreshStatusOnly = async () =>" in src)
     check("常驻轮询只拉轻量 /api/sniffer/status",
           "renderStatus(await request('/api/sniffer/status'))" in src)
-    # 用行首正则锚定「独立语句」，避免把 `// refreshStatusOnly();` 这种注释掉也算通过
     check("冷启动立即判定一次（不等第一次定时器）",
           bool(re.search(r"(?m)^\s*refreshStatusOnly\(\);", src)))
     check("用 setInterval 周期跑状态轮询",
           bool(re.search(r"(?m)^\s*setInterval\(refreshStatusOnly, POLL_STATUS_MS\);", src)))
-    # 关着面板时绝不能拉被限流的 /items
     seg_poll = _section(src, "const refreshStatusOnly = async () =>", "// 桌面壳就绪后")
     check("状态轮询里不请求被限流的 /api/sniffer/items",
           "sniffer/items" not in seg_poll,
           "关面板时不该拉 /items（限流端点）")
-
-    print("\n②c needs_setup 必须参与徽标显隐（否则入口把迁移/更新引导自己藏死）")
-    check("refreshAutoStatus 把 needs_setup 写进 snifferNeedsAttention",
-          "snifferNeedsAttention = !!(autoSt && autoSt.needs_setup);" in src)
-    check("refreshAutoStatus 之后重新判定一次徽标",
-          bool(re.search(r"renderAutoRow\(\);\s*\n\s*applyBadgeVisibility\(\);", src)))
     check("常驻状态轮询顺带刷新自动更新状态（冷启动即正确）",
           "try { await refreshAutoStatus(); } catch (e) { /* 静默 */ }" in src)
 
-    print("\n③ wire() 不再无条件把徽标显示出来")
-    check("wire 走 applyBadgeVisibility（不硬编码 hidden=false）",
+    print("\n③ wire() 只走 applyBadgeVisibility（单一出口）")
+    check("wire 走 applyBadgeVisibility",
           "const wire = () => { applyBadgeVisibility(); };" in src)
-    check("旧的「就绪即强制显示」写法已移除",
-          "const wire = () => { badgeBtn.hidden = false; };" not in src)
 
-    print("\n④ 面板本体/自动链路必须保留（藏徽标≠拆功能）")
-    check("入口徽标仍存在（只是按状态 hidden）",
+    print("\n④ 面板本体/自动链路必须保留（常显≠拆功能）")
+    check("入口徽标仍存在",
           "badgeBtn.className = 'badge';" in src and "badgeBtn.id = 'sniffBadge';" in src)
     check("扩展自动回流轮询仍是常驻 setInterval（不受面板开关影响）",
           "pickedTimer = setInterval(pollPicked, POLL_PICKED_MS);" in src)
     check("面板清晰度下拉仍在（否则 sniffQuality 取不到 qualitySel 会炸）",
           "const qualitySel = panel.querySelector('#sniffQuality');" in src)
 
-    print("\n⑤ 设计意图留痕（防后人改成无条件隐藏）")
-    check("源码注释说明了「扩展不在线时徽标回来 / 是唯一入口」",
-          ("扩展不在线" in src and "唯一入口" in src),
-          "注释被删=后人容易误改成无条件隐藏")
+    print("\n⑤ 设计意图留痕（防后人再改成条件隐藏）")
+    check("注释写明了「常显」",
+          "常显" in src, "注释被删＝下一个人又要猜为什么不能隐藏")
+    check("注释留了回退写法（历史行为可复原）",
+          "snifferNeedsAttention;" in src and "回退" in src)
 
     print("\n" + "-" * 68)
     ok = _total[0] - len(_fail)

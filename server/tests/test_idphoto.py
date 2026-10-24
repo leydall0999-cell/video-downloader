@@ -20,6 +20,7 @@
 import os
 import sys
 import io
+import contextlib
 import tempfile
 from pathlib import Path
 
@@ -51,6 +52,31 @@ def _tmp_png(im, name="subject.png"):
     p = Path(tempfile.gettempdir()) / f"_vdl_test_idp_{name}"
     im.save(p, format="PNG")
     return str(p)
+
+
+def _no_quota():
+    """临时放行证件照的按日配额（可当装饰器用）。
+
+    2026-10-23 证件照接入「每日次数」后，本文件多个用例在同一进程里连续打
+    `/api/idphoto/make`，免费 5 次额度很快用光 ⇒ 后面的用例全部 402，
+    看上去像「构图/编排坏了」，实际只是配额耗尽。
+    本文件测的是构图 / 排版 / 任务编排；配额本身（计数、402 文案、会员墙、
+    使用统计行）由 `test_feature_usage_gate.py` 与 `test_member_quota_e2e.py` 覆盖。
+    """
+    class _AlwaysOk:
+        def use_daily(self, *a, **kw):
+            return {"ok": True}
+
+    @contextlib.contextmanager
+    def _cm():
+        orig = idp.app.current_member_store
+        idp.app.current_member_store = lambda *a, **kw: _AlwaysOk()
+        try:
+            yield
+        finally:
+            idp.app.current_member_store = orig
+
+    return _cm()
 
 
 # ---------------------------------------------------------------- 后端纯逻辑
@@ -314,6 +340,7 @@ def test_compose_zoom_changes_size():
     print(f"✅ 人物大小可调：0.7→{w7:.2f} / 1.0→{w1:.2f} / 1.4→{w14:.2f}，头顶留白 {t1:.2f} 不动")
 
 
+@_no_quota()
 def test_render_endpoint_reuses_matting():
     """拖滑块只重合成、**不重抠图**：抠图必须只被调用一次（否则滑块等于不能用）。
 
@@ -444,6 +471,7 @@ def test_offset_extreme_never_empties_canvas():
     print(f"✅ 极限拖动仍保住主体（{n}/{n0} 像素，约 {n / n0:.0%}）")
 
 
+@_no_quota()
 def test_precut_skips_matting_and_rejects_opaque():
     """「用作证件照」（precut）：必须跳过抠图；没有透明区域的图必须拒收。
 
@@ -531,6 +559,11 @@ def test_frontend_drag_paste_and_matting_bridge_wiring():
     assert "addEventListener('paste'" in js, "没接 ⌘V 粘贴"
     assert "switchView('idphoto')" in js, "「用作证件照」没切到证件照视图"
     assert "form.append('precut'" in js, "生成时没带 precut（从抠图带入会白抠一次）"
+    # 2026-10-23 用户反馈「调人位置时整张都跟着走」：预览是**整版排版图**，给它套
+    # translate 会把白边和别的格一起推走 ⇒ 观感是「拖整张照片」。位移必须走
+    # 「按新位置重合成真图」的通道（idpScheduleOff → /render），背景巍然不动。
+    assert "idpScheduleOff" in js, "拖动没走「按位置重合成」通道（会退回整版平移）"
+    assert "translate(${(idpOff.x" not in js, "拖动又给整张预览图套了 translate（整版会跟着走）"
     print("✅ 拖动 / 滚轮 / 拖拽 / 粘贴 / 一键抠图带入 五条通道接线齐全")
 
 
@@ -551,6 +584,7 @@ def test_frontend_wiring_present():
     print("✅ 前端四处接线齐全（入口 / 视图 / 显隐 / 事件）")
 
 
+@_no_quota()
 def test_routes_mounted():
     """路由挂载：非法排版张数必须 400，未知任务必须 404（挂载失败会是 404/405）。"""
     from fastapi.testclient import TestClient
@@ -566,6 +600,7 @@ def test_routes_mounted():
     print("✅ 路由已挂载：非法参数 400 / 未知任务 404")
 
 
+@_no_quota()
 def test_job_pipeline_e2e():
     """端到端：POST 建任务 → 抠图（打桩）→ 合成 → 下载文件，全链路真的出图。
 

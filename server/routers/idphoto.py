@@ -427,6 +427,21 @@ def create_id_photo(
         raise app.HTTPException(status_code=400, detail="证件照尺寸需在 50~3000 像素之间")
     if int(layout) not in _ALLOWED_LAYOUT:
         raise app.HTTPException(status_code=400, detail="排版张数仅支持 1 / 4 / 8")
+    # 🔴 账号级每日配额（2026-10-23，用户反馈「使用统计里漏了证件照」）：此前证件照
+    # **完全不计次也不计费** —— 个人中心「使用统计」和管理后台配额面板都没有这一行，
+    # 等于免费无限次，而每次都要真跑一遍人像抠图（几十秒 CPU / 模型）。
+    # 现独立键 `idphoto`：免费 5 次/日、会员 200 次/日、不扣 AI 积分
+    # （与视频拼接 / 图片转换同档；用户 2026-10-23 选定「每日免费次数」而非扣积分）。
+    # 计数时机 = 发起即计一次（与下载 / 分享同规）；预览里拖动、滑块重合成（/render）不计次。
+    try:
+        _q = app.current_member_store(request).use_daily(
+            "idphoto", 1, title=f"{label or '一寸'} {int(w)}x{int(h)}")
+    except Exception:  # noqa: BLE001
+        _q = {"ok": True}      # fail-open：配额引擎异常不打断本地自用
+    if not _q.get("ok"):
+        raise app.HTTPException(
+            status_code=402,
+            detail="MEMBER_QUOTA|" + (_q.get("error") or "今日证件照次数已用完，明天再来"))
     save_path = app.DW_DIR / f"idp_up_{app.uuid.uuid4().hex[:12]}{suffix}"
     try:
         with save_path.open("wb") as f:

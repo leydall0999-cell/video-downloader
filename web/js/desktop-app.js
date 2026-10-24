@@ -382,20 +382,18 @@
     // （此前靠 wire() 解锁，pywebviewready 事件在动态脚本执行前就已派发时会永远隐藏）
     badgeBtn.hidden = false;
 
-    // 入口徽标的显隐（2026-10-02 用户反馈「这个是不是不需要了，可以隐藏」）：
-    //   扩展在线（全自动模式）= 它会在你日常浏览器里自动嗅探、并把结果在下方自动建成任务，
-    //   此时整个面板只剩「诊断信息」，没必要一直占着顶栏 → 收起徽标。
-    //   扩展不在线（还没装 / 浏览器没开）→ 徽标自动回来：那是「CDP 兜底嗅探」和
-    //   「首次下载扩展」的唯一入口，不能一并藏掉，否则新用户无路可走。
-    //   注意：面板 DOM 始终保留（只是打不开），pollPicked 常驻轮询也照旧，
-    //   所以扩展/悬浮球推来的条目仍会**自动建任务**，与徽标显隐无关。
+    // 入口徽标的显隐（2026-10-23 用户要求「常显」）：
+    //   历史行为是「扩展在线（全自动模式）就自动收起」——用户找不到入口，反馈「嗅探是隐藏了吗」。
+    //   改为一律常显：🔍 浏览器嗅探 固定留在顶栏，点开即面板（面板内仍按扩展状态切换 CDP/下载按钮）。
+    //   回退方式：把 applyBadgeVisibility 换回
+    //     badgeBtn.hidden = !!snifferExtOnline && !snifferNeedsAttention;
+    //   snifferExtOnline / snifferNeedsAttention 仍照旧计算，供面板状态与将来回退使用。
     let snifferExtOnline = false;
     // 「还有事要做」：浏览器里加载的不是受管目录那个 / 版本落后 / 磁盘已更新待重载 ——
     // update-status 的 needs_setup 正好覆盖这几种（全都满足时才是 false）。
-    // 必须参与徽标显隐：否则扩展一连上就把入口收起来，用户反而看不到迁移/更新引导。
     let snifferNeedsAttention = false;
     const applyBadgeVisibility = () => {
-      badgeBtn.hidden = !!snifferExtOnline && !snifferNeedsAttention;
+      badgeBtn.hidden = false;
     };
 
     const panel = document.createElement('div');

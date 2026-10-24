@@ -311,6 +311,51 @@ if [ -d "$COMMENTARY_DIR" ] && [ -f "$COMMENTARY_DIR/process.py" ]; then
   # 单二进制双角色：worker 子进程用 sys.executable 重入自身，
   # faster_whisper/edge_tts 等必须在冻结包里、不能依赖外部 .venv。
   "$VENV/bin/pip" install --timeout 120 --retries 5 --no-cache-dir --index-url "$PIP_INDEX" -r "$COMMENTARY_DIR/requirements.txt"
+  # ── 铁律校验：转写链路必须真能解码（2026-10-23 线上事故）────────────────────
+  # av 19.0.1 删除了 av.open(..., metadata_errors=...) 参数，而 faster-whisper 1.2.1
+  # 的 decode_audio() 仍在传 → 打包后**所有转写 1 秒内崩**（TypeError），
+  # App 只显示「生成失败：解说管线退出 1」，traceback 落在 transcribe。
+  # 最阴的地方：av 是 faster-whisper 的传递依赖，不钉版本时 pip 装最新；
+  # 开发机 venv / 管线 venv 恰好都是 18.0.0（能跑），只有构建 venv 装成 19（坏），
+  # 于是「本地怎么测都正常，发出去的包全挂」。这里用**真实 decode_audio 调用**验证，
+  # 走的就是打进包的同一份代码，0.2 秒静音即可，不联网不占资源。
+  _av_rc=0
+  "$VENV/bin/python" - <<'PY' || _av_rc=$?
+import os, struct, sys, tempfile
+try:
+    import av, faster_whisper
+    from faster_whisper.audio import decode_audio
+except Exception as exc:
+    print(f"❌ 转写依赖导入失败: {exc}"); sys.exit(1)
+frames = b"\x00\x00" * 3200          # 200ms 16kHz 单声道 s16 静音
+data = (b"RIFF" + struct.pack("<I", 36 + len(frames)) + b"WAVEfmt "
+        + struct.pack("<IHHIIHH", 16, 1, 1, 16000, 32000, 2, 16)
+        + b"data" + struct.pack("<I", len(frames)) + frames)
+p = os.path.join(tempfile.gettempdir(), "vdl_av_probe.wav")
+with open(p, "wb") as f:
+    f.write(data)
+rc = 0
+try:
+    decode_audio(p, sampling_rate=16000)
+    print(f"✅ 转写依赖兼容：av {av.__version__} + faster-whisper {faster_whisper.__version__}")
+except TypeError as exc:
+    if "metadata_errors" in str(exc):
+        print(f"❌ av {av.__version__} 与 faster-whisper {faster_whisper.__version__} 不兼容：{exc}")
+        print("   → av 必须 <19，见 commentary-pipeline/requirements.txt 的钉版本说明")
+        rc = 1
+    else:
+        print(f"⚠️ 解码探针 TypeError（非版本问题，不阻断）: {exc}")
+except Exception as exc:
+    print(f"⚠️ 解码探针异常（非版本问题，不阻断）: {exc}")
+finally:
+    try: os.unlink(p)
+    except OSError: pass
+sys.exit(rc)
+PY
+  if [ "$_av_rc" -ne 0 ]; then
+    echo "❌ 构建中止：转写依赖不兼容（av / faster-whisper 版本冲突，详见上方提示）"
+    exit 1
+  fi
   # 白名单精选管线文件到临时 staging 目录，再 --add-data（避免 .git/work/input 等 3.5G 垃圾随包）
   COMMENTARY_STAGING=$(_stage_commentary "$COMMENTARY_DIR")
   # ── 铁律校验：确保随包的是新版解说管线（含 --one-click 等 1.1.0 新 CLI）──

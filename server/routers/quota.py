@@ -193,21 +193,16 @@ def precheck_or_raise(
                 "category": "quota", "code": "MEMBER_QUOTA", "subscribe": True,
             },
         )
-    charge_commentary_credits(request, res.get("engine") or engine, duration_sec)
-    # 🔴 2026-10-06 补漏：`commentary_vision`（解说画面理解，50 积分）此前
-    # **完全没有扣费点** —— 用户勾了「画面理解」会真的去调多模态模型
-    # （单次真实成本 ¥0.24，全表最贵）却不扣任何积分，等于白嫖。
-    # 扣在这里而不是管线里：① 本函数已是全部解说入口的统一收口，一处覆盖
-    # 4 个入口（本地拖拽 / 上传 / 批量 / 单任务），新增入口照旧调它就自动被
-    # 覆盖；② 用户定档是「按次定价」，任务入口收一次即一份，与内部调用几次无关。
-    if vision:
-        _charge_optional(request, "commentary_vision", "解说画面理解")
-    # 每日免费配额落账（任务已通过门禁 + 积分已扣，才计一次；与字幕提取同构）。
-    # 重复点击会各自计一次（解说当前无去重），与 AI 积分扣费口径一致。
-    try:
-        _mstore.use_daily("cloud_commentary", 1)
-    except Exception:
-        pass
+    # 🔴 2026-10-23「失败不扣积分」：**真扣费从「任务前」挪到「产出成功后」**。
+    # 事故背景：百度网盘接入期间转写因 av 19 与 faster-whisper 1.2.1 不兼容，
+    # 1 秒内崩溃（解说管线退出 1），但积分已在预检这里扣掉、失败路径**没有任何退款**
+    # ⇒ 用户两次重试被扣 320 积分、一个成片都没拿到。
+    # 现在预检只做**只读**余额校验（余额不足仍在开跑前 402，不让用户白等十几分钟），
+    # 真正落账由 app.py `_commentary_run_http` 的两个成功分支调
+    # `charge_commentary_on_success()` 执行 —— 没产出就不扣。
+    billing = commentary_billing(request, res.get("engine") or engine, duration_sec, vision)
+    _assert_commentary_affordable(request, billing, _mstore)
+    res["billing"] = billing
     return res
 
 
@@ -301,8 +296,106 @@ def charge_commentary_credits(
     return {"ok": True, "op": op, "spent": total, "units": units}
 
 
+def commentary_billing(request: Optional[Request], engine: str, duration_sec: float,
+                       vision: bool = False) -> dict[str, Any]:
+    """算本次解说**应收什么**（只算不扣，零副作用）。
+
+    🔴 2026-10-23「失败不扣积分」：本函数只产出账单，真正落账是
+    `charge_commentary_on_success()`。分工的原因写在 `precheck_or_raise` 里。
+    """
+    op = _commentary_credit_op(engine, duration_sec)
+    units = commentary_billing_units(duration_sec)
+    total = commentary_credit_total(op, duration_sec)
+    vision_cost = 0
+    if vision:
+        try:
+            from membership import credit_cost
+            vision_cost = max(0, int(credit_cost("commentary_vision")))
+        except Exception:  # noqa: BLE001 — 查不到价按免费处理，绝不误拦用户
+            vision_cost = 0
+    owner = ""
+    try:
+        if request is not None:
+            owner = app_module()._task_owner(request)
+    except Exception:  # noqa: BLE001
+        owner = ""
+    return {"op": op, "units": int(units), "cost": int(total),
+            "vision": bool(vision), "vision_cost": int(vision_cost), "owner": owner}
+
+
+def _assert_commentary_affordable(request: Optional[Request], billing: dict[str, Any],
+                                  store: Any = None) -> None:
+    """只读校验：余额不够立刻 402（**不扣分、不消耗试用名额**）。
+
+    等价于旧的 `charge_commentary_credits` 的「拦人」那一半，只是不动账 ——
+    用的是 `membership.can_afford`（明确保证零副作用的那个），绝不能用
+    `gate_message` 当探针（它会真扣、还会烧掉一次性试用名额）。
+    """
+    if not billing:
+        return
+    try:
+        import membership as _mem
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        st = store if store is not None else (
+            app_module().current_member_store(request) if request is not None
+            else app_module().member_store)
+    except Exception:  # noqa: BLE001 — 取不到 store 就放行，交给产出后扣费兜底
+        return
+    for _op, _cost in ((billing.get("op"), billing.get("cost")),
+                       ("commentary_vision", billing.get("vision_cost"))):
+        if not _op or int(_cost or 0) <= 0:
+            continue
+        msg = _mem.can_afford(st, str(_op), total=int(_cost))
+        if msg:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=402, detail=f"MEMBER_QUOTA|{msg}")
+
+
+def charge_commentary_on_success(billing: dict[str, Any]) -> dict[str, Any]:
+    """**产出成功之后**才扣费（解说积分 + 画面理解 + 每日次数）。
+
+    🔴 2026-10-23：这是全部解说扣费**唯一**的落账点。任务失败（转写崩溃 / 超时 /
+    没找到脚本或成片）时它根本不会被调用 ⇒「没出片就不扣积分」。
+    幂等由调用方保证（job["billing"]["charged"]），重复调用会重复扣。
+    任何异常一律吞掉并记日志：记账失败绝不能把已经产出的成片作废。
+    """
+    import logging
+    bill = dict(billing or {})
+    op = str(bill.get("op") or "")
+    cost = int(bill.get("cost") or 0)
+    vision_cost = int(bill.get("vision_cost") or 0)
+    if cost <= 0 and vision_cost <= 0:
+        return {"ok": True, "charged": []}
+    try:
+        from membership import gate_message
+        from user_membership import store_for_owner
+        st = store_for_owner(str(bill.get("owner") or ""))
+        charged: list[str] = []
+        for _op, _cost in ((op, cost), ("commentary_vision", vision_cost)):
+            if not _op or _cost <= 0:
+                continue
+            msg = gate_message(st, _op, reason=f"commentary:{_op}", cost=_cost)
+            if msg:
+                # 余额在任务运行期间被别处花掉：照常交付成片，只记日志告警
+                logging.getLogger("quota").warning(
+                    "解说产出后扣费未成功（余额已不足，成片照常交付）op=%s cost=%s: %s",
+                    _op, _cost, msg)
+            else:
+                charged.append(_op)
+        try:
+            st.use_daily("cloud_commentary", 1)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "charged": charged}
+    except Exception:  # noqa: BLE001
+        logging.getLogger("quota").exception("解说产出后扣费失败（不影响成片交付）")
+        return {"ok": False, "charged": []}
+
+
 def assert_upload_allowed(request: Optional[Request], duration_sec: float,
-                          vision: bool = False) -> None:
+                          vision: bool = False) -> dict[str, Any]:
     """上传前服务端校验（兼容旧调用）：等价于 precheck_or_raise。
 
     历史上这里只判「时长 > 30 分钟」，漏了「时长合法但必须走云端、而云端额度
@@ -310,8 +403,12 @@ def assert_upload_allowed(request: Optional[Request], duration_sec: float,
 
     `vision` 透传给预检：上传入口勾了「画面理解」同样要扣 `commentary_vision`
     （这两个入口不走 `precheck_or_raise`，不传会漏扣）。
+
+    🔴 2026-10-23：返回**账单**（而不是 None），上传类入口必须把它存进
+    `commentary_jobs[job_id]["billing"]` —— 否则产出成功时没有账单可落账，
+    这条链路就变成免费（漏扣）。
     """
-    precheck_or_raise(request, duration_sec, vision=vision)
+    return (precheck_or_raise(request, duration_sec, vision=vision) or {}).get("billing") or {}
 
 
 @router.get("/api/quota/status")

@@ -188,7 +188,7 @@ run_one test_sniffer_ext_ping.py            # 嗅探「扩展心跳」三态：�
 run_one test_sniffer_ext_push.py            # 嗅探「扩展自动直推」：入库/去重/kind_hint/脏数据（2026-10-01 自动嗅探配套）
 run_one test_ext_version_cmp.py             # 扩展版本比对守卫：只在「内置比已装新」时提示升级（2026-10-01 防降级）
 run_one test_sniffer_quality_wiring.py      # 嗅探链路清晰度透传：后端白名单 + 桌面端用它 + 两端都有下拉（2026-10-01 用户「没法选择分辨率」）
-run_one test_sniffer_badge_hide_wiring.py   # 嗅探入口徽标按状态隐藏：扩展在线才收起、离线自动回来（2026-10-02 用户「这个可以隐藏了」）
+run_one test_sniffer_badge_hide_wiring.py   # 嗅探入口徽标**常显**（2026-10-23 用户「嗅探是隐藏了吗」；此前扩展在线即自动收起，今改为一律显示，条件隐藏不得加回）
 run_one test_extension_autoupdate_wiring.py # 扩展零点击自动更新：目录识别/安全同步（拒写他人目录·只增不删）+ 心跳回传 reload_to + 扩展自重载（2026-10-02 用户「扩展程序更新怎么办」）
 run_one test_download_wiring.py
 #  11b. test_login_gate_placement.py —— 登录门禁「挂载位置」守卫（2026-09-27 用户实测：
@@ -773,6 +773,16 @@ run_one test_credit_price_display.py
 #       且「每日次数」列仍用「次」（两列不混用）。
 run_one test_commentary_duration_pricing.py
 
+#  42d. test_commentary_fail_no_charge.py —— 解说「失败不扣积分」（2026-10-23 事故修复）。
+#       事故：解说在转写阶段 1 秒崩溃（包内 av 19.0.1 与 faster-whisper 1.2.1 不兼容），
+#       但 AI 积分已在**开跑前**的预检里真扣掉，失败路径只退云端免费次数、没有退积分
+#       通道 ⇒ 用户两次重试白扣 320 积分、一个成片都没拿到。
+#       本守卫钉（行为级，不靠字符串）：① 预检只读——跑完一分不动、被拒也不动；
+#       ② 预检回传账单（op/cost/vision_cost）；③ 只有产出成功才落账，且落账额
+#       = 解说 + 画面理解；④ 同一个 job 重复落账不重复扣；⑤ 失败任务一分不扣；
+#       ⑥ 空账单不误扣；⑦ can_afford(total) 与 gate_message(cost) 同口径。
+run_one test_commentary_fail_no_charge.py
+
 #  43. test_ai_free_trial.py —— 免费用户「首次体验」（2026-10-05 用户定档：
 #      **每个功能各免一次**，口径可在后台改 per_op / once / off）。
 #      背景：上一轮把 AI 积分墙补齐后，积分池为 0 的免费用户**第一次点任何 AI 功能
@@ -1163,6 +1173,20 @@ run_root test_bilibili_cookie_fix.py
 run_root test_bilibili_url_normalize.py
 run_pytest_root test_cdp_sniffer.py
 run_pytest_root test_chrqj_extractor.py
+# 网盘（百度）解析：新接口四步 verify→tplconfig→list→sharedownload
+# （sharedownload 必须 form 编码 —— 改回 json= 百度会 errno=2，本用例是回归防护）、
+# 登录态三态、路由层登录态取用顺序（2026-10-23 接入）
+run_pytest_root test_cloud_drive_baidu.py
+# 网盘下载「前端接线」守卫：HTML id / switchView 互斥 / 三端点 / 下载带 cookie
+# （少任何一处都会变成「点了没反应」或「解析成功却下载失败」，后端测试发现不了）
+run_pytest_root test_clouddrive_ui_wiring.py
+# 网盘直链下载策略：强制单连接 + 客户端身份 UA（2026-10-24 实测：百度按账号总带宽
+# 限速，4/8/16 连接比单连接更慢且会被掐断；P2SP 身份 ~145 KB/s vs 浏览器 ~78 KB/s）
+run_pytest_root test_netdisk_download_options.py
+# 网盘直链必须「按文件直下」：走 yt-dlp 会把标题换成直链路径段、mp3 存成 mp4
+run_pytest_root test_netdisk_direct_download.py
+# aria2c 默认 --enable-cookie=false，会静默吞掉 --header 传进来的 Cookie ⇒ 需要登录态的源 403
+run_pytest_root test_aria2_cookie_args.py
 run_pytest_root test_commentary_config.py
 run_pytest_root test_commentary_routes.py
 run_pytest_root test_commentary_stash.py

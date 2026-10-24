@@ -1780,6 +1780,48 @@ def _fold_commentary_range(src_dur: float, trim_start: float = 0.0, trim_end: fl
         return 0.0, (dur if dur > 0 else 0.0)   # 覆盖整片 → 不裁
     return ts, te
 
+def _commentary_charge_on_success(job_id: str) -> None:
+    """「产出成功才扣费」的唯一落账口（🔴 2026-10-23）。
+
+    事故背景：解说在转写阶段 1 秒崩溃（av 19 与 faster-whisper 1.2.1 不兼容），
+    但 AI 积分已在**开跑前**的预检里扣掉，而失败路径只退云端免费次数、
+    **完全没有退积分** ⇒ 用户两次重试被白白扣掉 320 积分、一个成片都没拿到。
+
+    现在预检（`routers/quota.py::precheck_or_raise`）只做**只读**余额校验，
+    真正落账挪到这里：只有任务真的产出了解说词或成片才调用 —— 没产出就不扣。
+
+    ⚠️ 调用位置铁律：本函数内部会拿 `_commentary_lock`，而它是**非可重入**的
+    普通 `threading.Lock` ⇒ 必须在 `with _commentary_lock:` 块**之外**调用，
+    否则自锁死（已有分支都是在 update 完、锁释放后再调）。
+
+    幂等：`billing["charged"]` 置位后不再重复扣（脚本审核后渲染复用父任务账单、
+    或同一个成功分支被重入时都靠它兜住）。
+    """
+    job: dict = {}
+    try:
+        with _commentary_lock:
+            job = commentary_jobs.get(job_id) or {}
+            bill = dict(job.get("billing") or {})
+        if not bill or bill.get("charged"):
+            return
+        from routers.quota import charge_commentary_on_success
+        res = charge_commentary_on_success(bill) or {}
+        bill["charged"] = True
+        bill["charged_at"] = time.time()
+        bill["charged_ops"] = list(res.get("charged") or [])
+        with _commentary_lock:
+            if job_id in commentary_jobs:
+                commentary_jobs[job_id]["billing"] = bill
+                job = commentary_jobs[job_id]
+        ops = bill["charged_ops"]
+        if ops:
+            _commentary_log(job, f"[计费] 已产出，扣除 AI 积分（{'、'.join(ops)}）")
+        else:
+            _commentary_log(job, "[计费] 已产出，本次无需扣积分")
+    except Exception:  # noqa: BLE001 — 记账失败绝不能把已产出的成片作废
+        logger.exception("解说产出后扣费异常（不影响成片交付）job=%s", job_id)
+
+
 def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit_only: str | None = None, script_only: bool = False, trim_start: float = 0.0, trim_end: float = 0.0, mode: str | None = None, commentary_type: str = "deep_hl", highlight_source: str = "ai", intro_highlight: bool = False, skip_intro_outro: bool = False, no_narrate_intro_outro: bool = True, retain_pct: float | None = None, web: bool = False, one_click: bool = False, title: str = "", style: str = "none", style_intensity: int = 65, src_filename: str = "", vision: bool = False, tts_provider: str = "", correct_transcript: str = "", intro_sec: float | None = None, outro_sec: float | None = None, drama_start_sec: float | None = None, drama_end_sec: float | None = None, export_jianying: str = "", bgm: str = "off", bgm_file: str = "", bgm_volume: float = 0.18, subtitle_size: float = 1.0, subtitle_color: str = "FFFFFF", subtitle_border: float = 1.0, subtitle_border_color: str = "000000", subtitle_pos: str = "bottom", max_chars: int = 0, original_speed: bool = True, feather_opt: str = "") -> None:
     """后台线程：把下载好的视频喂给 commentary-pipeline，等成片回传。
 
@@ -2128,6 +2170,9 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                         s["updated_at"] = now
                 _commentary_log(job, "解说词已生成，等待人工审核后再渲染成片")
                 job.update(status="script_ready", script_path=str(script_path), output_path="")
+            # 解说词已真实产出（转写 + 大模型都跑过了）⇒ 此时才落账。
+            # 后续「审核通过后渲染」复用父任务账单且已置 charged，不会二次扣。
+            _commentary_charge_on_success(job_id)
         else:
             # 成片命名：优先按 --out-name（剧名/标题）清洗后的前缀查找；
             # 找不到再退回 job_id(base) 兜底（旧任务或标题为空时）。
@@ -2155,6 +2200,8 @@ def _commentary_run(job_id: str, src_path: str, vertical: bool, voice: str, edit
                         s["status"] = "done"
                         s["updated_at"] = now
                 job.update(status="completed", output_path=str(out))
+            # 成片已落盘 ⇒ 此时才扣积分（失败路径根本走不到这里，自然不扣）
+            _commentary_charge_on_success(job_id)
             # 写入 BGM 状态 manifest：bgm=off 视为待配乐（draft），否则视为已成片（final）
             try:
                 _write_bgm_state(str(out), bgm=bgm or "off", volume=bgm_volume, source="render")
@@ -2283,6 +2330,7 @@ def _commentary_run_http(job_id: str, src_path: str, vertical: bool, voice: str,
         _set_http_step(3, "done", "成片已就绪")
         with _commentary_lock:
             commentary_jobs[job_id].update(status="completed", output_path=str(out_path))
+        _commentary_charge_on_success(job_id)
     except Exception as exc:  # noqa: BLE001
         _set_http_step(1 if http_steps[0]["status"] == "done" else 0, "error", str(exc)[:200])
         with _commentary_lock:
@@ -4209,6 +4257,8 @@ from routers import pagetool as _pagetool_rtr
 app.include_router(_pagetool_rtr.router)   # 文件变网页：本机文件 → 自包含 HTML 页面（2026-09-30）
 from routers import userdata as _userdata_rtr
 app.include_router(_userdata_rtr.router)   # 用户信息类数据云备份：设置/收藏/历史 + Cookie 密文（2026-10-16）
+from routers import cloud_drive as _cloud_drive_rtr
+app.include_router(_cloud_drive_rtr.router)   # 网盘文件源（阶段 0：百度网盘直链解析 + BDUSS 凭据）
 # 账号 / per-user 会员解析（A1+B2）：供各路由经 request 取当前用户态 store。
 # 必须在模块顶层定义（与 member_store 同级），否则 routers 里 `import app` 取不到。
 from user_membership import get_current_user_id, current_member_store

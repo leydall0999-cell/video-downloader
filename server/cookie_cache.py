@@ -75,6 +75,21 @@ def get_cached_cookie_header(host: str) -> str | None:
         return _read_cached(root)
     return None
 
+def peek_cached_cookie_header(host: str) -> str | None:
+    """只查缓存、不触发浏览器解密的版 get_cached_cookie_header。
+
+    网盘解析这类「每秒都可能被调用」的场景用这个：Chrome 156 起浏览器 cookie 走
+    应用绑定加密（ABE），解密必然失败且耗时，没必要每次都白试一遍。
+    精确 host 未命中时同样回落到根域快照（扩展按根域推送，见 get_cached_cookie_header）。
+    """
+    hit = _read_cached(host)
+    if hit:
+        return hit
+    root = _root_of(host)
+    if root and root != host:
+        return _read_cached(root)
+    return None
+
 def _save(host: str, header: str) -> None:
     try:
         _COOKIE_CACHE_DIR.mkdir(parents=True, exist_ok=True)

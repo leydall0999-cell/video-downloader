@@ -163,7 +163,8 @@ function openZoneAndScan() {
   openZoneAndScan();
   await tick();
   const r = rows();
-  check('扫出 12 行平台', r.length === 12, r.length);
+  // 2026-10-23：新增百度网盘 ⇒ 13 行
+  check('扫出 13 行平台', r.length === 13, r.length);
   check('已登录行排在第一位', r[0] && /哔哩哔哩/.test(r[0].children[0].textContent), r[0] && r[0].children[0].textContent);
   check('摘要显示已登录平台数', /1 个平台已登录/.test(byId('ckSummary').textContent), byId('ckSummary').textContent);
   check('本机按钮已解禁', byId('ckPushLocal').disabled === false);
