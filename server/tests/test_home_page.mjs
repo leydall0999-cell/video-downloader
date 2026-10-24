@@ -68,21 +68,38 @@ ok(/<a href="\/download">下载客户端 →<\/a>/.test(home), '解说卡必须�
 const capItems = home.match(/<li><span class="hp-cap-ic">/g) || [];
 eq(capItems.length, 22, `全功能清单必须列全 22 项（网页 10 + 桌面 12），实际 ${capItems.length}`);
 ok(home.includes('桌面客户端独有'), '全功能清单必须区分「桌面客户端独有」（否则等于骗用户网页版能用）');
-ok(home.includes('怎么用') && home.includes('已知限制'), '首页必须含「怎么用」与「已知限制」（诚实说明能力边界）');
+// 2026-10-24 用户明确「不要」：底部的「怎么用 / 已知限制」整段已移除，别再自动加回来
+ok(!home.includes('hp-how') && !home.includes('hp-steps') && !home.includes('hp-limits'),
+  '底部「怎么用 / 已知限制」段应已移除（用户 2026-10-24 明确不要）');
+ok(!home.includes('已知限制'), '不得再出现「已知限制」标题（用户已否掉这一段）');
 
 /* ---------------- ③ 用户点名文案（一字不改） ---------------- */
+const cssNoComment = stylesCss.replace(/\/\*[\s\S]*?\*\//g, '');
 ok(home.includes('百度网盘分享链接高速下载'), '主副标题必须写「高速下载」（用户明确改为高速，不是满速）');
 ok(!home.includes('满速'), '不得再出现「满速下载」（用户 2026-10-24 要求改成「高速下载」）');
 ok(home.includes('体验会员级别网速'), '网盘卡必须写「体验会员级别网速」（用户指定文案）');
 ok(!home.includes('需登录百度账号'), '不得出现「需登录百度账号」（用户要求去掉）');
 ok(/16\.2 MB\/s/.test(home), '网盘任务条必须展示 16.2 MB/s（用实测速度，不用 3.6 的旧数字）');
 
-// 「想体验全部功能请到桌面版」= 大字提示条，且「桌面版」加粗
-ok(/<p class="hp-hint">想体验全部功能请到<b>桌面版<\/b><\/p>/.test(home),
-  '缺少「想体验全部功能请到桌面版」大字提示（必须用 hp-hint 且「桌面版」加粗）');
+// 「想体验全部功能请到桌面版」= 大字提示条，且「桌面版」加粗；2026-10-24 用户要求
+//   「设计更突出、让用户有点击冲动」⇒ 该行改成可点链接（点同样去 /download）
+ok(/<a class="hp-hint" href="\/download"><span>想体验全部功能请到<b>桌面版<\/b><\/span><i aria-hidden="true">→<\/i><\/a>/.test(home),
+  '「想体验全部功能请到桌面版」必须是大字提示 + 可点链接（hp-hint → /download）');
+// CTA 区「有点击欲望」的三条落地：主按钮更大更厚、有扫光、副按钮有方向图标
+ok(/class="hp-btn hp-primary" id="homeStartBtn">\s*<span>开始使用<\/span>/.test(home),
+  '主按钮「开始使用」必须带图标结构（不再是纯文字）');
+ok(/class="hp-btn hp-ghost" href="\/download">\s*<svg/.test(home), '副按钮「下载桌面版」必须带下载图标');
+const btnRule = (cssNoComment.match(/\.hp-btn\s*\{[^}]*\}/) || [''])[0];
+const _btnH = parseFloat((btnRule.match(/height:\s*([\d.]+)rem/) || [])[1]);
+ok(_btnH >= 3.2, `主按钮高度须 ≥3.2rem（原来 2.7rem 太小，不够「想点」；实际 ${_btnH || '未定义'}rem）`);
+ok(/@keyframes hpSheen\b/.test(cssNoComment) && /\.hp-primary::after\s*\{[\s\S]*?animation:\s*hpSheen/.test(cssNoComment),
+  '主按钮缺少扫光动画（hpSheen）—— 突出点击意愿的关键动效');
+ok(/prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?hp-primary::after\s*\{\s*animation:\s*none/.test(cssNoComment),
+  '扫光动画必须尊重 prefers-reduced-motion（无动画偏好时关闭）');
+ok(/\.hp-hint:hover\s*\{[^}]*transform:\s*translateX/.test(cssNoComment),
+  '提示条悬停必须有位移反馈（否则看不出它是可点的第二个入口）');
 
 /* ---------------- ④ 首页每个 hp-* 类都必须有样式（防白板） ---------------- */
-const cssNoComment = stylesCss.replace(/\/\*[\s\S]*?\*\//g, '');
 const usedCls = new Set();
 (home.match(/class="([^"]+)"/g) || []).forEach((m) => {
   m.slice(7, -1).split(/\s+/).forEach((c) => { if (c.startsWith('hp-')) usedCls.add(c); });

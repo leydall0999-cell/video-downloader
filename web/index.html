@@ -77,10 +77,16 @@
             <span class="hp-chip"><i class="c-pan"></i>百度网盘直连</span>
           </div>
           <div class="hp-actions">
-            <button type="button" class="hp-btn hp-primary" id="homeStartBtn">开始使用 →</button>
-            <a class="hp-btn hp-ghost" href="/download">下载桌面版</a>
+            <button type="button" class="hp-btn hp-primary" id="homeStartBtn">
+              <span>开始使用</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 12h13"/><path d="m12.4 6.6 5.4 5.4-5.4 5.4"/></svg>
+            </button>
+            <a class="hp-btn hp-ghost" href="/download">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v10"/><path d="m7.8 10 4.2 4.2L16.2 10"/><path d="M4.6 19.4h14.8"/></svg>
+              <span>下载桌面版</span>
+            </a>
           </div>
-          <p class="hp-hint">想体验全部功能请到<b>桌面版</b></p>
+          <a class="hp-hint" href="/download"><span>想体验全部功能请到<b>桌面版</b></span><i aria-hidden="true">→</i></a>
         </div>
 
         <div class="hp-slice" aria-hidden="true">
@@ -178,29 +184,6 @@
           <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 7a2.2 2.2 0 0 1 2.2-2.2h3.9l2 2.1h7.3A2.2 2.2 0 0 1 20.8 9v8.2a2.2 2.2 0 0 1-2.2 2.2H5.4a2.2 2.2 0 0 1-2.2-2.2z"/></svg></span>本地媒体库</li>
           <li><span class="hp-cap-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.2" y="10.2" width="15.6" height="9.6" rx="2.2"/><path d="M8.2 10.2V7.4a3.8 3.8 0 0 1 7.6 0v2.8"/><path d="M12 14v2.2"/></svg></span>保险箱加密</li>
         </ul>
-      </div>
-    </div>
-
-    <div class="hp-sec">
-      <div class="hp-how">
-        <div>
-          <h2>怎么用</h2>
-          <ol class="hp-steps">
-            <li><i>1</i><span>进入「下载视频」页，把视频或网盘分享链接粘到输入框。</span></li>
-            <li><i>2</i><span>点「解析链接」。网盘链接会自动识别提取码，视频会自动识别标题与清晰度。</span></li>
-            <li><i>3</i><span>选好画质（或直接选文件），点「开始下载」。</span></li>
-            <li><i>4</i><span>完成后在任务卡上点「保存文件」即可取回本地。</span></li>
-          </ol>
-        </div>
-        <div>
-          <h2>已知限制</h2>
-          <ul class="hp-limits">
-            <li>会员 / 付费视频（如腾讯视频部分片源）受版权保护，无法解析，约 20 秒内会明确提示。</li>
-            <li>爱奇艺等部分平台受上游提取器限制，可能解析失败。</li>
-            <li>直播内容暂不支持下载；非视频站点会被直接拦下。</li>
-            <li>百度网盘下载已按会员档位优化，实际速度仍受百度账号自身权益影响。</li>
-          </ul>
-        </div>
       </div>
     </div>
   </section>

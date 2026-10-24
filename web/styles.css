@@ -2439,37 +2439,94 @@ html.theme-dark .mem-notice { background: #2a2110; border-color: #7c4a1e; border
   border-radius: 999px; padding: .34rem .72rem; box-shadow: 0 2px 8px rgba(30,41,90,.05);
 }
 .hp-chip i { width: 6px; height: 6px; border-radius: 50%; }
-.hp-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.3rem; }
+.hp-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1.55rem; }
+/* 按钮做大做厚：高度 3.4rem / 字号 1.02rem，主按钮带渐变+双层投影+周期扫光，
+   鼠标悬停再抬 2px —— 目的是把「点它」变成一眼就看得见的动作，而不是一排普通小按钮。 */
 .hp-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
-  height: 2.7rem; padding: 0 1.3rem; border-radius: .7rem;
-  font-size: .88rem; font-weight: 700; font-family: inherit; text-decoration: none;
-  border: 1px solid transparent; cursor: pointer;
-  transition: transform .16s, box-shadow .16s, background .16s, border-color .16s;
+  position: relative; overflow: hidden;
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  height: 3.55rem; padding: 0 1.7rem; border-radius: .86rem;
+  font-size: 1.06rem; font-weight: 800; letter-spacing: -.01em; font-family: inherit;
+  text-decoration: none; border: 1px solid transparent; cursor: pointer;
+  transition: transform .18s cubic-bezier(.2,.8,.3,1), box-shadow .18s, background .18s, border-color .18s, color .18s;
+  will-change: transform;
 }
+.hp-btn > svg { width: 1.1em; height: 1.1em; flex: none; transition: transform .18s; }
+.hp-btn:focus-visible { outline: 3px solid rgba(99,102,241,.45); outline-offset: 3px; }
 .hp-primary {
-  color: #fff; background: linear-gradient(135deg, #4f46e5 0%, #6366f1 48%, #7c3aed 100%);
-  box-shadow: 0 12px 26px -10px rgba(79,70,229,.6);
+  color: #fff;
+  background: linear-gradient(135deg, #4f46e5 0%, #6d28d9 52%, #7c3aed 100%);
+  box-shadow:
+    0 16px 34px -12px rgba(79,70,229,.82),
+    0 3px 10px -4px rgba(79,70,229,.5),
+    inset 0 1px 0 rgba(255,255,255,.28);
+  min-width: 11.6rem;
 }
-.hp-primary:hover { transform: translateY(-1px); box-shadow: 0 16px 32px -10px rgba(79,70,229,.66); }
-.hp-ghost { color: #334155; background: #fff; border-color: #dde2f0; }
-.hp-ghost:hover { border-color: #b9c2ec; transform: translateY(-1px); }
+/* 扫光：4.6s 一轮，在按钮上缓缓掠过一道高光（加了 prefer-reduced-motion 保护） */
+.hp-primary::after {
+  content: ""; position: absolute; top: -60%; bottom: -60%; width: 38%; left: -55%;
+  background: linear-gradient(100deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.42) 50%, rgba(255,255,255,0) 100%);
+  transform: skewX(-18deg); pointer-events: none;
+  animation: hpSheen 4.6s ease-in-out infinite;
+}
+@keyframes hpSheen {
+  0%, 62% { left: -55%; }
+  92%, 100% { left: 118%; }
+}
+.hp-primary:hover {
+  transform: translateY(-2px) scale(1.012);
+  box-shadow:
+    0 22px 44px -12px rgba(79,70,229,.9),
+    0 4px 12px -4px rgba(79,70,229,.55),
+    inset 0 1px 0 rgba(255,255,255,.32);
+}
+.hp-primary:hover > svg { transform: translateX(4px); }
+.hp-primary:active { transform: translateY(0) scale(.995); }
+.hp-ghost {
+  color: #2b3350; background: #fff; border-color: #d5dbef;
+  box-shadow: 0 8px 20px -14px rgba(30,41,90,.55);
+}
+.hp-ghost:hover {
+  color: var(--brand, #4f46e5); border-color: #b9c2ec; background: #f7f7ff;
+  transform: translateY(-2px);
+  box-shadow: 0 14px 26px -14px rgba(79,70,229,.55);
+}
+.hp-ghost:hover > svg { transform: translateY(2px); }
+.hp-ghost:active { transform: translateY(0); }
+/* 提示条做成可点链接（点了同样去 /download）：整块有底色和左色条，
+   悬停时底色加深、箭头右移 —— 让它看起来是「第二个入口」而不是一行说明文字。 */
 .hp-hint {
-  margin-top: 1.15rem;
+  display: inline-flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  margin-top: 1.05rem; padding: .62rem 1rem .62rem .86rem;
   font-size: clamp(1.05rem, 1.5vw, 1.24rem); font-weight: 800;
-  letter-spacing: -.012em; line-height: 1.5; color: #1f2433;
-  display: inline-flex; align-items: center; gap: .4rem; flex-wrap: wrap;
-  padding: .46rem .9rem .46rem .74rem; border-radius: .72rem;
-  background: linear-gradient(100deg, rgba(79,70,229,.11) 0%, rgba(124,58,237,.055) 58%, rgba(124,58,237,0) 100%);
-  border-left: 3px solid #6366f1;
-  box-shadow: 0 6px 18px -12px rgba(79,70,229,.5);
+  letter-spacing: -.012em; line-height: 1.45; color: #1f2433;
+  text-decoration: none; border-radius: .8rem;
+  background: linear-gradient(100deg, rgba(79,70,229,.13) 0%, rgba(124,58,237,.06) 58%, rgba(124,58,237,.02) 100%);
+  border: 1px solid rgba(99,102,241,.2); border-left: 3px solid #6366f1;
+  box-shadow: 0 8px 22px -14px rgba(79,70,229,.55);
+  transition: transform .18s, box-shadow .18s, background .18s, border-color .18s;
 }
-.hp-hint::before {
-  content: "→"; font-weight: 700; color: #6366f1; font-size: 1.05em; line-height: 1;
+.hp-hint > i {
+  font-style: normal; font-weight: 700; color: #6366f1; font-size: 1.05em; line-height: 1;
+  transition: transform .18s;
 }
 .hp-hint b {
   color: var(--brand, #4f46e5); font-weight: 800;
-  border-bottom: 2.5px solid rgba(79,70,229,.36); padding-bottom: 1px;
+  /* 用真实下划线而不是 border-bottom：带 offset 才能落在字底之下，不压住「版」字的脚 */
+  text-decoration: underline; text-decoration-thickness: 2.5px;
+  text-decoration-color: rgba(79,70,229,.4); text-underline-offset: 4px;
+}
+.hp-hint:hover {
+  background: linear-gradient(100deg, rgba(79,70,229,.2) 0%, rgba(124,58,237,.1) 58%, rgba(124,58,237,.04) 100%);
+  border-color: rgba(99,102,241,.4); border-left-color: #4f46e5;
+  transform: translateX(3px);
+  box-shadow: 0 12px 26px -14px rgba(79,70,229,.7);
+}
+.hp-hint:hover > i { transform: translateX(5px); }
+.hp-hint:focus-visible { outline: 3px solid rgba(99,102,241,.45); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  .hp-primary::after { animation: none; opacity: 0; }
+  .hp-btn, .hp-hint, .hp-hint > i, .hp-btn > svg { transition: none; }
 }
 
 /* ---- Hero 右侧：任务切片 ---- */
@@ -2587,27 +2644,11 @@ html.theme-dark .mem-notice { background: #2a2110; border-color: #7c4a1e; border
 .hp-cap-grid li:hover .hp-cap-ic { color: var(--brand, #4f46e5); }
 .hp-cap-ic svg { width: 1.1rem; height: 1.1rem; display: block; }
 
-/* ---- 怎么用 / 限制 ---- */
-.hp-how { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(1.2rem, 3vw, 2.4rem); }
-.hp-how h2 { font-size: 1.12rem; font-weight: 800; margin-bottom: .8rem; }
-.hp-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .6rem; }
-.hp-steps li { display: flex; gap: .6rem; font-size: .82rem; line-height: 1.7; color: #3f4759; }
-.hp-steps li i {
-  flex: none; width: 1.25rem; height: 1.25rem; border-radius: 50%;
-  background: #eef2ff; color: var(--brand, #4f46e5);
-  font-size: .7rem; font-weight: 800; font-style: normal;
-  display: grid; place-items: center; margin-top: .15rem;
-}
-.hp-limits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .55rem; }
-.hp-limits li { position: relative; padding-left: .85rem; font-size: .79rem; line-height: 1.65; color: #6b7280; }
-.hp-limits li::before { content: ""; position: absolute; left: 0; top: .55rem; width: .28rem; height: .28rem; border-radius: 50%; background: #c7cbe0; }
-
 /* ---- 响应式 ---- */
 @media (max-width: 900px) {
   .hp-hero-in { grid-template-columns: 1fr; }
   .hp-slice { max-width: 420px; }
   .hp-cards { grid-template-columns: 1fr; }
-  .hp-how { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
   #homeView { margin-top: 1.4rem; }
@@ -2615,4 +2656,8 @@ html.theme-dark .mem-notice { background: #2a2110; border-color: #7c4a1e; border
   .hp-hero h1 { font-size: 1.55rem; }
   .hp-cap-grid { grid-template-columns: 1fr; }
   .hp-cap-grid li:last-child { border-bottom: 0; }
+  /* 手机上两个入口拉满整行 —— 手指点得准，视觉上也只留一个明确动作 */
+  .hp-actions { flex-direction: column; align-items: stretch; }
+  .hp-btn, .hp-primary { width: 100%; min-width: 0; }
+  .hp-hint { width: 100%; justify-content: space-between; }
 }
