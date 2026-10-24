@@ -8480,10 +8480,23 @@
       //   super = 唯一超管（能改后台数据）/ admin = 管理员（后台只读）/ 其他 = 普通用户。
       // 后端 /api/auth/me 已带 role 字段；老后端没有该字段时按 is_admin 兜底成
       // 「管理员」—— 宁可把超管显示成只读管理员，也不要反向误标。
+      // 🔴 2026-10-24 修：这个标签原来只讲「角色」，不读会员状态 ⇒ 有 VIP 的普通账号
+      // 头像下仍写「普通用户」，与下方「会员状态：VIP会员 至 …」自相矛盾（用户实测反馈）。
+      // 现在角色优先（管理员身份比会员等级重要，不隐藏），非管理员时回落为会员等级。
       const _role = me.role || (me.is_admin ? 'admin' : '');
-      el.pfTag.textContent = _role === 'super' ? '👑 超级管理员'
-        : (_role === 'admin' ? '管理员（只读）' : '普通用户');
+      const _dlm = (member && member.download_member) || {};
+      const _aim = (member && member.ai_member) || {};
+      const _hasVip = !!_dlm.active;
+      const _hasAi = !!_aim.active;
+      let _tag = '普通用户';
+      if (_role === 'super') _tag = '👑 超级管理员';
+      else if (_role === 'admin') _tag = '管理员（只读）';
+      else if (_hasVip && _hasAi) _tag = 'VIP 会员 · AI 会员';
+      else if (_hasVip) _tag = 'VIP 会员';
+      else if (_hasAi) _tag = 'AI 会员';
+      el.pfTag.textContent = _tag;
       el.pfTag.classList.toggle('is-admin', !!me.is_admin);
+      el.pfTag.classList.toggle('is-vip', !me.is_admin && (_hasVip || _hasAi));
     }
     const ct = (prof && prof.created_at) || me.created_at || 0;
     if (el.pfCreated) el.pfCreated.textContent = ct ? pfFmtDate(ct, true) : '—';

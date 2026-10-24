@@ -2032,6 +2032,8 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 .pf-ov-name { font-size: 1.2rem; font-weight: 800; color: var(--text); word-break: break-all; }
 .pf-tag { display: inline-block; align-self: flex-start; padding: .12rem .55rem; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: .76rem; font-weight: 600; }
 .pf-tag.is-admin { background: #fef3c7; color: #b45309; }
+/* 会员标签（2026-10-24）：非管理员的会员账号在此处显示等级，实心底色以便与「普通用户」区分。 */
+.pf-tag.is-vip { background: var(--brand); color: #fff; }
 .pf-ov-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-left: auto; }
 .pf-ov-actions-inline { margin-left: 0; }
 .pf-ov-btn {
