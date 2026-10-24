@@ -2493,40 +2493,28 @@ html.theme-dark .mem-notice { background: #2a2110; border-color: #7c4a1e; border
 }
 .hp-ghost:hover > svg { transform: translateY(2px); }
 .hp-ghost:active { transform: translateY(0); }
-/* 提示条做成可点链接（点了同样去 /download）：整块有底色和左色条，
-   悬停时底色加深、箭头右移 —— 让它看起来是「第二个入口」而不是一行说明文字。 */
+/* 纯文字提示（2026-10-24 用户明确：只做文字提示，不做按钮）。
+   整条不设底色/边框/圆角/内边距/箭头 —— 就是 hero 里的一行说明文字；
+   只有「桌面版」是普通文字链接（下划线），点它去 /download。 */
 .hp-hint {
-  display: inline-flex; align-items: center; gap: .5rem; flex-wrap: wrap;
-  margin-top: 1.05rem; padding: .62rem 1rem .62rem .86rem;
+  margin-top: 1.05rem;
   font-size: clamp(1.05rem, 1.5vw, 1.24rem); font-weight: 800;
-  letter-spacing: -.012em; line-height: 1.45; color: #1f2433;
-  text-decoration: none; border-radius: .8rem;
-  background: linear-gradient(100deg, rgba(79,70,229,.13) 0%, rgba(124,58,237,.06) 58%, rgba(124,58,237,.02) 100%);
-  border: 1px solid rgba(99,102,241,.2); border-left: 3px solid #6366f1;
-  box-shadow: 0 8px 22px -14px rgba(79,70,229,.55);
-  transition: transform .18s, box-shadow .18s, background .18s, border-color .18s;
+  letter-spacing: -.012em; line-height: 1.55; color: #1f2433;
 }
-.hp-hint > i {
-  font-style: normal; font-weight: 700; color: #6366f1; font-size: 1.05em; line-height: 1;
-  transition: transform .18s;
-}
+.hp-hint a { color: inherit; text-decoration: none; }
 .hp-hint b {
   color: var(--brand, #4f46e5); font-weight: 800;
   /* 用真实下划线而不是 border-bottom：带 offset 才能落在字底之下，不压住「版」字的脚 */
-  text-decoration: underline; text-decoration-thickness: 2.5px;
+  text-decoration: underline; text-decoration-thickness: 2px;
   text-decoration-color: rgba(79,70,229,.4); text-underline-offset: 4px;
 }
-.hp-hint:hover {
-  background: linear-gradient(100deg, rgba(79,70,229,.2) 0%, rgba(124,58,237,.1) 58%, rgba(124,58,237,.04) 100%);
-  border-color: rgba(99,102,241,.4); border-left-color: #4f46e5;
-  transform: translateX(3px);
-  box-shadow: 0 12px 26px -14px rgba(79,70,229,.7);
+.hp-hint a:hover b { text-decoration-color: currentColor; }
+.hp-hint a:focus-visible {
+  outline: 3px solid rgba(99,102,241,.45); outline-offset: 3px; border-radius: 3px;
 }
-.hp-hint:hover > i { transform: translateX(5px); }
-.hp-hint:focus-visible { outline: 3px solid rgba(99,102,241,.45); outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) {
   .hp-primary::after { animation: none; opacity: 0; }
-  .hp-btn, .hp-hint, .hp-hint > i, .hp-btn > svg { transition: none; }
+  .hp-btn, .hp-btn > svg { transition: none; }
 }
 
 /* ---- Hero 右侧：任务切片 ---- */
@@ -2659,5 +2647,4 @@ html.theme-dark .mem-notice { background: #2a2110; border-color: #7c4a1e; border
   /* 手机上两个入口拉满整行 —— 手指点得准，视觉上也只留一个明确动作 */
   .hp-actions { flex-direction: column; align-items: stretch; }
   .hp-btn, .hp-primary { width: 100%; min-width: 0; }
-  .hp-hint { width: 100%; justify-content: space-between; }
 }

@@ -83,10 +83,11 @@ ok(home.includes('体验会员级别网速'), '网盘卡必须写「体验会员
 ok(!home.includes('需登录百度账号'), '不得出现「需登录百度账号」（用户要求去掉）');
 ok(/16\.2 MB\/s/.test(home), '网盘任务条必须展示 16.2 MB/s（用实测速度，不用 3.6 的旧数字）');
 
-// 「想体验全部功能请到桌面版」= 大字提示条，且「桌面版」加粗；2026-10-24 用户要求
-//   「设计更突出、让用户有点击冲动」⇒ 该行改成可点链接（点同样去 /download）
-ok(/<a class="hp-hint" href="\/download"><span>想体验全部功能请到<b>桌面版<\/b><\/span><i aria-hidden="true">→<\/i><\/a>/.test(home),
-  '「想体验全部功能请到桌面版」必须是大字提示 + 可点链接（hp-hint → /download）');
+// 「想体验全部功能请到桌面版」= 一行纯文字提示。
+// 2026-10-24 用户第二次明确：「只做文字提示，不做按钮」⇒ 去掉底色/边框/圆角/箭头，
+// 整条就是普通说明文字，只有「桌面版」保持为文字链接（下划线）可点去 /download。
+ok(/<p class="hp-hint">想体验全部功能请到<a href="\/download"><b>桌面版<\/b><\/a><\/p>/.test(home),
+  '「想体验全部功能请到桌面版」必须是纯文字提示（hp-hint 段落 + 「桌面版」文字链接），不能做成按钮');
 // CTA 区「有点击欲望」的三条落地：主按钮更大更厚、有扫光、副按钮有方向图标
 ok(/class="hp-btn hp-primary" id="homeStartBtn">\s*<span>开始使用<\/span>/.test(home),
   '主按钮「开始使用」必须带图标结构（不再是纯文字）');
@@ -98,8 +99,6 @@ ok(/@keyframes hpSheen\b/.test(cssNoComment) && /\.hp-primary::after\s*\{[\s\S]*
   '主按钮缺少扫光动画（hpSheen）—— 突出点击意愿的关键动效');
 ok(/prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?hp-primary::after\s*\{\s*animation:\s*none/.test(cssNoComment),
   '扫光动画必须尊重 prefers-reduced-motion（无动画偏好时关闭）');
-ok(/\.hp-hint:hover\s*\{[^}]*transform:\s*translateX/.test(cssNoComment),
-  '提示条悬停必须有位移反馈（否则看不出它是可点的第二个入口）');
 
 /* ---------------- ④ 首页每个 hp-* 类都必须有样式（防白板） ---------------- */
 const usedCls = new Set();
@@ -117,6 +116,18 @@ const hintRule = (cssNoComment.match(/\.hp-hint\s*\{[^}]*\}/) || [''])[0];
 ok(/font-size:\s*clamp\(1\.0[0-9]?rem/.test(hintRule) || /font-size:\s*1\.[0-9]+rem/.test(hintRule),
   '.hp-hint 字号必须放大（≥1.05rem）—— 用户要求「大字」写这行提示');
 ok(/font-weight:\s*[78]00/.test(hintRule), '.hp-hint 必须加粗（用户要求「大字」提示）');
+// 用户 2026-10-24 明确：「只做文字提示，不做按钮」—— 这条反过来钉死，防止以后又被做成按钮。
+ok(!/(^|[^-\w])background\s*:/.test(hintRule), '.hp-hint 不得有底色（那是按钮外观，用户只要文字提示）');
+ok(!/border-radius\s*:/.test(hintRule), '.hp-hint 不得有圆角（会变成胶囊按钮）');
+ok(!/(^|[^-\w])border\s*:/.test(hintRule) && !/border-left\s*:/.test(hintRule),
+  '.hp-hint 不得有边框/左色条（用户明确不要按钮）');
+ok(!/box-shadow\s*:/.test(hintRule), '.hp-hint 不得有投影（按钮才需要托起来）');
+ok(!/(^|[^-\w])padding\s*:/.test(hintRule), '.hp-hint 不得有内边距（会把文字撑成一个盒子）');
+ok(!/display:\s*inline-flex/.test(hintRule), '.hp-hint 不能是 flex 盒子（会被当成控件）');
+ok(!/\.hp-hint:hover\s*\{[^}]*transform\s*:/.test(cssNoComment),
+  '.hp-hint 悬停不能让整条位移/放大（那是按钮的反馈，用户只要文字）');
+ok(!/hp-hint\s*>\s*i/.test(cssNoComment),
+  '提示条不得再带箭头图标（hp-hint > i 是按钮暗示）；结构上 p.hp-hint 里只允许文字 + 「桌面版」链接');
 
 /* ---------------- ⑤ app.js 接线（漏一处就是「点了没反应」） ---------------- */
 ok(/tabHome:\s*\$\('tabHome'\)/.test(appJs), 'el 表未登记 tabHome');
