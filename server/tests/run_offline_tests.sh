@@ -1183,6 +1183,8 @@ run_pytest_root test_clouddrive_ui_wiring.py
 # 网盘直链下载策略：强制单连接 + 客户端身份 UA（2026-10-24 实测：百度按账号总带宽
 # 限速，4/8/16 连接比单连接更慢且会被掐断；P2SP 身份 ~145 KB/s vs 浏览器 ~78 KB/s）
 run_pytest_root test_netdisk_download_options.py
+# 网盘直链必须「按文件直下」：走 yt-dlp 会把标题换成直链路径段、mp3 存成 mp4
+run_pytest_root test_netdisk_direct_download.py
 # aria2c 默认 --enable-cookie=false，会静默吞掉 --header 传进来的 Cookie ⇒ 需要登录态的源 403
 run_pytest_root test_aria2_cookie_args.py
 run_pytest_root test_commentary_config.py

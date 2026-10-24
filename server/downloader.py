@@ -5712,6 +5712,151 @@ def _retry_matrix(downloader_type: str) -> list[tuple[str, bool]]:
     matrix.append((downloader_type, True))
     return matrix
 
+class _NetdiskCanceled(Exception):
+    """网盘直链下载被用户取消 / 看门狗终止。"""
+
+
+# Content-Type → 扩展名（只在解析阶段没给到带扩展名的文件名时兜底）
+_NETDISK_EXT_BY_CT = {
+    "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/mp4": ".m4a",
+    "audio/aac": ".aac", "audio/flac": ".flac", "audio/wav": ".wav",
+    "video/mp4": ".mp4", "video/x-matroska": ".mkv", "video/webm": ".webm",
+    "application/pdf": ".pdf", "application/zip": ".zip",
+    "application/x-rar-compressed": ".rar", "application/x-7z-compressed": ".7z",
+    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+    "text/plain": ".txt",
+}
+
+
+def _safe_filename(name: str, fallback: str = "网盘文件") -> str:
+    """清掉路径分隔符与控制字符，避免落盘越界。"""
+    n = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", (name or "").strip())
+    n = n.strip(" .")
+    return n[:180] or fallback
+
+
+def _netdisk_output_name(task: DownloadTask, content_type: str, final_url: str) -> str:
+    """决定网盘文件的落盘名。
+
+    🔴 优先用解析阶段拿到的**真实文件名**（通常自带扩展名，如 "008.xxx.mp3"）。
+    只有它没带扩展名时才按 Content-Type 补一个 —— 绝不能让 yt-dlp 那套
+    「按视频猜 .mp4」的逻辑生效，否则 mp3 会被存成 mp4。
+    """
+    title = _safe_filename(getattr(task, "title", "") or "")
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    ct_ext = _NETDISK_EXT_BY_CT.get(ctype, "")
+    if title:
+        tail = title.rsplit(".", 1)[-1].lower() if "." in title else ""
+        if tail and 1 <= len(tail) <= 5 and tail.isalnum():
+            return title
+        return title + ct_ext
+    base = ""
+    try:
+        base = (final_url or task.url).split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+    except Exception:  # noqa: BLE001
+        base = ""
+    base = _safe_filename(base, "网盘文件")
+    if ct_ext and not base.lower().endswith(ct_ext):
+        return base + ct_ext
+    return base
+
+
+def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
+                             cookie: str = "", proxy: str = "") -> None:
+    """百度网盘直链 → 按文件流式下载（**不经过 yt-dlp 解析**）。
+
+    🔴 为什么必须绕开 yt-dlp：`d.pcs.baidu.com` 的 dlink 会被 generic 提取器
+    当成「媒体页面」处理，2026-10-24 实测后果：
+      ① 标题被替换成直链路径段 ⇒ 用户看到 `3eab43fb6m1795...` 这种乱码文件名；
+      ② 扩展名按视频猜成 `.mp4` ⇒ 实际是 mp3 的文件被存成 mp4；
+      ③ 少数情况提取阶段直接失败，界面报「视频解析失败 [generic] …」。
+
+    网盘本来就是「给一条直链、下一个文件」，没有清晰度/格式可选，不需要解析。
+    约束（与 v1.0.88 的网盘策略一致）：单连接、P2SP 客户端身份、手动带 Cookie；
+    requests 的手动 header 在 302 跳转后仍会携带，所以跨到 *.baidupcs.com 也不会 403。
+    """
+    import requests  # 与本文件其它路径一致：延迟导入，避免拖慢启动
+
+    workdir = Path(task.workdir) if task.workdir else None
+    if workdir is None:
+        store.update(task.id, status="failed", error="任务缺少工作目录")
+        return
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    headers = {"User-Agent": _NETDISK_UA}
+    if cookie:
+        headers["Cookie"] = cookie
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    part = workdir / "netdisk.part"
+    started = time.time()
+    last_push = 0.0
+
+    store.update(task.id, status="downloading", progress=0.0, speed=0.0, eta=0)
+    task.add_step("下载文件", "running", "连接中…")
+
+    try:
+        with requests.get(task.url, headers=headers, proxies=proxies, stream=True,
+                          timeout=(15, 60), allow_redirects=True) as r:
+            if r.status_code >= 400:
+                raise RuntimeError(f"HTTP {r.status_code}")
+            total = int(r.headers.get("Content-Length") or 0)
+            if total:
+                store.update(task.id, total_bytes=total, filesize=total)
+            done = 0
+            with open(part, "wb") as fh:
+                for chunk in r.iter_content(256 * 1024):
+                    if not chunk:
+                        continue
+                    if task.cancel_requested or task.is_finished:
+                        raise _NetdiskCanceled()
+                    fh.write(chunk)
+                    done += len(chunk)
+                    now = time.time()
+                    if now - last_push >= 0.5:
+                        last_push = now
+                        elapsed = max(now - started, 0.001)
+                        speed = done / elapsed
+                        store.update(
+                            task.id,
+                            downloaded_bytes=done,
+                            progress=round(done / total * 100.0, 1) if total else 0.0,
+                            speed=round(speed, 1),
+                            eta=int((total - done) / speed) if (total and speed > 0) else 0,
+                        )
+            out_name = _netdisk_output_name(task, r.headers.get("Content-Type", ""), r.url)
+    except _NetdiskCanceled:
+        part.unlink(missing_ok=True)
+        if not task.is_finished:
+            store.update(task.id, status="canceled", error="已取消")
+        return
+    except Exception as exc:  # noqa: BLE001
+        part.unlink(missing_ok=True)
+        msg = str(exc)[:200]
+        task.add_step("下载文件", "error", msg)
+        store.update(
+            task.id, status="failed", error="网盘下载失败",
+            hint=(f"百度直链下载失败：{msg}。直链有效期 8 小时且必须带登录态；"
+                  "如果中途切换过百度账号或登录态失效，重新点一次「解析网盘」再下载。"),
+        )
+        return
+
+    out = workdir / out_name
+    try:
+        if out.exists():
+            out.unlink()
+        part.replace(out)
+    except OSError as exc:
+        store.update(task.id, status="failed", error="保存文件失败", hint=str(exc)[:200])
+        return
+
+    size = out.stat().st_size
+    task.add_step("下载文件", "done", f"输出文件：{out.name}")
+    task.log(f"网盘下载完成：{out.name}（{size} 字节）")
+    store.update(task.id, status="completed", progress=100.0, filepath=out,
+                 filename=out.name, filesize=size, downloaded_bytes=size,
+                 total_bytes=size, speed=0.0, eta=0)
+
+
 def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0, format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> None:
     """在后台线程执行，全部异常都写回任务状态，不向外抛。
 
@@ -5724,6 +5869,15 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
     健壮性：内置「停滞看门狗 + 整体硬超时」，防止站点/CDN 假死让任务永久挂起、
     占满并发槽拖垮后续所有下载（典型如 m3u8 流慢速 trickle 不触发 socket_timeout）。
     """
+    # 网盘直链（2026-10-24）：跳过 yt-dlp 解析，按文件直接下载。
+    # 走 yt-dlp 会把标题换成直链路径段、扩展名猜成 .mp4（mp3 被存成 mp4），
+    # 少数情况还会在 generic 提取阶段直接失败。
+    if _is_netdisk_direct(task.url):
+        _download_netdisk_direct(task, store,
+                                 cookie=(cookie or task.cookie or ""),
+                                 proxy=(proxy or task.proxy or ""))
+        return
+
     stop = threading.Event()
     last = {"bytes": 0, "disk": 0, "ts": time.time()}
     _workdir = Path(task.workdir) if task.workdir else None
