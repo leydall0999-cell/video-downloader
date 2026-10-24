@@ -122,12 +122,19 @@ class _FakeSession:
 
 
 def _patch_session(**kw):
-    """patch baidu.requests.Session，返回 (patcher, 实际被用到的 session)。"""
+    """patch baidu.requests.Session，返回 (patcher, 实际被用到的 session)。
+
+    ⚠️ 所有 Session() 调用复用**同一个替身**：2026-10-24 起，resolve_share 会在
+    「换直链」这一步额外新建一个带登录态的会话（匿名会话拿到的是过期的游客直链），
+    若每次都造新的替身，断言只能看到后一个空对象的 calls。
+    """
     box = {}
 
     def _factory():
-        s = _FakeSession(**kw)
-        box["s"] = s
+        s = box.get("s")
+        if s is None:
+            s = _FakeSession(**kw)
+            box["s"] = s
         return s
 
     p = mock.patch.object(baidu.requests, "Session", side_effect=_factory)

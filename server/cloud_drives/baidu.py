@@ -334,12 +334,23 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
         raise ValueError("分享里只有文件夹，暂不支持（阶段 2 再上）")
 
     fs_ids = [r.get("fs_id") for r in files if r.get("fs_id")]
-    dlinks = share_dlinks(s, sign, ts, uk, share_id, fs_ids, sekey, q)
+    # 🔴🔴 换直链必须用**带登录态的会话**（2026-10-24 实测）：
+    # 用匿名会话请求 /api/sharedownload，百度会返回「游客缓存」里的旧直链 ——
+    # dstime 停在一小时前、expires=1h，一拿到就过期，下载必报
+    # 31360 expire time out。换成带登录态的会话，同一个分享返回的是
+    # dstime=now、expires=8h 的活链，下载 206 正常（SVIP 实测 3.6 MB/s）。
+    # ⌁ 注意只有**这一步**要登录态：verify / tplconfig / list 仍必须匿名，
+    #   带登录态请求 tplconfig 会返回 HTML（踩过）。
+    s_dl = s
+    if login_cookie:
+        s_dl = new_session(share_url)
+        s_dl.headers["Cookie"] = login_cookie
+    dlinks = share_dlinks(s_dl, sign, ts, uk, share_id, fs_ids, sekey, q)
     # 批量漏掉的逐个补一次（百度偶发只回一部分）
     missing = [f for f in fs_ids if str(f) not in dlinks]
     for fid in missing:
         try:
-            dlinks.update(share_dlinks(s, sign, ts, uk, share_id, [fid], sekey, q))
+            dlinks.update(share_dlinks(s_dl, sign, ts, uk, share_id, [fid], sekey, q))
         except Exception:  # noqa: BLE001
             continue
 
