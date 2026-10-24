@@ -1197,6 +1197,7 @@
   let dlMode = 'video';
   const URL_PLACEHOLDER_VIDEO = '粘贴视频链接，每行一个可批量下载（例如 https://www.bilibili.com/video/BV1...）';
   const URL_PLACEHOLDER_IMAGE = '粘贴图片直链，每行一个可批量下载；也支持小红书等平台的分享链接（自动抓页面里的图）';
+  const URL_PLACEHOLDER_NETDISK = '粘贴百度网盘分享链接（提取码可以一起粘，会自动识别），例如 https://pan.baidu.com/s/1xxxx 提取码: c4c0';
   const trackers = new Map();
   // 正在删除的任务 ID 集合：防止 syncMissingCards 在 DELETE 生效前把卡片重建回来
   const _deletingIds = new Set();
@@ -1768,8 +1769,10 @@
     el.resolveBtn.disabled = loading;
     // 按钮文案随下载类型切换（图片模式是「下载图片」，没有解析阶段）
     const _img = dlMode === 'image';
+    const _nd = dlMode === 'netdisk';
     el.resolveBtn.querySelector('.btn-label').textContent =
-      loading ? (_img ? '下载中…' : '解析中…') : (_img ? '下载图片' : '解析链接');
+      loading ? (_img ? '下载中…' : '解析中…')
+              : (_nd ? '解析网盘' : (_img ? '下载图片' : '解析链接'));
   };
 
   /** 切换下载类型（视频 / 图片 / 网盘）：改占位符、按钮文案、提示与面板可见性。 */
@@ -1794,14 +1797,25 @@
     // 只留 #cdSlot 里的网盘面板；切回来时原面板自动恢复（不碰 hidden 状态，
     // 否则会把「本来就没结果」和「被网盘模式藏起来」两种情况搞混）。
     if (el.downloadView) el.downloadView.classList.toggle('mode-netdisk', _nd);
-    if (el.clouddriveView) el.clouddriveView.hidden = !_nd;
+    if (el.clouddriveView) {
+      if (!_nd) {
+        el.clouddriveView.hidden = true;
+      } else {
+        // 进网盘模式时，只有已经有文件列表/状态才把面板露出来；
+        // 否则保持跟视频模式「还没解析」时一样的干净页面（只有输入框）。
+        const hasList = el.cdList && el.cdList.children.length > 0;
+        const hasStatus = el.cdStatus && el.cdStatus.textContent.trim();
+        el.clouddriveView.hidden = !(hasList || hasStatus);
+      }
+    }
     if (el.imageModeNote) el.imageModeNote.hidden = !_img;
     // 图片模式：批量面板是视频概念（统一画质/并发），隐藏避免误导；
     // 图片本身就是每行一个的批量，输入框即批量。
     if (el.batchToggle) el.batchToggle.hidden = _img;
     if (_img && el.batchBox && !el.batchBox.hidden) el.batchBox.hidden = true;
     if (el.input) {
-      el.input.placeholder = _img ? URL_PLACEHOLDER_IMAGE : URL_PLACEHOLDER_VIDEO;
+      el.input.placeholder = _nd ? URL_PLACEHOLDER_NETDISK
+        : (_img ? URL_PLACEHOLDER_IMAGE : URL_PLACEHOLDER_VIDEO);
     }
     setLoading(false);
   };
@@ -17348,6 +17362,9 @@ el.dwVidPlayer.hidden = true;
   };
 
   const cdResolve = async () => {
+    // 解析一开始就把网盘面板（状态 + 文件列表 + 登录态）露出来，
+    // 这样「解析中 / 失败原因」都看得见。
+    if (el.clouddriveView) el.clouddriveView.hidden = false;
     const url = ((el.cdUrl && el.cdUrl.value) || '').trim();
     if (!url) { cdSetStatus('请先粘贴网盘分享链接', true); return; }
     if (!/pan\.baidu\.com|yun\.baidu\.com/.test(url)) {

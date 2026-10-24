@@ -268,14 +268,15 @@ img { max-width: 100%; display: block; }
    输入区与结果区让位，只显示 #cdSlot 里的网盘面板；切回来自动恢复。
    ⚠️ 卡片本身（.input-panel）必须留着 —— 「视频/图片/网盘」这个切换控件就在里面，
    整块藏掉会把切换器一起藏了，用户切到网盘后就再也回不去。所以只藏内容。 */
-#downloadView.mode-netdisk .result-panel { display: none; }
-#downloadView.mode-netdisk .input-panel > *:not(form) { display: none; }
-#downloadView.mode-netdisk #resolveForm > *:not(.mode-switch) { display: none; }
-/* 顶部大标题和「怎么用 · 视频下载」引导讲的是视频，网盘模式下要一起让位，
-   否则用户看到的是「粘贴视频链接」却要下网盘。 */
-#downloadView.mode-netdisk > .hero,
-#downloadView.mode-netdisk > details,
-#downloadView.mode-netdisk > .guide { display: none; }
+/* 网盘模式 = 视频/图片模式的同一套交互（2026-10-24 第二版）。
+   用户反馈第一版「整个页面都变了、感觉不在一个页面上」——所以这里**不动页面结构**：
+   大标题、切换器、输入框、卡片、下载说明全部保持原样，只换提示语和按钮文案。
+   唯一让位的是：
+   1) 视频解析结果区（否则会和网盘列表同屏打架）；
+   2) 网盘面板里那行重复的「分享链接 / 提取码」输入框 —— 输入已经由主输入框承担。 */
+#downloadView.mode-netdisk .result-panel,
+#downloadView.mode-netdisk .cd-form,
+#downloadView.mode-netdisk #cdTitle { display: none; }
 .image-mode-note {
   margin: 0 0 .85rem; font-size: .82rem; line-height: 1.65; color: var(--text-mute);
   background: #f6f7fc; border: 1px dashed var(--line); border-radius: 12px; padding: .6rem .85rem;

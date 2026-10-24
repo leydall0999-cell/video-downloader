@@ -70,10 +70,15 @@ def test_no_double_panel_when_netdisk_mode():
     """
     assert "const isCd = view === 'clouddrive'" in APP_TXT
     assert "el.clouddriveView.hidden = !isCd" not in APP_TXT, "网盘面板不该再随视图显隐"
+    # 第二版（2026-10-24）：交互与视频/图片一致，页面结构一律不动；
+    # 只让位「视频结果区」和「网盘面板里重复的输入行」。
     for rule in ("#downloadView.mode-netdisk .result-panel",
-                 "#downloadView.mode-netdisk #resolveForm > *:not(.mode-switch)",
-                 "#downloadView.mode-netdisk .input-panel > *:not(form)"):
+                 "#downloadView.mode-netdisk .cd-form"):
         assert rule in CSS_TXT, f"styles.css 缺少互斥规则：{rule}"
+    # 反向守卫：不许再把大标题/引导/说明整块藏掉（那会让用户觉得换了页面）
+    for forbidden in ("mode-netdisk > .hero", "mode-netdisk > details",
+                      "mode-netdisk .input-panel > *:not(form)"):
+        assert forbidden not in CSS_TXT, f"网盘模式不应隐藏页面骨架：{forbidden}"
     # 顶部「下载」tab 仍要能容纳网盘模式（clouddrive 已被翻译成 download）
     dl_line = [ln for ln in APP_TXT.splitlines()
                if "el.downloadView.hidden =" in ln]
