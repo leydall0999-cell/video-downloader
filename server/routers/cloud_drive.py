@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import urllib.parse
 
@@ -69,6 +70,46 @@ def _uid(request) -> str:
     return require_login_user(request)
 
 
+def _admin_login_cookie() -> str:
+    """管理员提供的百度登录态（服务器侧统一一份，所有网页版用户共用）。
+
+    2026-10-25 用户定档：「网盘 cookies 主要由管理员提供，用户自己获取的入口隐藏」。
+
+    来源优先级：
+      ① 环境变量 `VDL_BAIDU_BDUSS` —— 管理员/运维直接在服务器上配这一份；
+      ② 云端 cookie 池里 baidu.com 的条目 —— 桌面端用户浏览器里登录过百度网盘时
+         会自动取到并贡献进来（用户无需手填），管理员手工放进去的也走这里。
+
+    取到 ① 时顺手把它写回池里：这样「管理员那份」始终在共享池中，桌面端也能
+    通过共享池拿到同一份账号（两端一份凭据，不用各填各的）。
+    """
+    env = (os.environ.get("VDL_BAIDU_BDUSS") or "").strip()
+    if env:
+        header = env if "=" in env else f"BDUSS={env}"
+        try:
+            from cookie_pool import add_cookie
+            add_cookie("baidu.com", header, source="admin")
+        except Exception:  # noqa: BLE001 — 入池失败不影响本次使用
+            pass
+        return header
+    try:
+        from cookie_pool import get_cookie
+        return get_cookie("pan.baidu.com") or get_cookie("baidu.com") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _login_cookie(uid: str) -> str:
+    """本次要用的百度登录态：管理员那份优先，其次用户自己存的（接口保留，界面已隐藏）。"""
+    admin = _admin_login_cookie()
+    if admin:
+        return admin
+    try:
+        return baidu_cred_store.load_bduss(uid) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # ——————————————————————————————————————————————————————————————
 # 解析
 # ——————————————————————————————————————————————————————————————
@@ -87,7 +128,7 @@ def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request) -> dict
     if not (url.startswith("http://") or url.startswith("https://")):
         return {"ok": False, "error": "链接格式不对，应是 https://pan.baidu.com/... "}
 
-    cookie = baidu_cred_store.load_bduss(uid)
+    cookie = _login_cookie(uid)
     try:
         files = baidu.resolve(url, cookie, (req.pwd or "").strip())
     except ValueError as e:
@@ -167,9 +208,9 @@ def cloud_drive_download(request: app.Request):
     if not _is_netdisk_direct(dlink):
         raise app.HTTPException(status_code=400, detail="下载地址不是百度网盘直链，已拒绝")
 
-    cookie = baidu_cred_store.load_bduss(uid)
+    cookie = _login_cookie(uid)
     if not cookie:
-        raise app.HTTPException(status_code=403, detail="还没有百度登录态，请先保存 BDUSS 再下载")
+        raise app.HTTPException(status_code=403, detail="暂无可用的百度登录态，请联系管理员提供")
 
     name = (request.query_params.get("name") or "").strip() or "baidu-file"
     # 复用网页版既有的媒体中继 /api/media/proxy（它已具备 SSRF 护栏、Range 透传、

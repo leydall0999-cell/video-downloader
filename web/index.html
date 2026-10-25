@@ -64,7 +64,6 @@
         <button type="button" class="tab" data-view="imageconvert" id="tabImageConvert">图片转换</button>
         <button type="button" class="tab" data-view="share" id="tabShare">生成二维码/链接</button>
         <button type="button" class="tab" data-view="subtitle" id="tabSubtitle">AI 字幕</button>
-        <button type="button" class="tab" data-view="pan" id="tabPan">百度网盘</button>
         <button type="button" class="tab tab-sep" data-view="member" id="tabMember">💎 会员</button>
         <button type="button" class="tab" data-view="profile" id="tabProfile">个人中心</button>
         <button type="button" class="tab" data-view="appIntro" id="tabAppIntro">更多功能</button>
@@ -488,6 +487,25 @@
     <ul class="task-list" id="taskList"></ul>
   </section>
 
+  <!-- ===== 百度网盘（2026-10-25 用户定档：并入「下载视频」页；登录态由管理员提供，用户无需填写） ===== -->
+  <section class="panel pan-panel" id="panPanel" aria-labelledby="panTitle">
+    <h2 id="panTitle" class="guide-title">☁️ 百度网盘下载</h2>
+    <div class="cd-form">
+      <label class="uc-field cd-field-url">
+        <span class="uc-label">网盘分享链接</span>
+        <input type="text" id="panUrl" spellcheck="false" placeholder="粘贴百度网盘分享链接，例如 https://pan.baidu.com/s/1xxxx" />
+      </label>
+      <label class="uc-field cd-field-pwd">
+        <span class="uc-label">提取码</span>
+        <input type="text" id="panPwd" maxlength="8" spellcheck="false" placeholder="链接没给就留空" />
+      </label>
+      <button type="button" class="btn btn-primary" id="panResolveBtn">解析</button>
+    </div>
+    <p class="cd-status" id="panStatus" hidden aria-live="polite"></p>
+    <ul class="cd-list" id="panList"></ul>
+    <p class="pan-note">网盘文件由服务器代取并实时转发给你，速度取决于服务器带宽；大文件请耐心等待，别重复点。</p>
+  </section>
+
   <!-- 下载说明 -->
   <section class="panel guide" aria-labelledby="guideTitle">
     <h2 id="guideTitle" class="guide-title">下载说明</h2>
@@ -894,58 +912,7 @@
     </div>
   </section>
 
-  <!-- ===== 百度网盘（2026-10-25 用户拍板：网页版也做，登录态存服务器） ===== -->
-  <section id="panView" class="panel" hidden aria-labelledby="panTitle">
-    <h2 id="panTitle" class="guide-title">☁️ 百度网盘下载</h2>
-    <p class="uc-tip" style="margin-top:4px;color:var(--text-mute,#6b7280);">
-      粘贴百度网盘分享链接，列出网盘里的文件，直接下载到本地。不用转存、不用装客户端。
-    </p>
-
-    <div class="uc-bulk">
-      <h3 class="card-title">百度登录态</h3>
-      <p class="uc-tip" style="margin:.2rem 0 .6rem;font-size:11.5px;color:var(--text-mute,#6b7280);">
-        百度网盘的直链必须带登录态才能下载。填一次就存在服务器上（加密保存），以后不用再填；每份登录态只属于你自己的账号，别的用户看不到。
-        获取方法：浏览器登录 pan.baidu.com → 按 F12 打开控制台 → 输入 <code>document.cookie</code> 回车 → 复制里面 <code>BDUSS=...</code> 那一段。
-      </p>
-      <div class="uc-form">
-        <label class="uc-field">
-          <span class="uc-label">BDUSS（登录票据）</span>
-          <input type="text" id="panBduss" placeholder="BDUSS=..." autocomplete="off" spellcheck="false" />
-        </label>
-        <div class="uc-bulk-actions">
-          <button type="button" class="btn btn-primary" id="panSaveCred">保存到服务器</button>
-          <button type="button" class="btn btn-ghost" id="panClearCred">清除</button>
-          <span class="uc-count" id="panCredState" aria-live="polite"></span>
-        </div>
-      </div>
-    </div>
-
-    <div class="uc-bulk">
-      <h3 class="card-title">分享链接</h3>
-      <div class="uc-form">
-        <label class="uc-field">
-          <span class="uc-label">网盘链接</span>
-          <input type="text" id="panUrl" placeholder="https://pan.baidu.com/s/1xxxxxx" spellcheck="false" />
-        </label>
-        <label class="uc-field">
-          <span class="uc-label">提取码（没有就留空）</span>
-          <input type="text" id="panPwd" placeholder="例如 a1b2" maxlength="8" />
-        </label>
-        <div class="uc-bulk-actions">
-          <button type="button" class="btn btn-primary" id="panResolveBtn">解析文件</button>
-          <span class="uc-count" id="panStatus" aria-live="polite"></span>
-        </div>
-      </div>
-    </div>
-
-    <div class="uc-bulk" id="panFiles" hidden>
-      <h3 class="card-title">文件列表 <span class="uc-count" id="panFilesMeta"></span></h3>
-      <ul class="pan-list" id="panList"></ul>
-      <p class="uc-tip" style="margin:.6rem 0 0;font-size:11.5px;color:var(--text-mute,#6b7280);">
-        下载由服务器代取并实时转发，速度取决于你百度账号的等级与服务器带宽；大文件请耐心等待，别重复点。
-      </p>
-    </div>
-  </section>
+  <!-- 百度网盘面板已并入「下载视频」页（见 downloadView 内的 #panPanel，2026-10-25 用户定档） -->
 
   <!-- ===== 会员（网页版购买入口，2026-09-30）：免登录即可看到价目与权益，点「立即开通」才要求登录 ===== -->
   <section id="memberView" class="panel" hidden aria-labelledby="memTitle">
