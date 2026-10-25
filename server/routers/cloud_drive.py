@@ -39,6 +39,39 @@ class CloudDriveCredentialReq(BaseModel):
     bduss: str
 
 
+def _auto_contrib(header: str, source: str = "auto") -> None:
+    """从浏览器/缓存自动取到的百度登录态 ⇒ 自动加入共享池（2026-10-25 用户定档）。
+
+    用户要求：浏览器里本来就有百度登录态的，用户不用手填，我们自动取到后
+    自动进共享池 —— 这样网页版与别的用户也能用上同一份账号。
+
+    与「用户手动点贡献」的区别只在于触发方式（自动 vs 显式），入池与推云端
+    走的是同一条路。本地池 + 云端池各做一次；任何一步失败都不抛 ——
+    共享池挂了不能影响本次下载。
+
+    ⚠️ 通用同步通道（/api/cookie/sync/auto、/api/cookie/sync/from-local）仍然
+    排除百度 —— 那两条是「隐式读取浏览器」的通用通道，不该替用户决定共享账号；
+    这里只走网盘这条专用路径，语义明确、可控。
+    """
+    header = (header or "").strip()
+    if not header:
+        return
+    if not header.lower().startswith("bduss="):
+        header = f"BDUSS={header}"
+    try:
+        from cookie_pool import add_cookie
+        add_cookie("baidu.com", header, source=source)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import app as _app
+        url, token = _app._cloud_sync_config()
+        if url and token:
+            _app._push_cookie_to_cloud("baidu.com", header, url, token)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _baidu_login_cookie() -> str:
     """取百度登录态：手动保存的 BDUSS → 本机 cookie 缓存 → 实时解密浏览器 → 共享池。
 
@@ -61,6 +94,7 @@ def _baidu_login_cookie() -> str:
         for host in _BAIDU_HOSTS:
             got = cookie_cache.peek_cached_cookie_header(host)
             if got:
+                _auto_contrib(got, "cache")
                 return got
     except Exception:  # noqa: BLE001
         pass
@@ -69,6 +103,7 @@ def _baidu_login_cookie() -> str:
         import cookie_cache
         got = cookie_cache.get_cached_cookie_header("pan.baidu.com")
         if got:
+            _auto_contrib(got, "browser")
             return got
     except Exception:  # noqa: BLE001
         pass

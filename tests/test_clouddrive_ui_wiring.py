@@ -98,9 +98,24 @@ def test_resolve_and_download_endpoints():
 
 
 def test_login_gate_hint_wired():
-    """need_login 时要把登录态填写区展开，否则用户不知道为什么下载不了。"""
+    """need_login 时必须给出可执行的引导，否则用户不知道为什么下载不了。
+
+    2026-10-25 用户定档：百度登录态改由管理员提供，用户自助填写的入口已隐藏
+    （#cdCredBox 加了 hidden，app.js 里不再自动展开它）。所以这里的契约从
+    「展开填写区」改成「给出能解决问题的引导」——两条路都说清楚：
+      ① 浏览器/扩展里已登录过 ⇒ 会自动带上；
+      ② 没有 ⇒ 联系管理员提供。
+    同时守住红线：不能再出现展开已隐藏填写框的代码，否则界面与状态自相矛盾。
+    """
     assert "data.need_login" in APP_TXT or "!!data.need_login" in APP_TXT
-    assert "el.cdCredBox.open = true" in APP_TXT
+    # 引导文案必须精确命中网盘那句（app.js 里「管理员」到处都有，泛匹配会误判通过）
+    assert "请联系管理员提供百度登录态" in APP_TXT, \
+        "缺少「联系管理员提供百度登录态」的引导"
+    assert "浏览器登录过百度网盘会自动带上" in APP_TXT, \
+        "缺少「浏览器已登录会自动带上」的引导"
+    # 🔴 不能再自动展开已隐藏的填写区（入口已按用户要求隐藏）
+    assert "el.cdCredBox.open = true" not in APP_TXT, \
+        "自助填写入口已隐藏，不该再自动展开它"
 
 
 def test_has_styles_for_list():

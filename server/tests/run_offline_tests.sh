@@ -913,6 +913,12 @@ run_node test_baidu_cookie_share.mjs
 #      存了手动 BDUSS 必须盖过共享池。HOME/VDL_DATA_DIR 全隔离，不碰真实凭据。
 run_one test_baidu_pool_fallback.py
 
+# 53. test_cloud_drive_auto_contrib.py —— 浏览器/缓存里的百度登录态**自动**入共享池
+#      （2026-10-25 用户定档：用户自己填的入口已隐藏，浏览器里本来有就自动取、
+#      自动共享）。钉住：手动那份仍优先且不被自动共享；缓存/浏览器命中 ⇒ 入本地池
+#      + 推云端两步都做；共享池故障不影响本次取用；共享池兜底仍排最后。
+run_one test_cloud_drive_auto_contrib.py
+
 # 49. test_task_ownership_p0_2.py —— P0-2 下载任务/订阅源 越权隔离（安全审计 2026-10-11）：
 #      此前 `_require_task` 只按 id 取、`/api/tasks` 直接 `store.list_all()` 返回**全站**任务，
 #      攻击者拿到/枚举到 task_id 即可读标题、拉成片、取消/暂停他人任务；订阅源同理。
