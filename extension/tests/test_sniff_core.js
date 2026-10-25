@@ -52,7 +52,14 @@ var MATRIX = [
   ['https://www.youtube.com/youtubei/v1/player', 'application/json', ''],
   // 只吃「该主机的内部路径」：别的站点同样路径、以及 YouTube 的非内部路径都照常展示
   ['https://cdn.example.com/s/search/audio/success.mp3', 'audio/mpeg', 'media'],
-  ['https://www.youtube.com/clip/audio/real.mp3', 'audio/mpeg', 'media']
+  ['https://www.youtube.com/clip/audio/real.mp3', 'audio/mpeg', 'media'],
+  // 本站 /api/ 内部转发流（2026-10-25 实测）：网盘代取/媒体中继的一次性签名流，
+  // 文件名在 name= 查询参数里、路径无后缀，mime video/mp4 → 原被当成「直链」。
+  // 与 python tests/test_cdp_sniffer.py 的 MATRIX 逐条镜像。
+  ['https://hanyuxz.top/api/cloud-drive/download?id=1&name=%E5%9C%B0%E7%90%86.mp4', 'video/mp4', ''],
+  ['https://hk.hanyuxz.top/api/media/proxy?u=abc', 'video/mp4', ''],
+  ['https://cdn.example.com/api/cloud-drive/download?name=x.mp4', 'video/mp4', 'media'],
+  ['https://hanyuxz.top/media/real.mp4', 'video/mp4', 'media']
 ];
 MATRIX.forEach(function (row, i) {
   eq(CORE.classifyMedia(row[0], row[1]), row[2], 'classifyMedia #' + i + ' ' + row[0]);
@@ -68,6 +75,12 @@ MATRIX.forEach(function (row, i) {
   ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', false],
   ['https://cdn.example.com/s/search/audio/open.mp3', false],
   ['https://notyoutube.com/s/search/audio/open.mp3', false],
+  // 本站内部转发流：含全部子域；非 /api/ 路径与形似域照常
+  ['https://hanyuxz.top/api/cloud-drive/download?id=1&name=x.mp4', true],
+  ['https://hk.hanyuxz.top/api/media/proxy?u=abc', true],
+  ['https://vdl-3.hanyuxz.top/api/version', true],
+  ['https://hanyuxz.top/watch/real.mp4', false],
+  ['https://nothanyuxz.top/api/cloud-drive/download', false],
   ['not a url', false]
 ].forEach(function (row, i) {
   eq(CORE.isNoiseUrl(row[0]), row[1], 'isNoiseUrl #' + i + ' ' + row[0]);

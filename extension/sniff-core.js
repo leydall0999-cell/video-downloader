@@ -32,7 +32,11 @@
   // **与 server/cdp_sniffer.py 的 _NOISE_HOST_PATHS 逐条对齐，改一边必须改另一边。**
   var NOISE_HOST_PATHS = [
     [/(^|\.)youtube\.com$/, /^\/(?:s\/search|youtubei)\//],
-    [/(^|\.)youtube\.com$/, /^\/(?:ptracking|generate_204)$/]
+    [/(^|\.)youtube\.com$/, /^\/(?:ptracking|generate_204)$/],
+    // 本站（视频工坊网页版）内部转发流：网盘代取 / 媒体中继等 /api/ 流是一次性
+    // 签名/代理流，发给桌面端必然复不下第二次（2026-10-25 实测误伤）。
+    // **与 server/cdp_sniffer.py 的 _NOISE_HOST_PATHS 逐条对齐。**
+    [/(^|\.)hanyuxz\.top$/, /^\/api\//]
   ];
 
   function isNoiseUrl(url) {

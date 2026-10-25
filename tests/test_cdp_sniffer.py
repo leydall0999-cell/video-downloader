@@ -51,6 +51,13 @@ from cdp_sniffer import (  # noqa: E402
     # 只吃「该主机的内部路径」：别的站点同样路径、以及 YouTube 的非内部路径都照常展示
     ("https://cdn.example.com/s/search/audio/success.mp3", "audio/mpeg", "media"),
     ("https://www.youtube.com/clip/audio/real.mp3", "audio/mpeg", "media"),
+    # 本站 /api/ 内部转发流（2026-10-25 实测）：文件名在 name= 查询参数里、
+    # 路径无后缀，mime video/mp4 → 原被当成「直链」；现在按本站噪声丢弃。
+    # 形似域 / 非 /api/ 路径照常展示。
+    ("https://hanyuxz.top/api/cloud-drive/download?id=1&name=%E5%9C%B0%E7%90%86.mp4", "video/mp4", ""),
+    ("https://hk.hanyuxz.top/api/media/proxy?u=abc", "video/mp4", ""),
+    ("https://cdn.example.com/api/cloud-drive/download?name=x.mp4", "video/mp4", "media"),
+    ("https://hanyuxz.top/media/real.mp4", "video/mp4", "media"),
 ])
 def test_classify_media(url, mime, expect):
     assert classify_media(url, mime) == expect
@@ -65,6 +72,13 @@ def test_classify_media(url, mime, expect):
     ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", False),
     ("https://cdn.example.com/s/search/audio/open.mp3", False),
     ("https://notyoutube.com/s/search/audio/open.mp3", False),
+    # 本站内部转发流（2026-10-25 实测）：网盘代取/媒体中继的 /api/ 流是一次性
+    # 签名链接，嗅探发桌面端必然失败 —— 含全部子域；非 /api/ 路径与形似域照常
+    ("https://hanyuxz.top/api/cloud-drive/download?id=1&name=x.mp4", True),
+    ("https://hk.hanyuxz.top/api/media/proxy?u=abc", True),
+    ("https://vdl-3.hanyuxz.top/api/version", True),
+    ("https://hanyuxz.top/watch/real.mp4", False),
+    ("https://nothanyuxz.top/api/cloud-drive/download", False),
     ("not a url", False),
 ])
 def test_is_noise_url(url, expect):

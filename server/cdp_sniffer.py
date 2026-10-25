@@ -85,6 +85,11 @@ _IGNORED_SUFFIXES = (".vtt", ".srt", ".ass", ".jpg", ".jpeg", ".png", ".webp", "
 _NOISE_HOST_PATHS = (
     (re.compile(r"(^|\.)youtube\.com$"), re.compile(r"^/(?:s/search|youtubei)/")),
     (re.compile(r"(^|\.)youtube\.com$"), re.compile(r"^/(?:ptracking|generate_204)$")),
+    # 本站（视频工坊网页版）内部转发流：网盘代取 /api/cloud-drive/download、
+    # 媒体中继 /api/media/proxy、直链下载等都是**一次性签名/代理流**，浏览器嗅探到
+    # 发给桌面端后必然复不下第二次（2026-10-25 实测：报「版权保护」的误分类任务）。
+    # 本站媒体一律用站内下载 UI，嗅探直接丢弃。含所有子域（hk./vdl-N.）。
+    (re.compile(r"(^|\.)hanyuxz\.top$"), re.compile(r"^/api/")),
 )
 
 
