@@ -424,7 +424,9 @@ class TaskStore:
             if task is None or task.is_finished:
                 return False
             task.cancel_requested = True
-            if task.status == "pending":
+            if task.status in ("pending", "paused"):
+                # pending：还没起线程；paused：线程已退出、没人再消费标志——
+                # 两者都必须就地置终态，否则「暂停中点取消」永远停不下来（2026-10-26）。
                 task.status = "canceled"
                 task.error = "已取消下载"
                 task.add_step("排队等待", "error", "用户已取消")

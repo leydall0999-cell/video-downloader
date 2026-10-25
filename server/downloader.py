@@ -5780,6 +5780,14 @@ class _NetdiskCanceled(Exception):
     """网盘直链下载被用户取消 / 看门狗终止。"""
 
 
+class _NetdiskPaused(Exception):
+    """网盘直链下载被用户暂停（2026-10-26）。
+
+    🔴 与取消的本质区别：**保留 `netdisk.part`**，下次 run_download 发现
+    part 存在 → 带 `Range: bytes={size}-` 断点续传、追加写入。
+    """
+
+
 # Content-Type → 扩展名（只在解析阶段没给到带扩展名的文件名时兜底）
 _NETDISK_EXT_BY_CT = {
     "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/mp4": ".m4a",
@@ -5847,49 +5855,80 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
         return
     workdir.mkdir(parents=True, exist_ok=True)
 
+    part = workdir / "netdisk.part"
+    # 🔴 断点续传（2026-10-26）：暂停会保留 part；重启下载时若 part 存在 →
+    # 带 Range 从已下字节继续、追加写入。服务端若不按 Range 返回 206
+    # （直链过期/不支持）则回退整文件重下——绝不能把 200 全量 append 进旧 part。
+    resume_from = 0
+    if part.exists():
+        try:
+            resume_from = part.stat().st_size
+        except OSError:
+            resume_from = 0
+
     headers = {
         "User-Agent": _NETDISK_DOWNLOAD_UA,
         # 🔴 必需，不能省：百度 CDN 对不带 Range 的 GET 直接 403，
         # 且把原因伪装成 31326「无权限」/ 31360「直链过期」，极难排查。
         "Range": "bytes=0-",
     }
+    if resume_from > 0:
+        headers["Range"] = f"bytes={resume_from}-"
     if cookie:
         headers["Cookie"] = cookie
     proxies = {"http": proxy, "https": proxy} if proxy else None
-    part = workdir / "netdisk.part"
     started = time.time()
     last_push = 0.0
+    done = 0
+    total = int(getattr(task, "total_bytes", 0) or 0)
 
-    store.update(task.id, status="downloading", progress=0.0, speed=0.0, eta=0)
-    task.add_step("下载文件", "running", "连接中…")
+    store.update(task.id, status="downloading", speed=0.0, eta=0,
+                 downloaded_bytes=resume_from,
+                 progress=round(resume_from / total * 100.0, 1) if (total and resume_from) else 0.0)
+    task.add_step("下载文件", "running",
+                  f"续传第 {resume_from} 字节…" if resume_from else "连接中…")
 
     try:
         with requests.get(task.url, headers=headers, proxies=proxies, stream=True,
                           timeout=(15, 60), allow_redirects=True) as r:
             if r.status_code >= 400:
                 raise RuntimeError(f"HTTP {r.status_code}")
+            append = False
+            if resume_from > 0 and r.status_code == 206:
+                # 服务端确认从断点继续：Content-Length 是「剩余字节数」
+                append = True
+                done = resume_from
+            elif resume_from > 0:
+                # 服务端没按 Range 续传（返回 200 全量）→ 从头重下，覆盖旧 part
+                resume_from = 0
+                done = 0
             total = int(r.headers.get("Content-Length") or 0)
+            if append:
+                total += resume_from
             if total:
                 store.update(task.id, total_bytes=total, filesize=total)
-            done = 0
-            with open(part, "wb") as fh:
+            with open(part, "ab" if append else "wb") as fh:
                 for chunk in r.iter_content(256 * 1024):
                     if not chunk:
                         continue
                     if task.cancel_requested or task.is_finished:
                         raise _NetdiskCanceled()
+                    if task.pause_requested:
+                        raise _NetdiskPaused()
                     fh.write(chunk)
                     done += len(chunk)
                     now = time.time()
                     if now - last_push >= 0.5:
                         last_push = now
                         elapsed = max(now - started, 0.001)
-                        speed = done / elapsed
+                        # 速度只算本次会话新下的字节：续传时 done 含历史断点，
+                        # 直接除会把 100MB 历史 / 1s 算成 100MB/s 假速度。
+                        speed = (done - resume_from) / elapsed
                         store.update(
                             task.id,
                             downloaded_bytes=done,
                             progress=round(done / total * 100.0, 1) if total else 0.0,
-                            speed=round(speed, 1),
+                            speed=round(max(speed, 0.0), 1),
                             eta=int((total - done) / speed) if (total and speed > 0) else 0,
                         )
             out_name = _netdisk_output_name(task, r.headers.get("Content-Type", ""), r.url)
@@ -5897,6 +5936,18 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
         part.unlink(missing_ok=True)
         if not task.is_finished:
             store.update(task.id, status="canceled", error="已取消")
+        return
+    except _NetdiskPaused:
+        # 🔴 与取消的本质区别：保留 netdisk.part，点「继续」带 Range 断点续传。
+        try:
+            kept = part.stat().st_size
+        except OSError:
+            kept = done
+        task.add_step("下载文件", "pending", "已暂停（点「继续」断点续传）")
+        task.log(f"用户暂停网盘下载：已下 {kept} 字节，保留 .part 供续传")
+        store.update(task.id, status="paused", speed=0.0, eta=0,
+                     downloaded_bytes=kept,
+                     progress=round(kept / total * 100.0, 1) if total else 0.0)
         return
     except Exception as exc:  # noqa: BLE001
         part.unlink(missing_ok=True)
