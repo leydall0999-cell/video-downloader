@@ -16,7 +16,9 @@
 
   代理走 `POST /api/cookie/pool-admin`，鉴权复用既有的
   `VDL_COOKIE_SYNC_TOKEN`（桌面端 `~/.videodownloader/cloud_sync.json` 已配）。
-  该接口只暴露脱敏信息（账号哈希 / 时间 / 状态），不返回任何 Cookie 明文。
+  概览 / 校验 / 注入 / 删除只暴露脱敏信息（账号哈希 / 时间 / 状态）；
+  **唯一返回 Cookie 明文的是 `get`**（2026-10-25 为「桌面端回读云端池」新增）——
+  该令牌本就允许 inject（写池），读不扩大暴露面，且仍只放行白名单域。
 
 四个动作
 --------
@@ -43,6 +45,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -706,6 +709,33 @@ def _do_delete(domain: str, ids: Any) -> dict:
 
 # ─── 云端代理（桌面 App → vdl-worker）────────────────────────────────────────
 
+def _do_get(domain: str) -> dict[str, Any]:
+    """桌面端回读：取该域最新有效的 Cookie 明文（+ 优酷 ckey）。
+
+    背景（2026-10-25）：桌面 App 的本机池目录在从未喂过池的机器上不存在，
+    本机池恒 miss ⇒ 桌面用户没在浏览器登录的站一律解析失败，而云端池是满的。
+    桌面端在本机池 miss 时经本动作回读云端登录态，零操作复用。
+
+    安全口径与 inject 对等：同一把同步令牌本就允许「写池」，读不扩大暴露面；
+    只放行白名单域；未命中返回空 header（不是错误）。
+    """
+    if not domain:
+        return {"ok": False, "error": "缺少 domain 参数"}
+    _log = logging.getLogger(__name__)
+    root = cp._strip_sub(domain)
+    if not cp.is_allowed(root):
+        _log.info("[cookie_pool] get 拒绝非白名单域 domain=%s", domain)
+        return {"ok": True, "domain": root, "header": "", "ckey": ""}
+    header = cp.get_cookie(domain) or ""
+    ckey = ""
+    if root == "youku.com":
+        # ckey 与 Cookie 同域存储（优酷 UPS 签名用），桌面端一起回读
+        ckey = cp.get_ckey(domain) or ""
+    _log.info("[cookie_pool] get domain=%s hit=%s ckey=%s",
+              root, bool(header), bool(ckey))
+    return {"ok": True, "domain": root, "header": header, "ckey": ckey}
+
+
 def _cloud_cfg() -> tuple[str, str]:
     """云端池的地址与令牌。与 app.py 的 `_cloud_sync_config` 同源同优先级。
 
@@ -878,11 +908,11 @@ def admin_cookies_delete(payload: dict[str, Any] = Body(...),
 
 @router.post("/api/cookie/pool-admin")
 def cookie_pool_admin(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """云端池的管理入口，仅服务桌面 App 后台代理。
+    """云端池的管理入口，仅服务桌面 App 后台代理 / 解析回读。
 
     鉴权用 `VDL_COOKIE_SYNC_TOKEN`（与 /api/cookie/sync 同一把钥匙）：
-    这把钥匙本来就允许「写池」，所以再允许「读池概况 / 验真 / 删除」不扩大暴露面；
-    返回体里**没有任何 Cookie 明文**，只有账号哈希、项数、时间、状态。
+    这把钥匙本来就允许「写池（inject）」，所以再允许「读概况 / 验真 / 删除 /
+    回读（get）」不扩大暴露面。除 get 外，返回体里没有任何 Cookie 明文。
     """
     tok = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()
     if not tok or str((payload or {}).get("token") or "") != tok:
@@ -890,6 +920,9 @@ def cookie_pool_admin(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     action = str((payload or {}).get("action") or "overview")
     if action == "overview":
         return _overview()
+    if action == "get":
+        # 桌面端解析回读云端池（2026-10-25）：唯一返回 Cookie 明文的动作
+        return _do_get(str((payload or {}).get("domain") or "").strip())
     if action == "verify":
         return _do_verify(str((payload or {}).get("domain") or "").strip())
     if action == "inject":

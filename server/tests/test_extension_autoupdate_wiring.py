@@ -451,16 +451,28 @@ def section_d_no_tcc_scan():
     check("D2 App 自己的受管目录**不是**受保护目录（否则自己把自己锁死）",
           es.is_tcc_protected(es.managed_dir()) is False, str(es.managed_dir()))
 
-    # ③ 真调用被拒：写路径。刻意用一个**不存在**的下载目录路径来探测，
+    # ③ 真调用被拒：写路径。刻意用一个**不存在**的目录路径来探测，
     #    这样既能验证「危险路径优先拦」，又不会真往用户的下载目录里建东西。
     root = Path(tempfile.mkdtemp(prefix="exttcc_", dir=_TMP))
     src_dir = _write_ext(root / "src", _NAME, "9.9.9")
-    probe = home / "Downloads" / "_vdl_tcc_guard_probe_not_exist"
-    res = es.sync_to(probe, src_dir, _NAME, allow_empty=True)
-    check("D3 写受保护目录被拒（且先于「目录不存在」判定：危险路径优先拦）",
-          res.get("ok") is False and "隐私保护目录" in str(res.get("error")), res)
-    check("D3 拒绝信息里直接给出受管目录（用户知道该改成哪儿）",
-          str(es.managed_dir()) in str(res.get("error")), res.get("error"))
+    if sys.platform == "darwin":
+        probe = home / "Downloads" / "_vdl_tcc_guard_probe_not_exist"
+        res = es.sync_to(probe, src_dir, _NAME, allow_empty=True)
+        check("D3 写受保护目录被拒（且先于「目录不存在」判定：危险路径优先拦）",
+              res.get("ok") is False and "隐私保护目录" in str(res.get("error")), res)
+        check("D3 拒绝信息里直接给出受管目录（用户知道该改成哪儿）",
+              str(es.managed_dir()) in str(res.get("error")), res.get("error"))
+    else:
+        # 非 macOS 没有 TCC 概念（D2 已钉死「不判定为受保护」），但「.app 包内路径」
+        # 是跨平台禁令——写进应用包会破坏签名。用一个不存在的 .app 内路径探测：
+        # 被拒理由必须是「签名」而不是「目录不存在」，顺序才算对（危险路径优先拦）。
+        # 2026-10-25：Windows 反斜杠路径曾让 ".app/" 正斜杠子串匹配失效、守卫成死码。
+        probe = root / "VideoDownloader.app" / "Contents" / "Resources" / "extension"
+        res = es.sync_to(probe, src_dir, _NAME, allow_empty=True)
+        check("D3 写 .app 包内路径被拒（且先于「目录不存在」判定：危险路径优先拦）",
+              res.get("ok") is False and "签名" in str(res.get("error")), res)
+        check("D3 拒绝原因是包内路径而非「目录不存在」（守卫顺序正确）",
+              "目录不存在" not in str(res.get("error")), res.get("error"))
 
     # ③ 真调用被拒：config 路径（否则用户手选一个下载目录就会把 App 配到卡死）
     try:

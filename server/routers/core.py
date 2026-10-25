@@ -517,8 +517,10 @@ def stream_proxy(u: str='', cookie: str='', request: app.Request=None):
 def cookie_status(url: str='') -> dict:
     """探测本机浏览器是否含目标站点的登录 Cookie，供前端「检测登录态」与解析后自动提示。
 
-    返回 available/browser/profile：前端据此告知用户「已自动读取，无需手动粘贴」
-    或「未检测到，请先在浏览器登录该平台，或手动粘贴 Cookie」。
+    2026-10-24：返回体新增 status / label / count / running / hint。
+    原先把这些字段丢掉，前端只能拿到 available=True/False —— 用户看不出
+    「到底是从哪个浏览器读到的」「读不到是因为没登录还是浏览器锁着库」，
+    而这正是 Windows 上最常见的两种故障，必须能区分提示。
     """
     if not url:
         raise app.HTTPException(status_code=400, detail='请提供链接')
@@ -526,7 +528,19 @@ def cookie_status(url: str='') -> dict:
     url, platform = app.parse_source(url)
     host = app._host_of(url)
     info = app.downloader.detect_browser_cookie(host)
-    return {'host': host, 'platform': platform.key, 'needed': app.downloader.is_cookie_hardened_host(host), 'available': info['available'], 'browser': info['browser'], 'profile': info['profile']}
+    return {
+        'host': host,
+        'platform': platform.key,
+        'needed': app.downloader.is_cookie_hardened_host(host),
+        'available': info.get('available', False),
+        'browser': info.get('browser'),
+        'label': info.get('label'),
+        'profile': info.get('profile'),
+        'running': info.get('running', False),
+        'count': info.get('count', 0),
+        'status': info.get('status', 'absent'),
+        'hint': info.get('hint', ''),
+    }
 
 @router.post('/api/cookie/cache/clear')
 def cookie_cache_clear() -> dict:

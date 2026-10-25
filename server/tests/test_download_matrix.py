@@ -25,6 +25,13 @@ from tasks import DownloadTask  # noqa: E402
 
 _A2C_PATH = "/usr/local/bin/aria2c"
 
+# Windows 上 aria2c 被**全面禁用**（2026-10-18 用户实测：GUI 进程 fork 出的
+# aria2c.exe 不断弹控制台黑窗且起不来，窗口挂住不退出）。所以「有 aria2c 就该用它」
+# 这组断言只在非 Windows 成立；在 Windows 上它们测的是一个已被有意取消的行为，
+# 直接 return（脚本模式与 pytest 模式都兼容，Windows 下该测试平凡通过），
+# 否则真正的回归会被这两条噪声盖住。
+_WIN_SKIP_ARIA2C = sys.platform == "win32"
+
 
 def _with_aria2c(available: bool, fn) -> None:
     orig = downloader._aria2c_path
@@ -43,6 +50,9 @@ def test_retry_matrix_no_aria2c():
 
 
 def test_retry_matrix_with_aria2c():
+    if _WIN_SKIP_ARIA2C:
+        return
+
     def run():
         # auto + 有 aria2c → 原策略实际用 aria2c → 变体切 native
         assert _retry_matrix("") == [("", False), ("native", False), ("", True)]
@@ -134,6 +144,9 @@ def test_download_options_auto_native_fallback():
 
 
 def test_download_options_auto_uses_aria2c():
+    if _WIN_SKIP_ARIA2C:
+        return
+
     def run():
         task = _mk_task()
         opts = downloader._download_options(task, "best", _FakeReporter())

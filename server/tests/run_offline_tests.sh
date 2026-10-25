@@ -79,8 +79,9 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVER="$REPO/server"
 
 # 优先用项目 build venv（含 requests / fastapi / httpx），否则回退 managed python
+# Windows 构建机（build_win.sh）venv 在 .build_venv/Scripts/，与 mac 的 bin/ 并列候选。
 PY=""
-for cand in "$REPO/.build_venv/bin/python" "/Users/suixindelang/.workbuddy/binaries/python/versions/3.13.12/bin/python3"; do
+for cand in "$REPO/.build_venv/bin/python" "$REPO/.build_venv/Scripts/python.exe" "/Users/suixindelang/.workbuddy/binaries/python/versions/3.13.12/bin/python3"; do
   if [ -x "$cand" ]; then PY="$cand"; break; fi
 done
 if [ -z "$PY" ]; then
@@ -1173,6 +1174,18 @@ run_root test_bilibili_cookie_fix.py
 run_root test_bilibili_url_normalize.py
 run_pytest_root test_cdp_sniffer.py
 run_pytest_root test_chrqj_extractor.py
+# 搜狐多分片聚合：SohuIE 一集剧切成 N 个 mp4（part1 常只有几秒片头），原实现只取
+# entries[0] ⇒ 用户下到 9 秒残片；且 multi_video 整个丢给 yt-dlp 也不会合并
+# （outtmpl 相同会后片覆盖前片）。钉住聚合判据 + 档位映射（纯函数，不联网）。
+run_pytest_root test_sohu_multipart.py
+# 全平台路由/解析修掉的三处问题（2026-10-25 实测）：西瓜视频不再改写成抖音
+# （ID 不互通，改写只会白等 30s+ 并盖掉真实原因）；西瓜无 Cookie 直接抛
+# cookie_required；网易云单曲不再走 weibo /mv/detail。
+run_pytest_root test_platform_routing_fixes.py
+# 小红书短链展开 + Windows 浏览器 Cookie 兜底：_expand_xhs_short 必须能从
+# 「落在 /login?redirectPath=…」的展开结果里解出笔记页，否则桌面 UA 下短链
+# 必被误判「无法展开」，还会给用户一句错误的「任何下载工具都无法解析」。
+run_pytest_root test_xhs_short_link.py
 # 网盘（百度）解析：新接口四步 verify→tplconfig→list→sharedownload
 # （sharedownload 必须 form 编码 —— 改回 json= 百度会 errno=2，本用例是回归防护）、
 # 登录态三态、路由层登录态取用顺序（2026-10-23 接入）
@@ -1192,6 +1205,10 @@ run_pytest_root test_commentary_routes.py
 run_pytest_root test_commentary_stash.py
 run_pytest_root test_commentary_work_purge.py
 run_pytest_root test_cookie_cache.py
+# browser_cookies：「自动读取浏览器登录态」的唯一入口。它静默失败时上层只看到
+# 「未检测到登录态」——用户以为是自己没登录，实际是解密/枚举/挑 profile 出了问题。
+# 这类故障没有异常、没有日志，只能靠用例把每一环的契约钉死（离线，不碰真实浏览器数据）。
+run_pytest_root test_browser_cookies.py
 run_root test_cookie_pool_bilibili.py
 run_pytest_root test_cookie_sync_ratelimit.py
 run_root test_crypto_unit.py
@@ -1277,6 +1294,13 @@ run_pytest_root test_cookie_browser_push.py # 登录态推送闸门 + 根域回�
 #    ④ 注入必须先验真再入池（无效拒收）、多行粘贴逐行校验防 CRLF 头注入；
 #       云端入口只暴露脱敏信息，且必须带 VDL_COOKIE_SYNC_TOKEN。
 run_pytest_root test_admin_cookies_panel.py # 后台 Cookie 池：概览/校验/注入/删除/云端代理
+
+#  test_cloud_pool_readback.py —— 桌面端回读云端池（2026-10-25）
+#    ① 本机池 miss → 回读云端 get：命中/未命中/旧版云端 400/不可达 都不抛；
+#    ② 命中 5 分钟 TTL 缓存、未命中负缓存 1 分钟、不可达全局冷却 60s；
+#    ③ _pooled_cookie 本机优先（本地命中绝不调云端）；禁环境代理（防 407）；
+#    ④ 配置优先级 env > cloud_sync.json；服务端 _do_get 白名单/子域回落/ckey 仅优酷。
+run_pytest_root test_cloud_pool_readback.py
 
 #  test_usage_details_ledger.py —— 用量明细台账（2026-10-19）
 #    ① use_daily(title/platform) 把「下载了什么」写进 daily_details，供后台定位；

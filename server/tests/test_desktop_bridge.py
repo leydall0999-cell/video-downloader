@@ -40,7 +40,14 @@ class _FakeProc:
 
 
 def capture_script(kind, call_without_arg=False):
-    """调用 choose_files 并返回它生成的 osascript -e 参数列表。"""
+    """调用 choose_files 并返回它生成的 osascript -e 参数列表。
+
+    Windows（2026-10-22）：`choose_files` 走 ctypes 模态框（`_windows_choose_files`），
+    monkeypatch subprocess 拦不住 —— 真弹框会在无头回归环境里永久挂住。改拦
+    `_windows_choose_files` 本身，并把捕获到的 (exts, prompt) 合成与 mac 分支
+    结构一致的 osascript 命令行：下方断言校验的是「kind → 扩展名/提示语」映射
+    （本套件的立项目的），与平台无关，合成形态让同一批断言双平台复用。
+    """
     captured = {}
 
     def fake_run(cmd, capture_output=False, text=False, timeout=None, **kw):
@@ -50,6 +57,26 @@ def capture_script(kind, call_without_arg=False):
 
     real_run = subprocess.run
     subprocess.run = fake_run
+    real_win_choose = dl._windows_choose_files
+    if sys.platform == "win32":
+        def fake_win_choose(exts, prompt, multiple=True):
+            captured["exts"] = list(exts)
+            captured["prompt"] = prompt
+            ext_list = "{" + ", ".join(f'"{e}"' for e in exts) + "}"
+            script_lines = [
+                f'choose file of type {ext_list} with multiple selections allowed with prompt "{prompt}"',
+                'set out to ""',
+                'repeat with f in theFiles',
+                '  set out to out & POSIX path of f & linefeed',
+                'end repeat',
+                'return out',
+            ]
+            cmd = ["osascript"]
+            for line in script_lines:
+                cmd += ["-e", line]
+            captured["cmd"] = cmd
+            return []
+        dl._windows_choose_files = fake_win_choose
     try:
         api = dl.VdlApi()
         if call_without_arg:
@@ -58,6 +85,8 @@ def capture_script(kind, call_without_arg=False):
             api.choose_files(kind)
     finally:
         subprocess.run = real_run
+        if sys.platform == "win32":
+            dl._windows_choose_files = real_win_choose
 
     cmd = captured.get("cmd") or []
     # 期望形态：osascript -e <line1> -e <line2> ...
@@ -112,6 +141,17 @@ def _direct_save_section():
     # 入参/结果都写进临时目录，绝不碰用户真实的 ~/.video-downloader/save_panel
     dl._save_panel_dir = lambda: str(tmpdir)
     dl._ensure_save_panel_applet = lambda *a, **kw: fake_applet
+    # Windows（2026-10-22）：_choose_save_path 走 ctypes 模态框
+    # （_windows_choose_save_path），无头回归环境里真弹框会永久挂住。applet 机制
+    # 本身是纯 Python（文件 + Popen 桩），把模态框 shim 成与 mac 完全同款的两级
+    # 结构（applet → osascript 回落），下面整套用例原样复用，顺带在 Windows 上
+    # 守住「弹面板 / 取消 / 机制不可用」的返回语义不回归。
+    real_win_save = dl._windows_choose_save_path
+    if sys.platform == "win32":
+        dl._windows_choose_save_path = lambda p, s, lp="": (
+            dl._choose_save_path_via_applet(p, s, lp)
+            or dl._choose_save_path_via_osascript(p, s, lp)
+        )
 
     killed = []
 
@@ -158,7 +198,9 @@ def _direct_save_section():
           str(captured.get("popen", ["", "", ""])[2]).endswith("SavePanel.app"), captured.get("popen", []))
     check("启动前先清掉遗留 applet（pkill 只匹配 applet 可执行路径）",
           bool(killed) and killed[0][0] == "pkill"
-          and killed[0][-1].endswith("SavePanel.app/Contents/MacOS/applet"), killed[:1])
+          # os.path.join 的产物随平台变（Windows 是 \），归一化后再比后缀
+          and (killed[0][-1] or "").replace("\\", "/").endswith(
+              "SavePanel.app/Contents/MacOS/applet"), killed[:1])
     parts = captured.get("in_parts") or []
     check("入参第 1 行是随机数（识别本次结果）", len(parts) > 0 and len(parts[0]) > 8, parts[:1])
     check("入参第 2 行是提示语", len(parts) > 1 and parts[1] == "保存视频到", parts)
@@ -363,6 +405,7 @@ def _direct_save_section():
         dl._choose_save_path = real_choose
         dl._ensure_save_panel_applet = real_ensure
         dl._save_panel_dir = real_sp_dir
+        dl._windows_choose_save_path = real_win_save
         if real_requests is not None:
             sys.modules["requests"] = real_requests
         else:  # pragma: no cover
@@ -496,8 +539,12 @@ def _task_save_section():
         finally:
             subprocess.Popen = real_popen
         check("在访达中显示：文件存在 → OK", got_reveal == "OK", got_reveal)
-        check("在访达中显示：macOS 用 open -R（定位并选中，而不是只打开目录）",
-              bool(opened) and opened[-1][:2] == ["open", "-R"], opened[:1])
+        if sys.platform == "darwin":
+            check("在访达中显示：macOS 用 open -R（定位并选中，而不是只打开目录）",
+                  bool(opened) and opened[-1][:2] == ["open", "-R"], opened[:1])
+        else:
+            check("在访达中显示：Windows 用 explorer /select,（定位并选中）",
+                  bool(opened) and opened[-1][:2] == ["explorer", "/select,"], opened[:1])
         check("在访达中显示：路径不存在 → 如实报错（不静默）",
               got_missing.startswith("ERROR:"), got_missing)
     finally:
@@ -602,6 +649,10 @@ def _clipboard_read_section():
     `navigator.clipboard.readText()` 与 writeText 一样不可靠（WebKit 对 readText
     更严），所以读取也走原生桥。这里拦掉 subprocess.run，只检查调了哪个命令与
     返回值语义，绝不真去读用户剪贴板。
+
+    Windows（2026-10-22）：read_clipboard 先试 `win_clipboard` 真实 API，沙箱里
+    剪贴板内容不可控（读到真内容会让第一条断言必错）。装一个「API 不可用」桩
+    逼它走 powershell 回退，三条子用例（正常 / 异常 / 非零退出）才确定。
     """
     import types
 
@@ -612,42 +663,61 @@ def _clipboard_read_section():
         return types.SimpleNamespace(returncode=0, stdout=b"https://youtu.be/abc\n", stderr=b"")
 
     real_run = subprocess.run
-    subprocess.run = fake_run
+    real_win_cb = sys.modules.get("win_clipboard")
+    if sys.platform == "win32":
+        _cb = types.ModuleType("win_clipboard")
+
+        def _cb_boom():
+            raise RuntimeError("no clipboard api")
+
+        _cb.read_text = _cb_boom
+        sys.modules["win_clipboard"] = _cb
     try:
-        out = dl.VdlApi().read_clipboard()
+        subprocess.run = fake_run
+        try:
+            out = dl.VdlApi().read_clipboard()
+        finally:
+            subprocess.run = real_run
+
+        cmd = captured.get("cmd") or []
+        check("读取桥透传剪贴板原文（trim 交给前端，桥不加工）",
+              out == "https://youtu.be/abc\n", repr(out))
+        if sys.platform == "darwin":
+            check("读取桥调 pbpaste", cmd[:1] == ["pbpaste"], cmd)
+        if sys.platform == "win32":
+            check("读取桥 win32 回退 powershell（Get-Clipboard -Raw，API 不可用时）",
+                  cmd[:2] == ["powershell", "-NoProfile"], cmd[:2])
+        check("读取桥返回值不含 ERROR 前缀（否则会被当链接文本误判）",
+              not out.startswith("ERROR"), out)
+
+        # 读取失败/工具缺失：返回空串，绝不抛、也不得返回 ERROR 前缀
+        def boom(*_a, **_kw):
+            raise RuntimeError("no clipboard")
+
+        subprocess.run = boom
+        try:
+            out_err = dl.VdlApi().read_clipboard()
+        finally:
+            subprocess.run = real_run
+        check("读取桥异常时返回空串（不抛、不返回 ERROR 前缀）",
+              out_err == "", repr(out_err))
+
+        # 命令非零退出同样返回空串（不能把错误信息当剪贴板内容）
+        def rc_fail(cmd, capture_output=False, text=False, timeout=None, **kw):
+            return types.SimpleNamespace(returncode=1, stdout=b"", stderr=b"fail")
+
+        subprocess.run = rc_fail
+        try:
+            out_rc = dl.VdlApi().read_clipboard()
+        finally:
+            subprocess.run = real_run
+        check("读取桥命令非零退出返回空串", out_rc == "", repr(out_rc))
     finally:
-        subprocess.run = real_run
-
-    cmd = captured.get("cmd") or []
-    check("读取桥透传剪贴板原文（trim 交给前端，桥不加工）",
-          out == "https://youtu.be/abc\n", repr(out))
-    if sys.platform == "darwin":
-        check("读取桥调 pbpaste", cmd[:1] == ["pbpaste"], cmd)
-    check("读取桥返回值不含 ERROR 前缀（否则会被当链接文本误判）",
-          not out.startswith("ERROR"), out)
-
-    # 读取失败/工具缺失：返回空串，绝不抛、也不得返回 ERROR 前缀
-    def boom(*_a, **_kw):
-        raise RuntimeError("no clipboard")
-
-    subprocess.run = boom
-    try:
-        out_err = dl.VdlApi().read_clipboard()
-    finally:
-        subprocess.run = real_run
-    check("读取桥异常时返回空串（不抛、不返回 ERROR 前缀）",
-          out_err == "", repr(out_err))
-
-    # 命令非零退出同样返回空串（不能把错误信息当剪贴板内容）
-    def rc_fail(cmd, capture_output=False, text=False, timeout=None, **kw):
-        return types.SimpleNamespace(returncode=1, stdout=b"", stderr=b"fail")
-
-    subprocess.run = rc_fail
-    try:
-        out_rc = dl.VdlApi().read_clipboard()
-    finally:
-        subprocess.run = real_run
-    check("读取桥命令非零退出返回空串", out_rc == "", repr(out_rc))
+        if sys.platform == "win32":
+            if real_win_cb is not None:
+                sys.modules["win_clipboard"] = real_win_cb
+            else:  # pragma: no cover
+                sys.modules.pop("win_clipboard", None)
 
 
 def main():

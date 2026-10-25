@@ -76,7 +76,8 @@ class _FakeSession:
     """替身 requests.Session：记录调用，按 URL 回放固定响应。"""
 
     def __init__(self, records=None, page=PAGE_LITERAL,
-                 list_errno=0, verify_errno=0, dl_errno=0, dl_list=None):
+                 list_errno=0, verify_errno=0, dl_errno=0, dl_list=None,
+                 fm_info=None, fm_errno=0):
         self.headers = {}
         self.cookies = {}
         self.calls: list[tuple] = []
@@ -86,6 +87,10 @@ class _FakeSession:
         self._verify_errno = verify_errno
         self._dl_errno = dl_errno
         self._dl_list = dl_list
+        # filemetas 是新主路径（2026-10-24）。默认 info=[] 表示「没给直链」，
+        # 让老用例继续走 sharedownload 回退，保持既有断言不变。
+        self._fm_info = fm_info
+        self._fm_errno = fm_errno
 
     def get(self, url, **kw):
         self.calls.append(("GET", url, kw))
@@ -108,6 +113,10 @@ class _FakeSession:
                 return _Resp({"errno": self._list_errno})
             return _Resp({"errno": 0, "list": self._records,
                           "uk": UK, "share_id": SHARE_ID})
+        if "/api/filemetas" in url:
+            if self._fm_errno != 0:
+                return _Resp({"errno": self._fm_errno})
+            return _Resp({"errno": 0, "info": self._fm_info or []})
         if "/api/sharedownload" in url:
             if self._dl_errno != 0:
                 return _Resp({"errno": self._dl_errno})
@@ -247,6 +256,94 @@ def test_no_login_marks_need_login():
     assert files[0].need_login is True
     assert files[0].cookie == ""
     # 直链本身仍然拿到了（解析匿名可过，只是下载要登录态）
+    assert files[0].dlink == DLINK
+
+
+def test_anonymous_encrypted_dlink_returns_list_only():
+    """2026-10-24 实测回归：匿名换直链时百度返回加密字符串。
+
+    旧代码对 list 直接 item.get(...) → AttributeError，前端只看到
+    「'str' object has no attribute 'get'」。现在的契约：
+      · 不抛异常；返回文件清单（dlink 为空）+ need_login=True，
+        前端据此把下载按钮置灰并提示填 BDUSS。
+    """
+    p, _ = _patch_session(dl_list="ENCRYPTED_BASE64_BLOB==")
+    with p:
+        files = baidu.resolve_share(SHARE_URL, login_cookie="", pwd=PWD)
+    assert len(files) == 1
+    assert files[0].dlink == ""            # 拿不到直链
+    assert files[0].need_login is True     # 明确告知缺登录态
+    assert files[0].name == "001.17岁-刘德华.mp3"
+
+
+def test_logged_in_encrypted_dlink_raises_actionable_error():
+    """带登录态仍拿不到直链 = 真异常，必须是人话（不再崩成 AttributeError）。
+
+    2026-10-24 语义变更：sharedownload 现在**对谁都返回密文**（带不带 BDUSS 都一样），
+    所以这不再是「缺登录态」的问题，文案改为「接口变了 / 稍后重试」。
+    """
+    p, _ = _patch_session(dl_list="ENCRYPTED_BASE64_BLOB==")
+    with p:
+        with pytest.raises(ValueError) as ei:
+            baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=abc", pwd=PWD)
+    msg = str(ei.value)
+    assert "直链" in msg and "加密" in msg
+
+
+def test_filemetas_plain_dlink_is_preferred():
+    """主路径：/api/filemetas?dlink=1 直接给明文直链，命中后不再调 sharedownload。
+
+    2026-10-24 实测：sharedownload 已把 list 换成 AES 密文（带不带登录态都一样，
+    4184/4192 字符、16 字节对齐、客户端解不开），而同一账号体系的 filemetas
+    仍返回明文 dlink，故改成 filemetas 优先、sharedownload 兜底。
+    """
+    p, box = _patch_session(fm_info=[{"fs_id": int(FS_ID), "dlink": DLINK}])
+    with p:
+        files = baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=abc", pwd=PWD)
+    s = box["s"]
+    assert files[0].dlink == DLINK
+    urls = [u for _, u, _ in s.calls]
+    assert any("/api/filemetas" in u for u in urls)
+    assert not any("/api/sharedownload" in u for u in urls), "命中 filemetas 后不该再调 sharedownload"
+    fm = [u for u in urls if "/api/filemetas" in u][0]
+    assert "dlink=1" in fm and "type=dlink" in fm
+
+
+def test_dlink_headers_use_non_browser_ua():
+    """直链请求头必须用非浏览器 UA，且不带 Referer。
+
+    实测：带浏览器 UA（Chrome/Safari）一律 403 `error_code:31326 user is not authorized`；
+    官方客户端 UA / 非浏览器 UA 才能 206。Referer 同样会触发 403。
+    """
+    p, _ = _patch_session()
+    with p:
+        files = baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=abc", pwd=PWD)
+    h = files[0].headers
+    assert "Referer" not in h
+    assert "Mozilla" not in h["User-Agent"]
+    assert h["User-Agent"] == baidu.DLINK_UA
+
+
+def test_anonymous_search_cookie_is_not_login():
+    """只有百度搜索匿名 Cookie（无 BDUSS）时不能算已登录。
+
+    实测：这类 Cookie 多半来自「百度搜索」页，任何访客都有，传给网盘接口
+    照样拿不到直链；当成已登录会把「请填 BDUSS」这条可读提示盖成莫名错误。
+    """
+    assert baidu._has_baidu_login("BAIDUID=abc; PSTM=1") is False
+    assert baidu._has_baidu_login("BDUSS=xyz") is True
+    p, _ = _patch_session(dl_list="ENCRYPTED_BASE64_BLOB==")
+    with p:
+        files = baidu.resolve_share(SHARE_URL, login_cookie="BAIDUID=abc; PSTM=1", pwd=PWD)
+    assert files[0].need_login is True
+
+
+def test_dlink_list_with_non_dict_items_is_skipped():
+    """list 里夹带非 dict 条目时跳过而不是崩（防御性）。"""
+    p, _ = _patch_session(dl_list=["junk", {"fs_id": FS_ID, "dlink": DLINK}])
+    with p:
+        files = baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=abc", pwd=PWD)
+    assert len(files) == 1
     assert files[0].dlink == DLINK
 
 

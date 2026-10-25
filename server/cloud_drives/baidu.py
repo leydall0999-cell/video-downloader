@@ -14,11 +14,21 @@
      ① POST /share/verify        提取码 → 种 BDCLND cookie（即 sekey）
      ② GET  /share/tplconfig     取 sign / timestamp
      ③ GET  /share/list          列文件（顺带拿到 uk / share_id）
-     ④ POST /api/sharedownload   换 dlink（**必须 form 编码**，JSON 会 errno=2）
+     ④ GET  /api/filemetas?dlink=1  换 dlink（**明文字段 info[].dlink**）
    关键分工：①②③④ 全链路**匿名可过**，但 dlink 的 GET 下载**必须带登录态**
    （匿名 403 / error_code 31326 "user is not authorized"）。
    ⇒ 解析用的 Session 刻意**不带**登录 cookie（实测带全套 cookie 时
      tplconfig 会返回 HTML 而非 JSON）；登录态只塞进 CloudFile.cookie 给下载器。
+
+🔄 2026-10-24 换直链接口变更（重要，别改回去）：
+   原 ④ `/api/sharedownload` 已把 `list` 从数组换成 **AES 密文的 base64 字符串**
+   （单文件 4184 字符 / 3136 字节，16 字节对齐；带登录态后变 4192 字符但仍是密文）。
+   密钥不在客户端可获得范围内（sekey / sign / md5 等候选都试过解不开），
+   旧代码 `for item in list` 会直接 AttributeError。
+   现有两条实测可用的替代路径：
+     · `GET /api/filemetas?dlink=1&fsids=[..]&uk=&shareid=&type=dlink` → 明文 dlink，主路径
+     · dlink 下载时 UA 必须**非浏览器**（浏览器 UA 一律 403 31326），见 DLINK_UA
+   另注：同一 IP 短时间高频请求会触发 `hitcode:104` 频控（403），下载器需退避重试。
 """
 from __future__ import annotations
 
@@ -256,14 +266,64 @@ def share_list(s: requests.Session, surl: str, q: str) -> tuple[list, str, str]:
             str(j.get("share_id") or ""))
 
 
+# 百度 dlink（d.pcs.baidu.com）的 UA 白名单 —— 2026-10-24 实测：
+#   带**浏览器 UA** 一律 403 `{"error_code":31326,"error_msg":"user is not authorized"}`；
+#   官方客户端 UA / 空 UA / 非浏览器 UA（aria2、requests 默认）都能正常 206。
+# 这是百度的防盗链设计（浏览器 UA 不允许直取 PCS 直链），所以下载时必须
+# 显式指定客户端 UA，否则用户看到的是「未授权」而不是文件。
+DLINK_UA = "netdisk;P2SP;3.0.20.138"
+
+# filemetas 单次 fsids 上限（官方限制 100，超出返回 errno=2）
+_FILEMETAS_BATCH = 100
+
+
 def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str,
                  fs_ids: list, sekey: str, q: str) -> dict:
     """④ 换直链。返回 {fs_id: dlink}。
 
-    ⚠️ 必须 form 编码（data=），用 json= 百度会返回 errno=2。改回 JSON 是回归事故。
+    2026-10-24 改为双路径，顺序不能反：
+
+    ① **/api/filemetas?dlink=1 —— 主路径（明文）**
+       直接返回 `info[].dlink`，一次可批 100 个 fsid。
+       发现经过：`/api/sharedownload` 现在对谁都返回密文（见下），
+       而同一账号体系的 filemetas 仍给明文直链，且带登录态时更完整。
+
+    ② **/api/sharedownload —— 回退（老路径）**
+       实测它已把 `list` 从数组换成了 **AES 密文的 base64 字符串**
+       （单文件分享 4184 字符 / 3136 字节，正好 16 字节对齐；
+       带上登录态后变 4192 字符 —— 内容变了，但依然是密文）。
+       密钥不在客户端可得范围内（sekey / sign / md5 各种候选都试过解不开），
+       所以这条路现在基本不可用，只作兜底。
+       ⚠️ 它必须 form 编码（data=），用 json= 百度会返回 errno=2。
     """
-    if not fs_ids:
+    ids = [int(f) for f in fs_ids if str(f).isdigit()]
+    if not ids:
         return {}
+
+    out: dict = {}
+    for i in range(0, len(ids), _FILEMETAS_BATCH):
+        batch = ids[i:i + _FILEMETAS_BATCH]
+        url = (
+            f"{_BASE}/api/filemetas?dlink=1"
+            f"&fsids={urllib.parse.quote(json.dumps(batch))}"
+            f"&uk={uk}&shareid={share_id}&type=dlink&{q}"
+        )
+        try:
+            j = _json(s.get(url, timeout=_TIMEOUT))
+        except Exception:  # noqa: BLE001  网络抖动 → 走回退/下一个批次
+            continue
+        if j.get("errno") != 0:
+            continue
+        for item in j.get("info") or []:
+            if not isinstance(item, dict):
+                continue
+            fid = str(item.get("fs_id") or "")
+            if fid and item.get("dlink"):
+                out[fid] = item["dlink"]
+    if out:
+        return out
+
+    # ② 回退老接口
     url = (f"{_BASE}/api/sharedownload?sign={urllib.parse.quote(sign)}"
            f"&timestamp={ts}&{q}")
     body = {
@@ -273,7 +333,7 @@ def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str
         "sign": "",
         "uk": uk,
         "primaryid": share_id,
-        "fid_list": json.dumps([int(f) for f in fs_ids if str(f).isdigit()]),
+        "fid_list": json.dumps(ids),
         "path_list": "[]",
         "isPublic": "false",
         "extra": json.dumps({"sekey": sekey}),
@@ -281,8 +341,18 @@ def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str
     j = _json(s.post(url, data=body, timeout=_TIMEOUT))
     if j.get("errno") != 0:
         raise ValueError(_errno_msg(j.get("errno"), "获取下载直链失败"))
-    out: dict = {}
-    for item in j.get("list") or []:
+    lst = j.get("list")
+    if isinstance(lst, str):
+        # 走到这里说明 filemetas 也没给直链，只剩密文响应
+        raise ValueError(
+            "百度这次没返回可用的下载直链（接口返回了加密数据）。"
+            "请稍后重试；持续出现说明百度换了接口，需要更新版本"
+        )
+    if not isinstance(lst, list):
+        return {}
+    for item in lst:
+        if not isinstance(item, dict):   # 防御：偶发夹带非对象条目
+            continue
         fid = str(item.get("fs_id") or "")
         if fid and item.get("dlink"):
             out[fid] = item["dlink"]
@@ -292,6 +362,19 @@ def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str
 # ——————————————————————————————————————————————————————————————
 # 对外入口
 # ——————————————————————————————————————————————————————————————
+
+def _has_baidu_login(cookie: str) -> bool:
+    """判断 Cookie 头里是否含**百度网盘**的有效登录凭证。
+
+    只认 BDUSS。BAIDUID / BIDUPSID / PSTM / H_PS_PSSID 这些是百度搜索侧的
+    匿名标识，任何访客都有，跟网盘登录无关。2026-10-24 实测：把一份
+    「只有百度搜索匿名 Cookie」的头传给 sharedownload，百度照样返回加密 list
+    （`list` 字段是 4 KB 的密文而不是数组），于是只能报「请填 BDUSS」。
+    所以判定必须严格到 BDUSS —— 否则会自动读出来的匿名 Cookie 冒充登录态，
+    把「缺登录」这条可读提示盖成一句莫名的解密失败。
+    """
+    return bool(cookie) and "BDUSS=" in cookie
+
 
 def resolve_personal(path: str, cookie: str = "") -> list[CloudFile]:
     """个人网盘路径 —— 阶段 2 再做（新接口 /api/ostp/file/* 已定位未细测）。"""
@@ -342,10 +425,20 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
     # ⌁ 注意只有**这一步**要登录态：verify / tplconfig / list 仍必须匿名，
     #   带登录态请求 tplconfig 会返回 HTML（踩过）。
     s_dl = s
-    if login_cookie:
+    login_ok = _has_baidu_login(login_cookie)
+    if login_ok:
         s_dl = new_session(share_url)
         s_dl.headers["Cookie"] = login_cookie
-    dlinks = share_dlinks(s_dl, sign, ts, uk, share_id, fs_ids, sekey, q)
+    dlinks: dict = {}
+    try:
+        dlinks = share_dlinks(s_dl, sign, ts, uk, share_id, fs_ids, sekey, q)
+    except ValueError:
+        if login_ok:
+            raise       # 有登录态仍失败 = 真错误（errno 语义 / 风控），照旧抛给上层
+        # 匿名申请直链会拿到加密响应（见 share_dlinks 内注释，2026-10-24 实测）。
+        # 不当作致命错误：继续往下走，把「文件清单 + need_login」返回给前端，
+        # 让用户看到「有什么文件、缺什么才能下」，而不是一个空白面板。
+        dlinks = {}
     # 批量漏掉的逐个补一次（百度偶发只回一部分）
     missing = [f for f in fs_ids if str(f) not in dlinks]
     for fid in missing:
@@ -358,8 +451,8 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
     for r in files:
         fid = str(r.get("fs_id") or "")
         dlink = dlinks.get(fid) or ""
-        if not dlink:
-            continue
+        if not dlink and login_ok:
+            continue     # 有登录态却拿不到直链 = 这条真失败（最后统一报错）
         try:
             size = int(r.get("size") or 0)
         except (TypeError, ValueError):
@@ -369,8 +462,8 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
             size=size,
             dlink=dlink,
             cookie=login_cookie or "",
-            headers={"User-Agent": _UA, "Referer": share_url},
-            need_login=not bool(login_cookie),
+            headers={"User-Agent": DLINK_UA},
+            need_login=not login_ok,
         ))
     if not results:
         raise ValueError("未能从分享链接取到下载直链")

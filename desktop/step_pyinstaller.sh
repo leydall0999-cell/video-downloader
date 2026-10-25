@@ -25,6 +25,7 @@ echo "=== PYINSTALLER START $(date) ==="
   --add-data "$(W "$REPO/yt_dlp_plugins");yt_dlp_plugins" \
   --hidden-import app \
   --hidden-import downloader \
+  --hidden-import browser_cookies \
   --hidden-import platforms \
   --hidden-import tasks \
   --hidden-import yt_dlp_plugins \

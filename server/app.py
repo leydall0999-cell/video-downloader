@@ -4800,6 +4800,13 @@ def cookie_status(url: str = "") -> dict:
         "available": info["available"],
         "browser": info["browser"],
         "profile": info["profile"],
+        # 与 routers/core.py 的同名路由保持同形（路由注册顺序上 routers 先匹配，
+        # 但两份返回体必须一致，否则谁先谁后一变，前端就少字段）。
+        "label": info.get("label"),
+        "running": info.get("running", False),
+        "count": info.get("count", 0),
+        "status": info.get("status", "absent"),
+        "hint": info.get("hint", ""),
         "pool_updated_at": pool_ts,
     }
 

@@ -256,6 +256,7 @@ fi
   --add-data "$(_win "$REPO/server/assets");server/assets" \
   --hidden-import app \
   --hidden-import downloader \
+  --hidden-import browser_cookies \
   --hidden-import tts_guard \
   --hidden-import platforms \
   --hidden-import tasks \

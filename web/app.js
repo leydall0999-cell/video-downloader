@@ -17622,6 +17622,16 @@ el.dwVidPlayer.hidden = true;
 
   const cdDownload = async (f) => {
     if (!f || !f.dlink) return;
+    // 🔴 2026-10-24：网盘「下载」按钮是动态生成的 <button>（没有固定 id），因此走不到
+    // _LOGIN_GATED_ACTIONS 那套「按 id 拦截」的前端门禁 —— 未登录时请求被后端
+    // 401 NO_AUTH 拦下，界面上只留一句「下载失败：请先登录账号后再使用该功能」，
+    // 既没有登录入口，也看不出是账号问题（用户会怀疑是百度没登录）。
+    // 这里补同一道门禁：未登录先拉登录框，登录成功后自动继续这次下载。
+    if (typeof authToken === 'function' && !authToken()) {
+      try { window._pendingCdDownload = f; } catch (_) {}
+      _notifyNeedLogin('请先登录或注册账号，即可使用网盘下载');
+      return;
+    }
     try {
       const data = await request('/api/download', {
         method: 'POST',
@@ -17668,8 +17678,17 @@ el.dwVidPlayer.hidden = true;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn btn-sm btn-primary';
-      btn.textContent = '下载';
-      btn.addEventListener('click', () => cdDownload(f));
+      if (f.dlink) {
+        btn.textContent = '下载';
+        btn.addEventListener('click', () => cdDownload(f));
+      } else {
+        // 2026-10-24：百度对「未登录」的换直链请求返回加密响应，拿不到 dlink。
+        // 此时仍展示文件清单，但按钮必须显式禁用 —— 否则点了 cdDownload 直接 return，
+        // 用户看到的是「点了没反应」，比报错更难排查。
+        btn.textContent = '需登录';
+        btn.disabled = true;
+        btn.title = '请先在下方「百度登录态」粘贴 BDUSS 并保存，然后重新点「解析网盘」';
+      }
       li.appendChild(name);
       li.appendChild(size);
       li.appendChild(btn);
@@ -17678,6 +17697,40 @@ el.dwVidPlayer.hidden = true;
     if (needLogin) {
       cdSetStatus('已读到文件，但下载需要百度登录态：装了扩展并在浏览器登录过百度网盘会自动带上；否则在下面「百度登录态」里粘贴 BDUSS。', true);
       if (el.cdCredBox) el.cdCredBox.open = true;
+    }
+  };
+
+  // 登录成功后由登录回调调用：自动继续被门禁拦下的那次网盘下载。
+  // （cdDownload 是块作用域里的 const，登录回调在文件更下方拿不到它，故经 window 转一手）
+  window.__vdlCdResume = () => {
+    const f = window._pendingCdDownload;
+    try { window._pendingCdDownload = null; } catch (_) {}
+    if (f) { try { cdDownload(f); } catch (_) {} }
+  };
+
+  /** 说清楚「登录态到底是从哪个浏览器读的 / 为什么读不到」。
+   *
+   *  2026-10-24：这一段是新加的。原先 needLogin 只有一句笼统的「需要登录态」，
+   *  用户没法判断到底该去哪登录。而 Windows 上「读不到」有两种完全不同的原因：
+   *  ① 浏览器里确实没有（没登录）；② 浏览器开着，Chromium 独占锁住 Cookie 库
+   *  （Chrome/Edge/UC 都有反 cookie-stealer 锁，复制都失败）。对 ② 说「请登录」
+   *  是纯粹的误导 —— 必须让用户关掉浏览器或改用扩展推送。
+   */
+  const cdLoginSourceHint = async (url) => {
+    try {
+      const s = await request('/api/cookie/status?url=' + encodeURIComponent(url));
+      if (!s) return '';
+      const label = s.label || s.browser || '浏览器';
+      if (s.status === 'ok' && s.available) {
+        return `已从「${label}」读到 ${s.count} 条百度 Cookie${s.running ? '（该浏览器正在使用）' : ''}，`
+          + '但百度仍判定为未登录 —— 请在这个浏览器里登录百度账号后重新解析，或在下面粘贴 BDUSS。';
+      }
+      if (s.status === 'locked' || s.status === 'abe' || s.status === 'decrypt_failed') {
+        return (s.hint || `${label} 的登录态读不出来`) + '。';
+      }
+      return `本机浏览器里没有百度登录态（已查 ${label} 等已装浏览器）—— 请先在浏览器登录百度账号，或在下面粘贴 BDUSS。`;
+    } catch (e) {
+      return '';
     }
   };
 
@@ -17706,7 +17759,14 @@ el.dwVidPlayer.hidden = true;
       }
       const files = data.files || [];
       cdRender(files, !!data.need_login);
-      if (!data.need_login) cdSetStatus(`解析到 ${files.length} 个文件`, false);
+      if (!data.need_login) {
+        cdSetStatus(`解析到 ${files.length} 个文件`, false);
+      } else {
+        // 把「登录态从哪个浏览器读的 / 为什么读不到」补进状态行：
+        // 只说「需要登录态」用户不知道该去哪登录（Windows 上还可能是库被锁）。
+        const why = await cdLoginSourceHint(url);
+        if (why) cdSetStatus(why, true);
+      }
     } catch (e) {
       cdSetStatus('解析失败：' + (e && e.message ? e.message : e), true);
     } finally {
@@ -20026,6 +20086,11 @@ el.dwVidPlayer.hidden = true;
             window._pendingSubtitleExtract = false;
             setTimeout(() => { try { sbStartExtract(); } catch (_) {} }, 120);
           }
+          // 登录/注册前点了「网盘下载」的待办（动态按钮没有 id，走 window 钩子），
+          // 成功后自动继续；否则用户还得回网盘面板再点一次。
+          if (window._pendingCdDownload) {
+            setTimeout(() => { try { window.__vdlCdResume && window.__vdlCdResume(); } catch (_) {} }, 120);
+          }
           // 其他被登录门禁拦下的功能（转换/压缩/去水印/抠图…）登录成功后补点一次
           _replayGatedAction();
         }, 400);
@@ -21216,6 +21281,7 @@ el.dwVidPlayer.hidden = true;
   function _clearPendingActions() {
     try { window._pendingDownload = false; } catch (_) {}
     try { window._pendingSubtitleExtract = false; } catch (_) {}
+    try { window._pendingCdDownload = null; } catch (_) {}
     _pendingGatedId = '';
   }
   if (el.authModalClose) el.authModalClose.addEventListener('click', () => { if (_authLoading()) return; try { _clearPendingActions(); el.authModal.close(); } catch (_) {} });

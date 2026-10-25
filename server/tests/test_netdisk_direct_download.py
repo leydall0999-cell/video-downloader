@@ -91,18 +91,29 @@ class TestSourcing(unittest.TestCase):
         """直链下载的三个硬要求（2026-10-24 实测，缺一即 403）：
 
         1) 必须带 Range —— 裸 GET 会被判"无权限/过期"（伪错误码 31326/31360）；
-        2) 不能用 P2SP 那个 UA —— 同一链接 P2SP UA 403、浏览器 UA 206；
+        2) UA 必须**运行时协商** —— 百度按「账号 + UA」分桶：白天 SVIP 账号
+           浏览器 UA 206 / P2SP UA 403，晚上非会员账号正好相反。写死任何一个
+           UA 都会在另一类账号上 403 31326，所以不能断言「必须用某个常量」，
+           只能断言「不能写死」：UA 由 _pick_netdisk_ua 探测后填入；
         3) 必须带登录态 Cookie。
         """
         src = _src()
         idx = src.find("def _download_netdisk_direct(")
         body = src[idx:idx + 3000]
         self.assertIn('"Range": "bytes=0-"', body, "缺 Range：百度会直接 403")
-        self.assertIn("_NETDISK_DOWNLOAD_UA", body, "必须用浏览器 UA，不能用 P2SP")
-        self.assertNotIn('"User-Agent": _NETDISK_UA', body, "P2SP UA 会被 403")
+        self.assertIn("_pick_netdisk_ua(", body, "UA 必须运行时协商，不能写死")
+        self.assertNotIn('"User-Agent": _NETDISK_UA', body, "写死 P2SP UA 会在部分账号上 403")
+        self.assertNotIn('"User-Agent": _NETDISK_DOWNLOAD_UA', body,
+                         "写死浏览器 UA 会在另一类账号上 403 —— 两个常量都只能作为候选")
         self.assertIn('headers["Cookie"] = cookie', body)
         # 单连接：不允许出现并发下载器参数
         self.assertNotIn("concurrent_fragments", body)
+
+    def test_netdisk_ua_candidates_cover_both_identities(self):
+        """两个 UA 候选都必须在表里，否则协商只会在同一类账号上打转。"""
+        self.assertEqual(
+            set(D._NETDISK_UA_CANDIDATES), {D._NETDISK_DOWNLOAD_UA, D._NETDISK_UA}
+        )
 
 
 if __name__ == "__main__":

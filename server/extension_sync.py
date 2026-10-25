@@ -288,7 +288,10 @@ def sync_to(load_dir, src_dir, expected_name: str, allow_empty: bool = False) ->
     except (OSError, RuntimeError) as exc:
         return {"ok": False, "error": f"路径解析失败：{exc}", "version": "", "written": 0, "unchanged": 0}
 
-    if any(s in str(target) for s in _FORBIDDEN_SUBSTR):
+    # 归一化分隔符再比对：Windows 路径是反斜杠，直接拿 "/Applications/"、".app/"
+    # 这类正斜杠子串去匹配等于永远不中——守卫会悄悄变成死码（2026-10-25 实测）。
+    norm = str(target).replace("\\", "/")
+    if any(s in norm for s in _FORBIDDEN_SUBSTR):
         return {"ok": False, "error": "拒绝写入应用包内路径（会破坏签名）",
                 "version": "", "written": 0, "unchanged": 0}
     if is_tcc_protected(target):

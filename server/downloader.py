@@ -395,6 +395,77 @@ def _expand_generic_302(url: str, proxy: str = "", allowed_hosts: tuple[str, ...
         logger.info("[short expand] %s failed: %s", url, str(e)[:120])
     return url
 
+# 小红书笔记页路径（explore / discovery 两种形态，ID 为 24 位 hex）
+_XHS_NOTE_PATH_RE = re.compile(r"/(?:explore|discovery/item)/[\da-f]{8,}")
+
+
+def _expand_xhs_short(url: str, proxy: str = "") -> str:
+    """把 xhslink.cn / xhslink.com 分享短链展开成 xiaohongshu.com 笔记页。
+
+    2026-10-25 实测更正：短链**本身可以展开**，之前「网页端一律 302 回首页、
+    任何下载工具都无法解析」的结论是错的。真正的坑是展开结果跟 UA 有关系：
+
+      · 移动 UA（iPhone/Android）→ 302 直达
+        https://www.xiaohongshu.com/discovery/item/<id>?xsec_token=…
+      · 桌面 Chrome UA → 302 到
+        https://www.xiaohongshu.com/login?redirectPath=<URL 编码的笔记页>
+
+    旧实现用桌面 UA，终点永远落在 /login?…，而判定条件只认 URL 里带
+    /explore/ 或 /discovery/item/，于是「展开成功却当成失败」，把短链原样
+    交给 yt-dlp → [generic] 失败 → 反过来又套上「短链无法解析」的错误文案。
+
+    这里做三路兜底：① 终点 URL 含笔记路径直接用；② 落在 /login 时从
+    redirectPath 里解出笔记页；③ 前面都没命中时回看 302 跳转链的 Location。
+    """
+    import requests as _requests
+    from urllib.parse import unquote as _unquote
+
+    _mobile_ua = (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+        "Mobile/15E148 Safari/604.1"
+    )
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    def _note_url(candidate: str) -> str | None:
+        """从候选 URL（可能是 /login?redirectPath=… 或纯笔记页）里提取笔记页。"""
+        if not candidate:
+            return None
+        if _XHS_NOTE_PATH_RE.search(candidate) and "xiaohongshu.com" in candidate:
+            # 兜底把 http:// 升到 https://（redirectPath 里是 http 形态）
+            return candidate.replace("http://www.xiaohongshu.com", "https://www.xiaohongshu.com", 1)
+        from urllib.parse import parse_qs as _parse_qs
+        try:
+            qs = _parse_qs(urlparse(candidate).query)
+        except Exception:
+            return None
+        for key in ("redirectPath", "redirect_path", "redirect"):
+            for raw in qs.get(key, [])[:1]:
+                inner = _unquote(raw)
+                if _XHS_NOTE_PATH_RE.search(inner) and "xiaohongshu.com" in inner:
+                    return inner.replace(
+                        "http://www.xiaohongshu.com", "https://www.xiaohongshu.com", 1
+                    )
+        return None
+
+    try:
+        r = _requests.get(
+            url,
+            headers={"User-Agent": _mobile_ua, "Referer": "https://www.xiaohongshu.com/"},
+            proxies=proxies,
+            allow_redirects=True,
+            timeout=15,
+        )
+        for hop in [r.url] + [h.headers.get("Location", "") for h in (r.history or [])]:
+            note = _note_url(hop)
+            if note:
+                logger.info("[xhs expand] %s -> %s", url, note[:160])
+                return note
+        logger.info("[xhs expand] %s 未拿到笔记页，终点=%s", url, (r.url or "")[:160])
+    except Exception as e:  # noqa: BLE001
+        logger.info("[xhs expand] %s failed: %s", url, str(e)[:160])
+    return url
+
 def _normalize_bilibili_url(url: str) -> str:
     """把 B站 长链/b23.tv BV 短链统一归一化为 www.bilibili.com/video/BVxxx 长链。
 
@@ -511,23 +582,15 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
             return expanded
         return _strip_tracking_params(url)
 
-    # 小红书短链 xhslink.cn / xhslink.com/o/xxx：302 展开为 xiaohongshu.com 详情页
-    # （yt-dlp XiaohongShuIE 只认 xiaohongshu.com 域，短链会落 generic 失败；
-    #  展开后的 xsec_token / share_id 等参数由 yt-dlp 自行处理，保留不剥离）
-    # 2026-09-25 实测：xhslink.com/o/xxx 是 App 专属深链，网页端（含真 Chrome）
-    # 一律 302 回首页——把首页当展开结果传给 yt-dlp 只会得到误导性的
-    # 「暂未实现该站的解析器」。故仅当展开结果含笔记路径（/explore/ 或
-    # /discovery/item/）才采用；否则保留 xhslink 原链，由 _friendly_error
-    # 的小红书专属分支给出精准指引。
+    # 小红书短链 xhslink.cn / xhslink.com/o/xxx：展开为 xiaohongshu.com 笔记页
+    # （yt-dlp XiaohongShuIE 只认 xiaohongshu.com 域，短链会落 generic 失败）
+    # 2026-10-25 实测更正：短链可以展开，只是必须用移动 UA；桌面 UA 会落在
+    # /login?redirectPath=…，需从参数里解出笔记页（细节见 _expand_xhs_short）。
     if "xhslink.cn" in url or "xhslink.com" in url:
-        expanded = _expand_generic_302(url, proxy=proxy,
-                                       allowed_hosts=("xiaohongshu.com",),
-                                       referer="https://www.xiaohongshu.com/")
-        if expanded != url and ("/explore/" in expanded or "/discovery/item/" in expanded):
+        expanded = _expand_xhs_short(url, proxy=proxy)
+        if expanded != url:
             logger.info("[normalize] %s -> %s", url, expanded)
             return expanded
-        if expanded != url:
-            logger.info("[normalize] %s -> %s（未展开为笔记页，保留原短链）", url, expanded)
         return url
 
     # 爱奇艺 直接 playShare 分享页（www.iqiyi.com/playShare.html?shareId=...）：
@@ -546,13 +609,22 @@ def _normalize_share_url(url: str, proxy: str = "") -> str:
         logger.info("[normalize] %s -> %s", url, normalized)
         return normalized
 
-    # 西瓜视频（字节跳动同系，视频ID互通）：ixigua.com/<ID> 直接链接
-    # 归一化为 douyin.com/video/<ID>，复用抖音解析通道即可正常解析下载。
-    m = re.search(r"ixigua\.com/(?:video/|i)?(\d{15,})", url)
-    if m:
-        normalized = f"https://www.douyin.com/video/{m.group(1)}"
-        logger.info("[normalize] %s -> %s", url, normalized)
-        return normalized
+    # 西瓜视频 ixigua.com/<ID>：**不要**改写成 douyin.com/video/<ID>。
+    # 2026-10-25 实测：两者视频 ID 并不互通，改写后抖音侧一律回「视频不存在」，
+    # 白等 30s+ 还把真实原因盖掉。西瓜走 _ixigua_info（yt-dlp IxiguaIE + 浏览器 Cookie）。
+
+    # 腾讯视频：把带 vid 的分享/合集链统一成单集页 —— yt-dlp 的 vqq:video 只认
+    # `v.qq.com/x/page/<vid>.html`。
+    # ① 移动端分享 http://m.v.qq.com/play/play.html?vid=z3183jgqz3e
+    #    → 直接喂 yt-dlp 是 "Unsupported URL"
+    # ② 合集页带参数 v.qq.com/x/cover/<cid>.html?vid=z3183jgqz3e
+    #    → 归一化后实测可出 8 条格式（2026-10-25 用真实微短剧分享链验证）
+    if "qq.com" in url:
+        _vm = re.search(r"[?&]vid=([a-z0-9]{8,})", url)
+        if _vm:
+            normalized = f"https://v.qq.com/x/page/{_vm.group(1)}.html"
+            logger.info("[normalize] %s -> %s", url, normalized)
+            return normalized
 
     # 其余平台：仅做通用追踪参数净化，零风险
     return _strip_tracking_params(url)
@@ -917,11 +989,8 @@ def _patch_bilibili_webpage_download(proxy: str = "", cookie: str = "", ua: str 
                 if not _ck:
                     # 本次请求没带 Cookie（未登录解析 / 调用方没传）→ 用公共池兜底。
                     # B 站对无 Cookie 的 HTML 请求恒返回 412，而池里已有登录态。
-                    try:
-                        from cookie_pool import get_cookie as _pool_get
-                        _ck = _pool_get("bilibili.com") or ""
-                    except Exception:
-                        _ck = ""
+                    # _pooled_cookie：本机池 miss 时回读云端池（桌面端本机池常为空）。
+                    _ck = _pooled_cookie("bilibili.com")
                 _ua = _bili_patch_ua(_BILIBILI_PATCH_STATE.get("ua") or ua)
                 # 🔴 2026-10-18 实测：`/video/BVxxx` **不带尾斜杠**时 B 站直接回 412，
                 #    带斜杠同 Cookie 同 UA 回 200（各测 2 次，稳定复现）。
@@ -1377,6 +1446,58 @@ _NETDISK_DOWNLOAD_UA = (
 )
 _NETDISK_HOST_RE = re.compile(r"(?:^|\.)(?:baidupcs\.com|pcs\.baidu\.com)$")
 
+# 🔴 UA 必须**运行时协商**，不能写死（2026-10-24 两次实测结果相反）：
+#   · 10-24 白天（SVIP 账号）：浏览器 UA + Range → 206 / 3.70 MB/s；
+#                               P2SP UA + Range → 403 31326
+#   · 10-24 晚上（非会员账号）：P2SP UA + Range → 206 / 123 KB/s；
+#                               浏览器 UA + Range → 403 31326
+# 结论：百度按「账号 + UA」分桶，哪个 UA 能过取决于登录的是哪个账号。
+# 所以这里同时准备两种身份，先探 1 字节确认哪个可用，再拿它下发正式请求；
+# 并记住上次成功的那一个，避免每次下载都多花一次探测请求（百度有频控）。
+_NETDISK_UA_CANDIDATES: tuple[str, ...] = (_NETDISK_DOWNLOAD_UA, _NETDISK_UA)
+_netdisk_ua_hint: str = ""
+
+
+def _pick_netdisk_ua(url: str, cookie: str, proxy: str) -> str:
+    """探测哪个 UA 能取到百度直链（返回可用的 UA，全失败则回默认）。
+
+    用 `Range: bytes=0-0`（1 字节）探，代价极小；命中后记进进程级 hint，
+    同一台机器后续下载直接复用，不再重复探测。
+    """
+    global _netdisk_ua_hint
+    candidates = list(_NETDISK_UA_CANDIDATES)
+    if _netdisk_ua_hint in candidates:      # 上次成功的优先
+        candidates.remove(_netdisk_ua_hint)
+        candidates.insert(0, _netdisk_ua_hint)
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    try:
+        import requests
+    except Exception:  # pragma: no cover
+        return candidates[0]
+    for ua in candidates:
+        try:
+            h = {"User-Agent": ua, "Range": "bytes=0-0"}
+            if cookie:
+                h["Cookie"] = cookie
+            r = requests.get(url, headers=h, proxies=proxies, stream=True,
+                             timeout=(10, 20), allow_redirects=True)
+            ok = r.status_code in (200, 206)
+            detail = ""
+            if not ok:
+                try:
+                    detail = r.text[:120]
+                except Exception:
+                    pass
+            r.close()
+            if ok:
+                _netdisk_ua_hint = ua
+                logger.info("[网盘] 直链 UA 协商成功：%s", ua)
+                return ua
+            logger.info("[网盘] UA 不可用（%s）：%s %s", ua[:24], r.status_code, detail)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("[网盘] UA 探测异常（%s）：%s", ua[:24], str(exc)[:80])
+    return candidates[0]
+
 
 def _is_netdisk_direct(url_or_host: str) -> bool:
     """是否百度网盘直链（d.pcs.baidu.com → 302 → *.baidupcs.com）。"""
@@ -1590,13 +1711,29 @@ _COOKIE_HARDENED_DOMAINS: tuple[str, ...] = (
 # 但 YouTube 的 Cookie 又必须能进公共池（否则桌面端推来会被 400 拒收），
 # 因此走 cookie_pool._POOL_EXTRA_DOMAINS 单独放行，两件事互不干扰。
 
-# 候选浏览器（按优先级）。Chrome/Edge/Brave/Chromium 的 Cookie 解密仅需 cryptography
-# （已打包进 .app），不依赖 brotli，故优先；Firefox 需 brotli，暂不入列。
-_BROWSER_COOKIE_PROFILES: tuple[tuple[str, str], ...] = (
-    ("chrome", "~/Library/Application Support/Google/Chrome/*/Cookies"),
-    ("edge", "~/Library/Application Support/Microsoft Edge/*/Cookies"),
-    ("brave", "~/Library/Application Support/BraveSoftware/Brave-Browser/*/Cookies"),
-    ("chromium", "~/Library/Application Support/Chromium/*/Cookies"),
+# 候选浏览器来源改为跨平台表（真源见 browser_cookies.py）。
+#
+# 2026-10-24 根因修复：这里原先写死 macOS 的 4 条路径
+# （~/Library/Application Support/...）。在 Windows 上这些 glob 全部落空，
+# 于是「自动读取浏览器登录态」在 Windows 端**一次都没生效过** ——
+# 百度网盘解析只能报「请填写 BDUSS」、B站/YouTube 也拿不到登录态，
+# 全是这一处导致的，不是网络或账号问题。
+#
+# 新表覆盖 Chromium 系 + 国产壳（UC/360/QQ/搜狗/2345）+ Firefox，并且
+# **优先当前正在运行的浏览器**（用户此刻登录的 profile 才是有效会话）。
+# 下方保留派生视图仅供旧引用兼容，新代码请直接用 browser_cookies。
+try:
+    import browser_cookies as _browser_cookies
+except Exception:  # pragma: no cover
+    _browser_cookies = None  # type: ignore[assignment]
+
+_BROWSER_COOKIE_PROFILES: tuple[tuple[str, str], ...] = tuple(
+    (s["key"], s["roots"][0]) for s in (_browser_cookies._BROWSER_SOURCES if _browser_cookies else ())
+)
+
+# yt-dlp 认识的浏览器名（其余如 UC/360/QQ 只能走自解密）
+_YTDLP_BROWSERS: frozenset[str] = frozenset(
+    {"brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"}
 )
 
 def is_cookie_hardened_host(host: str) -> bool:
@@ -1605,11 +1742,21 @@ def is_cookie_hardened_host(host: str) -> bool:
     return any(host == d or host.endswith(f".{d}") for d in _COOKIE_HARDENED_DOMAINS)
 
 def _detect_browser_cookie_source() -> str | None:
-    """探测本机已安装且含 Cookie 数据库的浏览器，返回 yt-dlp 可用的浏览器名。"""
-    for name, pattern in _BROWSER_COOKIE_PROFILES:
-        if glob.glob(os.path.expanduser(pattern)):
-            return name
-    return None
+    """探测本机已安装 Cookie 库的浏览器，返回浏览器名（优先正在运行的）。
+
+    用于「浏览器装了但该站没登录」时的提示文案，让用户知道去哪个浏览器登录。
+    """
+    if _browser_cookies is None:
+        return None
+    try:
+        installed = _browser_cookies.list_installed_browsers()
+    except Exception:
+        return None
+    if not installed:
+        return None
+    # 正在运行的排前面：提示用户「去你正在用的那个浏览器登录」最省事
+    installed.sort(key=lambda x: (not x.get("running"), x.get("browser") or ""))
+    return installed[0].get("browser")
 
 def _root_domain(host: str) -> str:
     """取根域：v.qq.com → qq.com；www.douyin.com → douyin.com；a.b.com.cn → b.com.cn。"""
@@ -1672,75 +1819,254 @@ def _cookie_login_host(host: str) -> str:
     mapped = _CDN_TO_COOKIE_DOMAIN.get(_root_domain(h))
     return mapped or host
 
+
+# ────────────────────────────────────────────────────────────────────────────
+# 云端共享池回读（桌面端，2026-10-25）
+#
+# 背景：桌面 App 的本机池目录（~/.videodownloader/cookie_pool）在从未喂过池的
+# 机器上**根本不存在** ⇒ 本机池恒 miss ⇒ 桌面用户没在浏览器登录的站一律解析
+# 失败（实测小红书必败），而 VPS/Railway 上的云端池其实是满的（守护进程每
+# ~20 分钟收割推送）。这里让桌面端在本机池 miss 时回读云端池，把「共享登录态」
+# 也惠及桌面用户，与网页版口径一致。
+#
+# 通道：POST {云端}/api/cookie/pool-admin {"action":"get","domain":…,"token":…}
+#   —— 与桌面管理后台看池概览同一把令牌（VDL_COOKIE_SYNC_TOKEN，该令牌本就
+#      允许 inject 写池，读不扩大暴露面），云端只放行白名单域。
+#   —— 旧版云端（无 get 动作）返回 400 ⇒ 视为 miss，绝不影响解析主流程。
+#
+# 缓存三档：命中 5 分钟 / 未命中 1 分钟（负缓存）/ 云端整体不可达全局冷却 60s
+#   —— 否则每次解析都去吃一次 6s 连接超时，拖垮路由层超时预算。
+# 代理：显式禁用环境代理。云端是国内 IP（ECS），桌面进程常继承 clash/系统
+#   代理，走代理访问自家节点必被 407 拦（与 _call_vps_worker 同坑）。
+# ────────────────────────────────────────────────────────────────────────────
+_CLOUD_POOL_HIT_TTL = 300     # 命中缓存 5 分钟（池约 20 分钟轮换，够新鲜）
+_CLOUD_POOL_MISS_TTL = 60     # 未命中/失败负缓存 1 分钟
+_CLOUD_POOL_TIMEOUT = 6       # 国内 VPS 单程 6s 足够；再慢当作不可达
+_CLOUD_POOL_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+# domain -> (ts, header, ckey)；header/ckey 允许其一为空（优酷可能只有 ckey）
+_cloud_pool_mem: dict[str, tuple[float, str, str]] = {}
+_cloud_pool_down_until: float = 0.0   # 云端整体不可达的全局冷却截止点
+
+
+def _cloud_pool_cfg() -> tuple[str, str]:
+    """云端池地址与令牌：env 优先，回落 ~/.videodownloader/cloud_sync.json。"""
+    url = (os.environ.get("VDL_COOKIE_SYNC_URL") or "").strip()
+    token = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()
+    if not url or not token:
+        try:
+            cfg = Path.home() / ".videodownloader" / "cloud_sync.json"
+            if cfg.exists():
+                d = json.loads(cfg.read_text(encoding="utf-8"))
+                url = url or str(d.get("url") or "").strip()
+                token = token or str(d.get("token") or "").strip()
+        except Exception:
+            pass
+    return url, token
+
+
+def _cloud_pool_fetch(domain: str) -> tuple[str, str]:
+    """回读云端池一次，返回 (header, ckey)；任何失败都返回 ("","") 不抛。"""
+    global _cloud_pool_down_until
+    domain = (domain or "").strip().lower()
+    if not domain or _requests is None:
+        return "", ""
+    if time.time() < _cloud_pool_down_until:
+        return "", ""
+    url, token = _cloud_pool_cfg()
+    if not url or not token:
+        return "", ""
+    try:
+        r = _requests.post(
+            url.rstrip("/") + "/api/cookie/pool-admin",
+            json={"action": "get", "domain": domain, "token": token},
+            headers={"User-Agent": _CLOUD_POOL_UA},
+            timeout=_CLOUD_POOL_TIMEOUT,
+            proxies={"http": None, "https": None},
+        )
+        if r.status_code != 200:
+            # 旧版云端无 get 动作（400）/ 令牌失效（403）⇒ 当作没有，不报警不重试
+            _cookie_diag("cloud_pool_http", f"domain={domain} code={r.status_code}")
+            return "", ""
+        d = r.json() or {}
+        if not d.get("ok"):
+            return "", ""
+        header = str(d.get("header") or "")
+        ckey = str(d.get("ckey") or "")
+        if header:
+            _cookie_diag("cloud_pool_hit", f"domain={domain} len={len(header)}")
+        return header, ckey
+    except Exception as e:
+        # 云端不可达：全局冷却 60s，避免此后每个域每种解析都去吃一次连接超时
+        _cloud_pool_down_until = time.time() + 60
+        _cookie_diag("cloud_pool_error", f"domain={domain} {str(e)[:120]}")
+        return "", ""
+
+
+def _cloud_pool_cookie(domain: str) -> str:
+    """云端池 Cookie（TTL 缓存；桌面端本机池 miss 时调用）。"""
+    domain = (domain or "").strip().lower()
+    if not domain:
+        return ""
+    now = time.time()
+    item = _cloud_pool_mem.get(domain)
+    if item:
+        ts, header, _ck = item
+        if now - ts < (_CLOUD_POOL_HIT_TTL if header else _CLOUD_POOL_MISS_TTL):
+            return header
+    header, ckey = _cloud_pool_fetch(domain)
+    _cloud_pool_mem[domain] = (now, header, ckey)
+    return header
+
+
+def _cloud_pool_ckey(domain: str) -> str:
+    """云端池优酷 ckey（与 Cookie 同一次回读，共享 TTL 缓存）。"""
+    domain = (domain or "").strip().lower()
+    if not domain:
+        return ""
+    now = time.time()
+    item = _cloud_pool_mem.get(domain)
+    if item:
+        ts, _h, ckey = item
+        if now - ts < (_CLOUD_POOL_HIT_TTL if _h else _CLOUD_POOL_MISS_TTL):
+            return ckey
+    header, ckey = _cloud_pool_fetch(domain)
+    _cloud_pool_mem[domain] = (now, header, ckey)
+    return ckey
+
+
+def _pooled_cookie(domain: str) -> str:
+    """共享登录态单一入口：本机公共池 → 云端池回读，任一成功即返回。"""
+    try:
+        from cookie_pool import get_cookie as _pool_get
+        header = _pool_get(domain) or ""
+    except Exception:
+        header = ""
+    if header:
+        return header
+    return _cloud_pool_cookie(domain)
+
+
+def _pooled_ckey(domain: str) -> str:
+    """优酷 ckey 单一入口：本机公共池 → 云端池回读。"""
+    try:
+        from cookie_pool import get_ckey as _pool_ckey_get
+        ck = _pool_ckey_get(domain) or ""
+    except Exception:
+        ck = ""
+    if ck:
+        return ck
+    return _cloud_pool_ckey(domain)
+
 def _find_host_cookie_profile(host: str) -> tuple[str, str] | None:
     """探测哪个浏览器的哪个 Profile 含有目标站点的 cookie，返回 (browser, profile)。
 
-    背景：yt-dlp 的 cookiesfrombrowser 若不指定 profile 只读 Default；但用户登录态
-    常落在其它 Profile（如 Chrome 的 Profile 33），导致「自动读 cookie」读错地方而落空。
-    这里遍历各浏览器的所有 Profile，用 sqlite 直查 Cookies 数据库的 host_key
-    是否命中目标根域，返回第一个命中 Profile。
+    2026-10-24 重写。原实现有两个硬伤：
+      1. 路径表只有 macOS 的 ~/Library/...，Windows 上 glob 全落空 →
+         永远返回 None，Windows 端「自动读登录态」从上线起就没生效过；
+      2. 「第一个命中即返回」：同一站点多个 Profile 都有 Cookie 时容易挑到
+         游客态/过期态（数据中心 IP 上的 YouTube 只认完整会话，拿游客态
+         转发会被判 cookie_required）。
 
-    改进：支持 CDN 域名到 Cookie 登录域的回溯（如 bilivideo.cn → bilibili.com），
-    解决 B 站等平台「播放 URL 域 ≠ Cookie 域」导致自动 Cookie 检测失效的问题。
+    现在统一交给 browser_cookies.find_source：
+      - **正在运行的浏览器优先**（用户此刻登录的 profile 才是有效会话）；
+      - 同档按命中 Cookie 数量打分（数量越多越可能是完整会话）；
+      - 跨平台覆盖 Chromium 系 + 国产壳（UC/360/QQ/搜狗/2345）+ Firefox；
+      - 支持 CDN 域回溯（bilivideo.cn → bilibili.com）。
     """
     domains = _cookie_domains_for_host(host)
-    if not domains:
+    if not domains or _browser_cookies is None:
         return None
     try:
-        import sqlite3 as _sq
+        src = _browser_cookies.find_source(domains)
     except Exception:
         return None
-    # 🔴 不再「第一个命中即返回」：同一站点用户可能在多个 Profile 都有 Cookie，
-    # 但常只有一个是「完整登录会话」（其余是游客态/过期态）。数据中心 IP 上的
-    # YouTube 等 Bot 检测只认完整会话，拿游客态 Cookie 转发会被判 cookie_required。
-    # 故按「该域 Cookie 数量」打分，返回会话最完整的 Profile（2026-09-22 实测：
-    # Profile 33 含 139 个 YouTube/Google Cookie 可过 Bot；Default/Profile 43
-    # 仅 46~63 个，转发后对端仍报 cookie_required）。
-    best: tuple[str, str] | None = None
-    best_score = 0
-    for name, pattern in _BROWSER_COOKIE_PROFILES:
-        for db in glob.glob(os.path.expanduser(pattern)):
-            profile_dir = os.path.basename(os.path.dirname(db))
-            try:
-                con = _sq.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
-                try:
-                    score = 0
-                    for domain in domains:
-                        cnt = con.execute(
-                            "SELECT COUNT(*) FROM cookies WHERE host_key LIKE ?",
-                            (f"%.{domain}",),
-                        ).fetchone()[0]
-                        # host_key 有的带前导点(.qq.com)、有的是裸域(qq.com)，两种都算
-                        if cnt == 0:
-                            cnt = con.execute(
-                                "SELECT COUNT(*) FROM cookies WHERE host_key = ?",
-                                (domain,),
-                            ).fetchone()[0]
-                        score += cnt
-                    if score > best_score:
-                        best_score = score
-                        best = (name, profile_dir)
-                finally:
-                    con.close()
-            except Exception:
-                continue
-    return best
+    if not src:
+        return None
+    return src["browser"], src["profile"]
+
+def find_browser_cookie_source(host: str) -> dict[str, Any] | None:
+    """返回可读的 Cookie 来源（浏览器/Profile/Cookie 数），供排障与前端展示。
+
+    只返回**确实能读出来**的来源；「浏览器开着但库被锁」由 locked_browser_hint
+    单独处理（那种情况无法确认库里有没有目标站 Cookie，不能当成已检测到登录态）。
+    """
+    domains = _cookie_domains_for_host(host)
+    if not domains or _browser_cookies is None:
+        return None
+    try:
+        return _browser_cookies.find_source(domains)
+    except Exception:
+        return None
+
+
+def locked_browser_hint() -> str:
+    """有浏览器正开着、但 Cookie 库读不出来时，返回可操作的提示语；否则空串。
+
+    Windows 上只要 Chromium 系浏览器开着，Cookies 库就被独占（反 cookie-stealer），
+    这是「读不到」而不是「没登录」，提示必须说清楚，否则用户会以为要重新登录。
+    """
+    if _browser_cookies is None:
+        return ""
+    try:
+        locked = _browser_cookies.locked_browsers()
+    except Exception:
+        return ""
+    if not locked:
+        return ""
+    names = "、".join(dict.fromkeys(x["label"] for x in locked))
+    return f"{names} 正在运行并锁定了 Cookie 库：请关闭它后重试，或改用「扩展同步」"
 
 def get_browser_cookie_header(host: str, url: str) -> str | None:
     """若本机浏览器含目标站点的登录 Cookie，提取并构造可用于请求头的 Cookie 字符串。
 
-    供「在线观看」代理自动携带登录态，免去手动粘贴。返回 None 表示无可用 Cookie
-    （浏览器未安装 / 该站未登录 / 解密失败）。复用 _find_host_cookie_profile 定位
-    具体 Profile（登录态常不在 Default），再用 yt-dlp 的 cookie 解密能力导出。
+    返回 None 表示无可用 Cookie（浏览器未安装 / 该站未登录 / 解密失败 /
+    库被占用）。两级取法：
 
-    重要：短链域名（如 v.kuaishou.com）的 Cookie Jar 匹配只能拿到设备指纹 Cookie，
-    登录 Session 和反爬 token 通常在主域（www.kuaishou.com）或登录子域（id.kuaishou.com）。
-    因此对每个候选域名都尝试 add_cookie_header，合并去重后返回完整 Cookie 头。
+      ① **自解密**（browser_cookies）：Windows 上这是唯一可行路径。原因有两层：
+         - yt-dlp 在 Windows 读不了正在运行的 Chromium（upstream #7271，
+           Chromium 对 Cookies 加独占锁，复制必然失败）；
+         - UC / 360 / QQ / 搜狗 这些国产壳 yt-dlp 根本不认识。
+         同时这条路径**优先挑正在运行的浏览器**，拿到的才是用户此刻的会话。
+      ② yt-dlp 回退：macOS / Linux 的主路径（钥匙串 + PBKDF2 由它处理），
+         Windows 上对「已关闭的浏览器」也有效。
+
+    注意短链域（v.kuaishou.com）：登录 Session 和反爬 token 在 id./www. 主域，
+    只按短链域匹配会拿到匿名设备指纹，故候选 URL 要铺开合并。
     """
+    domains = _cookie_domains_for_host(host)
+    if not domains:
+        return None
+
+    # ① 自解密
+    if _browser_cookies is not None:
+        try:
+            src = _browser_cookies.find_source(domains)
+            if src and src.get("status") == "ok":
+                rows, reason = _browser_cookies.read_cookies(src["db"], src["kind"], domains)
+                header = _browser_cookies.build_cookie_header(rows)
+                if header:
+                    _cookie_diag(
+                        "browser_cookie_ok",
+                        f"{src['browser']}/{src['profile']} running={src['running']} n={len(rows)}",
+                    )
+                    return header
+                _cookie_diag("browser_cookie_empty", f"{src['browser']} reason={reason}")
+            elif src:
+                _cookie_diag(
+                    "browser_cookie_blocked",
+                    f"{src['browser']}/{src['profile']} status={src.get('status')}",
+                )
+        except Exception as exc:  # noqa: BLE001
+            _cookie_diag("browser_cookie_error", str(exc)[:120])
+
+    # ② yt-dlp 回退
     found = _find_host_cookie_profile(host)
     if not found:
         return None
     browser, profile = found
+    if browser not in _YTDLP_BROWSERS:
+        return None  # UC/360/QQ 等壳：yt-dlp 不认识，自解密已试过
     try:
         from yt_dlp.cookies import extract_cookies_from_browser
         from urllib.request import Request
@@ -1755,7 +2081,7 @@ def get_browser_cookie_header(host: str, url: str) -> str | None:
         # （merged_names 按 name 去重，候选重复无副作用）
         # 🔴 `id.` 必带：快手把 passToken 放在 id.kuaishou.com（登录子域），
         # 只取 www./裸域会漏掉它 ⇒ 服务端回「sid 不合法」，整份 Cookie 白给。
-        for d in _cookie_domains_for_host(host):
+        for d in domains:
             for sub in ("www", "id", "m"):
                 candidates.append(f"https://{sub}.{d}/")
             candidates.append(f"https://{d}/")
@@ -1787,15 +2113,101 @@ def get_browser_cookie_header(host: str, url: str) -> str | None:
 def detect_browser_cookie(host: str) -> dict[str, Any]:
     """探测本机浏览器是否含目标站点的 Cookie，供前端「检测登录态」按钮与解析结果展示。
 
-    复用 _find_host_cookie_profile 的 sqlite 直查逻辑：若命中则返回具体
-    (browser, profile)，前端可据此告诉用户「已自动读取，无需手动粘贴」。
+    返回 status 让前端能给出**可操作**的提示，而不是笼统的「未检测到登录态」：
+      ok / locked / abe / decrypt_failed / absent
+
+    线上最常遇到的是 locked：Windows 上浏览器开着就独占锁住 Cookies 库
+    （Chromium 反 cookie-stealer 设计），此时不是「没登录」而是「读不到」——
+    只能提示用户关掉浏览器再试、或装我们的扩展直推（扩展在浏览器内，不受锁影响）。
     """
-    found = _find_host_cookie_profile(host)
-    if found:
-        return {"available": True, "browser": found[0], "profile": found[1]}
+    domains = _cookie_domains_for_host(host)
+    src = find_browser_cookie_source(host)
+    if src and src.get("count", 0) > 0:
+        rows: list[dict[str, Any]] = []
+        reason = ""
+        if _browser_cookies is not None:
+            try:
+                rows, reason = _browser_cookies.read_cookies(src["db"], src["kind"], domains)
+            except Exception:
+                pass
+        label = src.get("label") or src.get("browser")
+        if rows:
+            return {
+                "available": True,
+                "browser": src.get("browser"),
+                "label": label,
+                "profile": src.get("profile"),
+                "running": src.get("running", False),
+                "count": len(rows),
+                "status": "ok",
+                "hint": "",
+            }
+        is_abe = reason == "abe_v20"
+        return {
+            "available": False,
+            "browser": src.get("browser"),
+            "label": label,
+            "profile": src.get("profile"),
+            "running": src.get("running", False),
+            "count": src.get("count", 0),
+            "status": "abe" if is_abe else "decrypt_failed",
+            "hint": (
+                f"{label} 启用了应用绑定加密（v20），第三方无法解密，请改用「扩展同步」"
+                if is_abe else
+                f"{label} 里有该站记录但解不出有效值（{reason or '未知原因'}），请在该浏览器重新登录一次"
+            ),
+        }
+    # 没有可读来源：优先提示「开着但被锁」，因为这是 Windows 上最常见的情况
+    hint = locked_browser_hint()
+    if hint:
+        locked = _browser_cookies.locked_browsers() if _browser_cookies else []
+        return {
+            "available": False,
+            "browser": locked[0]["browser"] if locked else None,
+            "label": "、".join(dict.fromkeys(x["label"] for x in locked)) if locked else None,
+            "profile": None,
+            "running": True,
+            "count": 0,
+            "status": "locked",
+            "hint": hint,
+        }
     # 浏览器装了、但该站无 Cookie：仍返回浏览器名，便于提示「请先在浏览器登录」
     b = _detect_browser_cookie_source()
-    return {"available": False, "browser": b, "profile": None}
+    return {"available": False, "browser": b, "profile": None, "status": "absent", "hint": ""}
+
+
+def _win_self_cookie_header(host: str) -> str:
+    """Windows 专用：用自研 browser_cookies 读出目标站的 Cookie 头。
+
+    为什么必须自己读、不能交给 yt-dlp 的 cookiesfrombrowser：
+      · yt-dlp 复制 Chromium 的 Cookies 库时，浏览器开着就 PermissionError
+        （upstream #7271），而它选不到浏览器时会**默认 chrome**，在本机
+        （只装了 Edge/UC/QQ）直接抛
+        "Could not copy Chrome cookie database"；
+      · 该异常发生在提取器之前，等于把整次解析带崩 —— 2026-10-25 实测，
+        小红书短链就是因为这个原因报成「短链无法解析」。
+    读不到就返回空串：不带 Cookie 继续，让站点自己给出「需登录」的真实错误，
+    比抛一个和站点无关的异常好排障。
+    """
+    domains = _cookie_domains_for_host(host)
+    if not domains or _browser_cookies is None:
+        return ""
+    try:
+        src = _browser_cookies.find_source(domains)
+        if not src or src.get("status") != "ok":
+            return ""
+        rows, _reason = _browser_cookies.read_cookies(src["db"], src["kind"], domains)
+        header = _browser_cookies.build_cookie_header(rows)
+        if header:
+            _cookie_diag(
+                "cfb_win_self",
+                f"{src['browser']}/{src['profile']} n={len(rows)} len={len(header)}",
+            )
+        return header or ""
+    except Exception as exc:  # noqa: BLE001
+        _cookie_diag("cfb_win_self_error", str(exc)[:160])
+        return ""
+
 
 def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     _cookie_diag("base_options_enter", f"host={host!r} cookie_len={len(cookie)}")
@@ -1920,6 +2332,10 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
                 pooled = _pool_get(cookie_host)
             except Exception as e:
                 _cookie_diag("pool_exception", str(e)[:200])
+            if not pooled:
+                # 本机池 miss（桌面端从未喂过池时恒 miss）→ 回读云端共享池，
+                # 让桌面用户零操作复用 VPS/Railway 上那份登录态（2026-10-25）。
+                pooled = _cloud_pool_cookie(cookie_host)
             logger.info("[cookie] host=%s cookie_host=%s pool=%s", host, cookie_host, "hit" if pooled else "miss")
             if pooled:
                 headers["Cookie"] = pooled
@@ -1937,6 +2353,16 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
                 if browser:
                     options["cookiesfrombrowser"] = (browser,)
                     _cookie_diag("cfb_env", browser)
+                elif os.name == "nt":
+                    # Windows：一律不把 cookiesfrombrowser 交给 yt-dlp。
+                    # 原因见 _win_self_cookie_header 的注释（浏览器开着必炸，
+                    # 且默认去读根本不存在的 Chrome）。改走自研读取，读不到
+                    # 就不带 Cookie 继续，避免整次解析被无关异常打断。
+                    _win_hdr = _win_self_cookie_header(cookie_host)
+                    if _win_hdr:
+                        headers["Cookie"] = _win_hdr
+                    else:
+                        _cookie_diag("cfb_skip_windows", "self-read empty, continue without cookie")
                 else:
                     # 全站默认尝试从本机浏览器读登录态（不再局限于白名单），
                     # 覆盖更多需要 Cookie 的站点（影视聚合站、会员专享、地区限制等）。
@@ -2026,8 +2452,27 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
         "is_cloud", os.environ.get("VDL_INSTANCE", "").strip().lower() == "cloud"
     )
 
+    # —— 浏览器 Cookie 库被占用（Windows 上 yt-dlp 读运行中的 Chromium）——
+    # 这条必须最先拦：它跟站点无关，却会把任何站点的解析都带崩，
+    # 不单独识别的话会落到「视频解析失败」这种无从下手的提示上。
+    if ("could not copy" in lowered and "cookie" in lowered) or (
+        "cookie database" in lowered
+    ):
+        return ResolveError(
+            "读不到浏览器 Cookie（浏览器正在运行并锁定 Cookie 库）",
+            "浏览器运行时会把 Cookie 数据库独占锁住，程序无法读取里面的登录态——"
+            "注意这**不代表你没登录**。\n\n"
+            "二选一：\n"
+            "① 关掉该浏览器 → 在视频工坊重新解析（读完首次后会缓存，之后可正常开着用）；\n"
+            "② 装「浏览器扩展同步」直接推送登录态（扩展在浏览器内运行，不受文件锁影响）。",
+            category="cookie_db_locked",
+        )
+
     # —— 小红书专属分层（2026-09-25）：打包 yt-dlp 已带 XiaoHongShuIE，失败只有三种形态 ——
-    # ① xhslink 短链：App 专属深链，网页端（含真 Chrome）一律 302 回首页；
+    # ① xhslink 短链：**可以展开**（移动 UA 直达笔记页，桌面 UA 落在 /login?
+    #    redirectPath=…，两种都能解出笔记页），展开逻辑见 _expand_xhs_short。
+    #    只有连展开都失败（网络/代理问题）时才会走到这里 —— 文案必须说真话，
+    #    别再声称「任何下载工具都无法解析」。
     # ② xiaohongshu.com 直链但本机浏览器无小红书登录态：网页版 2026 年起强制登录，
     #    无 Cookie 时 SSR 页是空壳 → "No video formats found"。
     # ③ /explore? 或 /discovery/item? 后面直接跟 "?"（无 24 位笔记 ID）：残缺链接。
@@ -2042,26 +2487,46 @@ def _friendly_error(exc: Exception, context: dict[str, Any] | None = None) -> Re
                 or "[xiaohongshu]" in lowered)
     if _xhs_hit and ("xhslink" in _xhs_ctx_host or "xhslink" in text.lower()):
         return ResolveError(
-            "小红书 App 分享短链无法在网页端打开",
-            "这条 xhslink.com 短链是小红书 App 专属深链，网页端访问会被重定向回首页，任何下载工具都无法直接解析。\n\n"
-            "请改用完整链接：\n"
-            "① 在小红书 App 打开该笔记 → 分享 → 复制链接，发送到电脑（如微信文件传输助手）；\n"
-            "② 把链接粘贴到电脑浏览器地址栏打开笔记页（需登录小红书），"
-            "再复制地址栏里 www.xiaohongshu.com/explore/... 开头的完整地址；\n"
-            "③ 把完整地址粘贴到视频工坊即可。\n\n"
-            "注意：小红书网页版需登录才能看到笔记，请先用 Chrome/Edge 打开 xiaohongshu.com 登录一次，"
-            "视频工坊会自动读取浏览器登录态，无需手动粘贴 Cookie。",
+            "这条小红书短链没能展开成笔记页",
+            "短链本身有效，但我们没能拿到它指向的笔记页（通常是网络或代理中断在"
+            "跳转途中，少数是短链已失效）。\n\n"
+            "① 确认代理/网络正常后再点一次「解析链接」；\n"
+            "② 仍不行就直接粘完整链接：用浏览器打开该笔记，复制地址栏里 "
+            "www.xiaohongshu.com/explore/… 或 /discovery/item/… 开头的那条；\n"
+            "③ 小红书网页版需要登录才能看到笔记，请先在浏览器登录一次（登录态会自动读取）。",
             category="xhs_short_link",
         )
     if _xhs_hit and ("no video formats" in lowered or "unable to extract" in lowered):
+        # 动态诊断（2026-10-25）：把「到底有没有读到登录态」摆到用户眼前。
+        # 用户体感常常是「我明明登录了」，实际是本机浏览器里一条小红书 Cookie
+        # 都没有（登录发生在手机 App / 另一台机器），光看笼统提示会一直重试。
+        _xhs_src = None
+        try:
+            _xhs_src = find_browser_cookie_source("xiaohongshu.com")
+        except Exception:  # noqa: BLE001
+            _xhs_src = None
+        if _xhs_src:
+            _xhs_diag = (
+                f"已从「{_xhs_src.get('browser') or '浏览器'}」读到 "
+                f"{_xhs_src.get('count') or '若干'} 条小红书 Cookie，但站点仍判定未登录 —— "
+                "这份登录态多半已经过期（网页端退出/被风控登出）。\n"
+                "① 在该浏览器里重新打开 www.xiaohongshu.com 确认是已登录状态；\n"
+                "② 再回来点一次「解析链接」（无需重启 VDL）。\n"
+            )
+        else:
+            _xhs_diag = (
+                "本机浏览器里**没有**小红书的登录 Cookie —— 已逐个检查 Chrome / Edge / "
+                "UC / QQ / 360 等浏览器（你手机 App 里的登录不会同步到电脑）。\n"
+                "① 用 Chrome 或 Edge 打开 www.xiaohongshu.com 登录账号；\n"
+                "② 回到视频工坊重新粘贴链接——登录态会自动读取注入，无需手动配置。\n"
+            )
         return ResolveError(
             "小红书笔记需要登录后才能解析",
-            "小红书网页版自 2026 年起强制登录：未登录时页面是空壳，看不到笔记内容（也就拿不到视频）。\n\n"
-            "解决办法（一次性，约 30 秒）：\n"
-            "① 用 Chrome 或 Edge 浏览器打开 www.xiaohongshu.com 并登录你的账号；\n"
-            "② 回到视频工坊重新粘贴链接——登录态会自动读取并注入，无需手动配置。\n\n"
-            "若已登录仍报此错：请确认登录用的就是 Chrome/Edge（Safari 因权限限制暂不支持自动读取），"
-            "或把笔记页地址栏的完整链接（含 xsec_token 参数）粘贴过来重试。",
+            "小红书网页端 2026 年起强制登录：未登录时页面是空壳，拿不到视频流"
+            "（这不是解析器坏了，任何工具都必须带登录态）。\n\n"
+            + _xhs_diag +
+            "\n若登录后仍报错，可改用「高级选项 → Cookie」粘贴 F12 里的 Cookie 串；"
+            "或把地址栏完整链接（含 xsec_token）粘过来重试。",
             category="xhs_login_required",
         )
     # ③ 残缺链接：/explore? /discovery/item? 后无笔记 ID（XiaoHongShuIE 的
@@ -2253,7 +2718,7 @@ def _is_restricted_placeholder(info: dict[str, Any]) -> bool:
 # 签名，未实现，报 "Fresh cookies needed"），即使带完整登录态 cookie 也无解。
 # 故网页端抖音改走 VPS 上的 Playwright 无头浏览器（douyin_resolve.py），拿到真实
 # 视频/音频轨 URL（音视频分离），再交给 yt-dlp process_info 下载 + ffmpeg 合并。
-_DOUYIN_HOSTS: tuple[str, ...] = ("douyin.com", "iesdouyin.com", "ixigua.com")
+_DOUYIN_HOSTS: tuple[str, ...] = ("douyin.com", "iesdouyin.com")
 _DOUYIN_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -3589,11 +4054,7 @@ def _youtube_cookie_candidates(user_cookie: str) -> list[tuple[str, str]]:
         _add("cache", get_cached_cookie_header("youtube.com") or "")
     except Exception:
         pass
-    try:
-        from cookie_pool import get_cookie as _pool_get
-        _add("pool", _pool_get("youtube.com") or "")
-    except Exception:
-        pass
+    _add("pool", _pooled_cookie("youtube.com") or "")
     return cands
 
 
@@ -4023,6 +4484,72 @@ def _ne_http_get(url: str, proxy: str = "", headers: dict | None = None) -> str:
     r.raise_for_status()
     return r.text
 
+def _ne_trial_only(info: dict[str, Any]) -> bool:
+    """判断 yt-dlp 拿到的是「30 秒试听片段」而不是完整音轨。
+
+    网易云对 VIP 专享曲目在未登录时只下发 30s 试听（CDN 路径形如
+    `.../jd-musicrep-ts/...mp3`），但 yt-dlp 返回的 `duration` 仍是整首长度 ——
+    用户会静悄悄拿到一个 30 秒的文件（2026-10-25 实测《我不难过》：探针报 320s，
+    实际落盘 30s / 481KB）。
+    判据用「体积 ÷ 时长 ÷ 码率」反推（不依赖 CDN 路径关键字，抗改名）：
+    完整音轨应 ≈ duration × abr / 8，试听片段只有十分之一左右。
+    """
+    duration = float(info.get("duration") or 0)
+    if duration <= 0:
+        return False
+    best = 0.0
+    for f in info.get("formats") or []:
+        if not isinstance(f, dict):
+            continue
+        size = f.get("filesize") or f.get("filesize_approx") or 0
+        abr = f.get("abr") or 128
+        if size and abr:
+            ratio = float(size) / (duration * float(abr) * 1000 / 8)
+            best = max(best, ratio)
+    return 0 < best < 0.5
+
+def _ne_probe(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
+    """网易云单曲 / MV 解析：先走 yt-dlp 原生提取器，失败再退 weapi（仅 MV）。
+
+    2026-10-25 实测：打包的 yt-dlp 自带 NetEaseMusic（单曲，1 条音轨）与
+    NetEaseMusicMv（MV，3 个清晰度）提取器，直连即可解析。旧实现不分单曲/MV
+    一律打 weapi `/mv/detail`，单曲 ID 被当作 MV 去查 ⇒ 接口返回非 JSON ⇒
+    用户看到「JSONDecodeError: Expecting value: line 1 column 1」这种没法看的错。
+    weapi 保留为 MV 兜底（个别 MV 详情接口比网页版稳）。
+
+    另：VIP 专享曲目未登录只有 30s 试听，必须当场拦下（见 `_ne_trial_only`），
+    否则用户会以为下到了整首。
+    """
+    try:
+        opts = _base_options(PROBE_RETRIES, "music.163.com", cookie=cookie, proxy=proxy)
+        opts["format"] = None
+        with _YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if info and (info.get("formats") or info.get("url")):
+            if _ne_trial_only(info):
+                raise ResolveError(
+                    "这首歌是 VIP 专享，未登录只能试听 30 秒",
+                    "网易云对会员专享曲目只给未登录访客 30 秒试听片段，下载下来会是半截音频。\n\n"
+                    "两个办法：\n"
+                    "① 在 Chrome / Edge / UC 里登录网易云音乐，回到视频工坊重新点「解析」"
+                    "（会自动读取浏览器登录态，有会员就能拿完整音轨）；\n"
+                    "② 换一首非 VIP 曲目（页面上没有「VIP」角标的）再解析。",
+                    category="need_vip",
+                )
+            return info
+    except ResolveError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.info("[netease] yt-dlp 解析失败，尝试 weapi 兜底：%s", str(e)[:140])
+    if re.search(r"(?:/mv\?id=|/mv/)", url or ""):
+        return _ne_info(url, proxy=proxy)
+    raise ResolveError(
+        "网易云单曲解析失败",
+        "yt-dlp 没能解析出这条单曲（可能版权受限/已下架，或当前出口 IP 被风控限流）。\n"
+        "请确认链接形如 music.163.com/song?id=数字，稍后重试，或换一首歌再试。",
+        category="parse_failed",
+    )
+
 def _ne_info(url: str, proxy: str = "") -> dict[str, Any]:
     """网易云音乐 MV 解析（music.163.com/mv?id=xxx）。"""
     m = re.search(r"(?:/mv\?id=|/mv/|id=)(\d+)", url)
@@ -4087,6 +4614,90 @@ def _ne_info(url: str, proxy: str = "") -> dict[str, Any]:
         "protocol": "https",
         "http_headers": {"User-Agent": _NE_UA, "Referer": "https://music.163.com/"},
     }
+
+def _write_netscape_cookies(cookie_header: str, domain: str) -> str:
+    """把 `k=v; k2=v2` 的 Cookie 头写成 Netscape Cookie 临时文件，返回路径。
+
+    yt-dlp 的 IxiguaIE 用 `self._get_cookies(url)` 判断「有没有 Cookie」，读的是
+    cookiejar；直接塞 `http_headers["Cookie"]` 不生效（仍会报 "Cookies are needed"），
+    必须先落成 cookiefile 让 yt-dlp 载入。调用方用完负责删除。
+    """
+    import tempfile
+    import time as _t
+    lines = ["# Netscape HTTP Cookie File"]
+    exp = int(_t.time()) + 86400
+    dom = domain if domain.startswith(".") else "." + domain
+    for part in cookie_header.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        name, _, value = part.partition("=")
+        name, value = name.strip(), value.strip()
+        if not name or not value:
+            continue
+        lines.append("\t".join([dom, "TRUE", "/", "FALSE", str(exp), name, value]))
+    fd, path = tempfile.mkstemp(prefix="vdl_ck_", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return path
+
+def _ixigua_info(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
+    """西瓜视频解析（yt-dlp 原生 IxiguaIE + 浏览器登录态）。
+
+    2026-10-25 实测三种情况：
+      ① 不带 Cookie：IxiguaIE 直接抛「Cookies (not necessarily logged in) are needed」；
+      ② 只带匿名 `__ac_nonce`：拿到的是反爬挑战页，没有 SSR_HYDRATED_DATA；
+      ③ 必须用真实浏览器 Cookie（含 `__ac_signature`），即用户浏览器访问过 xigua.com。
+    所以这里：有本机浏览器 Cookie 就带 Cookie 文件解析；没有就直接给可操作提示，
+    不做无意义的 20s 重试。旧代码把 ixigua.com/<ID> 改写成 douyin.com/video/<ID>
+    （注释称「视频 ID 互通」）——实测不成立，已删除。
+    """
+    ck = (cookie or "").strip() or (get_browser_cookie_header("www.ixigua.com", url) or "")
+    if not ck:
+        raise ResolveError(
+            "西瓜视频需要浏览器 Cookie",
+            "西瓜视频（ixigua.com）从 2026 年起对无 Cookie 的请求下发反爬挑战页，"
+            "拿不到播放数据（不是链接失效）。\n\n"
+            "解决办法（一次性，约 30 秒）：\n"
+            "① 用 Chrome 或 Edge 打开 https://www.ixigua.com ，正常浏览/登录一次；\n"
+            "② 回到视频工坊重新点「解析」——本机会自动读取该浏览器 Cookie，无需手动粘贴。\n\n"
+            "另一条路：同一个视频通常也能在抖音找到，用抖音链接下载（抖音解析无需登录）。",
+            category="cookie_required",
+        )
+    ck_path = ""
+    try:
+        ck_path = _write_netscape_cookies(ck, "ixigua.com")
+        opts = _base_options(PROBE_RETRIES, "www.ixigua.com", cookie=ck, proxy=proxy)
+        opts["format"] = None
+        opts["cookiefile"] = ck_path
+        hdr = dict(opts.get("http_headers") or {})
+        hdr.setdefault("Referer", "https://www.ixigua.com/")
+        opts["http_headers"] = hdr
+        with _YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if info and info.get("formats"):
+            return info
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+        if "SSR_HYDRATED_DATA" in msg or "Cookies" in msg:
+            raise ResolveError(
+                "西瓜视频反爬校验未通过",
+                "浏览器里的西瓜 Cookie 已过期或缺少反爬标记（`__ac_signature`）。\n"
+                "请用 Chrome/Edge 打开 https://www.ixigua.com 随便看一个视频（让站点刷新 Cookie），"
+                "再回视频工坊重试点「解析」。",
+                category="cookie_invalid_or_expired",
+            ) from None
+        raise ResolveError("西瓜视频解析失败", msg[:300], category="parse_failed") from None
+    finally:
+        if ck_path:
+            try:
+                os.remove(ck_path)
+            except Exception:
+                pass
+    raise ResolveError(
+        "西瓜视频解析失败", "页面里没有可下载的视频流（可能已删除或仅限 App 观看）。",
+        category="parse_failed",
+    )
 
 
 # 金牌影院（nmwchxx.com）：第三方影视聚合站（Next.js SPA），yt-dlp 无提取器。
@@ -4440,11 +5051,8 @@ def _finder_info(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # 用户没自带 Cookie 时，先试云端共享池兜底（weixin.qq.com 域）
         effective_cookie = (cookie or "").strip()
         if not effective_cookie:
-            try:
-                from cookie_pool import get_cookie as _pool_get
-                effective_cookie = _pool_get("weixin.qq.com") or ""
-            except Exception:
-                effective_cookie = ""
+            # 本机池 miss 时回读云端池（桌面端同样受益）
+            effective_cookie = _pooled_cookie("weixin.qq.com")
         try:
             data = _call_vps_worker("finder", url, cookie=effective_cookie)
             return {
@@ -4514,6 +5122,286 @@ def _yy_info(url: str, proxy: str = "") -> dict[str, Any]:
         category="pending_extractor",
     )
 
+
+# --------------------------------------------------------------------------- #
+# 搜狐多分片（SohuIE 返回 _type=multi_video）
+# --------------------------------------------------------------------------- #
+# 🔴 2026-10-25 实测（用户报「搜狐解析器要重写」）：
+#   · tv.sohu.com 一集剧被 SohuIE 切成 N 个 mp4（part1 常只有 6~10s 片头，
+#     part2..partN 各 ~300s），返回的是 _type=multi_video；
+#   · 原实现两处都只取 entries[0]（probe 与 _run_once 各一处）⇒ 用户下到的是
+#     9 秒 / 472KB 的片头，看起来像「解析失败」；
+#   · 把整个 multi_video 交给 yt-dlp 也不会自动合并：outtmpl 相同时后片会
+#     **覆盖前片**（实测 12 片只剩最后一片），更不能这么做。
+# 正确链路：probe 按 format_id 聚合各片（体积/时长求和）→ 下载逐片落到
+# 工作目录的隐藏子目录 → ffmpeg concat（-c copy 无损）拼成单片 → 清理分片。
+_SOHU_PART_DIRNAME = ".vdlparts"
+
+
+def _sohu_is_multi(info: dict[str, Any]) -> bool:
+    """是否搜狐式「同一集切成 N 片」（multi_video）。
+
+    ⚠️ 只认 multi_video：搜狐返回 playlist 时是**多集列表**，那要按第一集处理，
+    绝不能当分片拼起来——拼了就是「整部剧塞一个文件」。
+    """
+    return info.get("_type") == "multi_video" and bool(info.get("entries"))
+
+
+def _sohu_aggregate(info: dict[str, Any]) -> dict[str, Any]:
+    """把 N 个分片聚合成「单片形态」：formats 按 format_id 合并、时长/体积求和。
+
+    返回的 info 额外带 `_vdl_parts`（每片 format_id → 格式 dict），交给
+    `_sohu_download_parts` 逐片下载；probe 返回前会把这个字段剥掉（含直链，
+    不进前端）。
+    """
+    entries = [e for e in (info.get("entries") or []) if e and e.get("formats")]
+    if not entries:
+        raise ResolveError("该视频无法解析出分片", "请更换链接或稍后重试")
+    part_maps: list[dict[str, dict]] = []
+    for e in entries:
+        m: dict[str, dict] = {}
+        for f in e.get("formats") or []:
+            fid = str(f.get("format_id") or "").strip()
+            if fid and f.get("url"):
+                m[fid] = f
+        part_maps.append(m)
+    # 只保留「每一片都有」的档位：缺片的档位下出来会在中间断掉
+    common = set(part_maps[0])
+    for m in part_maps[1:]:
+        common &= set(m)
+    total_duration = sum(float(e.get("duration") or 0) for e in entries) or None
+    agg: list[dict[str, Any]] = []
+    for fid in sorted(common):
+        sizes = [int(m[fid].get("filesize") or 0) for m in part_maps]
+        item = dict(part_maps[0][fid])
+        item["format_id"] = fid
+        item["filesize"] = sum(sizes) if all(sizes) else None
+        item["duration"] = total_duration
+        agg.append(item)
+    if not agg:
+        # 档位对不齐（站点偶尔给不同片不同码率档）：退回第一片的档位，
+        # 下载时逐片各自选，至少不空手。
+        agg = [dict(f) for f in part_maps[0].values()]
+    merged = {k: v for k, v in info.items() if k not in ("entries", "_type")}
+    merged.update({
+        "formats": agg,
+        "duration": total_duration,
+        # 存**原始 entry**（不是精简 dict）：process_info 依赖 entry 里的
+        # display_id/url/format_id/ext/protocol 等字段，字段缺失会退化成
+        # "No video formats found"（2026-10-25 实测踩过）。
+        "_vdl_parts": entries,
+        "_vdl_part_count": len(entries),
+    })
+    logger.info("[sohu] 多分片聚合：%d 段 / %d 档 / 总时长 %.1fs",
+                len(entries), len(agg), total_duration or 0)
+    return merged
+
+
+def _ffmpeg_bin() -> str:
+    """定位 ffmpeg（打包版把 ffmpeg 放在 exe 同级/内置目录，需用绝对路径）。"""
+    cand = os.environ.get("VDL_FFMPEG_BIN", "").strip()
+    if cand and Path(cand).exists():
+        return cand
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    roots = [Path(sys.executable).parent, Path(getattr(sys, "_MEIPASS", "") or ".")]
+    for root in roots:
+        for name in ("ffmpeg.exe", "ffmpeg"):
+            p = root / name
+            if p.exists():
+                return str(p)
+    for p in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"):
+        if Path(p).exists():
+            return p
+    return "ffmpeg"
+
+
+def _safe_media_name(name: str, default: str = "video") -> str:
+    """把标题清洗成 Windows/macOS 都合法的文件名（不含扩展名）。"""
+    s = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", (name or "").strip())
+    s = re.sub(r"\s+", " ", s).strip(" .")
+    return (s or default)[:MAX_TITLE_CHARS]
+
+
+def _sohu_concat(part_files: list[Path], out: Path, task: DownloadTask) -> Path:
+    """ffmpeg concat demuxer 无损拼接同源分片；失败时逐级降级。"""
+    ff = _ffmpeg_bin()
+    lst = out.with_suffix(".concat.txt")
+    # concat demuxer 的 file 指令：单引号包裹，内部单引号用 '\'' 转义
+    lst.write_text(
+        "".join("file '%s'\n" % str(p).replace("'", "'\\''") for p in part_files),
+        encoding="utf-8",
+    )
+    attempts = [
+        ["-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", "-movflags", "+faststart"],
+        # 时间戳不连续（个别片首帧 PTS 归零）时补 genpts 再拼
+        ["-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy"],
+    ]
+    last_err = ""
+    for i, args in enumerate(attempts):
+        try:
+            res = subprocess.run(
+                [ff, "-v", "error", "-y", *args, str(out)],
+                capture_output=True, text=True, timeout=1800,
+            )
+            if res.returncode == 0 and out.exists() and out.stat().st_size > 1024:
+                lst.unlink(missing_ok=True)
+                return out
+            last_err = (res.stderr or "")[-300:]
+            task.log(f"合并尝试 {i + 1} 未成功：{last_err[:120]}")
+        except Exception as exc:  # noqa: BLE001
+            last_err = str(exc)[:200]
+    lst.unlink(missing_ok=True)
+    raise ResolveError(
+        "分片下载完成但合并失败",
+        f"已下完 {len(part_files)} 段，ffmpeg 拼接失败：{last_err}\n"
+        "可改用较低清晰度重试，或检查本机 ffmpeg 是否可用。",
+    )
+
+
+def _sohu_pick_format_id(formats: list[dict], quality_key: str) -> str:
+    """按用户选的档位在搜狐的分片档里挑 format_id。
+
+    🔴 不能直接套 `_format_selector`：搜狐的 format 没有 vcodec 标记，且**宽银幕
+       源短边远小于标称档位**（640x268 在站内叫 360P、1280x534 叫 720P）。按
+       `height 350~370` 去匹配一个都不中 ⇒ "Requested format is not available"
+       （2026-10-25 端到端实测报的就是这个）。
+    这里改成「短边最接近请求档位」，同距离优先 H.264 档。
+    """
+    qk = (quality_key or "").strip().lower()
+    if qk in ("best", "highest"):
+        want = 9999
+    else:
+        try:
+            want = int(qk)
+        except (TypeError, ValueError):
+            return ""   # audio/m4a/webm 等交给原 selector
+        if want <= 0:
+            return ""
+    cands: list[tuple[int, int, str]] = []
+    for f in formats or []:
+        h = _short_side(f) or f.get("height") or 0
+        if not h:
+            continue
+        fid = str(f.get("format_id") or "")
+        if not fid:
+            continue
+        # 0 = H.264 优先（兼容性最好），1 = 其他编码
+        pref = 0 if ("h264" in fid.lower() or fid in ("ori", "super", "src", "nor")) else 1
+        cands.append((abs(int(h) - want), pref, fid))
+    if not cands:
+        return ""
+    return min(cands)[2]
+
+
+def _sohu_download_parts(task: DownloadTask, info: dict[str, Any], base_opts: dict,
+                         reporter, quality_key: str = "") -> Path:
+    """搜狐多分片：逐片下载 → concat 合并 → 返回成品路径。
+
+    进度天然正确：_ProgressReporter 以 filename 为 key 累加（每片一个文件），
+    总进度 = Σ已下 / Σ总量，不需要额外换算。
+    """
+    parts: list[dict[str, dict]] = info.get("_vdl_parts") or []
+    if not parts:
+        raise ResolveError("该视频无法解析出分片", "请更换链接或稍后重试")
+    workdir = Path(task.workdir or ".")
+    pdir = workdir / _SOHU_PART_DIRNAME
+    shutil.rmtree(pdir, ignore_errors=True)
+    pdir.mkdir(parents=True, exist_ok=True)
+    total = len(parts)
+    # 搜狐的档位是 format_id（nor/high/super…），站内标称高度与实际短边差得远，
+    # 完成后不要报「清晰度不符」（见 _ProgressReporter._actual_note）
+    try:
+        setattr(task, "_quality_mapped", True)
+    except Exception:
+        pass
+    task.add_step("下载音视频", "running", f"该视频分 {total} 段，逐段下载后自动合并为单个文件…")
+    task.log(f"搜狐多分片：共 {total} 段，开始逐段下载（每段约 5 分钟）")
+
+    files: list[Path] = []
+    fixed_fmt = _sohu_pick_format_id(info.get("formats") or [], quality_key)
+    if fixed_fmt:
+        task.log(f"清晰度档位映射到搜狐格式：{fixed_fmt}")
+    for i, raw in enumerate(parts):
+        if task.cancel_requested:
+            raise DownloadCanceled()
+        # 🔴 关键：原始 entry 顶层带了 `url`/`format_id`（= 站内最高档 super），
+        # yt-dlp 的 process_info 见到顶层 url 就**直接拿它下载、完全忽略 format
+        # selector**（2026-10-25 实测：请求 360P 实得 534P/166MB）。而把 url 删掉
+        # 只留 formats 又会退化成 "No video formats found"。
+        # 正确做法：把选定档的字段**平铺到 entry 顶层**，并去掉 formats，
+        # 让 yt-dlp 走「单格式」路径，选中的档就是唯一档，无从选错。
+        chosen = None
+        for cand in raw.get("formats") or []:
+            if str(cand.get("format_id") or "") == fixed_fmt:
+                chosen = cand
+                break
+        if chosen is None:
+            cands = [f for f in (raw.get("formats") or []) if f.get("url")]
+            cands.sort(key=lambda f: _short_side(f) or f.get("height") or 0, reverse=True)
+            chosen = cands[0] if cands else None
+        if chosen is None:
+            raise ResolveError(
+                f"第 {i + 1}/{total} 段没有可用清晰度",
+                "请更换链接或稍后重试。",
+            )
+        entry = {k: v for k, v in raw.items()
+                 if k not in ("formats", "requested_formats", "requested_downloads")}
+        entry.update(chosen)
+        entry["id"] = f"{info.get('id') or 'sohu'}_part{i + 1}"
+        entry["title"] = info.get("title") or entry.get("title") or "video"
+        for _k in ("playlist_index", "playlist_count", "playlist_id", "playlist_title",
+                   "playlist_autonumber", "n_entries", "__last_playlist_index"):
+            entry.pop(_k, None)
+        _chosen_id = str(chosen.get("format_id") or "")
+        opts_i = dict(base_opts)
+        opts_i.pop("postprocessors", None)   # 逐片不做 remux/抽音轨，合并后再处理
+        opts_i.pop("paths", None)
+        opts_i["outtmpl"] = {"default": str(pdir / f"part{i + 1:03d}.%(ext)s")}
+        opts_i["overwrites"] = True
+        opts_i["noplaylist"] = True
+        # entry 只剩一档，selector 必须精确指向它（否则档位 selector 会对不上
+        # 搜狐那套 640x268≈360P 的非标高度）
+        if _chosen_id:
+            opts_i["format"] = _chosen_id
+        task.log(f"第 {i + 1}/{total} 段开始下载…")
+        with YoutubeDL(opts_i) as ydl_i:
+            got_info = ydl_i.process_info(entry) or {}
+        if not fixed_fmt:
+            if got_info.get("requested_formats"):
+                fixed_fmt = "+".join(str(f.get("format_id")) for f in got_info["requested_formats"])
+            else:
+                fixed_fmt = str(got_info.get("format_id") or "")
+            if fixed_fmt:
+                task.log(f"全部分段锁定清晰度：{fixed_fmt}")
+        filepath = None
+        for d in (got_info.get("requested_downloads") or []):
+            if d.get("filepath") and Path(d["filepath"]).exists():
+                filepath = Path(d["filepath"])
+        if filepath is None:
+            cand = [p for p in sorted(pdir.glob(f"part{i + 1:03d}.*"))
+                    if p.suffix not in (".part", ".ytdl", ".tmp")]
+            filepath = cand[0] if cand else None
+        if filepath is None:
+            raise ResolveError(
+                f"第 {i + 1}/{total} 段下载失败",
+                "请重试；若反复失败请更换清晰度（低档位分片更小更稳）。",
+            )
+        files.append(filepath)
+        task.log(f"第 {i + 1}/{total} 段完成（{filepath.stat().st_size / 1048576:.1f} MB）")
+
+    title = _safe_media_name(info.get("title") or info.get("id") or "sohu")
+    out = workdir / f"{title}.mp4"
+    task.add_step("合并与后处理", "running", f"正在合并 {total} 段…")
+    task.log(f"开始合并 {total} 段…")
+    out = _sohu_concat(files, out, task)
+    shutil.rmtree(pdir, ignore_errors=True)
+    task.log(f"合并完成：{out.name}（{out.stat().st_size / 1048576:.1f} MB）")
+    info["requested_downloads"] = [{"filepath": str(out)}]
+    info["_vdl_parts"] = []
+    return out
+
 class _NeedYtDlp(Exception):
     """标记该平台应交由 probe() 末尾的 yt-dlp 通用流程解析（已收录且 yt-dlp 支持）。"""
 
@@ -4538,7 +5426,9 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             "这是 B站 个人空间 / 动态页，不是单个视频",
             "请打开该视频，复制浏览器地址栏中以 bilibili.com/video/BVxxxx 开头的播放页链接，再粘贴解析。",
         )
-    if "bangumi" in _norm_for_check:
+    # 番剧拦截只对 B站 生效：AcFun 的番剧页同样带 /bangumi/（acfun.cn/bangumi/aa…），
+    # 旧实现只判路径不判站，会把可正常下载的 AcFun 番剧误报成「B站 番剧 DRM」。
+    if "bangumi" in _norm_for_check and "bilibili" in _norm_for_check:
         raise ResolveRestricted(
             "该链接是 B站 番剧 / 影视（会员 DRM 内容）",
             "番剧、电影、纪录片等受版权 DRM 保护，标准下载方式无法解析。请更换为公开可播放的普通视频链接。",
@@ -4564,13 +5454,9 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         _yk_cookie = cookie
         _yk_ckey = ""
         if not _yk_cookie or True:  # 你库 ckey 一律走公共池（无本机引擎）
-            try:
-                from cookie_pool import get_cookie as _pool_get, get_ckey as _pool_ckey
-
-                _yk_cookie = _yk_cookie or (_pool_get("youku.com") or "")
-                _yk_ckey = _pool_ckey("youku.com") or ""
-            except Exception:
-                pass
+            # _pooled_*：本机池 miss 时回读云端池（Cookie 与 ckey 同一次回读）
+            _yk_cookie = _yk_cookie or _pooled_cookie("youku.com")
+            _yk_ckey = _pooled_ckey("youku.com")
         try:
             return _youku_info(url, _yk_cookie, _yk_ckey, proxy=effective_proxy)
         except ResolveError:
@@ -4590,6 +5476,21 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             "该直播平台已暂时下线",
             "直播模块（斗鱼 / 映客 / 网易CC）已于 2026-08-22 下线，恢复时间待定。"
             "可关注后续更新，或使用其他平台。",
+        )
+    # 西瓜视频：原生 IxiguaIE + 浏览器 Cookie（详见 _ixigua_info；不再改写为抖音链接）
+    if "ixigua.com" in (host or ""):
+        return _ixigua_info(url, cookie=cookie, proxy=proxy)
+    # 腾讯视频合集页（无 vid 参数）：yt-dlp 只会返回空 playlist，提前给可操作提示。
+    # 2026-10-25 实测：v.qq.com/x/cover/<cid>.html → entries 恒为空。
+    if "qq.com" in (host or "") and re.search(r"/x/cover/[a-z0-9]+\.html", url or "") \
+            and "vid=" not in (url or ""):
+        raise ResolveError(
+            "这是腾讯视频的合集 / 剧集页",
+            "合集页只列出剧集清单，解析不到具体视频。\n"
+            "请在浏览器打开这部剧，点进任意一集，复制那一集播放页的链接"
+            "（形如 v.qq.com/x/cover/…/<vid>.html 或 v.qq.com/x/page/<vid>.html）再解析。\n\n"
+            "另：腾讯视频的会员专享内容受版权保护，无法下载；免费集可以正常解析。",
+            category="unsupported_url_form",
         )
     # 抖音/快手/微博/爱奇艺：yt-dlp 提取器失效或分享页 JS-only，走 VPS Playwright 真实浏览器解析
     if _is_douyin_host(host):
@@ -4646,9 +5547,21 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             return info
         # worker 未配置（本地桌面）且非分享页 → 回退 yt-dlp 通用流程
     # —— B 类平台专用提取器分发（平台已收录但 yt-dlp 无原生提取器）——
-    # 网易云 MV：走自研 weapi 加密接口（yt-dlp 数据中心 IP 风控 404）
+    # 网易云专辑 / 歌单 / 歌手 / 排行榜页：不是单曲，_ne_info 只认 MV/单曲，
+    # 喂进去会得到 "JSONDecodeError: Expecting value" 这种没法看的报错。
+    # 2026-10-25 实测（music.163.com/#/album?id=…）。整批下载走歌单功能。
+    if "music.163.com" in (host or "") and re.search(
+        r"/(?:#/)?(?:album|playlist|artist|toplist|discover)", url or ""
+    ):
+        raise ResolveError(
+            "这是网易云专辑 / 歌单链接，不是单曲",
+            "请打开具体歌曲的播放页（music.163.com/song?id=… 或 /#/song?id=…）再解析；"
+            "要整张专辑/歌单批量下载，请用「歌单 / 专辑下载」功能。",
+        )
+    # 网易云单曲 / MV：yt-dlp 原生提取器优先（单曲音轨、MV 多清晰度均可），
+    # weapi 仅作 MV 兜底 —— 见 _ne_probe 注释
     if "music.163.com" in (host or ""):
-        return _ne_info(url, proxy=proxy)
+        return _ne_probe(url, cookie=cookie, proxy=proxy)
     # 土豆：已并入优酷，尝试重定向或明确停运提示
     if "tudou.com" in (host or ""):
         return _tudou_info(url, proxy=proxy)
@@ -4837,7 +5750,9 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             # _friendly_error 的平台分支。仅对明确命中的平台 category 短路，
             # 其余平台错误保持原有行为不变。
             _fe = _friendly_error(exc, _build_diag_context(url, cookie=cookie, proxy=proxy, options=opts))
-            if getattr(_fe, "category", "") in ("xhs_short_link", "xhs_login_required"):
+            if getattr(_fe, "category", "") in (
+                "xhs_short_link", "xhs_login_required", "cookie_db_locked"
+            ):
                 raise _fe from exc
             # YouTube 等站格式选择失败时，降级用 extract_flat 重试（只拿元数据，不含格式列表）
             if "format" in str(exc).lower() or "not available" in str(exc).lower():
@@ -4899,9 +5814,12 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         if not entries:
             raise ResolveError("该链接是一个空的合集", "请粘贴单个视频的播放地址")
         info = entries[0]
-    # 多分片视频（如搜狐 SohuIE 返回 _type=multi_video，一个视频切成 N 个 mp4 分片）：
-    # 取第一个分片继续（分片间可无缝拼接，youtube-dl 也这样处理）。
-    if info.get("_type") == "multi_video":
+    # 多分片视频（搜狐 SohuIE 返回 _type=multi_video，一集切成 N 个 mp4 分片）：
+    # 搜狐必须聚合（否则只显示/只下第一片 9 秒片头，见 _sohu_aggregate 注释）；
+    # 其他平台的多分片按原逻辑取第一片继续。
+    if info.get("_type") == "multi_video" and (_host_of(url) or "").endswith("sohu.com"):
+        info = _sohu_aggregate(info)
+    elif info.get("_type") == "multi_video":
         entries = [e for e in (info.get("entries") or []) if e]
         if not entries:
             raise ResolveError("该视频无法解析出分片", "请更换链接或稍后重试")
@@ -4917,6 +5835,9 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     # 优酷：yt-dlp 的 YoukuIE 只返回单集标题，从网页 <title> 补全整部剧名
     if info and _host_of(url) in ("youku.com", "tudou.com"):
         info = _enrich_youku_series(info, effective_proxy)
+    # 多分片的逐片直链只给下载阶段用（体积大、前端无展示价值），别透传到 UI
+    if info.get("_vdl_parts"):
+        info.pop("_vdl_parts", None)
     return info
 
 # --------------------------------------------------------------------------- #
@@ -5447,6 +6368,10 @@ class _ProgressReporter:
         if want in (BEST_KEY, AUDIO_KEY, M4A_KEY, WEBM_KEY):
             return f"音视频下载完成 · 实际 {got}P"
         if str(got) != str(want):
+            # 搜狐这类「按 format_id 映射档位」的平台：站内标称 360P 的源短边只有
+            # 268（宽银幕裁切），此时报「清晰度不符」是误报，会吓到用户。
+            if getattr(self._task, "_quality_mapped", False):
+                return f"音视频下载完成 · 实际 {got}P（按平台档位映射）"
             return f"音视频下载完成 · ⚠️ 请求 {want}P 实得 {got}P（清晰度不符）"
         return f"音视频下载完成 · 实际 {got}P"
 
@@ -5781,7 +6706,9 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
       ③ 少数情况提取阶段直接失败，界面报「视频解析失败 [generic] …」。
 
     网盘本来就是「给一条直链、下一个文件」，没有清晰度/格式可选，不需要解析。
-    约束（与 v1.0.88 的网盘策略一致）：单连接、P2SP 客户端身份、手动带 Cookie；
+    约束（与 v1.0.88 的网盘策略一致）：单连接、手动带 Cookie、必须带 Range；
+    **UA 由 _pick_netdisk_ua 运行时协商**（浏览器身份 / P2SP 身份取决于账号分桶，
+    写死任何一个都会在另一类账号上 403 31326）。
     requests 的手动 header 在 302 跳转后仍会携带，所以跨到 *.baidupcs.com 也不会 403。
     """
     import requests  # 与本文件其它路径一致：延迟导入，避免拖慢启动
@@ -5793,7 +6720,9 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
     workdir.mkdir(parents=True, exist_ok=True)
 
     headers = {
-        "User-Agent": _NETDISK_DOWNLOAD_UA,
+        # UA 不写死：百度按「账号 + UA」分桶，见 _NETDISK_UA_CANDIDATES 注释。
+        # 先探 1 字节确认可用的身份，再拿它下发正式请求。
+        "User-Agent": _pick_netdisk_ua(task.url, cookie, proxy),
         # 🔴 必需，不能省：百度 CDN 对不带 Range 的 GET 直接 403，
         # 且把原因伪装成 31326「无权限」/ 31360「直链过期」，极难排查。
         "Range": "bytes=0-",
@@ -6178,11 +7107,22 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                 cookie=(_dl_opts.get("http_headers") or {}).get("Cookie", cookie),
                 ua=(_dl_opts.get("http_headers") or {}).get("User-Agent"),
             )
-        with _YoutubeDL(_dl_opts) as ydl:
+        # 搜狐：解析阶段必须去掉 format selector —— 搜狐格式没有 vcodec 标记、
+        # 短边又远离标称档位（640x268 标称 360P），带 selector 会在**解析**这一步
+        # 就抛 "Requested format is not available"，连信息都拿不到。
+        # 档位由 _sohu_pick_format_id 在下载阶段逐片映射。
+        _extract_opts = _dl_opts
+        if (_task_host or "").endswith("sohu.com"):
+            _extract_opts = {k: v for k, v in _dl_opts.items() if k != "format"}
+            _extract_opts["noplaylist"] = False
+        with _YoutubeDL(_extract_opts) as ydl:
             # 阶段 1：只解析元数据，不下载
             if _is_douyin_host(_task_host):
                 # 抖音：yt-dlp 提取器已失效，直接用 VPS 解析出的真实音视频轨 URL
                 info = _douyin_info(task.url)
+            elif "ixigua.com" in (_task_host or ""):
+                # 西瓜：原生 IxiguaIE + 浏览器 Cookie（与 probe 同一路径）
+                info = _ixigua_info(task.url, cookie=cookie, proxy=effective_proxy)
             elif "dazn.com" in (_task_host or ""):
                 # DAZN：DRM+地区封锁，明确提示（与 probe 一致）
                 raise ResolveError(
@@ -6260,6 +7200,11 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                         ) or {}
                     else:
                         raise
+            # 搜狐剧集：SohuIE 返回 multi_video（一集切成 N 片），必须聚合后再
+            # 交给 _sohu_download_parts 逐片下载 + concat，否则只会下到第一片
+            # 9 秒片头（2026-10-25 用户实测「搜狐解析器要重写」的根因）。
+            if _sohu_is_multi(info) and (_host_of(task.url) or "").endswith("sohu.com"):
+                info = _sohu_aggregate(info)
             if info.get("webpage_url"):
                 task.source_url = info["webpage_url"]
             if info.get("title"):
@@ -6317,7 +7262,11 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             # （如 AV1 400/39x、部分 H.264 298/18）URL 被 Google CDN 拒绝，
             # 捕获后自动换 client 与已知可用格式重试，用户无感知。
             try:
-                ydl.process_info(info)
+                if info.get("_vdl_parts"):
+                    # 搜狐多分片：逐段下载 + ffmpeg concat（进度由 reporter 按文件名累加）
+                    _sohu_download_parts(task, info, _dl_opts, reporter, quality_key)
+                else:
+                    ydl.process_info(info)
             except (DownloadError, ExtractorError) as _exc:
                 _err_str = str(_exc)
                 _is_403 = "403" in _err_str or "Forbidden" in _err_str

@@ -112,9 +112,16 @@ class TestNetdiskDownloadOptions(unittest.TestCase):
         self.assertEqual(o.get("concurrent_fragment_downloads"), 1)
 
     def test_non_netdisk_untouched(self):
-        # 非网盘：aria2c 与并发策略保持原样（不能被这次改动误伤）
+        # 非网盘：并发策略保持原样（不能被这次改动误伤）
         o = self._opts("https://www.bilibili.com/video/BV1xx411c7mD")
-        self.assertEqual(o.get("downloader"), "aria2c")
+        if sys.platform == "win32":
+            # Windows 上 aria2c 是**全面禁用**的（2026-10-18 用户实测：GUI 进程 fork
+            # 出的 aria2c.exe 会不断弹控制台黑窗，且窗口里跑不起来挂住不退出）。
+            # 所以这条「不受网盘改动影响」的断言在 Windows 上要反过来断：
+            # 非网盘也必须走内置下载器，不能被网盘策略误伤成 aria2c。
+            self.assertNotEqual(o.get("downloader"), "aria2c")
+        else:
+            self.assertEqual(o.get("downloader"), "aria2c")
         self.assertNotEqual(o.get("http_headers", {}).get("User-Agent"),
                             D._NETDISK_UA)
 
