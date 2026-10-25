@@ -175,6 +175,14 @@ def get_voice_sample() -> dict[str, Any]:
         except (json.JSONDecodeError, OSError, ValueError):
             pass
     exists = bool(audio) and os.path.isfile(audio)
+    if audio and not exists:
+        # P2-1 兜底（2026-10-25）：配置里可能存着**另一台机器**的绝对路径（换机 /
+        # 跨平台恢复配置后 audio_path 必失效），此时回退到本机样本目录的同名文件，
+        # 避免「我的音色」回显 Mac 路径、试听报「还没配置音色样本」。
+        local = _config_dir() / "voice_samples" / os.path.basename(audio)
+        if local.is_file():
+            audio = str(local)
+            exists = True
     suffix_ok = audio.lower().endswith(VOICE_SAMPLE_EXTS)
     return {
         "audio_path": audio,
