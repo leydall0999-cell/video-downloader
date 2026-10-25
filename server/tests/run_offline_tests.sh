@@ -1084,6 +1084,17 @@ run_one test_launcher_boot_feedback.py
 #       ⚠️ 若 uvicorn 升级自修了 None-stdout，A 组「复现」会红——按用例过期删 A 组即可。
 run_one test_win_console_stdio_guard.py
 
+# 61.8 test_win_path_layout.py —— Windows 配置目录布局守卫（2026-10-26）。
+#       **在 macOS 上模拟 Windows 冻结版**，不需要虚拟机、不需要 CI、秒级反馈：
+#       伪造 sys.platform=win32 / sys.frozen / APPDATA 三件套（它们都是运行时求值），
+#       断言业务配置落到 %APPDATA%\VideoDownloader 而非 ~/.video-downloader。
+#       另有一条扫描守卫：任何定义 _config_dir 且用 Path.home() 的模块都必须处理
+#       win32，防止新增配置模块时漏加分支（那种缺陷在 mac 上永远测不出来，只会
+#       表现为「Windows 用户改设置不生效」）。
+#       已知例外 gateway_config（唯一不带 Windows 分支）已登记在测试文件顶部。
+#       变异验证：破坏 vision_config 的 win32 分支 ⇒ 本文件 2 项变红。
+run_one test_win_path_layout.py
+
 # 62. test_cloud_matting_gateway.py —— 云端抠图改走「本产品服务端」（2026-10-13 定档
 #     「钥匙不出保险柜」）：网关接入时必须走网关且出站请求不含任何火山凭据；
 #     未接入时保留本机直连；就绪判定与凭据来源（server/local/none）语义正确；
