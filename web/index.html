@@ -255,6 +255,12 @@
 <section class="panel input-panel" aria-labelledby="inputTitle">
     <h2 id="inputTitle" class="sr-only">输入视频链接</h2>
     <form id="resolveForm" autocomplete="off">
+      <!-- 下载类型切换（2026-10-25 对齐桌面端排版）：网盘不是页面底部单独一块，
+           而是本页的第二种下载类型，点切换就地切换、不跳转。 -->
+      <div class="mode-switch" role="tablist" aria-label="下载类型">
+        <button type="button" class="mode-btn is-active" id="modeVideoBtn" data-mode="video" role="tab" aria-selected="true">视频下载</button>
+        <button type="button" class="mode-btn" id="modeNetdiskBtn" data-mode="netdisk" role="tab" aria-selected="false">网盘下载</button>
+      </div>
       <div class="input-row">
         <label class="sr-only" for="urlInput">视频链接</label>
         <div class="input-shell">
@@ -372,6 +378,28 @@
     </div>
   </section>
 
+  <!-- ===== 百度网盘（2026-10-25 对齐桌面端排版）：
+         网盘不放在页面底部单独一块，而是紧跟输入区的「第二种下载类型」——
+         顶部切换器切到「网盘下载」时就地展开，解析结果直接出现在当前页。
+         登录态由管理员提供，用户无需填写。 ===== -->
+  <section class="panel pan-panel" id="panPanel" aria-labelledby="panTitle" hidden>
+    <h2 id="panTitle" class="guide-title">☁️ 百度网盘下载</h2>
+    <div class="cd-form">
+      <label class="uc-field cd-field-url">
+        <span class="uc-label">网盘分享链接</span>
+        <input type="text" id="panUrl" spellcheck="false" placeholder="直接粘贴整段分享文案或链接，例如 https://pan.baidu.com/s/1xxxx" />
+      </label>
+      <label class="uc-field cd-field-pwd">
+        <span class="uc-label">提取码</span>
+        <input type="text" id="panPwd" maxlength="8" spellcheck="false" placeholder="链接没给就留空" />
+      </label>
+      <button type="button" class="btn btn-primary" id="panResolveBtn">解析</button>
+    </div>
+    <p class="cd-status" id="panStatus" hidden aria-live="polite"></p>
+    <ul class="cd-list" id="panList"></ul>
+    <p class="pan-note">网盘文件由服务器代取并实时转发给你，速度取决于服务器带宽；大文件请耐心等待，别重复点。</p>
+  </section>
+
   <!-- 解析结果 -->
   <section class="panel result-panel" id="resultPanel" hidden aria-live="polite">
     <div class="video-card">
@@ -485,25 +513,6 @@
       <button type="button" class="btn btn-ghost btn-sm" id="cancelAllBtn" hidden>全部取消</button>
     </div>
     <ul class="task-list" id="taskList"></ul>
-  </section>
-
-  <!-- ===== 百度网盘（2026-10-25 用户定档：并入「下载视频」页；登录态由管理员提供，用户无需填写） ===== -->
-  <section class="panel pan-panel" id="panPanel" aria-labelledby="panTitle">
-    <h2 id="panTitle" class="guide-title">☁️ 百度网盘下载</h2>
-    <div class="cd-form">
-      <label class="uc-field cd-field-url">
-        <span class="uc-label">网盘分享链接</span>
-        <input type="text" id="panUrl" spellcheck="false" placeholder="直接粘贴整段分享文案或链接，例如 https://pan.baidu.com/s/1xxxx" />
-      </label>
-      <label class="uc-field cd-field-pwd">
-        <span class="uc-label">提取码</span>
-        <input type="text" id="panPwd" maxlength="8" spellcheck="false" placeholder="链接没给就留空" />
-      </label>
-      <button type="button" class="btn btn-primary" id="panResolveBtn">解析</button>
-    </div>
-    <p class="cd-status" id="panStatus" hidden aria-live="polite"></p>
-    <ul class="cd-list" id="panList"></ul>
-    <p class="pan-note">网盘文件由服务器代取并实时转发给你，速度取决于服务器带宽；大文件请耐心等待，别重复点。</p>
   </section>
 
   <!-- 下载说明 -->

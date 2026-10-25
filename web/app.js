@@ -429,7 +429,8 @@
     sbProgressWrap: $('sbProgressWrap'), sbProgressFill: $('sbProgressFill'), sbStatus: $('sbStatus'),
     sbResult: $('sbResult'), sbMeta: $('sbMeta'), sbHelpBtn: $('sbHelpBtn'), sbHelpText: $('sbHelpText'),
     sbDlSrt: $('sbDlSrt'), sbDlTxt: $('sbDlTxt'),
-    // —— 百度网盘（2026-10-25 用户定档：并入「下载视频」页；登录态由管理员提供，用户不填）——
+    // —— 百度网盘（2026-10-25 对齐桌面端：网盘是本页的第二种下载类型，顶部切换器切换）——
+    modeVideoBtn: $('modeVideoBtn'), modeNetdiskBtn: $('modeNetdiskBtn'),
     panPanel: $('panPanel'),
     panUrl: $('panUrl'), panPwd: $('panPwd'), panResolveBtn: $('panResolveBtn'), panStatus: $('panStatus'),
     panList: $('panList'),
@@ -1097,10 +1098,48 @@
     });
   }
 
+  // 当前下载类型：video（默认） / netdisk（2026-10-25 对齐桌面端排版）
+  let dlMode = 'video';
+  const URL_PLACEHOLDER_VIDEO = '粘贴视频链接，可批量（每行一个）';
+  const URL_PLACEHOLDER_NETDISK = '粘贴百度网盘分享链接（整段分享文案也可以直接粘）';
+
   const setLoading = (loading) => {
     el.resolveBtn.classList.toggle('loading', loading);
     el.resolveBtn.disabled = loading;
-    el.resolveBtn.querySelector('.btn-label').textContent = loading ? '解析中…' : '解析链接';
+    el.resolveBtn.querySelector('.btn-label').textContent =
+      loading ? '解析中…' : (dlMode === 'netdisk' ? '解析网盘' : '解析链接');
+  };
+
+  /** 切换下载类型（视频 / 网盘）：改占位符、按钮文案与面板可见性。
+   *  网盘不是「另一个页面」，而是本页的第二种类型——切过来就地展开，不跳转。 */
+  const setDownloadMode = (mode) => {
+    dlMode = mode === 'netdisk' ? 'netdisk' : 'video';
+    const _nd = dlMode === 'netdisk';
+    if (el.modeVideoBtn) {
+      el.modeVideoBtn.classList.toggle('is-active', !_nd);
+      el.modeVideoBtn.setAttribute('aria-selected', String(!_nd));
+    }
+    if (el.modeNetdiskBtn) {
+      el.modeNetdiskBtn.classList.toggle('is-active', _nd);
+      el.modeNetdiskBtn.setAttribute('aria-selected', String(_nd));
+    }
+    // 用 downloadView 上的 class 让视频结果区 / 重复的网盘输入行让位（见 styles.css）；
+    // 切回视频模式时它们自动恢复（不碰 resultPanel 的 hidden，否则会把
+    // 「本来就没结果」和「被网盘模式藏起来」两种状态搞混）。
+    if (el.downloadView) el.downloadView.classList.toggle('mode-netdisk', _nd);
+    if (el.panPanel) {
+      if (!_nd) {
+        el.panPanel.hidden = true;
+      } else {
+        // 进网盘模式时，只有已经有文件列表/状态才把面板露出来；
+        // 否则保持跟视频模式「还没解析」时一样的干净页面（只有输入框）。
+        const hasList = el.panList && el.panList.children.length > 0;
+        const hasStatus = el.panStatus && el.panStatus.textContent.trim();
+        el.panPanel.hidden = !(hasList || hasStatus);
+      }
+    }
+    if (el.input) el.input.placeholder = _nd ? URL_PLACEHOLDER_NETDISK : URL_PLACEHOLDER_VIDEO;
+    setLoading(false);
   };
 
   // ------------------------------------------------------------------ 渲染
@@ -4645,6 +4684,16 @@
       urls = [raw];
     }
 
+    // 网盘链接（2026-10-25 对齐桌面端）：就地切到网盘模式并解析，不跳页、不换页。
+    // 粘贴整段分享文案也能命中（extractUrls 会把里面的 pan.baidu.com 链接挑出来）。
+    if (urls.some((u) => /pan\.baidu\.com|yun\.baidu\.com/i.test(u))) {
+      setDownloadMode('netdisk');
+      if (el.panUrl) el.panUrl.value = raw;
+      if (el.panPwd) el.panPwd.value = '';
+      if (el.panResolveBtn) el.panResolveBtn.click();
+      return;
+    }
+
     // 单 URL → 解析；多 URL → 批量
     if (urls.length > 1) {
       await runBatch(urls, cookie, proxy);
@@ -7306,6 +7355,9 @@
   };
 
   const panResolve = async () => {
+    // 解析一开始就把网盘面板（状态 + 文件列表）露出来，
+    // 这样「解析中 / 未登录提示 / 失败原因」都看得见（桌面端同款行为）。
+    if (el.panPanel) el.panPanel.hidden = false;
     if (!panRequireLogin()) return;
     const rawInput = ((el.panUrl && el.panUrl.value) || '').trim();
     if (!rawInput) { panSetStatus('请粘贴网盘分享链接', true); return; }
@@ -10427,6 +10479,20 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   if (el.tabImageConvert) el.tabImageConvert.addEventListener('click', () => switchView('imageconvert'));
   if (el.tabSubtitle) el.tabSubtitle.addEventListener('click', () => switchView('subtitle'));
   // —— 百度网盘（2026-10-25：并入「下载视频」页）——
+  // 下载类型切换（2026-10-25 对齐桌面端排版）：网盘是本页的第二种下载类型。
+  // 点「网盘下载」不跳转，只把页面切成网盘形态（输入区 + 网盘面板）。
+  if (el.modeVideoBtn) {
+    el.modeVideoBtn.addEventListener('click', () => {
+      setDownloadMode('video');
+      try { el.input.focus(); } catch (_) { /* 聚焦失败不影响功能 */ }
+    });
+  }
+  if (el.modeNetdiskBtn) {
+    el.modeNetdiskBtn.addEventListener('click', () => {
+      setDownloadMode('netdisk');
+      try { el.input.focus(); } catch (_) { /* 聚焦失败不影响功能 */ }
+    });
+  }
   if (el.panResolveBtn) el.panResolveBtn.addEventListener('click', panResolve);
   if (el.panPwd) el.panPwd.addEventListener('keydown', (e) => { if (e.key === 'Enter') panResolve(); });
   if (el.panUrl) el.panUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') panResolve(); });

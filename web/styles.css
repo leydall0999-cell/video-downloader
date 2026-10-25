@@ -670,6 +670,26 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 .cd-item.is-busy { opacity: .6; pointer-events: none; }
 .pan-panel { margin-top: 1rem; }
 .pan-note { margin: .2rem 0 0; font-size: 11.5px; color: var(--text-mute); }
+
+/* 下载类型切换（2026-10-25 对齐桌面端）：视频下载 / 网盘下载 并列在输入区顶部，
+   网盘不再作为页面底部单独一块上下分开放，切过来就地展开。 */
+.mode-switch {
+  display: inline-flex; gap: .25rem; margin-bottom: .85rem;
+  background: #eef0f8; border: 1px solid var(--line); border-radius: 999px; padding: .25rem;
+}
+.mode-btn {
+  border: 0; background: transparent; color: var(--text-mute); cursor: pointer;
+  font-size: .88rem; font-weight: 600; padding: .45rem 1.15rem; border-radius: 999px;
+  transition: background .18s, color .18s; font-family: inherit;
+}
+.mode-btn:hover:not(.is-active) { color: var(--text); }
+.mode-btn.is-active { background: var(--brand); color: #fff; box-shadow: 0 2px 8px rgba(79, 70, 229, .28); }
+/* 网盘模式下让位的两块：① 视频解析结果（否则与网盘文件列表同屏打架）；
+   ② 网盘面板里那行重复的「分享链接 / 提取码」—— 输入已由主输入框承担。
+   ⚠️ 只藏内容，不藏 .input-panel 本身：切换器就在里面，整块藏掉就切不回来了。 */
+#downloadView.mode-netdisk .result-panel,
+#downloadView.mode-netdisk .cd-form,
+#downloadView.mode-netdisk #panTitle { display: none; }
 .uc-result { display: flex; flex-direction: column; gap: .7rem; margin-top: .8rem; }
 /* 转换结果预览：视频/音频/GIF 内嵌播放，带深色画框并限制尺寸 */
 .uc-preview { margin: 0; }
