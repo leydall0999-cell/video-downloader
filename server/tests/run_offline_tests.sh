@@ -1105,6 +1105,15 @@ run_one test_win_path_layout.py
 #       变异验证：摘掉 lib 分支 + 排除改回大小写敏感 ⇒ 4 项变红（复现 CI 日志里的 shim 路径）。
 run_one test_win_ffmpeg_shim_guard.py
 
+# 61.10 test_win_version_identity.py —— Windows 上 /api/version 不得回落 'dev'（2026-10-26）。
+#       core.py::BUILD_VERSION 是 /api/version 唯一来源，候选路径原本只写 macOS 布局
+#       （<exe>/../../Resources/...），Windows onedir 下变成 C:\Resources ⇒ 恒 'dev'
+#       ⇒ 应用内更新拿不到当前版本。同仓 system.py **有** exe 同级候选 ⇒ 两端不同源、极难察觉。
+#       用 ast 抽出 _read_build_version 真跑（假 sys.executable + 真目录树），
+#       覆盖 macOS / onedir 根 / onedir 6.x(_internal/server) 三种布局。
+#       变异验证：删掉 `ep.parent / 'build_version.txt'` ⇒ Windows 用例变红且 got='dev'（与真机一致）。
+run_one test_win_version_identity.py
+
 # 62. test_cloud_matting_gateway.py —— 云端抠图改走「本产品服务端」（2026-10-13 定档
 #     「钥匙不出保险柜」）：网关接入时必须走网关且出站请求不含任何火山凭据；
 #     未接入时保留本机直连；就绪判定与凭据来源（server/local/none）语义正确；

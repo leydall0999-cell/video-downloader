@@ -81,7 +81,7 @@ REACHABLE_CODES = (200, 204, 401, 403, 422)
 MUST_ENDPOINTS = ("/api/version", "/api/system/info")
 # 尽力接口：404 只记 warn
 BEST_EFFORT_ENDPOINTS = (
-    "/api/changelog",
+    "/api/system/changelog",  # 🔴 真正的路由是这个，不是 /api/changelog（首轮误报 404）
     "/api/tasks",
     "/api/sniffer/status",
 )
@@ -230,9 +230,16 @@ def main() -> int:
     indexed = build_index(install_dir)
     rep.add("A", "installed files indexed", indexed > 0, f"{indexed} files")
 
-    for must_dir in ("_internal", "web"):
-        rep.add("A", f"dir {must_dir}/ present",
-                os.path.isdir(os.path.join(install_dir, must_dir)))
+    rep.add("A", "dir _internal/ present",
+            os.path.isdir(os.path.join(install_dir, "_internal")))
+    # 🔴 PyInstaller onedir 6.x 把 --add-data 的数据收进 **_internal/**（不是平铺在
+    #    产物根），所以 web 实际在 _internal/web —— 只查根会误报「UI 整个没了」。
+    #    （2026-10-26 首轮验收就这样假红过一次。）
+    web_root = os.path.join(install_dir, "web")
+    web_internal = os.path.join(install_dir, "_internal", "web")
+    rep.add("A", "dir web/ present (root or _internal/)",
+            os.path.isdir(web_root) or os.path.isdir(web_internal),
+            web_internal if os.path.isdir(web_internal) else web_root)
 
     # version.txt（build_win.sh 写在 onedir 根，装完应在 {app} 根）
     vtxt = read_text(os.path.join(install_dir, "version.txt"))
@@ -298,8 +305,10 @@ def main() -> int:
                 got_ver = str(json.loads(body).get("version") or "")
             except Exception:
                 pass
+            # version 字段是**构建指纹**（"v1.0.93 · 构建 <sha> @ MM-DD HH:MM"），
+            # 不是裸版本号 ⇒ 只能做包含判断，全等会永远红（首轮误报过）。
             rep.add("B", "/api/version matches installer",
-                    (not want_ver) or got_ver == want_ver,
+                    (not want_ver) or got_ver == want_ver or (want_ver in got_ver),
                     f"got={got_ver!r} want={want_ver!r}")
 
             # 🔴 钉死 platform：史上写死 "macos"，Windows 版谎报自己
@@ -360,8 +369,18 @@ def main() -> int:
         time.sleep(3)
         rep.add("C", "uninstall exit code", un.returncode == 0,
                 f"rc={un.returncode}")
-        rep.add("C", "install dir removed", not os.path.isdir(install_dir),
-                install_dir)
+        # 🔴 别断言「目录整个消失」：Inno 只删自己装过的文件，运行期产生的
+        #    （日志/配置/缓存）会留下，于是目录还在但 exe 已删 —— 这是正常行为，
+        #    首轮把它判成 ❌ 是误报。判据改为「主程序确实被删」+ 列出残留备查。
+        exe_gone = not os.path.isfile(os.path.join(install_dir, "VideoDownloader.exe"))
+        leftovers = ""
+        if os.path.isdir(install_dir):
+            try:
+                leftovers = ", ".join(sorted(os.listdir(install_dir))[:8])
+            except OSError:
+                leftovers = "(无法列出)"
+        rep.add("C", "VideoDownloader.exe removed", exe_gone,
+                f"残留: {leftovers}" if leftovers else "")
     else:
         rep.add("C", "unins000.exe exists", False, install_dir)
 
