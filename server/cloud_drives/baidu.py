@@ -126,6 +126,46 @@ def _json(resp) -> dict:
 # URL 分类
 # ——————————————————————————————————————————————————————————————
 
+_SHARE_URL_RE = re.compile(
+    r"https?://(?:pan|yun)\.baidu\.com/[^\s\u4e00-\u9fff\"'<>，。；、）)】]+", re.I)
+_SHARE_PWD_RE = re.compile(
+    r"(?:提取码|密码|pwd)\s*[:：=]?\s*([0-9A-Za-z]{4})(?![0-9A-Za-z])", re.I)
+_URL_TAIL_JUNK = ".,;:!?)）】]」》\"'"
+
+
+def extract_share_url(text: str) -> tuple[str, str]:
+    """从「整段分享文案」里提取 (分享链接, 提取码)。
+
+    用户在百度网盘 App / 网页点「复制链接」，拿到的不是裸 URL，而是多行文案::
+
+        通过百度网盘分享的文件：狂野俄罗斯西伯利亚.mp4
+        链接:https://pan.baidu.com/s/1hgu12HSQdxe47CaGb-jx7Q
+        提取码:fhh1
+        复制这段内容打开「百度网盘APP 即可获取」
+
+    整段粘进输入框是最自然的操作 ⇒ 这里统一做一次规范化，
+    前端（web/app.js 的 panExtractShare）保持同样的正则口径。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return "", ""
+    m = _SHARE_URL_RE.search(raw)
+    if not m:
+        return "", ""
+    url = m.group(0).rstrip(_URL_TAIL_JUNK)
+    pwd = ""
+    pm = _SHARE_PWD_RE.search(raw)
+    if pm:
+        pwd = pm.group(1)
+    if not pwd:
+        try:
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            pwd = (q.get("pwd") or [""])[0]
+        except Exception:  # noqa: BLE001
+            pwd = ""
+    return url, pwd
+
+
 def parse_baidu_url(url: str) -> dict:
     """把用户输入归类。
 
@@ -135,7 +175,10 @@ def parse_baidu_url(url: str) -> dict:
     - personal: {"kind":"personal", "path": "/..."}
     """
     url = (url or "").strip()
-    if "pan.baidu.com" not in url and "yun.baidu.com" not in url:
+    # 整段分享文案（标题 + 「链接:」 + 「提取码:」）先规范化，只留真正的 URL；
+    # 提取码同时带出来，供后面的 share 分支兜底使用。
+    url, _text_pwd = extract_share_url(url)
+    if not url:
         return {"kind": "unknown"}
     parsed = urllib.parse.urlparse(url)
     query = urllib.parse.parse_qs(parsed.query)
@@ -152,7 +195,7 @@ def parse_baidu_url(url: str) -> dict:
             "kind": "share",
             "surl": surl,
             "raw": "1" + surl,
-            "pwd": (query.get("pwd") or [""])[0],
+            "pwd": ((query.get("pwd") or [""])[0] or _text_pwd),
         }
 
     frag = parsed.fragment or ""

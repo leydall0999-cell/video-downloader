@@ -17437,12 +17437,39 @@ el.dwVidPlayer.hidden = true;
     }
   };
 
+  // 整段分享文案 → (链接, 提取码)（2026-10-25 桌面端同步 web-dev 的 panExtractShare，
+  // 正则口径与 server/cloud_drives/baidu.py 的 extract_share_url 保持一致）
+  const cdExtractShare = (text) => {
+    const s = String(text || '');
+    const m = s.match(/https?:\/\/(?:pan|yun)\.baidu\.com\/[^\s\u4e00-\u9fff"'<>，。；、）)】]+/i);
+    if (!m) return { url: '', pwd: '' };
+    const url = m[0].replace(/[.,;:!?)）】\]」》"']+$/, '');
+    let pwd = '';
+    const pm = s.match(/(?:提取码|密码|pwd)\s*[:：=]?\s*([0-9A-Za-z]{4})(?![0-9A-Za-z])/i);
+    if (pm) pwd = pm[1];
+    if (!pwd) {
+      const q = url.match(/[?&]pwd=([0-9A-Za-z]{4})(?![0-9A-Za-z])/i);
+      if (q) pwd = q[1];
+    }
+    return { url, pwd };
+  };
+
   const cdResolve = async () => {
     // 解析一开始就把网盘面板（状态 + 文件列表 + 登录态）露出来，
     // 这样「解析中 / 失败原因」都看得见。
     if (el.clouddriveView) el.clouddriveView.hidden = false;
-    const url = ((el.cdUrl && el.cdUrl.value) || '').trim();
-    if (!url) { cdSetStatus('请先粘贴网盘分享链接', true); return; }
+    const rawInput = ((el.cdUrl && el.cdUrl.value) || '').trim();
+    if (!rawInput) { cdSetStatus('请先粘贴网盘分享链接', true); return; }
+    // 百度「复制链接」给的是整段文案（标题 + 「链接:」 + 「提取码:」），
+    // 先提取真正的 URL 与提取码并回填输入框，让用户看到程序认到了什么。
+    const parsed = cdExtractShare(rawInput);
+    let url = rawInput;
+    if (parsed.url && parsed.url !== rawInput) {
+      url = parsed.url;
+      if (el.cdUrl) el.cdUrl.value = url;
+      if (parsed.pwd && el.cdPwd && !el.cdPwd.value.trim()) el.cdPwd.value = parsed.pwd;
+      cdSetStatus('已识别链接与提取码，正在解析…', false);
+    }
     if (!/pan\.baidu\.com|yun\.baidu\.com/.test(url)) {
       cdSetStatus('目前只支持百度网盘分享链接（pan.baidu.com）', true);
       return;
