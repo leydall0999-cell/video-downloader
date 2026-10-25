@@ -34,7 +34,13 @@ on:
         options: [auto, force-skip]
         default: auto
   push:
-    tags: ["v*"]
+    # v*          = 正式发 Windows 版（会走 Release 步骤，产出可分发安装包）
+    # winverify-* = 只跑「真 Windows 验收」，**不发 Release、不碰线上**。
+    #               用途：本机（macOS）无法测 Windows，而本机又没有 gh token
+    #               调 workflow_dispatch —— 推一个 winverify-* tag 是唯一能
+    #               全自主触发远程真 Windows 测试的方式（git push 走 SSH 即可）。
+    #               验收报告会回推 ci-logs 分支，本机 git fetch 就能读到。
+    tags: ["v*", "winverify-*"]
 
 jobs:
   build:
@@ -350,3 +356,81 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: python desktop/ci_assert_win_no_window.py
+
+      # ── 真机验收：把「分发给用户的那个安装包」走一遍 装→起→验→卸 ──
+      # 🔴 为什么单独加这一步：上面那个 Smoke test 起的是 onedir 目录里的 exe，
+      #    而真正发出去的是 Inno 单文件安装包。安装包少打文件、快捷方式指错、
+      #    卸载残留这几类问题，跑 onedir 永远发现不了 —— 只能靠真装一遍。
+      #
+      # 🔴 为什么放最后：沿用「断言保留阻断力，但不卡住已构建好的包交付」的
+      #    既有教训（2026-10-18 连挂三轮都是附属步骤把 Release 全 skipped 掉）。
+      #    包已经上传/发布，这一步红了照样能取包排查。
+      #
+      # 分级：A=安装包完整性（必过）B=运行期（无头环境可能受限，只警告）
+      #       C=卸载干净（必过）。退出码 1=A/C 坏，2=仅 B 未过。
+      - name: 真机验收（安装包 装→起→验→卸）
+        id: verify
+        continue-on-error: true
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          set +e
+          python desktop/ci_verify_win_installer.py --ver "$(tr -d '[:space:]' < VERSION)"
+          RC=$?
+          echo "verify_rc=$RC" >> "$GITHUB_OUTPUT"
+          if [ "$RC" = "2" ]; then
+            echo "::warning::B 级（运行期）未过 —— 无头 runner 上 pywebview 可能起不来，A/C 全绿即包本身完好"
+          fi
+          exit 0
+
+      - name: 上传验收报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-verify-report
+          path: |
+            verify-win-report.md
+            verify-win-report.json
+            verify-win-app-stdout.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      # 本机没 gh token，匿名 API 下不了 artifact ⇒ 报告必须回推分支才能读到。
+      # 先基于远端 ci-logs 分支再提交，避免覆盖同轮里构建日志那一步推的内容。
+      - name: 回推验收报告到 ci-logs 分支（本机可读）
+        if: always()
+        run: |
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git fetch origin ci-logs 2>/dev/null || true
+          git checkout -B ci-logs origin/ci-logs 2>/dev/null || git checkout -B ci-logs
+          mkdir -p ci-logs
+          TS="$(date +%Y%m%d_%H%M%S)"
+          [ -f verify-win-report.md ]   && cp verify-win-report.md   "ci-logs/win-verify_${TS}.md"
+          [ -f verify-win-report.json ] && cp verify-win-report.json "ci-logs/win-verify_${TS}.json"
+          [ -f verify-win-app-stdout.log ] && cp verify-win-app-stdout.log "ci-logs/win-verify-stdout_${TS}.log"
+          git add ci-logs/
+          git commit -m "ci: win verify report ${TS}" || echo "no change to commit"
+          git push -f origin ci-logs || echo "push failed (non-fatal)"
+
+      - name: 验收结论补进 Summary
+        if: always()
+        run: |
+          {
+            echo ""
+            echo "## 真机验收（安装包 装→起→验→卸）"
+            echo ""
+            case "${{ steps.verify.outputs.verify_rc }}" in
+              0) echo "- 结论: ✅ A(完整性) / B(运行期) / C(卸载) 全过" ;;
+              2) echo "- 结论: ⚠️ A / C 通过，**B 未过** —— 无头 runner 无显示器，pywebview 可能起不来；包本身完好" ;;
+              1) echo "- 结论: ❌ A(完整性) 或 C(卸载) 有失败 —— **包有问题，别发**" ;;
+              *) echo "- 结论: ⚠️ 未产出有效结果（rc=${{ steps.verify.outputs.verify_rc }}，可能是安装包装不出来）" ;;
+            esac
+            echo ""
+            if [ -f verify-win-report.md ]; then
+              cat verify-win-report.md
+            else
+              echo "(no report file)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
