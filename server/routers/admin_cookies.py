@@ -1168,13 +1168,42 @@ def admin_cookies_delete(payload: dict[str, Any] = Body(...),
 
 # ─── 云端侧入口（共享令牌，供桌面 App 后台代理）─────────────────────────────
 
+def _pool_get_action(domain: str) -> dict[str, Any]:
+    """回读云端公共池：返回指定域最新有效 Cookie 明文（供桌面端「回读云端池」兜底）。
+
+    与 inject/delete 同持 VDL_COOKIE_SYNC_TOKEN：持有者本就能写池，允许读池
+    （仅返回明文、不写盘）不扩大暴露面。贡献域（baidu.com）不在此通道返回——
+    BDUSS 敏感度远高于视频站 Cookie，桌面端走网盘专属链路取。
+    """
+    if not domain:
+        raise HTTPException(status_code=400, detail="缺少 domain")
+    norm = cp._norm_domain(domain)
+    if cp.is_contrib_only(norm):
+        return {"ok": True, "found": False, "domain": norm,
+                "header": None, "reason": "contrib_only"}
+    header = cp.get_cookie(domain)
+    if not header:
+        return {"ok": True, "found": False, "domain": norm, "header": None}
+    matched = norm
+    for c in cp._candidates(domain):
+        try:
+            if cp._pool_file(c).exists():
+                matched = c
+                break
+        except Exception:
+            pass
+    return {"ok": True, "found": True, "domain": matched, "header": header}
+
+
 @router.post("/api/cookie/pool-admin")
 def cookie_pool_admin(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """云端池的管理入口，仅服务桌面 App 后台代理。
 
     鉴权用 `VDL_COOKIE_SYNC_TOKEN`（与 /api/cookie/sync 同一把钥匙）：
-    这把钥匙本来就允许「写池」，所以再允许「读池概况 / 验真 / 删除」不扩大暴露面；
-    返回体里**没有任何 Cookie 明文**，只有账号哈希、项数、时间、状态。
+    这把钥匙本来就允许「写池」，所以再允许「读池概况 / 验真 / 删除」不扩大暴露面。
+    注意：`get` 动作会返回指定域 Cookie **明文**（仅持有该令牌的桌面端可取），
+    用于「桌面端未登录也能复用云端共享登录态」；贡献域（baidu.com）不在此通道返回。
+    其余动作（overview / verify / delete）仍只暴露脱敏信息。
     """
     tok = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()
     if not tok or str((payload or {}).get("token") or "") != tok:
@@ -1191,4 +1220,6 @@ def cookie_pool_admin(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if action == "delete":
         return _do_delete(str((payload or {}).get("domain") or "").strip(),
                           (payload or {}).get("ids") or [])
+    if action == "get":
+        return _pool_get_action(str((payload or {}).get("domain") or "").strip())
     raise HTTPException(status_code=400, detail=f"未知动作：{action}")
