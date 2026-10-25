@@ -399,6 +399,28 @@ function pollResult(it, btn, sid, okLabel, left) {
   });
 }
 
+/** 网络级失败自愈（2026-10-26 用户实测「发送失败: Failed to fetch」）：
+ * 后台 getEndpoint 命中缓存后**永不重探**，而 App 重启可能换端口（8321 被旧实例
+ * 短暂占住 ⇒ 新实例落到 8322）⇒ 扩展拿着死端口发请求必然 Failed to fetch，
+ * 标题栏「已连接桌面端」还照常亮（它只判断缓存非空，不验证对方活着）。
+ * 自愈：网络级错误 ⇒ 走 detectEndpoint 清缓存重探端口表 ⇒ 拿到新端点重试一次。
+ * HTTP 层错误（服务器有回应）不算，照常上报，不做无谓重试。 */
+function postSendHealed(it, carry) {
+  return postSend(state.endpoint, it, carry).catch(function (e) {
+    var msg = String((e && e.message) || '');
+    var netDead = (e instanceof TypeError) ||
+      /failed to fetch|networkerror|load failed/i.test(msg);
+    if (!netDead) throw e;
+    return new Promise(function (resolve, reject) {
+      chrome.runtime.sendMessage({ type: 'detectEndpoint' }, function (r) {
+        if (chrome.runtime.lastError || !r || !r.endpoint) { reject(e); return; }
+        state.endpoint = r.endpoint;
+        postSend(r.endpoint, it, carry).then(resolve, reject);
+      });
+    });
+  });
+}
+
 function sendItem(it, btn, okLabel) {
   okLabel = okLabel || '已发送 ✓';
   if (!state.endpoint) {
@@ -422,7 +444,7 @@ function sendItem(it, btn, okLabel) {
   }
   btn.disabled = true;
   btn.textContent = '发送中…';
-  postSend(state.endpoint, it, state.carryCookie !== false)
+  postSendHealed(it, state.carryCookie !== false)
     .then(function (resp) {
       var sid = resp && resp.send_id;
       if (!sid) {
@@ -501,7 +523,7 @@ function sendItemWithNote(it, btn, okLabel) {
   btn.disabled = true;
   btn.textContent = '发送中…';
   note(btn, '正在把页面地址交给桌面端解析…', false);
-  postSend(state.endpoint, it, state.carryCookie !== false)
+  postSendHealed(it, state.carryCookie !== false)
     .then(function (resp) {
       var sid = resp && resp.send_id;
       if (!sid) { donePage(btn, okLabel, '已投递（未返回回执）'); return; }
