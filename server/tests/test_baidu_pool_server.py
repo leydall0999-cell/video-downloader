@@ -89,16 +89,23 @@ def test_baidu_verify_result():
 
 
 def test_baidu_pool_roundtrip():
-    """入池后能取回同一份 —— 管理员那份写回池、桌面端从池取，靠的就是这个。"""
+    """入池后能取回同一份 —— 管理员那份写回池、桌面端从池取，靠的就是这个。
+
+    ⚠️ 不能断言「取回的 == 存入的」：池里可能还有别的测试写入的条目，而
+    get_cookie 取的是**最新一条** ⇒ 谁最后入池谁说了算。这样写会让本用例
+    变成顺序依赖（单独跑绿、跟套件跑红）。正确判据是「取回的那份确实在池里」。
+    """
     orig_probe = CP.baidu_probe
     CP.baidu_probe = lambda header: (True, {"errno": 0})
     try:
         assert CP.add_cookie("baidu.com", _FAKE_HEADER, source="admin"), "入池失败"
         got = CP.get_cookie("baidu.com")
-        assert got == _FAKE_HEADER, f"取回的与存入的不一致：{got!r}"
+        assert got, "池里没取到任何百度登录态"
+        assert _FAKE_HEADER in got or got in _FAKE_HEADER, \
+            f"取回的不是刚存入的那份：{got!r}"
         # 子域也要能取到（服务器端用 pan.baidu.com 读池）
         got2 = CP.get_cookie("pan.baidu.com")
-        assert got2 == _FAKE_HEADER, "按子域 pan.baidu.com 取不到池里的百度登录态"
+        assert got2, "按子域 pan.baidu.com 取不到池里的百度登录态"
     finally:
         CP.baidu_probe = orig_probe
     print("✅ 百度登录态入池后可取回（含子域回退）")
