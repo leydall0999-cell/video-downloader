@@ -94,7 +94,8 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     # 磁盘不是大模型算力，且中心 _CLOUD_RESOURCES 只认 8 个旧键（未知键会被
     # 回退成 cloud_commentary，等于让分享去消耗「视频解说」的终身额度）。
     "share_qr": 200,          # 生成二维码（分享链接）/ 日（会员）
-    "share_page": 200,        # 生成网页（转在线链接）/ 日（会员）
+    "share_page": 200,
+    "cloud_drive": 200,         # 网盘下载（服务器中转百度直链）/ 日（会员）        # 生成网页（转在线链接）/ 日（会员）
 }
 # 免费档每日配额（2026-10-04 定稿：免费下载 10 次/日；2026-10-06 起各功能免费 3 次/日独立计）
 FREE_DAILY_LIMITS: dict[str, int] = {
@@ -113,6 +114,7 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     # VDL_WEB_SHARE_DAILY 写死），迁到配额表后后台可改，且与桌面端同账号共用。
     "share_qr": 20,           # 生成二维码 免费 20 次/日
     "share_page": 20,         # 生成网页 免费 20 次/日
+    "cloud_drive": 3,          # 网盘下载 免费 3 次/日
 }
 # 不限次资源：网页端没有「评论/数据/字幕批量」功能（那是从 DataTool 抄来的、V1 未实现），
 # 故为空元组。quota_state 遇到不在两张表里的 resource 会走 unknown → fail-open 放行。
@@ -167,6 +169,7 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     # 「生成网页」转在线链接计 share_page，其余计 share_qr。
     {"key": "share_qr",    "name": "生成二维码", "resource": "share_qr",    "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
     {"key": "share_page",  "name": "生成网页",   "resource": "share_page",  "unit": "次", "free_limit": 20, "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
+    {"key": "baidu_pan",   "name": "网盘下载",   "resource": "cloud_drive", "unit": "次", "free_limit": 3,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0},
 ]
 
 # --------------------------------------------------------------------------- #
@@ -1014,6 +1017,7 @@ _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     # 🔴 2026-10-19：分享进配额表 ⇒ 必须有对应卖点文案（守卫 test_feature_usage_gate ③）
     ("share_qr", "生成二维码 {v} 次/日"),
     ("share_page", "生成网页 {v} 次/日"),
+    ("cloud_drive", "网盘下载 {v} 次/日"),
 )
 # 不走每日配额、但属于会员权益的说明项
 _BENEFIT_EXTRA: tuple[dict[str, str], ...] = (

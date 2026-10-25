@@ -213,6 +213,24 @@ def cloud_drive_download(request: app.Request):
         raise app.HTTPException(status_code=403, detail="暂无可用的百度登录态，请联系管理员提供")
 
     name = (request.query_params.get("name") or "").strip() or "baidu-file"
+
+    # —— 每日配额门禁（资源键 cloud_drive，独立计次，不污染普通下载配额）——
+    # 免费 3 次/日、会员 200 次/日（见 membership.py）。预检超限抛 402 引导开通会员；
+    # 放行即计数（同步流式中转没有「任务完成」回写点，请求即代表一次使用）。
+    _cd_store = app.current_member_store(request)
+    _cd_q = _cd_store.quota_state("cloud_drive")
+    if not (_cd_q.get("unlimited") or _cd_q.get("unknown") or _cd_q.get("allowed", True)):
+        if _cd_q.get("tier") == "free":
+            _cd_detail = (f"今日免费网盘下载次数已用尽（{_cd_q['limit']}/日），"
+                          f"开通VIP会员可解锁 {_cd_q.get('member_limit', 0)} 次/日")
+        else:
+            _cd_detail = f"今日网盘下载配额已用尽（{_cd_q['limit']}/日）"
+        raise app.HTTPException(status_code=402, detail=_cd_detail)
+    try:
+        _cd_store.use_daily("cloud_drive", 1, title=name, platform="百度网盘")
+    except Exception:  # noqa: BLE001 — 计数失败 fail-open，绝不阻断下载
+        pass
+
     # 复用网页版既有的媒体中继 /api/media/proxy（它已具备 SSRF 护栏、Range 透传、
     # Content-Length 回传、防盗链 Referer、浏览器 UA）。这里只额外做两件事：
     #   ① force_range：百度直链裸 GET 一律 403，必须带 Range；

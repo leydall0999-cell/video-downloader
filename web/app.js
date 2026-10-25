@@ -7323,6 +7323,11 @@
       if (!resp.ok) {
         let msg = '下载失败';
         try { const p = await resp.json(); msg = p.detail || p.error || msg; } catch (_) { /* ignore */ }
+        if (resp.status === 402) {
+          panSetStatus(msg + ' · 点右上角「订阅」开通会员解锁', true);
+          try { promptSubscribe(); } catch (_) { /* ignore */ }
+          return;
+        }
         if (resp.status === 403 && /登录/.test(msg)) {
           try { if (window.__vdlOpenAuthModal) window.__vdlOpenAuthModal(); } catch (_) { /* ignore */ }
         }
