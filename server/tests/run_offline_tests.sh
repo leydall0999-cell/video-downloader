@@ -116,6 +116,7 @@ run_one test_cloud_daily_quota_unified.py   # 跨端每日免费额度统一：�
 run_one test_cloud_link.py
 run_one test_media_proxy_range.py
 run_one test_cloud_drive_baidu_web.py         # 网页版百度网盘：登录态存服务器(加密/按用户隔离)/resolve 不外泄直链与 cookie/download 带 Range+登录态中转(2026-10-25 用户拍板「存服务器上」)
+run_one test_baidu_pool_server.py         # 服务器端百度登录态进共享池：白名单放行+仅贡献域标记+真问站点验真+入池取回+管理员那份写回池(2026-10-25)
 run_one test_direct_url_hls.py
 run_node test_web_direct_download.js
 run_node test_web_hls_assemble.js

@@ -73,6 +73,17 @@ _BASE_DOMAINS = {"chrqj.com", "bilibili.com", "youku.com", "weixin.qq.com"}
 # 而 hardened 之外没有任何机制能让它进池（/api/cookie/sync 会以 400 拒收）。
 _POOL_EXTRA_DOMAINS = {"youtube.com"}
 
+# 🔴 2026-10-25 用户定档：百度网盘登录态（BDUSS）进共享池，给网页版所有用户共用。
+# 服务器端与桌面端(app-dev)必须一致，否则：
+#   ① 桌面端从浏览器自动取到后推云端，会被 /api/cookie/sync 以 400「不支持的域名」拒收；
+#   ② 管理员在服务器上提供的那份 BDUSS 写不进池 ⇒ 网页版永远没登录态可用。
+# 白名单放行，但**不进自动同步遍历**（_sync_domains_to_cloud 那条通用通道）：
+# BDUSS = 完整网盘账号权限（能看该账号所有文件、拿会员带宽），敏感度远高于
+# 视频平台 Cookie，不能替用户默认决定「共享我的网盘账号」。
+# 它只能从两条明确意图的路径进来：管理员在服务器上配置，或桌面端用户自己
+# 在网盘页显式贡献 / 浏览器里有登录态时由网盘专用链路取回。
+_CONTRIB_ONLY_DOMAINS = {"baidu.com"}
+
 logger = logging.getLogger(__name__)
 
 # 金牌影院验真用的签名参数（chrqj.com / nmwchxx.com 同一站，共用密钥与视频 ID）
@@ -118,6 +129,8 @@ def _root_domains() -> set:
     ds: set = {_strip_sub(d) for d in _BASE_DOMAINS if _strip_sub(d)}
     # 额外放行域（不需要「改写 403 文案」副作用的那批，如 youtube.com）
     ds |= {_strip_sub(d) for d in _POOL_EXTRA_DOMAINS if _strip_sub(d)}
+    # 仅显式贡献域（百度网盘）：进 is_allowed（能被存/能取），但被自动同步排除
+    ds |= {_strip_sub(d) for d in _CONTRIB_ONLY_DOMAINS if _strip_sub(d)}
     # env 扩展：逗号/分号/空格分隔的域名列表
     extra = os.environ.get("VDL_COOKIE_POOL_DOMAINS", "")
     for d in extra.replace(";", ",").replace(" ", ",").split(","):
@@ -142,6 +155,14 @@ def is_allowed(domain: str) -> bool:
     if not d:
         return False
     return any(d == r or d.endswith("." + r) for r in _root_domains())
+
+
+def is_contrib_only(domain: str) -> bool:
+    """是否「仅显式贡献」域（百度网盘）：不接受通用自动/隐式推送通道。"""
+    d = _strip_sub(domain)
+    if not d:
+        return False
+    return any(d == r or d.endswith("." + r) for r in _CONTRIB_ONLY_DOMAINS)
 
 
 def _pool_file(domain: str) -> Path:
@@ -478,6 +499,47 @@ def verify_chrqj(header: str, domain: str = "chrqj.com") -> bool | None:
 
 _BILI_NAV = "https://api.bilibili.com/x/web-interface/nav"
 
+# 百度网盘登录态验真（2026-10-25 共享池接入）：问 xpan/nas uinfo。
+# errno=0 ⇒ 登录态有效（响应里带 vip_type，可判断是不是会员账号）；
+# errno≠0 ⇒ 明确无效（BDUSS 过期/被踢下线时百度回 -6）；
+# 网络不可达 ⇒ None（放行，与 verify_cookie「仅明确无效才拒」的口径一致）。
+_BAIDU_UINFO = "https://pan.baidu.com/rest/2.0/xpan/nas?method=uinfo"
+_BAIDU_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+
+def baidu_probe(header: str) -> tuple[bool | None, dict]:
+    """问百度 uinfo：返回 (判定, 响应 dict)。判定 True=有效 / False=明确无效 / None=问不出来。"""
+    import json
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(_BAIDU_UINFO, headers={
+        "Cookie": header or "",
+        "User-Agent": _BAIDU_UA,
+        "Referer": "https://pan.baidu.com/",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        # 4xx 带 JSON 体时仍能拿到 errno（百度对过期 BDUSS 回 200 + errno=-6）
+        try:
+            data = json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:
+            return (None, {})
+    except Exception:
+        return (None, {})
+    if not isinstance(data, dict):
+        return (None, {})
+    return ((int(data.get("errno") or 0) == 0), data)
+
+
+def verify_baidu(header: str) -> bool | None:
+    """百度网盘登录态验真（真问站点，不是结构校验）。"""
+    ok, _info = baidu_probe(header)
+    return ok
+
+
 
 def verify_bilibili(header: str) -> bool | None:
     """B 站登录态验真：nav 接口 isLogin 为真才算有效。
@@ -679,6 +741,10 @@ def verify_cookie(domain: str, header: str) -> bool | None:
     # 只能问站点本身；这是唯一能区分两者的判据。
     if d == "bilibili.com":
         return verify_bilibili(header)
+    # 百度网盘（2026-10-25）：同理，游客态也带一堆字段，只能问站点；
+    # 且这里要的是「这个账号是不是真登录、是不是会员」，问一次全知道。
+    if d == "baidu.com":
+        return verify_baidu(header)
     # 健康检查探针占位（SID=RELAYTEST 之类），不是真实登录态，永远不该入池
     if "RELAYTEST" in (header or ""):
         return False
