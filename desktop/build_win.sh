@@ -279,24 +279,35 @@ fi
 #    所以拷贝前必须：① 解析到真身（排除 choco shim 目录）② 实跑 -version 验证。
 #    只信「能跑出版本号的那个文件」，不信 PATH 上先撞见谁。
 _resolve_real_bin() {
-  local name="$1" explicit="$2" cand found
-  for cand in "$explicit" "$(command -v "$name" 2>/dev/null)" "$REPO/$name.exe"; do
+  local name="$1" explicit="$2" cand found low libroot
+  # ① 显式指定（VDL_FFMPEG_BIN / VDL_FFPROBE_BIN）最优先
+  for cand in "$explicit"; do
     [[ -n "$cand" && -f "$cand" ]] || continue
-    # choco 的 bin 目录里全是 shim：原地能跑，拷进包必废 —— 直接排除
-    case "$cand" in
-      */chocolatey/bin/*|*"/chocolatey/bin/"*|*"\\chocolatey\\bin\\"*) continue ;;
-    esac
-    if "$cand" -version >/dev/null 2>&1; then
-      echo "$cand"; return 0
-    fi
+    if "$cand" -version >/dev/null 2>&1; then echo "$cand"; return 0; fi
   done
-  # 兜底：到 Chocolatey 的 lib 目录里找真身（不限包内目录结构，深度限制避免扫全盘）
-  if [[ -d /c/ProgramData/chocolatey/lib ]]; then
-    found="$(find /c/ProgramData/chocolatey/lib -maxdepth 6 -type f -name "$name.exe" 2>/dev/null | head -1)"
-    if [[ -n "$found" ]] && "$found" -version >/dev/null 2>&1; then
-      echo "$found"; return 0
-    fi
-  fi
+  # ② 直接到 Chocolatey 存真身的 lib 目录里找（**优先于 PATH**）。
+  #    shim 的相对目标固定是 ..\lib\<pkg>\tools\... ⇒ 真身一定在 lib 下；
+  #    Windows 文件系统大小写不敏感，两种写法都试一遍以防万一。
+  for libroot in /c/ProgramData/chocolatey/lib /c/ProgramData/Chocolatey/lib; do
+    [[ -d "$libroot" ]] || continue
+    while IFS= read -r found; do
+      [[ -f "$found" ]] || continue
+      if "$found" -version >/dev/null 2>&1; then echo "$found"; return 0; fi
+    done < <(find "$libroot" -maxdepth 7 -type f -iname "$name.exe" 2>/dev/null | head -8)
+  done
+  # ③ PATH 上的候选：必须**大小写不敏感**地排除 chocolatey/bin
+  #    （2026-10-26 第二轮实测：写成小写 chocolatey 时，实际路径是
+  #     /c/ProgramData/Chocolatey/bin/ffmpeg —— 大写 C ⇒ shim 蒙混过关，整轮又挂）
+  for cand in "$(command -v "$name" 2>/dev/null)" "$(command -v "$name.exe" 2>/dev/null)" "$REPO/$name.exe"; do
+    [[ -n "$cand" && -f "$cand" ]] || continue
+    # 用 tr 转小写而非 ${cand,,}：后者是 bash 4+ 语法，macOS 自带 bash 3.2 不支持，
+    # 会导致本机无法验证本函数（CI 的 Git Bash 虽支持，但保持可移植更稳）。
+    low="$(printf '%s' "$cand" | tr '[:upper:]' '[:lower:]')"
+    case "$low" in
+      *"/chocolatey/bin/"*|*"\\chocolatey\\bin\\"*) continue ;;
+    esac
+    if "$cand" -version >/dev/null 2>&1; then echo "$cand"; return 0; fi
+  done
   return 1
 }
 
