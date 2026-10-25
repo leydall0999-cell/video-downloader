@@ -2737,6 +2737,12 @@ def _is_douyin_host(host: str) -> bool:
 _RESOLVE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _RESOLVE_CACHE_LOCK = threading.Lock()
 _RESOLVE_CACHE_TTL = 90.0
+# 单次 /v1/resolve 的 HTTP 上限（2026-10-26 上调 90 → 130）：
+# 云端 daemon 侧抖音最坏链路 = 快路预算 20s + Playwright 85s 硬上限 ≈ 105s，
+# 90s 会在 daemon 给出结论前先断，把「慢」误报成「解析服务不可达」。
+# 真正的闸门是 routers/core.py 的 asyncio.wait_for（按平台给预算，抖音 120s），
+# 这里只要比它大就不会抢先触发。
+_WORKER_HTTP_TIMEOUT = 130
 # 复用连接（keep-alive）省去每次 TLS 握手/建连（~100-300ms）
 _worker_http: Any = None
 
@@ -2852,7 +2858,7 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
             endpoint,
             headers={"User-Agent": "vdl-platform-resolve"},
             proxies=proxies,
-            timeout=90,
+            timeout=_WORKER_HTTP_TIMEOUT,
         )
         # 403 自愈（桌面端经线上转发）：cloud_sync.json 的 token 更新后，运行中的
         # app 无需重启即可刷新（_ensure_vps_env 只在启动时注入一次）
@@ -2864,7 +2870,7 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
                     _build_endpoint(_new_tok),
                     headers={"User-Agent": "vdl-platform-resolve"},
                     proxies=proxies,
-                    timeout=90,
+                    timeout=_WORKER_HTTP_TIMEOUT,
                 )
         r.raise_for_status()
         data = r.json()

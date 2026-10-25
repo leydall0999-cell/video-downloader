@@ -163,6 +163,12 @@ _RESOLVERS = {
 PUSH_RETRIES = int(os.environ.get("VDL_COOKIE_PUSH_RETRIES", "2"))
 PUSH_RETRY_BACKOFF = int(os.environ.get("VDL_COOKIE_PUSH_BACKOFF", "15"))
 
+# 抖音快路（a_bogus 签名直连）的时间预算常量（见下方 do_resolve 的 douyin 分支）：
+# 该快路无内置超时，卡住会拖死整台 daemon，必须在外面加闸。正常快路实测 ~0.7s，
+# 20s 绰绰有余；超预算即回落 Playwright（85s 硬上限），总耗时仍可控。
+# 这里单独定义成常量只是为了让两处（定义 + 使用）保持同名、便于环境变量覆盖。
+_DOUYIN_DIRECT_TIMEOUT = int(os.environ.get("VDL_DOUYIN_DIRECT_TIMEOUT", "20"))
+
 
 def _collect_and_cache():
     """串行起 Chromium 收集一次 B站 Cookie 并写入 _cached（不推送）。
@@ -338,8 +344,26 @@ def do_resolve(platform, url, cookie=""):
     # 实测 ~0.7s/条 vs Playwright 20s+）。签名被抖音风控升级打掉或链接
     # 非视频页时才回落 Playwright 浏览器方案，快路失败对用户透明。
     if platform == "douyin":
+        # 🔴 2026-10-26 实测修复：快路 douyin_direct.resolve() 是纯 HTTP 直连，
+        # **没有任何超时保护**（urllib/requests 未设 timeout），一旦卡在读 socket
+        # 上就永久挂住（curl 实测新链接 100s / 115s 全无响应）。更糟的是它跑在
+        # _resolve_lock **之外**，不受下方 Playwright 那条 85s 硬兜底约束 ——
+        # 于是 /v1/resolve 永不返回、 hung 线程只增不减，最后连已解析过的链接
+        # 也一起卡死（整台 daemon 被拖死）。
+        # 这里给它 20s 预算：超时或异常一律**回落 Playwright**（有 85s 上限，
+        # 必定返回 ok/错误），保证 /v1/resolve 最坏 ~105s 内必有结论。
         try:
-            return True, douyin_direct.resolve(url)
+            _dex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            _dfut = _dex.submit(douyin_direct.resolve, url)
+            try:
+                return True, _dfut.result(timeout=_DOUYIN_DIRECT_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                # shutdown(wait=False)：卡死的线程无法强杀，只能不再等它；
+                # 它在后台自然结束后结果被丢弃，不影响本次回落。
+                _dex.shutdown(wait=False)
+                logger.warning(
+                    "[douyin-direct] %ss 未返回（疑似卡在读 socket），回落 Playwright: %s",
+                    _DOUYIN_DIRECT_TIMEOUT, url[:80])
         except douyin_direct.VideoNotFoundError as e:
             # 签名有效但视频确证不存在：确定性结论，回落浏览器也是同样结果
             return False, str(e)

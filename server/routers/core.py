@@ -7,6 +7,7 @@ handler 原样搬入、零改引用。路由用 @router.get/post 挂载，已在
 """
 import app
 import hmac
+import os
 import object_store
 import re
 from fastapi import APIRouter
@@ -130,8 +131,12 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     # 等播放器发流请求，实测 25~60s，用通用的国内直连阈值（60s）会误报超时。
     # 与网页端 core.py 保持同源，改这里时两边须同步。
     if app.downloader._is_douyin_host(host):
-        # 抖音走 VPS Playwright 真实浏览器解析，起 Chromium + 页面加载实测 25-30s
-        timeout = 75
+        # 抖音走 VPS Playwright 真实浏览器解析，起 Chromium + 页面加载实测 25-30s。
+        # 🔴 2026-10-26 实测上调 75 → 120：云端 daemon 的抖音快路（a_bogus 签名直连）
+        # 会先跑一次，失败/超时才回落 Playwright（daemon 侧另有 85s 硬上限），
+        # 故最坏链路 ≈ 20s(快路预算) + 85s(Playwright) ≈ 105s —— 75s 必然误报超时。
+        # 前端 /api/resolve 的 fetch 上限是 300s，120s 不会先被前端掐断。
+        timeout = int(os.environ.get("VDL_RESOLVE_TIMEOUT_DOUYIN", "120"))
     elif app.downloader._is_iqiyi_host(host):
         # 爱奇艺 VPS Playwright worker：起 Chromium + 等播放器发 m3u8 请求，实测 30-50s
         timeout = 90
