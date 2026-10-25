@@ -1,0 +1,371 @@
+▶ 准备构建环境（独立 venv）
+
+[notice] A new release of pip is available: 26.2.1 -> 26.2.2
+[notice] To update, run: D:\a\video-downloader\video-downloader\.build_venv\Scripts\python.exe -m pip install --upgrade pip
+▶ 生成应用图标
+icon source: desktop/icon.png
+icon.ico generated
+▶ 打包 VideoDownloader.exe（单文件夹 / 无控制台）
+▶ 捆绑解说管线(随包自包含): /d/a/video-downloader/video-downloader/commentary-pipeline
+
+[notice] A new release of pip is available: 26.2.1 -> 26.2.2
+[notice] To update, run: D:\a\video-downloader\video-downloader\.build_venv\Scripts\python.exe -m pip install --upgrade pip
+   ✔ 复制系统中文字体进包: msyh.ttc
+   ✔ staging 就位: /d/a/video-downloader/video-downloader/build/commentary_staging（process.py 36015 字节）
+   ✔ 解说管线版本校验通过（检测到 1.1.0 新 CLI）
+   ✔ 管线指纹: 702e85f
+192 INFO: PyInstaller: 6.22.3, contrib hooks: 2026.9
+192 INFO: Python: 3.13.16
+215 INFO: Platform: Windows-2025Server-10.0.26100-SP0
+215 INFO: Python environment: D:\a\video-downloader\video-downloader\.build_venv
+215 INFO: wrote D:\a\video-downloader\video-downloader\VideoDownloader.spec
+218 INFO: Removing temporary files and cleaning cache in C:\Users\runneradmin\AppData\Local\pyinstaller
+D:\a\video-downloader\video-downloader\.build_venv\Lib\site-packages\fitz\__init__.py:17: FutureWarning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+  warnings.warn(
+4725 WARNING: collect_data_files - skipping data collection for module 'Cryptodome' as it is not a package.
+4726 WARNING: collect_dynamic_libs - skipping library collection for module 'Cryptodome' as it is not a package.
+158 WARNING: Failed to collect submodules for 'webview.platforms.android' because importing 'webview.platforms.android' raised: ModuleNotFoundError: No module named 'android'
+385 WARNING: Failed to collect submodules for 'onnxruntime.quantization.neural_compressor' because importing 'onnxruntime.quantization.neural_compressor' raised: ModuleNotFoundError: No module named 'onnx_ir'
+11824 INFO: Module search paths (PYTHONPATH):
+['D:\\a\\video-downloader\\video-downloader\\.build_venv\\Scripts\\pyinstaller.exe',
+ 'C:\\hostedtoolcache\\windows\\Python\\3.13.16\\x64\\python313.zip',
+ 'C:\\hostedtoolcache\\windows\\Python\\3.13.16\\x64\\DLLs',
+ 'C:\\hostedtoolcache\\windows\\Python\\3.13.16\\x64\\Lib',
+ 'C:\\hostedtoolcache\\windows\\Python\\3.13.16\\x64',
+ 'D:\\a\\video-downloader\\video-downloader\\.build_venv',
+ 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages',
+ 'D:\\a\\video-downloader\\video-downloader\\desktop',
+ 'D:\\a\\video-downloader\\video-downloader\\server',
+ 'D:\\a\\video-downloader\\video-downloader']
+12480 INFO: Appending 'binaries' from .spec
+12481 INFO: Appending 'datas' from .spec
+12518 INFO: checking Analysis
+12518 INFO: Building Analysis because Analysis-00.toc is non existent
+12518 INFO: Looking for Python shared library...
+12518 INFO: Using Python shared library: C:\hostedtoolcache\windows\Python\3.13.16\x64\python313.dll
+12518 INFO: Running Analysis Analysis-00.toc
+12518 INFO: Target bytecode optimization level: 0
+12518 INFO: Initializing module dependency graph...
+12519 INFO: Initializing module graph hook caches...
+12533 INFO: Analyzing modules for base_library.zip ...
+14035 INFO: Processing standard module hook 'hook-encodings.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+14507 INFO: Processing standard module hook 'hook-math.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+16173 INFO: Processing standard module hook 'hook-pickle.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+17249 INFO: Processing standard module hook 'hook-heapq.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+17935 INFO: Caching module dependency graph...
+17979 INFO: Analyzing D:\a\video-downloader\video-downloader\desktop\desktop_launcher.py
+18159 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+18386 INFO: Processing standard module hook 'hook-xml.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+18784 INFO: Processing standard module hook 'hook-sysconfig.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+18790 INFO: Processing standard module hook 'hook-_ctypes.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+18817 INFO: Processing standard module hook 'hook-uvicorn.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+19980 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+19981 INFO: SetuptoolsInfo: initializing cached setuptools info...
+20917 INFO: Processing standard module hook 'hook-platform.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+21225 INFO: Processing standard module hook 'hook-difflib.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+21396 INFO: Processing standard module hook 'hook-webbrowser.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+21632 INFO: Processing standard module hook 'hook-websockets.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+22619 INFO: Processing standard module hook 'hook-anyio.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+23445 INFO: Processing standard module hook 'hook-urllib3.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+23588 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+23588 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+23596 INFO: Processing standard module hook 'hook-setuptools.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+23610 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+23644 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+23644 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+23657 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+23658 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+23833 INFO: Processing standard module hook 'hook-_osx_support.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+23854 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+24173 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+24174 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+24797 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+24797 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+25544 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+25545 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+25826 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+26011 INFO: Processing standard module hook 'hook-cryptography.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+27028 INFO: hook-cryptography: cryptography does not seem to be using dynamically linked OpenSSL.
+27454 INFO: Processing standard module hook 'hook-certifi.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+28114 INFO: Processing standard module hook 'hook-pydantic.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+28971 INFO: Processing standard module hook 'hook-zoneinfo.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+31046 INFO: Processing standard module hook 'hook-sqlite3.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+31349 INFO: Processing standard module hook 'hook-yt_dlp.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\yt_dlp\\__pyinstaller'
+WARNING: Using Crypto since Cryptodome is not available. Install with: python3 -m pip install pycryptodomex
+115 WARNING: Failed to collect submodules for 'urllib3.contrib.emscripten' because importing 'urllib3.contrib.emscripten' raised: ModuleNotFoundError: No module named 'js'
+32410 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+33135 INFO: Processing standard module hook 'hook-Crypto.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+33711 INFO: Processing standard module hook 'hook-pycparser.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+44311 INFO: Processing standard module hook 'hook-av.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+44655 INFO: Processing standard module hook 'hook-numpy.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+46920 INFO: Processing standard module hook 'hook-psutil.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+48842 INFO: Processing standard module hook 'hook-pygments.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+51399 INFO: Processing standard module hook 'hook-PIL.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+51540 INFO: Processing standard module hook 'hook-PIL.Image.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+52065 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+53175 INFO: Processing standard module hook 'hook-fsspec.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+54013 INFO: Processing standard module hook 'hook-onnxruntime.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+54104 INFO: Processing pre-safe-import-module hook 'hook-tensorflow.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\pre_safe_import_module'
+54377 INFO: Processing standard module hook 'hook-cv2.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+65368 INFO: Processing standard module hook 'hook-webview.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\webview\\__pyinstaller'
+65943 INFO: Processing pre-safe-import-module hook 'hook-gi.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+66121 INFO: Processing standard module hook 'hook-clr.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\pythonnet\\_pyinstaller'
+66138 INFO: Processing standard module hook 'hook-clr_loader.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+66302 INFO: Analyzing hidden import 'yt_dlp_plugins.extractor'
+66302 INFO: Analyzing hidden import 'yt_dlp_plugins.extractor.chrqj'
+66347 INFO: Analyzing hidden import 'yt_dlp_plugins.extractor.kuaishou'
+66367 INFO: Analyzing hidden import 'yt_dlp.__main__'
+66368 INFO: Analyzing hidden import 'yt_dlp.__pyinstaller'
+66369 INFO: Analyzing hidden import 'yt_dlp.__pyinstaller.hook-yt_dlp'
+66395 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+66396 INFO: Setuptools: 'importlib_metadata' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.importlib_metadata'!
+66429 INFO: Processing standard module hook 'hook-setuptools._vendor.importlib_metadata.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+66454 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+66454 INFO: Setuptools: 'zipp' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.zipp'!
+66491 INFO: Processing standard module hook 'hook-win32ctypes.core.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+67710 INFO: Analyzing hidden import 'yt_dlp.compat._deprecated'
+67712 INFO: Analyzing hidden import 'yt_dlp.compat._legacy'
+67720 INFO: Analyzing hidden import 'yt_dlp.utils._deprecated'
+67724 INFO: Analyzing hidden import 'yt_dlp.utils._legacy'
+67736 INFO: Analyzing hidden import 'pymupdf.__main__'
+67780 INFO: Analyzing hidden import 'pymupdf._tgif'
+67780 INFO: Analyzing hidden import 'pymupdf.layout.onnx.LayoutProbAnalyzer'
+67791 INFO: Analyzing hidden import 'pymupdf.mupdf_info'
+67795 INFO: Analyzing hidden import 'pymupdf.show_features'
+67801 INFO: Analyzing hidden import 'pymupdf.tgif'
+67806 INFO: Analyzing hidden import 'fitz.table'
+67807 INFO: Analyzing hidden import 'fitz.utils'
+67807 INFO: Analyzing hidden import 'pythonnet._pyinstaller'
+67808 INFO: Analyzing hidden import 'pythonnet._pyinstaller.hook-clr'
+67809 INFO: Analyzing hidden import 'webview.__pyinstaller'
+67810 INFO: Analyzing hidden import 'webview.__pyinstaller.hook-webview'
+67811 INFO: Analyzing hidden import 'webview._version'
+67812 INFO: Analyzing hidden import 'faster_whisper.assets'
+67812 INFO: Analyzing hidden import 'edge_tts.__main__'
+67820 INFO: Analyzing hidden import 'ctranslate2.converters'
+68147 INFO: Analyzing hidden import 'ctranslate2.converters.eole_ct2'
+68161 INFO: Analyzing hidden import 'tokenizers.tools'
+68175 INFO: Analyzing hidden import 'onnxruntime.backend'
+68191 INFO: Analyzing hidden import 'onnxruntime.capi.convert_npz_to_onnx_adapter'
+68194 INFO: Analyzing hidden import 'onnxruntime.datasets'
+68195 INFO: Analyzing hidden import 'onnxruntime.quantization.matmul_bnb4_quantizer'
+68204 INFO: Analyzing hidden import 'onnxruntime.quantization.preprocess'
+68207 INFO: Analyzing hidden import 'onnxruntime.quantization.qdq_loss_debug'
+68221 INFO: Analyzing hidden import 'onnxruntime.quantization.static_quantize_runner'
+68229 INFO: Analyzing hidden import 'onnxruntime.tools.check_onnx_model_mobile_usability'
+68271 INFO: Analyzing hidden import 'onnxruntime.tools.convert_onnx_models_to_ort'
+68319 INFO: Analyzing hidden import 'onnxruntime.tools.make_dynamic_shape_fixed'
+68322 INFO: Analyzing hidden import 'onnxruntime.tools.offline_tuning'
+68331 INFO: Analyzing hidden import 'onnxruntime.tools.onnx_randomizer'
+68335 INFO: Analyzing hidden import 'onnxruntime.tools.onnxruntime_test'
+68353 INFO: Analyzing hidden import 'onnxruntime.tools.optimize_onnx_model'
+68355 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py'
+68355 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs'
+68356 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ArgType'
+68357 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ArgTypeAndIndex'
+68360 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Attribute'
+68376 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.AttributeType'
+68377 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Checkpoint'
+68383 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DeprecatedKernelCreateInfos'
+68388 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DeprecatedNodeIndexAndKernelDefHash'
+68392 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DeprecatedSessionState'
+68397 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DeprecatedSubGraphSessionState'
+68400 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Dimension'
+68404 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DimensionValue'
+68407 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.DimensionValueType'
+68408 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.EdgeEnd'
+68410 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.FloatProperty'
+68414 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Graph'
+68428 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.InferenceSession'
+68433 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.IntProperty'
+68436 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.KernelTypeStrArgsEntry'
+68441 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.KernelTypeStrResolver'
+68444 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.MapType'
+68448 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Model'
+68458 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ModuleState'
+68465 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Node'
+68479 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.NodeEdge'
+68485 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.NodeType'
+68486 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.NodesToOptimizeIndices'
+68493 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.OpIdKernelTypeStrArgsEntry'
+68497 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.OperatorSetId'
+68501 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.OptimizerGroup'
+68506 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ParameterOptimizerState'
+68511 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.PropertyBag'
+68518 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.RuntimeOptimizationRecord'
+68523 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.RuntimeOptimizationRecordContainerEntry'
+68527 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.RuntimeOptimizations'
+68531 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.SequenceType'
+68534 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Shape'
+68538 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.SparseTensor'
+68543 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.StringProperty'
+68546 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.StringStringEntry'
+68550 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Tensor'
+68559 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.TensorDataType'
+68560 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.TensorTypeAndShape'
+68564 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.TypeInfo'
+68568 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.TypeInfoValue'
+68568 INFO: Analyzing hidden import 'onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.ValueInfo'
+68575 INFO: Analyzing hidden import 'onnxruntime.tools.pytorch_export_contrib_ops'
+68582 INFO: Analyzing hidden import 'onnxruntime.tools.qdq_helpers'
+68583 INFO: Analyzing hidden import 'onnxruntime.tools.qdq_helpers.optimize_qdq_model'
+68584 INFO: Analyzing hidden import 'onnxruntime.tools.reduced_build_config_parser'
+68592 INFO: Analyzing hidden import 'onnxruntime.tools.remove_initializer_from_input'
+68594 INFO: Analyzing hidden import 'onnxruntime.tools.update_onnx_opset'
+68596 INFO: Analyzing hidden import 'onnxruntime.transformers.affinity_helper'
+68598 INFO: Analyzing hidden import 'onnxruntime.transformers.benchmark'
+68627 INFO: Analyzing hidden import 'onnxruntime.transformers.benchmark_helper'
+68654 INFO: Analyzing hidden import 'onnxruntime.transformers.bert_perf_test'
+68676 INFO: Analyzing hidden import 'onnxruntime.transformers.bert_test_data'
+68696 INFO: Analyzing hidden import 'onnxruntime.transformers.compare_bert_results'
+68704 INFO: Analyzing hidden import 'onnxruntime.transformers.constants'
+68706 INFO: Analyzing hidden import 'onnxruntime.transformers.convert_generation'
+68911 INFO: Analyzing hidden import 'onnxruntime.transformers.convert_tf_models_to_pytorch'
+68921 INFO: Analyzing hidden import 'onnxruntime.transformers.convert_to_packing_mode'
+68938 INFO: Analyzing hidden import 'onnxruntime.transformers.dynamo_onnx_helper'
+68947 INFO: Analyzing hidden import 'onnxruntime.transformers.float16'
+68969 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention'
+69013 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention_clip'
+69024 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention_sam2'
+69041 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention_unet'
+69085 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_attention_vae'
+69096 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_bart_attention'
+69115 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_base'
+69121 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_bias_add'
+69125 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_biasgelu'
+69128 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_biassplitgelu'
+69132 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_conformer_attention'
+69142 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_constant_fold'
+69148 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_embedlayer'
+69174 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_fastgelu'
+69189 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gelu'
+69199 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gelu_approximation'
+69201 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gemmfastgelu'
+69206 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gpt_attention'
+69223 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gpt_attention_megatron'
+69235 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_gpt_attention_no_past'
+69243 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_group_norm'
+69250 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_layernorm'
+69267 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_mha_dit'
+69284 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_mha_mmdit'
+69304 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_nhwc_conv'
+69309 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_options'
+69317 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_qordered_attention'
+69331 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_qordered_gelu'
+69335 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_qordered_layernorm'
+69339 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_qordered_matmul'
+69346 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_quickgelu'
+69349 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_reshape'
+69356 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_rotary_attention'
+69416 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_shape'
+69421 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_simplified_layernorm'
+69427 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_skip_group_norm'
+69436 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_skiplayernorm'
+69504 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_transpose'
+69512 INFO: Analyzing hidden import 'onnxruntime.transformers.fusion_utils'
+69525 INFO: Analyzing hidden import 'onnxruntime.transformers.huggingface_models'
+69528 INFO: Analyzing hidden import 'onnxruntime.transformers.import_utils'
+69529 INFO: Analyzing hidden import 'onnxruntime.transformers.io_binding_helper'
+69551 INFO: Analyzing hidden import 'onnxruntime.transformers.large_model_exporter'
+69569 INFO: Analyzing hidden import 'onnxruntime.transformers.metrics'
+69577 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_exporter'
+69602 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model'
+69669 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_bart'
+69677 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_bert'
+69704 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_bert_keras'
+69721 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_bert_tf'
+69743 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_clip'
+69745 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_conformer'
+69748 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_gpt2'
+69753 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_mmdit'
+69767 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_phi'
+69807 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_sam2'
+69813 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_t5'
+69843 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_tnlr'
+69851 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_unet'
+69863 INFO: Analyzing hidden import 'onnxruntime.transformers.onnx_model_vae'
+69866 INFO: Analyzing hidden import 'onnxruntime.transformers.optimizer'
+69885 INFO: Analyzing hidden import 'onnxruntime.transformers.past_helper'
+69892 INFO: Analyzing hidden import 'onnxruntime.transformers.profile_result_processor'
+69905 INFO: Analyzing hidden import 'onnxruntime.transformers.profiler'
+69917 INFO: Analyzing hidden import 'onnxruntime.transformers.quantize_helper'
+69920 INFO: Analyzing hidden import 'onnxruntime.transformers.shape_infer_helper'
+69926 INFO: Analyzing hidden import 'onnxruntime.transformers.shape_optimizer'
+69942 INFO: Analyzing hidden import 'onnxruntime.transformers.torch_onnx_export_helper'
+69944 INFO: Analyzing hidden import 'av.__main__'
+69947 INFO: Analyzing hidden import 'av.container.pyio'
+69956 INFO: Analyzing hidden import 'av.datasets'
+69961 INFO: Analyzing hidden import 'av.dictionary'
+69963 INFO: Analyzing hidden import 'av.filter.link'
+69963 INFO: Analyzing hidden import 'av.opaque'
+69967 INFO: Analyzing hidden import 'av.sidedata.encparams'
+69969 INFO: Analyzing hidden import 'av.utils'
+69972 INFO: Processing module hooks (post-graph stage)...
+70420 INFO: Processing standard module hook 'hook-pytest.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+70727 INFO: Processing standard module hook 'hook-py.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+72465 WARNING: Hidden import "pycparser.lextab" not found!
+72465 WARNING: Hidden import "pycparser.yacctab" not found!
+72777 WARNING: Hidden import "tzdata" not found!
+73129 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks'
+75800 INFO: Performing binary vs. data reclassification (1020 entries)
+75923 INFO: Looking for ctypes DLLs
+76256 INFO: Analyzing run-time hooks ...
+76273 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+76277 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+76280 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+76282 INFO: Including run-time hook 'pyi_rth_cryptography_openssl.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\rthooks'
+76283 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+76373 INFO: Creating base_library.zip...
+76399 INFO: Looking for dynamic libraries
+D:\a\video-downloader\video-downloader\.build_venv\Lib\site-packages\fitz\__init__.py:17: FutureWarning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+  warnings.warn(
+79788 INFO: Extra DLL search directories (AddDllDirectory): ['D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\numpy.libs', 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\av.libs', 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\onnx.libs', 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\ml_dtypes.libs', 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\ctranslate2', 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\cv2\\../../x64/vc17/bin', 'D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\curl_cffi.libs']
+79788 INFO: Extra DLL search directories (PATH): ['D:\\a\\video-downloader\\video-downloader\\.build_venv\\Lib\\site-packages\\cv2\\../../x64/vc17/bin']
+82395 INFO: Warnings written to D:\a\video-downloader\video-downloader\build\VideoDownloader\warn-VideoDownloader.txt
+82748 INFO: Graph cross-reference written to D:\a\video-downloader\video-downloader\build\VideoDownloader\xref-VideoDownloader.html
+82904 INFO: checking PYZ
+82904 INFO: Building PYZ because PYZ-00.toc is non existent
+82904 INFO: Building PYZ (ZlibArchive) D:\a\video-downloader\video-downloader\build\VideoDownloader\PYZ-00.pyz
+86106 INFO: Building PYZ (ZlibArchive) D:\a\video-downloader\video-downloader\build\VideoDownloader\PYZ-00.pyz completed successfully.
+86205 INFO: checking PKG
+86205 INFO: Building PKG because PKG-00.toc is non existent
+86206 INFO: Building PKG (CArchive) VideoDownloader.pkg
+86283 INFO: Building PKG (CArchive) VideoDownloader.pkg completed successfully.
+86284 INFO: Bootloader D:\a\video-downloader\video-downloader\.build_venv\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+86284 INFO: checking EXE
+86284 INFO: Building EXE because EXE-00.toc is non existent
+86285 INFO: Building EXE from EXE-00.toc
+86285 INFO: Copying bootloader EXE to D:\a\video-downloader\video-downloader\build\VideoDownloader\VideoDownloader.exe
+86287 INFO: Copying icon to EXE
+86289 INFO: Copying 0 resources to EXE
+86289 INFO: Embedding manifest in EXE
+86291 INFO: Appending PKG archive to EXE
+86308 INFO: Fixing EXE headers
+86467 INFO: Building EXE from EXE-00.toc completed successfully.
+86479 INFO: checking COLLECT
+86480 INFO: Building COLLECT because COLLECT-00.toc is non existent
+86480 INFO: Building COLLECT COLLECT-00.toc
+87446 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+87475 INFO: Build complete! The results are available in: D:\a\video-downloader\video-downloader\dist
+Adding imports: ['yt_dlp.compat._legacy', 'yt_dlp.compat._deprecated', 'yt_dlp.utils._legacy', 'yt_dlp.utils._deprecated', 'Crypto', 'websockets', 'websockets.__main__', 'websockets.asyncio', 'websockets.asyncio.client', 'websockets.asyncio.connection', 'websockets.asyncio.messages', 'websockets.asyncio.router', 'websockets.asyncio.server', 'websockets.auth', 'websockets.cli', 'websockets.client', 'websockets.connection', 'websockets.datastructures', 'websockets.exceptions', 'websockets.extensions', 'websockets.extensions.base', 'websockets.extensions.permessage_deflate', 'websockets.frames', 'websockets.headers', 'websockets.http11', 'websockets.imports', 'websockets.legacy', 'websockets.legacy.auth', 'websockets.legacy.client', 'websockets.legacy.exceptions', 'websockets.legacy.framing', 'websockets.legacy.handshake', 'websockets.legacy.http', 'websockets.legacy.protocol', 'websockets.legacy.server', 'websockets.protocol', 'websockets.proxy', 'websockets.server', 'websockets.speedups', 'websockets.streams', 'websockets.sync', 'websockets.sync.client', 'websockets.sync.connection', 'websockets.sync.messages', 'websockets.sync.router', 'websockets.sync.server', 'websockets.sync.utils', 'websockets.trio', 'websockets.trio.client', 'websockets.trio.connection', 'websockets.trio.messages', 'websockets.trio.router', 'websockets.trio.server', 'websockets.trio.utils', 'websockets.typing', 'websockets.uri', 'websockets.utils', 'websockets.version', 'requests', 'requests.__version__', 'requests._internal_utils', 'requests.adapters', 'requests.api', 'requests.auth', 'requests.certs', 'requests.compat', 'requests.cookies', 'requests.exceptions', 'requests.help', 'requests.hooks', 'requests.models', 'requests.packages', 'requests.sessions', 'requests.status_codes', 'requests.structures', 'requests.utils', 'urllib3', 'urllib3._base_connection', 'urllib3._collections', 'urllib3._request_methods', 'urllib3._version', 'urllib3.connection', 'urllib3.connectionpool', 'urllib3.contrib', 'urllib3.contrib.pyopenssl', 'urllib3.contrib.socks', 'urllib3.exceptions', 'urllib3.fields', 'urllib3.filepost', 'urllib3.http2', 'urllib3.http2.connection', 'urllib3.http2.probe', 'urllib3.poolmanager', 'urllib3.response', 'urllib3.util', 'urllib3.util.connection', 'urllib3.util.proxy', 'urllib3.util.request', 'urllib3.util.response', 'urllib3.util.retry', 'urllib3.util.ssl_', 'urllib3.util.ssl_match_hostname', 'urllib3.util.ssltransport', 'urllib3.util.timeout', 'urllib3.util.url', 'urllib3.util.util', 'urllib3.util.wait', 'mutagen', 'brotli', 'certifi', 'secretstorage', 'curl_cffi']
+▶ 捆绑 ffmpeg / ffprobe（放入 bin/ 子目录，启动器会优先用捆绑版本）
+   ffmpeg  真身: /c/ProgramData/Chocolatey/bin/ffmpeg
+   ffprobe 真身: /c/ProgramData/Chocolatey/bin/ffprobe
+▶ 捆绑 aria2c（种子后端随安装包自包含，从官方 GitHub release 下载 Windows 版）
+   [aria2] 下载 https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip
+   [aria2] 已打包 aria2c 到 D:\a\video-downloader\video-downloader\dist\VideoDownloader\bin（自包含校验通过）
+▶ 写入版本身份（version.txt / build_version.txt）
+   版本：1.0.93
+   构建：v1.0.93 · 构建 e3e7895 @ 10-25 18:39
+▶ 核查包内必备二进制（deno / ffmpeg / ffprobe）
+▶ 包内必备二进制核查：D:\a\video-downloader\video-downloader\dist\VideoDownloader（目标平台 win；已实跑 --version）
+   ✔ deno      92.9MB  _internal\bin\deno.exe  [deno 2.9.7 (stable, release, x86_64-pc-windows-msvc)]
+   ❌ ffmpeg  冒烟执行返回 4294967295：Cannot find file at '..\\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe' (D:\a\video-downloader\video-downloader\dist\VideoDownloader\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg（bin\ffmpeg.exe）
+       缺它 ⇒ 音视频合并/转码不可用
+   ❌ ffprobe 冒烟执行返回 4294967295：Cannot find file at '..\\lib\ffmpeg\tools\ffmpeg\bin\ffprobe.exe' (D:\a\video-downloader\video-downloader\dist\VideoDownloader\lib\ffmpeg\tools\ffmpeg\bin\ffpro（bin\ffprobe.exe）
+       缺它 ⇒ 音视频合并/转码不可用
+   ✔ yt_dlp_ejs           _internal\yt_dlp_ejs
+   → 未通过：缺少可用二进制，已拦截发布
+❌ 包内缺少可用二进制（deno / ffmpeg / ffprobe 之一），已中止打包。
+   修法：① 确认 requirements.txt 的 deno==2.9.7 已装进 venv（/d/a/video-downloader/video-downloader/.build_venv/Scripts/deno.exe）；
+         ② ffmpeg.exe / ffprobe.exe 需在 PATH 或仓库根目录；然后重跑构建。

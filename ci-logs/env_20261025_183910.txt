@@ -1,0 +1,13 @@
+=== run: 40222008463 sha: e3e78957992b2d543b95120c320e19bdb3430fc6 ===
+=== python ===
+Python 3.13.16
+=== ffmpeg ===
+ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers
+=== iscc ===
+/c/ProgramData/Chocolatey/bin/iscc
+=== commentary-pipeline 目录 ===
+Dockerfile
+README.md
+assets
+commentary_worker.py
+input
