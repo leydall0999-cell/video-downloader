@@ -2006,6 +2006,10 @@ def _is_local_direct(request) -> bool:
 #   - 其余（含 "null" 的沙箱 iframe、任意外部站点）→ 拒绝。
 _EXT_ORIGIN_RE = re.compile(r"^(chrome|moz|safari-web|ms-browser)-extension://[^\s]*$")
 _LOCAL_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
+# 站点自身域名（含子域）视作同源，不误判为跨站。部署在 hanyuxz.top（含 share/download/vdl-check 等子域）。
+_SITE_ORIGIN_RE = re.compile(r"^https?://([a-z0-9-]+\.)*hanyuxz\.top(:\d+)?$", re.IGNORECASE)
+# VDL_ALLOW_ORIGINS 中显式声明的来源（如 hanyuxz.top）等同站点自身，一并放行。
+_ALLOWED_SITE_ORIGINS = {o.rstrip("/").lower() for o in ALLOW_ORIGINS}
 
 
 def _cross_site_rejected(request) -> bool:
@@ -2016,7 +2020,11 @@ def _cross_site_rejected(request) -> bool:
         return False
     if not origin:
         return False
-    return not (_EXT_ORIGIN_RE.match(origin) or _LOCAL_ORIGIN_RE.match(origin))
+    origin_n = origin.rstrip("/").lower()
+    return not (_EXT_ORIGIN_RE.match(origin)
+                or _LOCAL_ORIGIN_RE.match(origin)
+                or _SITE_ORIGIN_RE.match(origin)
+                or origin_n in _ALLOWED_SITE_ORIGINS)
 
 
 # 前端缓存策略（2026-10-22 重写，修「网页版首屏白屏数秒」）：
