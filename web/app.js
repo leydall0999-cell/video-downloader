@@ -17431,8 +17431,9 @@ el.dwVidPlayer.hidden = true;
       el.cdList.appendChild(li);
     });
     if (needLogin) {
-      cdSetStatus('已读到文件，但下载需要百度登录态：装了扩展并在浏览器登录过百度网盘会自动带上；否则在下面「百度登录态」里粘贴 BDUSS。', true);
-      if (el.cdCredBox) el.cdCredBox.open = true;
+      // 🔴 2026-10-25 用户定档：用户自助填写登录态的入口已隐藏（由管理员提供），
+      // 所以这里不能再把用户往「下面那个框」引，也不能自动展开它。
+      cdSetStatus('已读到文件，但下载需要百度登录态：装了扩展并在浏览器登录过百度网盘会自动带上；否则请联系管理员提供百度登录态。', true);
     }
   };
 

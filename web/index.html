@@ -2185,7 +2185,10 @@
     <p class="cd-status" id="cdStatus" hidden></p>
     <ul class="cd-list" id="cdList"></ul>
 
-    <details class="howto cd-cred" id="cdCredBox">
+    <!-- 🔴 2026-10-25 用户定档：百度登录态**由管理员提供**，用户自己填的入口全部隐藏。
+         保留 DOM（hidden）而不是删掉，是为了 app.js 里那套监听/状态更新不报错；
+         以后要恢复用户自助填写，去掉 hidden 即可。 -->
+    <details class="howto cd-cred" id="cdCredBox" hidden>
       <summary class="howto-head"><span class="howto-ic" aria-hidden="true">🔑</span><span class="howto-title">百度登录态（真正下载时需要）</span><span class="howto-caret" aria-hidden="true">▾</span></summary>
       <div class="howto-body">
         <p class="cd-hint">看文件列表不登录也能用，但<b>下载文件必须带百度登录态</b>（匿名会被百度拒绝）。装了我们的浏览器扩展、并在浏览器里登录过百度网盘的，会自动带上、不用填；没有的话：浏览器打开 pan.baidu.com 登录后，把 Cookie 里 <b>BDUSS</b> 那一段粘到下面。默认<b>只存这台电脑</b>；点下面的「贡献到共享池」才会把它加密分享给其他用户复用（点的时候会再跟你确认一次）。<b>填了就以这里填的账号为准</b>（盖过浏览器里自动读到的那个）—— 百度限速是按账号等级给的，想跑满带宽就把<b>会员账号</b>的 BDUSS 填进来。</p>
