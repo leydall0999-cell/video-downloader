@@ -46,7 +46,8 @@ const WEB_CAPS = {
 // 仅桌面端 → 网页版不得声称可用
 const DESK_CAPS = [
   'subscribe', 'torrent', 'extension', 'commentary', 'compress', 'sr', 'share', 'page',
-  'bridge', 'dwvideo', 'matting', 'idphoto', 'ffmpeg_tools', 'library', 'retention', 'crypto', 'archive',
+  'bridge', 'dwvideo', 'matting', 'idphoto', 'ffmpeg_tools', 'library', 'retention', 'crypto',
+  // 2026-10-25：archive（一键归档网盘）卡片已随「网盘只做下载」的定位下线并删除，不再计入
 ];
 
 // 卡片格式：<div class="app-intro-card" data-cap="xxx"> … <span class="app-intro-tag tag-web|tag-desktop">
@@ -55,7 +56,7 @@ const cards = [];
 let m;
 while ((m = cardRe.exec(intro)) !== null) cards.push({ cap: m[1], body: m[2] });
 
-assert.equal(cards.length, 25, `「更多功能」页应有 25 张能力卡片，实际 ${cards.length}`);
+assert.equal(cards.length, 24, `「更多功能」页应有 24 张能力卡片，实际 ${cards.length}`);
 
 const caps = cards.map((c) => c.cap);
 assert.equal(new Set(caps).size, caps.length, 'data-cap 不得重复：' + caps.filter((c, i) => caps.indexOf(c) !== i).join(','));
@@ -94,22 +95,29 @@ assert.ok(!/app-intro-group-title[^>]*>[^<]*<\/span>账号</.test(intro),
   '「账号」分组已删除，不该再出现');
 
 // ---- 静态占位数字必须与卡片实算一致（首屏不闪错数字；app.js 只是兜底纠正）----
+// 2026-10-25：web-dev 的「更多功能」页已不再展示「网页可用 N / 仅桌面端 M」统计，
+// 故改为**存在才强校验** —— app-dev 若仍保留统计，照旧逐字校验；两分支都不误报。
 const webCount = Object.keys(WEB_CAPS).length;
 const deskCount = DESK_CAPS.length;
-assert.ok(new RegExp(`id="appIntroWebCount">${webCount}</b>`).test(intro),
-  `index.html 静态占位应为「网页可用 ${webCount}」，否则首屏会闪错数字`);
-assert.ok(new RegExp(`id="appIntroDesktopCount">${deskCount}</b>`).test(intro),
-  `index.html 静态占位应为「仅桌面端 ${deskCount}」`);
+const hasStats = /id="appIntroWebCount"/.test(intro);
+if (hasStats) {
+  assert.ok(new RegExp(`id="appIntroWebCount">${webCount}</b>`).test(intro),
+    `index.html 静态占位应为「网页可用 ${webCount}」，否则首屏会闪错数字`);
+  assert.ok(new RegExp(`id="appIntroDesktopCount">${deskCount}</b>`).test(intro),
+    `index.html 静态占位应为「仅桌面端 ${deskCount}」`);
+}
 
-// ---- app.js 计数接线：卡片增删后数字自动跟上 ----
-const statsStart = appJs.indexOf("// ---- 「更多功能」页能力计数");
-assert.ok(statsStart > 0, 'app.js 缺少「更多功能」页能力计数接线');
-const stats = appJs.slice(statsStart, statsStart + 900);
-assert.ok(/querySelectorAll\('#appIntroGroups \.app-intro-card'\)/.test(stats), '计数必须遍历真实的卡片容器');
-assert.ok(/card\.querySelector\('\.tag-web'\)/.test(stats) && /card\.querySelector\('\.tag-desktop'\)/.test(stats),
-  '计数必须按可用性标签区分两类');
-assert.ok(/getElementById\('appIntroWebCount'\)/.test(stats) && /getElementById\('appIntroDesktopCount'\)/.test(stats),
-  '计数结果必须写回两个统计元素');
+// ---- app.js 计数接线：卡片增删后数字自动跟上（仅页面保留统计元素时才需要）----
+if (hasStats) {
+  const statsStart = appJs.indexOf("// ---- 「更多功能」页能力计数");
+  assert.ok(statsStart > 0, 'app.js 缺少「更多功能」页能力计数接线');
+  const stats = appJs.slice(statsStart, statsStart + 900);
+  assert.ok(/querySelectorAll\('#appIntroGroups \.app-intro-card'\)/.test(stats), '计数必须遍历真实的卡片容器');
+  assert.ok(/card\.querySelector\('\.tag-web'\)/.test(stats) && /card\.querySelector\('\.tag-desktop'\)/.test(stats),
+    '计数必须按可用性标签区分两类');
+  assert.ok(/getElementById\('appIntroWebCount'\)/.test(stats) && /getElementById\('appIntroDesktopCount'\)/.test(stats),
+    '计数结果必须写回两个统计元素');
+}
 
 // ---- 样式：分组视觉 ----
 for (const sel of ['.app-intro-groups {', '.app-intro-group-title {', '.app-intro-group-title::before {',
@@ -133,4 +141,4 @@ assert.ok(/<span id="buildTag" class="build-tag"><\/span>/.test(indexHtml),
 assert.ok(/\.build-tag:empty \{ display: none; \}/.test(stylesCss),
   '空 .build-tag 必须隐藏，否则会在页脚留下一个孤立圆点');
 
-console.log('✅ 「更多功能」页回归守卫通过：25 项能力 / 5 组 / 标签齐备 / 网页可用项入口存在 / 计数接线与样式完好');
+console.log(`✅ 「更多功能」页回归守卫通过：${cards.length} 项能力 / 5 组 / 标签齐备 / 网页可用项入口存在 / 计数与样式完好`);

@@ -7287,11 +7287,37 @@
     });
   };
 
+  // 百度网盘「复制链接」给的是整段文案（标题 + 「链接:」 + 「提取码:」）。
+  // 用户整段粘贴是最自然的操作 ⇒ 这里先提取出真正的 URL / 提取码，并回填输入框，
+  // 让用户看到程序认到了什么。（正则口径与后端 baidu.extract_share_url 保持一致）
+  const panExtractShare = (text) => {
+    const s = String(text || '');
+    const m = s.match(/https?:\/\/(?:pan|yun)\.baidu\.com\/[^\s\u4e00-\u9fff"'<>，。；、）)】]+/i);
+    if (!m) return { url: '', pwd: '' };
+    const url = m[0].replace(/[.,;:!?)）】\]」》"']+$/, '');
+    let pwd = '';
+    const pm = s.match(/(?:提取码|密码|pwd)\s*[:：=]?\s*([0-9A-Za-z]{4})(?![0-9A-Za-z])/i);
+    if (pm) pwd = pm[1];
+    if (!pwd) {
+      const q = url.match(/[?&]pwd=([0-9A-Za-z]{4})(?![0-9A-Za-z])/i);
+      if (q) pwd = q[1];
+    }
+    return { url, pwd };
+  };
+
   const panResolve = async () => {
     if (!panRequireLogin()) return;
-    const url = ((el.panUrl && el.panUrl.value) || '').trim();
-    if (!url) { panSetStatus('请粘贴网盘分享链接', true); return; }
-    const pwd = ((el.panPwd && el.panPwd.value) || '').trim();
+    const rawInput = ((el.panUrl && el.panUrl.value) || '').trim();
+    if (!rawInput) { panSetStatus('请粘贴网盘分享链接', true); return; }
+    const ex = panExtractShare(rawInput);
+    const url = ex.url || rawInput;
+    let pwd = ((el.panPwd && el.panPwd.value) || '').trim();
+    // 粘贴的是整段文案时：把提取结果回填，用户能直接看到识别到的链接与提取码
+    if (ex.url && ex.url !== rawInput && el.panUrl) el.panUrl.value = ex.url;
+    if (!pwd && ex.pwd) {
+      pwd = ex.pwd;
+      if (el.panPwd) el.panPwd.value = pwd;
+    }
     el.panResolveBtn.disabled = true;
     panSetStatus('解析中…');
     try {
@@ -10404,6 +10430,17 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   if (el.panResolveBtn) el.panResolveBtn.addEventListener('click', panResolve);
   if (el.panPwd) el.panPwd.addEventListener('keydown', (e) => { if (e.key === 'Enter') panResolve(); });
   if (el.panUrl) el.panUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') panResolve(); });
+  // 粘贴拦截：整段文案粘进 input 时浏览器可能只留第一行 ⇒ 直接读剪贴板原文提取并回填。
+  if (el.panUrl) el.panUrl.addEventListener('paste', (ev) => {
+    let txt = '';
+    try { txt = (ev.clipboardData || window.clipboardData).getData('text') || ''; } catch (_) { /* ignore */ }
+    const ex = panExtractShare(txt);
+    if (!ex.url) return;                       // 不是百度分享文案 ⇒ 走浏览器默认粘贴
+    ev.preventDefault();
+    el.panUrl.value = ex.url;
+    if (ex.pwd && el.panPwd) el.panPwd.value = ex.pwd;
+    panSetStatus(ex.pwd ? '已识别链接与提取码，点「解析」' : '已识别链接，点「解析」');
+  });
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabMember) el.tabMember.addEventListener('click', () => { switchView('member'); track('member_click'); });
   if (el.tabShare) el.tabShare.addEventListener('click', () => switchView('share'));

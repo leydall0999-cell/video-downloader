@@ -23,8 +23,14 @@ if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
 # 隔离数据目录：import cookie_pool 会建池目录，绝不能落到真实池子
-os.environ.setdefault("VDL_DATA_DIR", "/tmp/vdl_test_baidu_pool_server")
-os.environ.setdefault("VDL_COOKIE_POOL_DIR", "/tmp/vdl_test_baidu_pool_server/pool")
+_POOL_ROOT_TEST = "/tmp/vdl_test_baidu_pool_server"
+# 🔴 每次运行都必须从**空池**开始：目录是固定的，上一次跑 test_admin_env_writes_back_to_pool
+#    写进去的「管理员那份」会残留；而 get_cookie 取最新一条 ⇒ roundtrip 会一直取到残留，
+#    导致本文件单独跑也红（历史遗留的顺序依赖，2026-10-25 修）。
+import shutil as _shutil  # noqa: E402
+_shutil.rmtree(_POOL_ROOT_TEST, ignore_errors=True)
+os.environ.setdefault("VDL_DATA_DIR", _POOL_ROOT_TEST)
+os.environ.setdefault("VDL_COOKIE_POOL_DIR", _POOL_ROOT_TEST + "/pool")
 os.environ.setdefault("VDL_CLOUD_LINK", "0")
 
 import cookie_pool as CP  # noqa: E402
@@ -116,6 +122,10 @@ def test_admin_env_writes_back_to_pool():
     orig_probe = CP.baidu_probe
     CP.baidu_probe = lambda header: (True, {"errno": 0})
     old_env = os.environ.get("VDL_BAIDU_BDUSS")
+    # 池文件快照：本用例会把「管理员那份」写进池，而 get_cookie 取的是**最新一条**
+    # ⇒ 不恢复就会污染后续用例（roundtrip 会取到这一份而不是自己刚存的）。
+    pool_file = CP._pool_file("baidu.com")
+    backup = pool_file.read_bytes() if pool_file.exists() else None
     os.environ["VDL_BAIDU_BDUSS"] = "BDUSS=from-admin-env-value"
     try:
         got = CD._admin_login_cookie()
@@ -128,6 +138,15 @@ def test_admin_env_writes_back_to_pool():
             os.environ.pop("VDL_BAIDU_BDUSS", None)
         else:
             os.environ["VDL_BAIDU_BDUSS"] = old_env
+        # 用例间隔离：池文件恢复原状（没有原文件就删掉本用例新建的）
+        try:
+            if backup is None:
+                if pool_file.exists():
+                    pool_file.unlink()
+            else:
+                pool_file.write_bytes(backup)
+        except OSError:
+            pass
     print("✅ 管理员那份既能用，也会写回共享池")
 
 

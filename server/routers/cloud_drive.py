@@ -122,15 +122,18 @@ def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request) -> dict
     文件名、大小。真正的下载走 /api/cloud-drive/download。
     """
     uid = _uid(request)
-    url = (req.url or "").strip()
-    if not url:
+    raw_input = (req.url or "").strip()
+    if not raw_input:
         return {"ok": False, "error": "请填写百度网盘分享链接"}
-    if not (url.startswith("http://") or url.startswith("https://")):
-        return {"ok": False, "error": "链接格式不对，应是 https://pan.baidu.com/... "}
+    # 百度网盘「复制链接」给的是整段文案（标题 + 「链接:」 + 「提取码:」），
+    # 用户整段粘贴是最自然的操作 ⇒ 先提取真正的 URL 与提取码，不再要求手动摘。
+    url, text_pwd = baidu.extract_share_url(raw_input)
+    if not url:
+        return {"ok": False, "error": "链接格式不对，应是 https://pan.baidu.com/..."}
 
     cookie = _login_cookie(uid)
     try:
-        files = baidu.resolve(url, cookie, (req.pwd or "").strip())
+        files = baidu.resolve(url, cookie, (req.pwd or "").strip() or text_pwd)
     except ValueError as e:
         return {"ok": False, "error": str(e), "need_credential": (not cookie)}
     except Exception as e:  # noqa: BLE001
