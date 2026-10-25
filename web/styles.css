@@ -7537,9 +7537,13 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .ckp-tab.is-on .ckp-tab-meta { color: inherit; opacity: .75; }
 
 /* ===== 网盘下载（2026-10-23 新增）===== */
-.cd-form { display: flex; flex-wrap: wrap; gap: .6rem .8rem; align-items: flex-end; margin-bottom: .8rem; }
-.cd-field-url { flex: 1 1 420px; }
+.cd-form { display: flex; flex-wrap: nowrap; gap: .6rem .8rem; align-items: flex-end; margin-bottom: .8rem; }
+/* 2026-10-25 用户定档：链接/提取码/解析永远一行，不许折行——
+   链接框用 flex-basis:0 收缩腾位（原来的 1 1 420px 会在窄窗口把提取码挤到第二行） */
+.cd-field-url { flex: 1 1 0; min-width: 0; }
 .cd-field-pwd { flex: 0 0 160px; }
+@media (max-width: 640px) { .cd-field-pwd { flex-basis: 110px; } }
+.cd-form > .btn { flex: 0 0 auto; white-space: nowrap; }
 .cd-form .uc-label { display: block; font-size: .78rem; color: var(--text-mute); margin-bottom: .25rem; }
 .cd-form input { width: 100%; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-input, #fff); color: inherit; font-size: .85rem; }
 .cd-form input:focus { outline: none; border-color: var(--brand); }
