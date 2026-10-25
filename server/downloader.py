@@ -1797,6 +1797,54 @@ def detect_browser_cookie(host: str) -> dict[str, Any]:
     b = _detect_browser_cookie_source()
     return {"available": False, "browser": b, "profile": None}
 
+def _cloud_pool_cookie(domain: str) -> str:
+    """桌面端回读云端共享池：本地无该域 Cookie 时，向线上 pool-admin?action=get 取回明文。
+
+    仅桌面端用（桌面本机池通常为空，共享登录态都在云端）。与 _push_cookie_to_cloud
+    同口径：带浏览器 UA 绕过 Cloudflare 对 Python-urllib 的拦截。贡献域（baidu.com）
+    不在此取——走网盘专属链路。任何异常都返回空串，调用方回退浏览器兜底，绝不阻断解析。
+    """
+    domain = (domain or "").strip()
+    if not domain or "baidu.com" in domain:
+        return ""
+    import json as _json
+    import urllib.request as _req
+    import urllib.error as _err  # noqa: F401
+    from pathlib import Path as _P
+    url = (os.environ.get("VDL_COOKIE_SYNC_URL") or "").strip()
+    token = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()
+    cfg = _P.home() / ".videodownloader" / "cloud_sync.json"
+    if (not url or not token) and cfg.exists():
+        try:
+            d = _json.loads(cfg.read_text(encoding="utf-8"))
+            url = url or (d.get("url") or "").strip()
+            token = token or (d.get("token") or "").strip()
+        except Exception:
+            pass
+    if not url or not token:
+        return ""
+    target = url.rstrip("/") + "/api/cookie/pool-admin"
+    body = _json.dumps({"action": "get", "domain": domain, "token": token}).encode()
+    req = _req.Request(
+        target, data=body, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
+        },
+    )
+    try:
+        with _req.urlopen(req, timeout=15) as r:
+            data = _json.loads(r.read().decode("utf-8", "replace"))
+    except Exception:
+        return ""
+    if data.get("ok") and data.get("found"):
+        return (data.get("header") or "").strip()
+    return ""
+
+
 def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     _cookie_diag("base_options_enter", f"host={host!r} cookie_len={len(cookie)}")
     options: dict[str, Any] = {
@@ -1925,14 +1973,21 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
                 headers["Cookie"] = pooled
                 _cookie_diag("pool_hit", f"len={len(pooled)}")
             else:
-                # 公共池 miss 时，异步召唤 VPS 守护进程补推（非阻塞、带冷却），
-                # 下次请求即可命中登录态，实现「容器重建/重启后秒级自愈」。
-                try:
-                    from cookie_pool import request_refill as _pool_refill
-                    _pool_refill(cookie_host)
-                except Exception:
-                    pass
-                browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
+                # 🔴 2026-10-25 新增：本地池空 → 回读云端共享池（桌面本机池通常为空，
+                # 共享登录态都在云端；拿到即可直接复用，无需等 VPS 补推 / 开浏览器）。
+                cloud_ck = _cloud_pool_cookie(cookie_host)
+                if cloud_ck:
+                    headers["Cookie"] = cloud_ck
+                    _cookie_diag("cloud_pool_hit", f"len={len(cloud_ck)}")
+                else:
+                    # 公共池 miss 时，异步召唤 VPS 守护进程补推（非阻塞、带冷却），
+                    # 下次请求即可命中登录态，实现「容器重建/重启后秒级自愈」。
+                    try:
+                        from cookie_pool import request_refill as _pool_refill
+                        _pool_refill(cookie_host)
+                    except Exception:
+                        pass
+                    browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
                 _cookie_diag("cache_miss", f"host={host}")
                 if browser:
                     options["cookiesfrombrowser"] = (browser,)
