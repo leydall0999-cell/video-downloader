@@ -1095,6 +1095,16 @@ run_one test_win_console_stdio_guard.py
 #       变异验证：破坏 vision_config 的 win32 分支 ⇒ 本文件 2 项变红。
 run_one test_win_path_layout.py
 
+# 61.9 test_win_ffmpeg_shim_guard.py —— Windows 打包「ffmpeg shim」陷阱守卫（2026-10-26）。
+#       真机验收连挂两轮的元凶：CI 上 PATH 的 ffmpeg 是 Chocolatey **shim**（靠相对路径
+#       ..\lib\ffmpeg\tools\... 找真身），拷进包后相对路径失效 ⇒ 守门实跑 --version 拦下
+#       ⇒ 整轮中止、安装包产不出来（user「做 Windows 版老是卡住」的真因）。
+#       第一版修复仍被拦：排除规则写成小写 chocolatey，实际路径是**大写 Chocolatey**。
+#       本守卫**不是文本 grep**：把 build_win.sh 的 _resolve_real_bin 原样抽出来，
+#       在假目录树上真跑（大写 Chocolatey + bin/ 放 shim + lib/ 放真身），断言解析到真身。
+#       变异验证：摘掉 lib 分支 + 排除改回大小写敏感 ⇒ 4 项变红（复现 CI 日志里的 shim 路径）。
+run_one test_win_ffmpeg_shim_guard.py
+
 # 62. test_cloud_matting_gateway.py —— 云端抠图改走「本产品服务端」（2026-10-13 定档
 #     「钥匙不出保险柜」）：网关接入时必须走网关且出站请求不含任何火山凭据；
 #     未接入时保留本机直连；就绪判定与凭据来源（server/local/none）语义正确；

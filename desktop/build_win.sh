@@ -288,7 +288,8 @@ _resolve_real_bin() {
   # ② 直接到 Chocolatey 存真身的 lib 目录里找（**优先于 PATH**）。
   #    shim 的相对目标固定是 ..\lib\<pkg>\tools\... ⇒ 真身一定在 lib 下；
   #    Windows 文件系统大小写不敏感，两种写法都试一遍以防万一。
-  for libroot in /c/ProgramData/chocolatey/lib /c/ProgramData/Chocolatey/lib; do
+  # VDL_CHOCO_LIB 仅用于离线测试把本函数指向假目录（真机上保持默认两个候选）
+  for libroot in ${VDL_CHOCO_LIB:-/c/ProgramData/chocolatey/lib /c/ProgramData/Chocolatey/lib}; do
     [[ -d "$libroot" ]] || continue
     while IFS= read -r found; do
       [[ -f "$found" ]] || continue
