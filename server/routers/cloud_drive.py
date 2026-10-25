@@ -56,7 +56,12 @@ def _auto_contrib(header: str, source: str = "auto") -> None:
     header = (header or "").strip()
     if not header:
         return
-    if not header.lower().startswith("bduss="):
+    # 🔴 判断「是否已含 BDUSS」而不是「是否以 BDUSS= 开头」：百度 Cookie 是一整串
+    # （BAIDUID/BIDUPSID/BDUSS/STOKEN/... 并列），缓存里的 header 往往以 BAIDUID= 开头。
+    # 用 startswith 判断会以为「没有 BDUSS」而补一个前缀 ⇒ 变成
+    # `BDUSS=BAIDUID=...`（长度多 6 字节），这种畸形头验真必被拒 ⇒ 自动入池永远失败。
+    # 只有「整段只有裸 BDUSS 值」时才补前缀。
+    if "bduss=" not in header.lower():
         header = f"BDUSS={header}"
     try:
         from cookie_pool import add_cookie

@@ -114,6 +114,47 @@ def test_pool_fallback_is_last():
     print("✅ 共享池兜底仍然排最后")
 
 
+def test_real_baidu_cookie_header_is_not_prefixed():
+    """🔴 真实百度 Cookie 是一整串（BAIDUID=...; BDUSS=...; STOKEN=...），
+    开头通常是 BAIDUID 而不是 BDUSS。
+
+    若用 startswith("bduss=") 判断「有没有 BDUSS」，就会给整串补一个
+    `BDUSS=` 前缀 ⇒ 变成 `BDUSS=BAIDUID=...`（长度多 6 字节），这种畸形头
+    验真必被拒 ⇒ 自动入池永远失败（本机实测踩到：reject-invalid len=2726）。
+    正确判据是「整串里是否含 bduss=」。
+    """
+    added: list = []
+    real_header = "BAIDUID=ABC123; BDUSS=REAL_BDUSS_VALUE; STOKEN=TOK; PANPSC=x"
+    with mock.patch.dict(sys.modules, {"cookie_cache": _fake_cache(peek=real_header)}), \
+         mock.patch.object(rt, "get_baidu_bduss", return_value=""), \
+         mock.patch("cookie_pool.add_cookie",
+                    side_effect=lambda d, h, source="sync": added.append((d, h, source)) or True), \
+         mock.patch("app._cloud_sync_config", return_value=("", "")), \
+         mock.patch("app._push_cookie_to_cloud", return_value={"ok": True}):
+        got = rt._baidu_login_cookie()
+    assert got == real_header, f"取回的登录态被改了：{got[:60]!r}"
+    assert added, "没有入池"
+    assert added[0][1] == real_header, \
+        f"入池的 header 被加了畸形前缀：{added[0][1][:60]!r}"
+    assert not added[0][1].lower().startswith("bduss=baiduid="), \
+        "出现了 BDUSS=BAIDUID= 这种畸形头"
+    print("✅ 真实百度 Cookie 整串原样入池，不被加畸形前缀")
+
+
+def test_bare_bduss_value_still_gets_prefix():
+    """反之：用户只给了一个裸 BDUSS 值时，仍要补上 BDUSS= 前缀。"""
+    added: list = []
+    with mock.patch.dict(sys.modules, {"cookie_cache": _fake_cache(peek="RAWVALUE123")}), \
+         mock.patch.object(rt, "get_baidu_bduss", return_value=""), \
+         mock.patch("cookie_pool.add_cookie",
+                    side_effect=lambda d, h, source="sync": added.append((d, h, source)) or True), \
+         mock.patch("app._cloud_sync_config", return_value=("", "")), \
+         mock.patch("app._push_cookie_to_cloud", return_value={"ok": True}):
+        got = rt._baidu_login_cookie()
+    assert added and added[0][1] == "BDUSS=RAWVALUE123", added
+    print("✅ 裸 BDUSS 值仍会补上 BDUSS= 前缀")
+
+
 if __name__ == "__main__":
     for fn in (
         test_manual_bduss_wins_and_is_not_auto_contributed,
@@ -121,6 +162,8 @@ if __name__ == "__main__":
         test_browser_hit_auto_contributes,
         test_auto_contrib_failure_does_not_break_download,
         test_pool_fallback_is_last,
+        test_real_baidu_cookie_header_is_not_prefixed,
+        test_bare_bduss_value_still_gets_prefix,
     ):
         fn()
     print("\n🎉 百度登录态自动共享池测试全部通过")
