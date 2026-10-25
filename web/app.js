@@ -11109,10 +11109,10 @@ el.dwVidPlayer.hidden = true;
     // 片头片尾 2 选 1：默认「保留·不解说」（绝对不解说片头片尾）
     const introOutroMode = el.comIntroOutroMode();
     const skip_intro_outro = introOutroMode === 'skip';
-    // 起点/终点只在「去片头片尾」下生效（2026-09-20 定稿：非 skip 显示 00:00:00 且不参与
-    // 提交——那边填的只是草稿；否则用户在非 skip 模式里的草稿会被当成全片裁剪区间）。
-    const dramaStart = (skip_intro_outro && el.comDramaStart && el.comDramaStart.value) ? parseTimeSec(el.comDramaStart.value) : null;
-    const dramaEnd = (skip_intro_outro && el.comDramaEnd && el.comDramaEnd.value) ? parseTimeSec(el.comDramaEnd.value) : null;
+    // 起点/终点：只要用户填了有效区间就生效，不再依赖「去片头片尾」开关。
+    // 之前限定只在 skip 模式生效，导致「选了范围仍按全片出」（用户诉求：划定区间就按区间解说）。
+    const dramaStart = (el.comDramaStart && el.comDramaStart.value && el.comDramaStart.value.trim()) ? parseTimeSec(el.comDramaStart.value) : null;
+    const dramaEnd = (el.comDramaEnd && el.comDramaEnd.value && el.comDramaEnd.value.trim()) ? parseTimeSec(el.comDramaEnd.value) : null;
     const no_narrate_intro_outro = true; // 两个模式都不解说片头片尾（skip 模式已剪掉）
     return {
       commentary_type: typeEl ? typeEl.value : 'deep_hl',
@@ -11745,7 +11745,10 @@ el.dwVidPlayer.hidden = true;
       // 初始化全局配音选择器（默认选中当前风格联动的音色）。
       // 先拉一次样本状态：选项里要不要带「🎤 我的音色（克隆）」取决于 ready，别吃旧值。
       await comLoadVoiceSample();
-      comFillScriptVoice(STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural');
+      // 2026-10-24：记住上次选的音色（尤其是「我的音色」），下次打开解说默认沿用，
+      // 不用每次重新选 / 重新录（用户诉求：录好的声音要自动保存、自动用上）。
+      const _savedVoice = (() => { try { return localStorage.getItem('vdl_com_voice_choice') || ''; } catch (_) { return ''; } })();
+      comFillScriptVoice(_savedVoice || STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural');
 
       // 逐段渲染可编辑行
       const segs = data.segments || [];
@@ -12172,6 +12175,8 @@ el.dwVidPlayer.hidden = true;
   // 「起 qwen3tts 服务 / 刷新状态条 / 露出我的音色行」一整套逻辑，别抄第二份。
   if (el.comScriptVoice) {
     el.comScriptVoice.addEventListener('change', () => {
+      // 记住当前选的音色（含「我的音色」），重启后自动沿用，免去重复选择 / 重新录制。
+      try { localStorage.setItem('vdl_com_voice_choice', el.comScriptVoice.value); } catch (_) {}
       if (el.comScriptVoice.value !== COM_CLONE_VOICE) return;
       if (!el.comTtsProvider) return;
       if (COM_CLONE_PROVIDERS.indexOf(el.comTtsProvider.value) >= 0) return;  // 已经是克隆引擎
@@ -12863,8 +12868,8 @@ el.dwVidPlayer.hidden = true;
   let comDramaStash = { start: '', end: '' };
   let comDramaSuggest = null;      // {lo, hi, dur} | null（轻量探测建议值）
   let comDramaSuggestSeq = 0;      // 换片竞态保护：旧请求迟到直接丢弃
-  const COM_DRAMA_GATE_NOTE = '当前是「保留片头片尾·不解说」，<b>不会裁剪</b>，起点/终点显示 00:00:00'
-    + '（这里填的时间只是草稿，切到「去片头片尾」才生效）。';
+  const COM_DRAMA_GATE_NOTE = '「保留片头片尾·不解说」：起点/终点<b>填了就按这段裁剪</b>（与「去片头片尾」无关），'
+    + '只是不额外去除片头片尾。留空＝不裁剪（按全片解说）。';
   const COM_DRAMA_OPEN_NOTE = '「去片头片尾」：<b>留空＝自动检测</b>（读片名/集数画面+人声黑场，识别不到兜底跳过前 90 秒）；'
     + '<b>填了就以你填的为准</b>（人工输入优先级最高，也可直接填秒数如 85）。预填的时间是系统探测到的建议值，可直接改。';
   /** 向后端要轻量边界建议（媒体库/下载源才有 id；本地拖拽文件拿不到服务端路径，
@@ -12903,11 +12908,10 @@ el.dwVidPlayer.hidden = true;
     const note = el.comDramaNote;
     const open = el.comIntroOutroMode() === 'skip';
     if (!open) {
-      // 非 skip：显示 00:00:00（comGetOptions 里非 skip 不提交这两个值），先暂存手填值
-      if (s && s.value.trim()) comDramaStash.start = s.value.trim();
-      if (e && e.value.trim()) comDramaStash.end = e.value.trim();
-      if (s) { s.value = ''; s.placeholder = '00:00:00'; }
-      if (e) { e.value = ''; e.placeholder = '00:00:00'; }
+      // 非 skip：范围同样生效（起点/终点只要填了就裁剪，与「去片头片尾」开关无关），
+      // 故不再清空用户手填值，只更新提示文案。
+      if (s) s.placeholder = '留空＝不裁剪';
+      if (e) e.placeholder = '留空＝不裁剪';
     } else {
       if (s) s.placeholder = '自动检测';
       if (e) e.placeholder = '自动检测';
@@ -13779,9 +13783,12 @@ el.dwVidPlayer.hidden = true;
           return;
         }
         comRenderVoiceSample(data);
-        // 存好之后立刻把它挂进「全局配音」下拉（2026-09-20 用户要求「保存到全局配音里供选择」）：
-        // 不刷新的话，下拉里那一项要等下次打开审核面板才出现，用户会以为没保存上。
-        comFillScriptVoice();
+        // 存好之后立刻把它挂进「全局配音」下拉并切到「我的音色」：
+        // 用户「录制我的音色」的诉求就是录完即用，下次打开解说默认就是这段录音，
+        // 不用再手动选 / 重新录。changed 事件会把引擎联动切到克隆并记住这个选择。
+        comFillScriptVoice(COM_CLONE_VOICE);
+        try { localStorage.setItem('vdl_com_voice_choice', COM_CLONE_VOICE); } catch (_) {}
+        if (el.comScriptVoice) el.comScriptVoice.dispatchEvent(new Event('change'));
         const shown = (data && data.name) || nm;
         comSetVoiceStatus('ok', '音色已保存 ✓' + (shown ? '（' + shown + '）' : '')
           + '已加进右上「全局配音」与「🎧 全部音色」');
