@@ -268,24 +268,54 @@ if [ -n "${COMMENTARY_STAGING:-}" ] && [ -d "$COMMENTARY_STAGING" ]; then
     || rm -rf "$COMMENTARY_STAGING" 2>/dev/null || true
 fi
 
+# 🔴 Chocolatey shim 陷阱（2026-10-26 真机实测，整轮构建被拦在这里）：
+#    CI 镜像里 PATH 上的 ffmpeg 是 C:\ProgramData\chocolatey\bin\ffmpeg.exe ——
+#    它**不是真程序**，是 Chocolatey 的转发器（shim），靠相对路径
+#    ..\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe 找真身。原来的逻辑直接
+#    `cp "$(command -v ffmpeg)"` 把 shim 拷进包 ⇒ 相对路径在包里失效 ⇒
+#    包内 ffmpeg.exe 执行报 "Cannot find file at '..\lib\ffmpeg\...'" ⇒
+#    构建守门（实跑 --version）拦下 ⇒ 整轮中止、根本拿不到安装包。
+#
+#    所以拷贝前必须：① 解析到真身（排除 choco shim 目录）② 实跑 -version 验证。
+#    只信「能跑出版本号的那个文件」，不信 PATH 上先撞见谁。
+_resolve_real_bin() {
+  local name="$1" explicit="$2" cand found
+  for cand in "$explicit" "$(command -v "$name" 2>/dev/null)" "$REPO/$name.exe"; do
+    [[ -n "$cand" && -f "$cand" ]] || continue
+    # choco 的 bin 目录里全是 shim：原地能跑，拷进包必废 —— 直接排除
+    case "$cand" in
+      */chocolatey/bin/*|*"/chocolatey/bin/"*|*"\\chocolatey\\bin\\"*) continue ;;
+    esac
+    if "$cand" -version >/dev/null 2>&1; then
+      echo "$cand"; return 0
+    fi
+  done
+  # 兜底：到 Chocolatey 的 lib 目录里找真身（不限包内目录结构，深度限制避免扫全盘）
+  if [[ -d /c/ProgramData/chocolatey/lib ]]; then
+    found="$(find /c/ProgramData/chocolatey/lib -maxdepth 6 -type f -name "$name.exe" 2>/dev/null | head -1)"
+    if [[ -n "$found" ]] && "$found" -version >/dev/null 2>&1; then
+      echo "$found"; return 0
+    fi
+  fi
+  return 1
+}
+
 echo "▶ 捆绑 ffmpeg / ffprobe（放入 bin/ 子目录，启动器会优先用捆绑版本）"
-if command -v ffmpeg >/dev/null 2>&1; then
-  FF="$(command -v ffmpeg)"
-elif [[ -f "$REPO/ffmpeg.exe" ]]; then
-  FF="$REPO/ffmpeg.exe"
-else
-  echo "⚠️  未找到 ffmpeg，请先安装或把 ffmpeg.exe 放到仓库根目录"
+if ! FF="$(_resolve_real_bin ffmpeg "${VDL_FFMPEG_BIN:-}")"; then
+  echo "⚠️  未找到可用的 ffmpeg（PATH 里若只有 Chocolatey shim 不算）：" >&2
+  echo "    请先装静态版 ffmpeg，或用 VDL_FFMPEG_BIN 显式指向真身 ffmpeg.exe" >&2
   exit 1
 fi
+echo "   ffmpeg  真身: $FF"
 mkdir -p "$REPO/dist/VideoDownloader/bin"
 cp "$FF" "$REPO/dist/VideoDownloader/bin/ffmpeg.exe"
 # ffprobe 与 ffmpeg 同目录（Windows 上为 ffprobe.exe），解说管线重度依赖
-if [[ -f "${FF%ffmpeg}ffprobe" ]]; then
-  cp "${FF%ffmpeg}ffprobe" "$REPO/dist/VideoDownloader/bin/ffprobe.exe"
-elif command -v ffprobe >/dev/null 2>&1; then
-  cp "$(command -v ffprobe)" "$REPO/dist/VideoDownloader/bin/ffprobe.exe"
-elif [[ -f "$REPO/ffprobe.exe" ]]; then
-  cp "$REPO/ffprobe.exe" "$REPO/dist/VideoDownloader/bin/ffprobe.exe"
+if [[ -f "${FF%ffmpeg.exe}ffprobe.exe" ]]; then
+  cp "${FF%ffmpeg.exe}ffprobe.exe" "$REPO/dist/VideoDownloader/bin/ffprobe.exe"
+  echo "   ffprobe 真身: ${FF%ffmpeg.exe}ffprobe.exe（与 ffmpeg 同目录）"
+elif FP="$(_resolve_real_bin ffprobe "${VDL_FFPROBE_BIN:-}")"; then
+  cp "$FP" "$REPO/dist/VideoDownloader/bin/ffprobe.exe"
+  echo "   ffprobe 真身: $FP"
 else
   echo "⚠️  未找到 ffprobe，解说功能将不可用（下载不受影响）"
 fi
