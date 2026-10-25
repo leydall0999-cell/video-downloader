@@ -649,6 +649,22 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 }
 .uc-check { flex-direction: row; align-items: center; gap: .4rem; }
 .uc-check .uc-label { color: var(--text); font-size: .85rem; }
+
+/* 百度网盘（2026-10-25）：文件列表 */
+.pan-list { list-style: none; margin: .2rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+.pan-item {
+  display: flex; align-items: center; gap: .8rem;
+  padding: .6rem .8rem; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface);
+}
+.pan-item-ic { flex: none; width: 26px; height: 26px; border-radius: 7px; background: var(--brand-soft);
+  color: var(--brand); display: flex; align-items: center; justify-content: center; font-size: .85rem; }
+.pan-item-main { flex: 1; min-width: 0; }
+.pan-item-name { display: block; font-size: .9rem; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pan-item-size { display: block; font-size: .78rem; color: var(--text-mute); margin-top: .15rem; }
+.pan-item-dl { flex: none; }
+.pan-item.is-busy { opacity: .6; pointer-events: none; }
 .uc-result { display: flex; flex-direction: column; gap: .7rem; margin-top: .8rem; }
 /* 转换结果预览：视频/音频/GIF 内嵌播放，带深色画框并限制尺寸 */
 .uc-preview { margin: 0; }

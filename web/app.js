@@ -429,6 +429,12 @@
     sbProgressWrap: $('sbProgressWrap'), sbProgressFill: $('sbProgressFill'), sbStatus: $('sbStatus'),
     sbResult: $('sbResult'), sbMeta: $('sbMeta'), sbHelpBtn: $('sbHelpBtn'), sbHelpText: $('sbHelpText'),
     sbDlSrt: $('sbDlSrt'), sbDlTxt: $('sbDlTxt'),
+    // —— 百度网盘（2026-10-25 用户拍板：网页版也做，登录态存服务器）——
+    panView: $('panView'), tabPan: $('tabPan'),
+    panUrl: $('panUrl'), panPwd: $('panPwd'), panResolveBtn: $('panResolveBtn'), panStatus: $('panStatus'),
+    panBduss: $('panBduss'), panSaveCred: $('panSaveCred'), panClearCred: $('panClearCred'),
+    panCredState: $('panCredState'),
+    panFiles: $('panFiles'), panList: $('panList'), panFilesMeta: $('panFilesMeta'),
     // —— 个人中心（2026-09-29 对齐 App）——
     profileView: $('profileView'),
     pfAuthBox: $('pfAuthBox'), pfAuthModeTitle: $('pfAuthModeTitle'),
@@ -7241,6 +7247,170 @@
     if (t && t.classList && t.classList.contains('howto')) howtoSyncButtons();
   }, true);
 
+  // —— 百度网盘（2026-10-25 用户拍板：网页版也做，登录态存服务器）——
+  // 交互：填一次 BDUSS（存服务器，加密）→ 粘贴分享链接 → 解析列文件 → 点下载。
+  // 下载由服务器代取并实时转发，浏览器全程拿不到百度 cookie 与直链。
+  const panSetStatus = (text) => { if (el.panStatus) el.panStatus.textContent = text || ''; };
+
+  const panLoggedIn = () => !!(localStorage.getItem('vdl_auth_token') || '').trim();
+
+  const panRequireLogin = () => {
+    if (panLoggedIn()) return true;
+    try { if (window.__vdlOpenAuthModal) window.__vdlOpenAuthModal(); } catch (_) { /* ignore */ }
+    panSetStatus('请先登录账号后再使用百度网盘下载');
+    return false;
+  };
+
+  const panLoadCredStatus = async () => {
+    if (!el.panCredState) return;
+    if (!panLoggedIn()) { el.panCredState.textContent = '未登录'; return; }
+    try {
+      const r = await request('/api/cloud-drive/credential/status');
+      el.panCredState.textContent = (r && r.set) ? '已保存在服务器上 ✅' : '尚未保存登录态';
+    } catch (e) {
+      el.panCredState.textContent = (e && e.needLogin) ? '未登录' : '状态读取失败';
+    }
+  };
+
+  const panSaveCred = async () => {
+    if (!panRequireLogin()) return;
+    const v = ((el.panBduss && el.panBduss.value) || '').trim();
+    if (!v) { panSetStatus('请先粘贴 BDUSS'); return; }
+    el.panSaveCred.disabled = true;
+    try {
+      const r = await request('/api/cloud-drive/credential', { method: 'POST', body: JSON.stringify({ bduss: v }) });
+      if (r && r.ok) {
+        el.panCredState.textContent = '已保存到服务器 ✅';
+        panSetStatus('登录态已保存，以后不用再填');
+        if (el.panBduss) el.panBduss.value = '';
+      } else {
+        panSetStatus((r && r.error) || '保存失败');
+      }
+    } catch (e) {
+      panSetStatus((e && e.message) || '保存失败');
+    } finally {
+      el.panSaveCred.disabled = false;
+    }
+  };
+
+  const panClearCred = async () => {
+    if (!panRequireLogin()) return;
+    el.panClearCred.disabled = true;
+    try {
+      await request('/api/cloud-drive/credential', { method: 'DELETE' });
+      el.panCredState.textContent = '尚未保存登录态';
+      panSetStatus('已清除服务器上保存的登录态');
+    } catch (e) {
+      panSetStatus((e && e.message) || '清除失败');
+    } finally {
+      el.panClearCred.disabled = false;
+    }
+  };
+
+  const panRenderFiles = (files) => {
+    if (!el.panList) return;
+    el.panList.innerHTML = '';
+    if (!files.length) {
+      if (el.panFiles) el.panFiles.hidden = true;
+      panSetStatus('分享里没有可下载的文件');
+      return;
+    }
+    if (el.panFiles) el.panFiles.hidden = false;
+    if (el.panFilesMeta) el.panFilesMeta.textContent = files.length + ' 个文件';
+    files.forEach((f) => {
+      const li = document.createElement('li');
+      li.className = 'pan-item';
+      const ic = document.createElement('span');
+      ic.className = 'pan-item-ic'; ic.textContent = '⬇';
+      const main = document.createElement('span');
+      main.className = 'pan-item-main';
+      const nm = document.createElement('span');
+      nm.className = 'pan-item-name'; nm.textContent = f.name || '文件';
+      const sz = document.createElement('span');
+      sz.className = 'pan-item-size';
+      sz.textContent = formatBytes(f.size) + (f.need_login ? ' · 需要百度登录态' : '');
+      main.appendChild(nm); main.appendChild(sz);
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'btn btn-primary pan-item-dl'; btn.textContent = '下载';
+      btn.addEventListener('click', () => panDownload(f, btn, li));
+      li.appendChild(ic); li.appendChild(main); li.appendChild(btn);
+      el.panList.appendChild(li);
+    });
+  };
+
+  const panResolve = async () => {
+    if (!panRequireLogin()) return;
+    const url = ((el.panUrl && el.panUrl.value) || '').trim();
+    if (!url) { panSetStatus('请粘贴网盘分享链接'); return; }
+    const pwd = ((el.panPwd && el.panPwd.value) || '').trim();
+    el.panResolveBtn.disabled = true;
+    panSetStatus('解析中…');
+    try {
+      const r = await request('/api/cloud-drive/resolve', { method: 'POST', body: JSON.stringify({ url, pwd }) });
+      if (!r || !r.ok) {
+        panSetStatus((r && r.error) || '解析失败');
+        return;
+      }
+      panRenderFiles(r.files || []);
+      panSetStatus(r.need_credential
+        ? '已列出文件，但下载还需要百度登录态 —— 请在上面保存 BDUSS'
+        : ('已列出 ' + (r.files || []).length + ' 个文件'));
+    } catch (e) {
+      panSetStatus((e && e.message) || '解析失败');
+    } finally {
+      el.panResolveBtn.disabled = false;
+    }
+  };
+
+  const panDownload = async (f, btn, li) => {
+    if (!panRequireLogin()) return;
+    const label = btn.textContent;
+    btn.textContent = '下载中…';
+    if (li) li.classList.add('is-busy');
+    try {
+      const url = '/api/cloud-drive/download?id=' + encodeURIComponent(f.id)
+        + '&name=' + encodeURIComponent(f.name || 'baidu-file');
+      const resp = await fetch(url, { headers: authBearerHeaders(), credentials: 'same-origin' });
+      if (!resp.ok) {
+        let msg = '下载失败';
+        try { const p = await resp.json(); msg = p.detail || p.error || msg; } catch (_) { /* ignore */ }
+        if (resp.status === 403 && /登录/.test(msg)) {
+          try { if (window.__vdlOpenAuthModal) window.__vdlOpenAuthModal(); } catch (_) { /* ignore */ }
+        }
+        throw new Error(msg);
+      }
+      const name = f.name || 'baidu-file';
+      // 大文件优先流式落盘（Chrome/Edge 的 File System Access API），避免整包进内存；
+      // 浏览器不支持时回退 blob（文件太大会吃内存，但保证能下）。
+      if (window.showSaveFilePicker && resp.body) {
+        try {
+          const handle = await window.showSaveFilePicker({ suggestedName: name });
+          const writable = await handle.createWritable();
+          await resp.body.pipeTo(writable);
+          panSetStatus('已保存：' + name);
+          return;
+        } catch (e) {
+          if (e && e.name === 'AbortError') { panSetStatus('已取消保存'); return; }
+          // 其它错误：流可能已被消费，回退 blob 时可能为空，不纠结
+        }
+      }
+      const blob = await resp.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      panSetStatus('已开始下载：' + name);
+    } catch (e) {
+      panSetStatus((e && e.message) || '下载失败');
+    } finally {
+      btn.textContent = label;
+      if (li) li.classList.remove('is-busy');
+    }
+  };
+
   function switchView(view) {
     // 首帧兜底标记（<head> 里的 data-boot）只负责第一次绘制；
     // 一旦进入正常切换流程就撤掉，显示权交回给各视图的 hidden 属性。
@@ -7260,7 +7430,8 @@
     const isProfile = view === 'profile';      // 个人中心
     const isMem = view === 'member';          // 会员（公开购买页，2026-09-30）
     const isShare = view === 'share';         // 分享（合并视图：二维码/网页 子页签，2026-09-30）
-    const isAnyExtra = isMusic || isImage || isSt || isProfile || isMem || isShare;
+    const isPan = view === 'pan';             // 百度网盘（2026-10-25）
+    const isAnyExtra = isMusic || isImage || isSt || isProfile || isMem || isShare || isPan;
     el.downloadView.hidden = isHome || isLib || isSub || isTor || isCom || isUp || isDw || isAppIntro || isAnyExtra;
     if (el.homeView) el.homeView.hidden = !isHome;
     el.libraryView.hidden = !isLib;
@@ -7276,6 +7447,7 @@
     if (el.profileView) el.profileView.hidden = !isProfile;
     if (el.memberView) el.memberView.hidden = !isMem;
     if (el.shareView) el.shareView.hidden = !isShare;
+    if (el.panView) el.panView.hidden = !isPan;
     if (el.shareQrView) el.shareQrView.hidden = !(isShare && _sharePane === 'shareqr');
     if (el.pageGenView) el.pageGenView.hidden = !(isShare && _sharePane === 'pagegen');
     if (el.tabHome) el.tabHome.classList.toggle('is-active', isHome);
@@ -7293,7 +7465,9 @@
     if (el.tabProfile) el.tabProfile.classList.toggle('is-active', isProfile);
     if (el.tabMember) el.tabMember.classList.toggle('is-active', isMem);
     if (el.tabShare) el.tabShare.classList.toggle('is-active', isShare);
+    if (el.tabPan) el.tabPan.classList.toggle('is-active', isPan);
     if (isLib) loadLibrary();
+    if (isPan) panLoadCredStatus();
     if (isSub) loadSubscriptions();
     if (isCom) loadCommentary();
     if (isUp) { el.ucStatus.textContent = ''; }
@@ -10276,6 +10450,13 @@ document.querySelectorAll('a.dl[data-text-target]').forEach(function(a){
   if (el.tabMusicConvert) el.tabMusicConvert.addEventListener('click', () => switchView('musicconvert'));
   if (el.tabImageConvert) el.tabImageConvert.addEventListener('click', () => switchView('imageconvert'));
   if (el.tabSubtitle) el.tabSubtitle.addEventListener('click', () => switchView('subtitle'));
+  // —— 百度网盘（2026-10-25）——
+  if (el.tabPan) el.tabPan.addEventListener('click', () => switchView('pan'));
+  if (el.panSaveCred) el.panSaveCred.addEventListener('click', panSaveCred);
+  if (el.panClearCred) el.panClearCred.addEventListener('click', panClearCred);
+  if (el.panResolveBtn) el.panResolveBtn.addEventListener('click', panResolve);
+  if (el.panPwd) el.panPwd.addEventListener('keydown', (e) => { if (e.key === 'Enter') panResolve(); });
+  if (el.panUrl) el.panUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') panResolve(); });
   if (el.tabProfile) el.tabProfile.addEventListener('click', () => switchView('profile'));
   if (el.tabMember) el.tabMember.addEventListener('click', () => { switchView('member'); track('member_click'); });
   if (el.tabShare) el.tabShare.addEventListener('click', () => switchView('share'));

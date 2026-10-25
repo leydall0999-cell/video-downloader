@@ -115,6 +115,7 @@ run_one test_cloud_quota.py                # 云端算力账号级配额：免�
 run_one test_cloud_daily_quota_unified.py   # 跨端每日免费额度统一：网页版采纳云端 daily_free_limits + 离线开关切断云端（2026-10-17 用户定档「以后台为准」）
 run_one test_cloud_link.py
 run_one test_media_proxy_range.py
+run_one test_cloud_drive_baidu_web.py         # 网页版百度网盘：登录态存服务器(加密/按用户隔离)/resolve 不外泄直链与 cookie/download 带 Range+登录态中转(2026-10-25 用户拍板「存服务器上」)
 run_one test_direct_url_hls.py
 run_node test_web_direct_download.js
 run_node test_web_hls_assemble.js

@@ -3507,6 +3507,11 @@ from routers import subtitle as _subtitle_rtr
 app.include_router(_subtitle_rtr.router)
 from routers import share_token as _share_token_rtr
 app.include_router(_share_token_rtr.router)
+# 百度网盘下载（2026-10-25 用户拍板：网页版也做，登录态存服务器）。
+# 与桌面端那套的区别在 routers/cloud_drive.py 里有说明：网页版由服务器带登录态
+# 取文件再流式中转，dlink 用服务端加密令牌承载、百度 cookie 不出服务器。
+from routers import cloud_drive as _cloud_drive_rtr
+app.include_router(_cloud_drive_rtr.router)
 # 网页访客统计（PV/UV/事件/来源，仅落哈希不落 IP 明文；上架/变现决策的数据依据）
 from routers import webstats as _webstats_rtr
 app.include_router(_webstats_rtr.router)

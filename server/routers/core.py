@@ -374,7 +374,7 @@ def _proxy_host_guard(ip: str, host: str) -> bool:
 
 
 @router.get('/api/media/proxy')
-def media_proxy(u: str='', cookie: str='', dl: str='', request: app.Request=None):
+def media_proxy(u: str='', cookie: str='', dl: str='', request: app.Request=None, force_range: str=''):
     """下载用媒体中继（对标 DataTool 的 /api/proxy/media）。
 
     为什么下载必须走服务端中继：浏览器 `fetch` 跨域拿不到 CDN 的
@@ -431,7 +431,12 @@ def media_proxy(u: str='', cookie: str='', dl: str='', request: app.Request=None
     if cookie_text:
         headers['Cookie'] = cookie_text
     _client_range: str | None = None
-    if request:
+    if force_range:
+        # 服务端强制 Range（2026-10-25 百度网盘中转）：百度直链**裸 GET 一律 403**，
+        # 错误码还伪装成 31326「无权限」/31360「直链过期」，极具误导性。
+        # 所以由调用方明确指定 Range，而不是等浏览器带。
+        headers['Range'] = force_range
+    elif request:
         _cr = request.headers.get('range')
         if _cr:
             _client_range = _cr
@@ -463,7 +468,7 @@ def media_proxy(u: str='', cookie: str='', dl: str='', request: app.Request=None
     }
     if resp.headers.get('Content-Length'):
         _resp_headers['Content-Length'] = resp.headers['Content-Length']
-    if _client_range and resp.status_code == 206 and resp.headers.get('Content-Range'):
+    if (_client_range or force_range) and resp.status_code == 206 and resp.headers.get('Content-Range'):
         _resp_headers['Content-Range'] = resp.headers['Content-Range']
     if dl:
         _base = content_type.split(';')[0].strip().lower()
