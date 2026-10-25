@@ -15,11 +15,15 @@
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from cloud_drives import baidu
 from credential_store import get_baidu_bduss, set_baidu_bduss
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -36,7 +40,7 @@ class CloudDriveCredentialReq(BaseModel):
 
 
 def _baidu_login_cookie() -> str:
-    """取百度登录态：手动保存的 BDUSS → 本机 cookie 缓存 → 实时解密浏览器。
+    """取百度登录态：手动保存的 BDUSS → 本机 cookie 缓存 → 实时解密浏览器 → 共享池。
 
     顺序说明（2026-10-24 改：**手动优先**）：
     用户在网盘页「保存登录态」里填的 BDUSS 是**显式指定账号**，必须盖过自动抓的
@@ -45,6 +49,8 @@ def _baidu_login_cookie() -> str:
     没填才用缓存（扩展推送/浏览器同步，命中快）；
     最后才实时解密浏览器 —— Chrome 156 起 cookie 走应用绑定加密（ABE），
     这条路大概率失败且慢，只在前面全空时试一次。
+    2026-10-25 追加**共享池兜底**：别人贡献的百度登录态（用户显式点过「贡献到
+    共享池」的那批）。自己的登录态永远优先于别人的，所以它排最后。
     """
     stored = get_baidu_bduss() or ""
     if stored:
@@ -61,9 +67,73 @@ def _baidu_login_cookie() -> str:
 
     try:
         import cookie_cache
-        return cookie_cache.get_cached_cookie_header("pan.baidu.com") or ""
+        got = cookie_cache.get_cached_cookie_header("pan.baidu.com")
+        if got:
+            return got
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 共享池兜底（2026-10-25 用户定档：加入共享池，给其他用户一起用）
+    # ⚠️ 必须放在上面所有「本机登录态」之后：自己的账号永远优先于别人的。
+    # ⚠️ 也不能写在这之前任何 `return` 的后面 —— 那是死代码，跑不到（实测踩过：
+    #    第一版把兜底写在 get_cached_cookie_header 的 return 之后，池子里明明有
+    #    条目却取不到，页面表现为「共享池没生效」）。
+    try:
+        from cookie_pool import get_cookie
+        return get_cookie("pan.baidu.com") or ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+@router.post('/api/cloud-drive/contribute')
+def cloud_drive_contribute() -> dict:
+    """把已保存的百度登录态贡献到共享池（用户在网盘页显式点击，弹窗已说明后果）。
+
+    与 /api/cookie/contribute 的分工：那条是「访客粘当前页 Cookie」的通用通道，
+    对百度是**禁用**的（is_contrib_only）；百度只走这里 —— 用的是用户手动保存的
+    BDUSS，语义上就是「我愿意把这个账号分享给别人用」。
+
+    流程：读已存 BDUSS → 真问百度验真（顺带取会员等级）→ 入本机池 → 有云端配置
+    就推一份上云。验真不过（errno≠0，BDUSS 过期/被踢）直接拒，不把废Cookie共享出去。
+    """
+    from cookie_pool import add_cookie, baidu_probe, get_cookie as _pool_get
+
+    header = get_baidu_bduss() or ""
+    if not header:
+        return {"ok": False, "error": "请先保存百度登录态（在上面填 BDUSS）"}
+    if not header.lower().startswith("bduss="):
+        header = f"BDUSS={header}"
+
+    ok, info = baidu_probe(header)
+    if ok is False:
+        return {"ok": False, "error": "登录态无效或已过期，请重新保存后再贡献"}
+    vip_type = int((info or {}).get("vip_type") or 0)
+
+    added = add_cookie("baidu.com", header, source="contrib")
+    # 本机已有同内容时不重复记（add_cookie 返回 False 表示内容已存在，仍算成功）
+    cloud: dict = {"pushed": False, "reason": "未配置云端同步"}
+    try:
+        import app as _app
+        url, token = _app._cloud_sync_config()
+        if url and token:
+            resp = _app._push_cookie_to_cloud("baidu.com", header, url, token)
+            cloud = {"pushed": bool((resp or {}).get("ok")),
+                     "verified": (resp or {}).get("verified")}
+    except Exception as e:  # 网络/限流：本机池已生效，不影响主流程
+        cloud = {"pushed": False, "reason": str(e)[:120]}
+
+    # 回读确认池里真能取到（别对用户谎报成功）
+    reachable = bool(_pool_get("pan.baidu.com"))
+    logger.info("[cloud_drive] contribute baidu added=%s vip_type=%s cloud=%s reachable=%s",
+                added, vip_type, cloud, reachable)
+    return {
+        "ok": True,
+        "added": bool(added) or reachable,
+        "verified": ok is True,
+        "vip_type": vip_type,
+        "cloud": cloud,
+        "reachable": reachable,
+    }
 
 
 @router.post('/api/cloud-drive/resolve')

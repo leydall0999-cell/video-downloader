@@ -939,6 +939,7 @@
     cdList: $('cdList'),
     cdCookie: $('cdCookie'),
     cdCookieSave: $('cdCookieSave'),
+    cdCookieShare: $('cdCookieShare'),
     cdCookieState: $('cdCookieState'),
     cdCredBox: $('cdCredBox'),
     tabCloudDrive: $('tabCloudDrive'),
@@ -17493,8 +17494,43 @@ el.dwVidPlayer.hidden = true;
     } catch (e) { /* 老版本后端没有这些端点：静默忽略 */ }
   };
 
+  // 2026-10-25 用户定档：百度登录态加入共享池，给其他用户一起用。
+  // 三条硬约束：
+  //   ① 必须先保存过登录态（贡献的是「我手动指定的那个账号」，不是顺手抓的）；
+  //   ② 点下去之前必须弹窗说清后果（BDUSS = 完整网盘账号权限）；
+  //   ③ 后端会真问百度验真，过期/被踢的直接拒，不把废 Cookie 共享出去。
+  const cdShareCookie = async () => {
+    if (!el.cdCookieShare) return;
+    const go = await showConfirm(
+      '贡献后，其他用户解析百度网盘时也能用你这个账号的登录态（加密存储、只能本人账号取回自己那份）。\n\n'
+      + '要知道的两点：\n'
+      + '· 百度按账号限速，别人下载会算在你这个账号的带宽/额度上；\n'
+      + '· 这个账号能看到你网盘里的文件，请只用你愿意分享的账号。\n\n'
+      + '确定要贡献到共享池吗？',
+      { okText: '确定贡献', cancelText: '取消', danger: true },
+    );
+    if (!go) return;
+    el.cdCookieShare.disabled = true;
+    if (el.cdCookieState) el.cdCookieState.textContent = '正在验真并贡献…';
+    try {
+      const data = await request('/api/cloud-drive/contribute', { method: 'POST', body: '{}' });
+      if (data && data.ok) {
+        const vip = data.vip_type ? '（会员账号）' : '';
+        const cloud = data.cloud && data.cloud.pushed ? '，已同步到云端池' : '（仅本机池，未上云）';
+        if (el.cdCookieState) el.cdCookieState.textContent = `已贡献到共享池${vip}${cloud}`;
+      } else if (el.cdCookieState) {
+        el.cdCookieState.textContent = (data && data.error) || '贡献失败';
+      }
+    } catch (e) {
+      if (el.cdCookieState) el.cdCookieState.textContent = `贡献失败：${e.message || '请稍后重试'}`;
+    } finally {
+      el.cdCookieShare.disabled = false;
+    }
+  };
+
   if (el.cdResolve) el.cdResolve.addEventListener('click', cdResolve);
   if (el.cdCookieSave) el.cdCookieSave.addEventListener('click', cdSaveCookie);
+  if (el.cdCookieShare) el.cdCookieShare.addEventListener('click', cdShareCookie);
   if (el.cdPwd) el.cdPwd.addEventListener('keydown', (e) => { if (e.key === 'Enter') cdResolve(); });
   if (el.cdUrl) el.cdUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') cdResolve(); });
   cdRefreshCredState();

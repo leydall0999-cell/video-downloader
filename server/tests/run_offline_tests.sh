@@ -896,6 +896,23 @@ run_node test_howto_guide.mjs
 #      ⑤ loadedmetadata→comFeatherDetect 自动探测链必须还在（羽化绿条靠它回来）。
 run_node test_commentary_source_restore.mjs
 
+# 51. test_baidu_cookie_share.mjs —— 百度网盘登录态进共享池（2026-10-25 用户定档
+#      「加入共享池，给其他用户一起用」）。BDUSS = 完整网盘账号权限，敏感度远高于
+#      视频平台 Cookie，所以只接受**显式贡献**：
+#      ① 百度进 _CONTRIB_ONLY_DOMAINS，被 _sync_domains_to_cloud 与
+#         /api/cookie/sync/from-local 双双排除（否则等于替所有用户决定共享账号）；
+#      ② 贡献只走网盘页「贡献到共享池」按钮（带确认弹窗），用的是手动保存的 BDUSS；
+#      ③ 贡献前真问百度 uinfo 验真，过期/被踢直接拒；
+#      ④ 取用顺序：手动 BDUSS > 本机缓存 > 浏览器解密 > 共享池（自己的优先）。
+run_node test_baidu_cookie_share.mjs
+
+# 52. test_baidu_pool_fallback.py —— 百度共享池兜底的**运行时**测试（2026-10-25）。
+#      源码守卫（上一条）只能看「有没有那段代码」，看不住「跑不跑得到」：第一版
+#      把兜底写在本机缓存 return 之后成了死代码，池子里有条目却取不到。
+#      本测试直接调 _baidu_login_cookie()：无本机登录态必须落到共享池，
+#      存了手动 BDUSS 必须盖过共享池。HOME/VDL_DATA_DIR 全隔离，不碰真实凭据。
+run_one test_baidu_pool_fallback.py
+
 # 49. test_task_ownership_p0_2.py —— P0-2 下载任务/订阅源 越权隔离（安全审计 2026-10-11）：
 #      此前 `_require_task` 只按 id 取、`/api/tasks` 直接 `store.list_all()` 返回**全站**任务，
 #      攻击者拿到/枚举到 task_id 即可读标题、拉成片、取消/暂停他人任务；订阅源同理。
