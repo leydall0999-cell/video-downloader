@@ -1707,11 +1707,14 @@ class MembershipStore:
                         del hist[k]
                 self._persist()
             du["date"] = day
-            du["download"] = 0
-            du["cloud"] = 0
-            for _r in ("cloud_commentary", "cloud_convert",
-                       "cloud_dewatermark", "cloud_subtitle"):
-                du[_r] = 0                       # 2026-10-06 拆池：各功能独立日切
+            # 2026-10-25：改为**动态重置**——daily_usage 里除 date 外的键一律归零，
+            # 不再维护硬编码列表。原因：FEATURE_USAGE_DEFS 后来新增的资源
+            # （cloud_drive / convert_audio / convert_image / cloud_concat /
+            #  cloud_dewatermark_pdf / cloud_subtitle_burn / cloud_subtitle_translate /
+            #  share_qr / share_page）都没加进旧列表，导致「跨日不清零、配额永久顶满」。
+            for _k in list(du.keys()):
+                if _k != "date":
+                    du[_k] = 0
             for _dead in _DEAD_USAGE_KEYS:      # 清掉历史状态文件里的死键
                 du.pop(_dead, None)
 
@@ -1776,6 +1779,7 @@ class MembershipStore:
                              "cloud_subtitle": "字幕提取",
                              "cloud_subtitle_burn": "字幕烧录",
                              "cloud_subtitle_translate": "字幕翻译",
+                             "cloud_drive": "网盘下载",
                              # 2026-10-19：新键必须有中文名，否则超限文案会直接
                              # 把资源键（convert_audio / share_qr）甩给用户看。
                              "convert_audio": "音乐转换",
