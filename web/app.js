@@ -7394,6 +7394,7 @@
     const label = btn.textContent;
     btn.textContent = '下载中…';
     if (li) li.classList.add('is-busy');
+    const total = Number(f.size) || 0;
     try {
       const url = '/api/cloud-drive/download?id=' + encodeURIComponent(f.id)
         + '&name=' + encodeURIComponent(f.name || 'baidu-file');
@@ -7412,21 +7413,44 @@
         throw new Error(msg);
       }
       const name = f.name || 'baidu-file';
+      // 流式读取，边下边累计字节，实时刷新按钮上的进度与速度（解析时已返回文件总大小 f.size）。
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let done = 0;
+      let lastPaint = 0;
+      const t0 = Date.now();
+      const paint = () => {
+        const sec = Math.max(0.001, (Date.now() - t0) / 1000);
+        const sp = Math.round(done / sec);
+        btn.textContent = total
+          ? `下载中 ${Math.floor(done * 100 / total)}% · ${formatBytes(sp)}/s`
+          : `下载中 ${formatBytes(done)} · ${formatBytes(sp)}/s`;
+      };
+      let writable = null;
       // 大文件优先流式落盘（Chrome/Edge 的 File System Access API），避免整包进内存；
       // 浏览器不支持时回退 blob（文件太大会吃内存，但保证能下）。
-      if (window.showSaveFilePicker && resp.body) {
-        try {
-          const handle = await window.showSaveFilePicker({ suggestedName: name });
-          const writable = await handle.createWritable();
-          await resp.body.pipeTo(writable);
-          panSetStatus('已保存：' + name);
-          return;
-        } catch (e) {
-          if (e && e.name === 'AbortError') { panSetStatus('已取消保存'); return; }
-          // 其它错误：流可能已被消费，回退 blob 时可能为空，不纠结
+      if (window.showSaveFilePicker) {
+        try { writable = await (await window.showSaveFilePicker({ suggestedName: name })).createWritable(); }
+        catch (e) { if (e && e.name === 'AbortError') { panSetStatus('已取消保存'); return; } writable = null; }
+      }
+      for (;;) {
+        const { done: end, value } = await reader.read();
+        if (end) break;
+        if (value) {
+          done += value.byteLength;
+          chunks.push(value);
+          if (writable) await writable.write(value);
+          const now = Date.now();
+          if (now - lastPaint > 200) { lastPaint = now; paint(); }
         }
       }
-      const blob = await resp.blob();
+      paint();
+      if (writable) {
+        await writable.close();
+        panSetStatus('已保存：' + name);
+        return;
+      }
+      const blob = new Blob(chunks);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = name;
