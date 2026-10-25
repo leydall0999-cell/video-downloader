@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -1166,6 +1167,36 @@ def admin_cookies_delete(payload: dict[str, Any] = Body(...),
     return r
 
 
+def _do_get(domain: str) -> dict[str, Any]:
+    """桌面端回读：取该域最新有效的 Cookie 明文（+ 优酷 ckey）。
+
+    背景（2026-10-25）：桌面 App 的本机池目录在从未喂过池的机器上不存在，
+    本机池恒 miss ⇒ 桌面用户没在浏览器登录的站一律解析失败，而云端池是满的。
+    桌面端在本机池 miss 时经本动作回读云端登录态，零操作复用。
+
+    本函数为 2026-10-26 自 app-dev（1.0.95）移植到网页版主干，使云端节点
+    具备回读能力；桌面端回读通道至此端到端打通。
+
+    安全口径与 inject 对等：同一把同步令牌本就允许「写池」，读不扩大暴露面；
+    只放行白名单域；未命中返回空 header（不是错误）。
+    """
+    if not domain:
+        return {"ok": False, "error": "缺少 domain 参数"}
+    _log = logging.getLogger(__name__)
+    root = cp._strip_sub(domain)
+    if not cp.is_allowed(root):
+        _log.info("[cookie_pool] get 拒绝非白名单域 domain=%s", domain)
+        return {"ok": True, "domain": root, "header": "", "ckey": ""}
+    header = cp.get_cookie(domain) or ""
+    ckey = ""
+    if root == "youku.com":
+        # ckey 与 Cookie 同域存储（优酷 UPS 签名用），桌面端一起回读
+        ckey = cp.get_ckey(domain) or ""
+    _log.info("[cookie_pool] get domain=%s hit=%s ckey=%s",
+              root, bool(header), bool(ckey))
+    return {"ok": True, "domain": root, "header": header, "ckey": ckey}
+
+
 # ─── 云端侧入口（共享令牌，供桌面 App 后台代理）─────────────────────────────
 
 def _pool_get_action(domain: str) -> dict[str, Any]:
@@ -1211,6 +1242,9 @@ def cookie_pool_admin(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     action = str((payload or {}).get("action") or "overview")
     if action == "overview":
         return _overview()
+    if action == "get":
+        # 桌面端解析回读云端池（2026-10-26 移植）：唯一返回 Cookie 明文的动作
+        return _do_get(str((payload or {}).get("domain") or "").strip())
     if action == "verify":
         return _do_verify(str((payload or {}).get("domain") or "").strip(),
                           force=bool((payload or {}).get("force")))
