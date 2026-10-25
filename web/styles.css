@@ -2641,16 +2641,20 @@ html.theme-dark .mem-notice { background: #2a2110; border-color: #7c4a1e; border
 /* ---- 能力清单 ---- */
 .hp-caps { background: #fff; border: 1px solid #eceffa; border-radius: 1.1rem; padding: 1.1rem 1.25rem 1.25rem; box-shadow: 0 8px 26px rgba(15,23,42,.05); }
 .hp-cap-head {
-  display: flex; align-items: center; gap: .5rem;
-  font-size: .82rem; font-weight: 800; color: #334155;
-  padding: .35rem 0 .2rem;
+  display: flex; align-items: center; gap: .55rem;
+  /* 分组标题要比列表项（.8rem）明显大一号，否则和子内容糊成一片（2026-10-25 用户反馈） */
+  font-size: 1rem; font-weight: 800; color: #1e293b;
+  letter-spacing: -.01em; line-height: 1.4;
+  padding: 0;
 }
-.hp-cap-head + .hp-cap-head { margin-top: 1.1rem; border-top: 1px solid #f0f2fa; padding-top: 1.1rem; }
-.hp-cap-head i { width: 7px; height: 7px; border-radius: 50%; }
+/* 两组之间的分隔线：标题中间隔着 <ul>，不是相邻兄弟 —— 必须用 .hp-cap-grid + .hp-cap-head，
+   旧写法 .hp-cap-head + .hp-cap-head 永远匹配不到（这就是「标题和子内容粘一起」的真因）。 */
+.hp-cap-grid + .hp-cap-head { margin-top: 1.9rem; border-top: 1px solid #eef1f9; padding-top: 1.5rem; }
+.hp-cap-head i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .hp-cap-head i.web { background: #10b981; }
 .hp-cap-head i.app { background: #8b5cf6; }
 .hp-cap-head span { margin-left: .2rem; font-size: .72rem; font-weight: 500; color: #a3aabc; }
-.hp-cap-grid { list-style: none; margin: .5rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .1rem 1.6rem; }
+.hp-cap-grid { list-style: none; margin: .85rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .1rem 1.6rem; }
 .hp-cap-grid li {
   display: flex; align-items: center; gap: .6rem; padding: .5rem 0;
   font-size: .8rem; color: #3f4759; border-bottom: 1px solid #f2f4fb;
