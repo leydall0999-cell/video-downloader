@@ -303,8 +303,8 @@ def do_resolve(platform, url, cookie=""):
     if platform == "douyin":
         try:
             return True, douyin_direct.resolve(url)
-        except douyin_direct.VideoNotFoundError as e:
-            # 签名有效但视频确证不存在：确定性结论，回落浏览器也是同样结果
+        except (douyin_direct.VideoNotFoundError, douyin_direct.ArgusBlockedError) as e:
+            # 确定性结论（视频不存在 / Argus 风控拦截）：回落浏览器也是同样结果
             return False, str(e)
         except Exception as e:  # noqa: BLE001
             logger.warning("[douyin-direct] 直连失败，回落 Playwright: %s", str(e)[:150])

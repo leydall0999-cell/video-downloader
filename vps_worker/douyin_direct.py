@@ -39,6 +39,10 @@ class VideoNotFoundError(RuntimeError):
     """签名有效但视频确证不存在（已删/私密/短链过期）——无需回落浏览器。"""
 
 
+class ArgusBlockedError(RuntimeError):
+    """抖音 Argus 风控确定拦截（平台级，非临时故障）——回落 Playwright 也无效。"""
+
+
 # ---------------------------------------------------------------- SM3（国标）
 class _SM3:
     """GB/T 32905-2016 SM3 哈希，纯 Python（约 5μs/短串，够用）。"""
@@ -350,6 +354,20 @@ def resolve(url: str, timeout: int = 15) -> dict:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
+        # 2026-10-27：抖音上线 Argus 安全插件，匿名直连详情接口被确定性拦截
+        # （响应体 "Blocked by ArgusSecurityPlugin Uifid/Signature Not Found"，
+        #   本机/机房 IP、有无浏览器 cookie 均一样）。这是平台级风控而非临时
+        #   故障，抛 ArgusBlockedError 让 daemon 直接返回、不再回落 Playwright
+        #   白耗 35s（实测 Playwright 页面同样拿不到视频流）。
+        _body = b""
+        try:
+            _body = e.read(300) or b""
+        except Exception:
+            pass
+        if b"ArgusSecurityPlugin" in _body:
+            raise ArgusBlockedError(
+                "抖音解析暂不可用：抖音近期升级风控（Argus 安全插件），网页端匿名解析被拦截"
+                "（与链接是否有效无关）。请稍后重试")
         raise RuntimeError("详情接口 HTTP %s" % e.code)
     except json.JSONDecodeError:
         raise RuntimeError("详情接口返回非 JSON（可能被风控）")

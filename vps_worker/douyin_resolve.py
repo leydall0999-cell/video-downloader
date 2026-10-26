@@ -182,10 +182,13 @@ def resolve(url, timeout=30):
             if not video_url.startswith("http") or not vid:
                 # 拿不到 video_id 且无视频流 → 短链失效 / 视频被删除 / 私密 / 短链过期
                 # final_url 通常会落到首页/jingxuan 精选页 / 抖音返回未登录提示
+                # 2026-10-27：抖音上线 Argus 风控后，无头浏览器页面也拿不到视频流
+                # （页面只剩壳 + 永久加载圈），无法区分「视频不存在」与「被风控」，
+                # 文案不再断言链接无效，避免误导用户。
                 raise RuntimeError(
-                    "抖音链接无效或视频不存在（final_url=%s, streams=%d）。"
-                    "可能原因：视频已删除/作者设为私密/仅好友可见/短链已过期。请换一个视频链接试"
-                    % (final_url[:80], len(captured))
+                    "抖音解析失败：抖音近期升级风控（Argus），网页端匿名解析与无头浏览器均被拦截，"
+                    "暂无法区分是风控拦截还是视频已删除/私密。请稍后重试"
+                    "（streams=%d, final_url=%s）" % (len(captured), final_url[:60])
                 )
 
             # 标题：抖音页面 title 可能异步写入，等 1-2s 直到非空
