@@ -14175,11 +14175,11 @@ el.dwVidPlayer.hidden = true;
     } else {
       box.classList.remove('is-custom', 'is-center');
       box.classList.add('is-bottom');    // 无自定义 → 底部默认（＝管线 bottom 档）
-      // 逐式复刻管线 _seg_cmd_narration：
-      //   ① 有羽化带时 y_bottom = ch - band_y - band_h/2 - size/2（字幕中心对齐带中心）
-      //   ② clamp 到 [base_margin(8%), ch - size]
-      //   ③ bottom 档再整体上抬 SUBTITLE_RAISE_RATIO(3%)×画面高
-      //   ④ 文字顶 = ch - y_bottom - size（管线 y = h - margin - used）
+      // 逐式复刻管线 _seg_cmd_narration（2026-10-26 同步）：
+      //   ① 有羽化带时 y_bottom = ch - band_y - band_h/2 - subH/2（字幕中心对齐带中心，**不上抬**）
+      //   ② clamp 到 [base_margin(8%), 1 - subH]
+      //   ③ 仅无羽化带兜底档整体上抬 SUBTITLE_RAISE_RATIO(3%)×画面高防贴底（羽化档已居中，再抬会浮到带上方）
+      //   ④ 文字顶 = ch - y_bottom - subH（管线 y = h - margin - used）
       // 🔴 用「真实渲染高度」做比例（含 10px 下限与 line-height），而非纯比例 subH，
       //    否则小预览里字号被下限抬到 10px、文字框比比例值高，预览会比成片偏下、压住羽化带。
       const subH = (txt.offsetHeight || (contentH * COM_SUB_EM_RATIO * size)) / contentH;
@@ -14188,8 +14188,9 @@ el.dwVidPlayer.hidden = true;
         yBottom = 1 - (comFeather.bandY + comFeather.bandH / 2) - subH / 2;
         yBottom = Math.max(yBottom, COM_SUB_BASE_MARGIN);
         yBottom = Math.min(yBottom, 1 - subH);
+      } else {
+        yBottom = Math.min(yBottom + COM_SUB_RAISE_RATIO, 1 - subH);
       }
-      yBottom = Math.min(yBottom + COM_SUB_RAISE_RATIO, 1 - subH);
       const topRatio = 1 - yBottom - subH;
       txt.style.marginTop = Math.max(0, r.y + contentH * topRatio).toFixed(1) + 'px';
       txt.style.marginBottom = '0';
