@@ -382,7 +382,17 @@ def _run_server_with_retry(start_port: int, host: str, app_dir: str, lock_file=N
             return
         except OSError as e:
             last_err = e
-            _launch_log(f"端口 {p} 绑定失败（{e}），自动重试下一端口 {p+1}")
+            # 🔴 2026-10-26 排障教训：这里过去只记 {e}，遇到
+            #    「[Errno 2] No such file or directory」这种**根本不是端口问题**的
+            #    OSError（uvicorn 加载 app 阶段就抛的），12 个端口全试一遍却只有一行
+            #    无堆栈的报错，真凶藏得死死的。端口是无关的：同一异常会重复 12 次。
+            #    现在把堆栈一并写进启动日志，下次直接看 traceback 即可定位。
+            try:
+                import traceback as _tb
+                _detail = _tb.format_exc()
+            except Exception:  # noqa: BLE001
+                _detail = "(traceback unavailable)"
+            _launch_log(f"端口 {p} 启动失败（{type(e).__name__}: {e}），自动重试下一端口 {p+1}\n{_detail}")
             continue
         except SystemExit as e:
             # 冻结版 uvicorn 在 bind 失败时抛 SystemExit(非0)，需当作可重试的绑定失败；

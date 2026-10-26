@@ -239,6 +239,31 @@ else
   echo "⚠️  未找到 clr_loader/ffi/dlls（$_CLRLOADER_DLLS）——pythonnet 可能无法初始化" >&2
 fi
 
+# ── pywebview 的 WebView2Loader：三个平台目录**缺一不可** ──────────────
+# 🔴 2026-10-26 事故（v1.0.95-win1，CI 构建）：装完一点开就弹「本地服务启动失败」，
+#    启动日志是 pywebview 抛 FileNotFoundError('Cannot find win-arm64')。
+#    根因两层：
+#      1) pywebview 6.x 的 webview/platforms/edgechromium.py 在 **import 期**无条件
+#         遍历 ('win-arm64','win-x64','win-x86') 三个目录，任一个不存在就
+#         FileNotFoundError ⇒ 原生窗口根本起不来；
+#      2) `--collect-all webview` 把这些 .dll 归到 **binaries**，而 PyInstaller 会按
+#         目标架构过滤 ⇒ 包里只剩 win-x64，arm64/x86 被静默丢掉，构建日志却全绿。
+#    修法：显式用 **--add-data**（data 不走架构过滤）把三个目录都收进去。
+#    真机硬断言见 desktop/ci_assert_win_bundle.py（CI 里 Release 之后跑）。
+_WV_RUNTIMES="$VENV/Lib/site-packages/webview/lib/runtimes"
+_WV_RUNTIME_ARGS=()
+if [ -d "$_WV_RUNTIMES" ]; then
+  for _p in win-x64 win-arm64 win-x86; do
+    if [ -d "$_WV_RUNTIMES/$_p/native" ]; then
+      _WV_RUNTIME_ARGS+=(--add-data "$(_win "$_WV_RUNTIMES/$_p/native");webview/lib/runtimes/$_p/native")
+    else
+      echo "⚠️  venv 内缺少 webview runtime 目录 $_WV_RUNTIMES/$_p/native —— 包内将缺失该平台" >&2
+    fi
+  done
+else
+  echo "⚠️  未找到 webview/lib/runtimes（$_WV_RUNTIMES）——原生窗口可能起不来（仅剩浏览器兜底）" >&2
+fi
+
 # ⚠️ 不要再加 --collect-all onnx：它会把 onnx 官方的测试数据集（约 2.4 万个文件）
 #    整个打进包，属纯死重（server/ 代码零 import onnx），拖慢构建并撑大安装包。
 #    与 build_mac.sh 保持一致；真需要时 PyInstaller 的常规依赖分析会自动收进来。
@@ -278,6 +303,7 @@ fi
   "${COMMENTARY_DATA[@]}" \
   ${_DENO_BINARY_ARGS[@]+"${_DENO_BINARY_ARGS[@]}"} \
   ${_CLRLOADER_ARGS[@]+"${_CLRLOADER_ARGS[@]}"} \
+  ${_WV_RUNTIME_ARGS[@]+"${_WV_RUNTIME_ARGS[@]}"} \
   "$(_win "$REPO/desktop/desktop_launcher.py")"
 
 # 清理 staging 临时目录（Windows 无 ~/.Trash：mv 失败则就地删除，CI 上无副作用）

@@ -350,3 +350,15 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: python desktop/ci_assert_win_no_window.py
+
+      # ── 真机断言：Windows 包内「必备资源」齐全（webview 三平台运行时 / server assets）──
+      # 🔴 2026-10-26 事故：v1.0.95-win1 装完点开就弹「本地服务启动失败」，根因是
+      #    --collect-all webview 把三个平台的 WebView2Loader.dll 当 binaries，
+      #    被 PyInstaller 按架构过滤掉 arm64/x86 ⇒ pywebview import 期
+      #    FileNotFoundError('Cannot find win-arm64') ⇒ 无原生窗口。
+      #    构建日志全绿、包能装能传，只有双击那一刻才崩 —— 典型静默坏包，
+      #    必须在产物上加硬断言兜住。位置同样放 Release 之后（不卡交付）。
+      - name: 断言 Windows 包内必备资源齐全（真机）
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python desktop/ci_assert_win_bundle.py dist/VideoDownloader
