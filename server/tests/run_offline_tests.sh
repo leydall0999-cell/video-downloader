@@ -1381,6 +1381,13 @@ run_one test_cookie_sync_auto.py
 # 不换域取 Cookie = 匿名解析。含「主站不得被误映射」和 B站 CDN 回归。
 run_one test_cookie_share_host_map.py
 
+# 解说渲染「绝不慢放」守卫（2026-10-26）：用户实拍成片突然慢动作，根因是
+# 渲染预检检出「旁白字数超片段时长预算」就自动放弃原速（--no-original-speed
+# ⇒ setpts 慢放对齐）。用户拍板：画面绝不慢放、解说保持完整 —— 渲染层原速
+# 模式本就窗口跟随旁白（原速多播几秒/放不下整段跳过），恒原速即可。
+# 本守卫钉死：预检恒 True、渲染链路无降速模式、app.py 慢放开关默认关。
+run_one test_commentary_never_slowdown.py
+
 echo ""
 echo "========================================="
 echo "  通过: $PASS   失败: $FAIL"
