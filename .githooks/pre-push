@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# 推送前三道闸（2026-10-27 建立）
+#
+# 背景：Mac 与 Windows 共用 app-dev 分支，两边各自往前跑，攒了 32 个远端提交
+# 后被迫一次大合并，撞出 7 处冲突，其中 web/app.js 因为「冲突尾部那行 };
+# 被 git 判为共有」而少一个闭合括号 —— 两边单独都合法、合完就坏，肉眼
+# 看不出来。所以把三件事做成推送前的硬拦截：
+#
+#   ① 落后检查：推之前先 fetch，落后远端就拦 ⇒ 强制「推前 rebase」
+#   ② 发版出口：VERSION / server/changelog.py 只允许发版机改 ⇒ 消灭最痛的冲突源
+#   ③ 语法校验：跑 tools/check_syntax.py，红了就拦 ⇒ 挡住静默坏包
+#
+# 紧急绕过：VDL_SKIP_PUSH_GUARD=1 git push ...
+# 本机设为发版机：git config vdl.releaseHost true
+
+set -uo pipefail
+export PYTHONIOENCODING=utf-8
+export GIT_TERMINAL_PROMPT=0
+
+if [ "${VDL_SKIP_PUSH_GUARD:-0}" = "1" ]; then
+  echo "⚠️  VDL_SKIP_PUSH_GUARD=1 —— 三道闸全部跳过"
+  exit 0
+fi
+
+# ── 找 python ────────────────────────────────────────────────────────────
+PY_CMD=()
+if [ -n "${VDL_PYTHON:-}" ] && command -v "$VDL_PYTHON" >/dev/null 2>&1; then
+  PY_CMD=("$VDL_PYTHON")
+else
+  for c in python python3 py; do
+    if command -v "$c" >/dev/null 2>&1; then
+      if [ "$c" = "py" ]; then PY_CMD=(py -3); else PY_CMD=("$c"); fi
+      break
+    fi
+  done
+fi
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+REMOTE="${1:-origin}"
+
+echo "── 推送前检查（分支：${BRANCH:-未知}）──"
+
+# ── ① 落后检查 ───────────────────────────────────────────────────────────
+if [ -n "$BRANCH" ]; then
+  GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=8" \
+    git fetch --quiet origin "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" >/dev/null 2>&1
+  FETCH_RC=$?
+  # fetch 失败也别放弃：本地缓存的远端 ref 虽然可能过期，但「缓存比远端旧」
+  # 不会造成误报落后，照样能拦住绝大多数「忘了先 pull」的情况。
+  if [ "$FETCH_RC" -eq 0 ] || git rev-parse --verify "origin/${BRANCH}" >/dev/null 2>&1; then
+    BEHIND="$(git rev-list --count "HEAD..origin/${BRANCH}" 2>/dev/null || echo 0)"
+    if [ "${BEHIND:-0}" -gt 0 ]; then
+      echo ""
+      echo "❌ 落后远端 ${BEHIND} 个提交，先整合再推："
+      echo "     git pull --rebase origin ${BRANCH}"
+      echo "   （合并有冲突就逐个解，解完跑 tools/check_syntax.py --range HEAD^1..HEAD）"
+      echo "   确认要强推覆盖别人的提交？用 VDL_SKIP_PUSH_GUARD=1 git push ..."
+      exit 1
+    fi
+    if [ "$FETCH_RC" -ne 0 ]; then
+      echo "  ✅ ① 与远端同步（连不上远端，按本地缓存判断：无落后）"
+    else
+      echo "  ✅ ① 与远端同步（无落后）"
+    fi
+  else
+    echo "  ⚪ ① 连不上远端且无本地缓存，跳过落后检查（离线推送请自行确认）"
+  fi
+fi
+
+# ── ② 发版出口检查 ───────────────────────────────────────────────────────
+# 用 pre-push 的 stdin（local_ref local_sha remote_ref remote_sha）算真实范围
+VER_RANGE=""
+if [ -n "$BRANCH" ] && git rev-parse --verify "origin/${BRANCH}" >/dev/null 2>&1; then
+  VER_RANGE="origin/${BRANCH}..HEAD"
+fi
+
+if [ -n "$VER_RANGE" ]; then
+  TOUCHED="$(git diff --name-only "$VER_RANGE" -- VERSION server/changelog.py 2>/dev/null)"
+  if [ -n "$TOUCHED" ]; then
+    REL_HOST="$(git config --bool --get vdl.releaseHost 2>/dev/null || echo false)"
+    if [ "$REL_HOST" != "true" ]; then
+      echo ""
+      echo "❌ 本次推送改动了发版文件，但本机不是发版机："
+      echo "$TOUCHED" | sed 's/^/     - /'
+      echo "   版本号与更新说明只在发版机上改（避免两台机器抢同一个版本号）。"
+      echo "   若这台就是发版机：git config vdl.releaseHost true"
+      echo "   若确需在这台发版：VDL_SKIP_PUSH_GUARD=1 git push ..."
+      exit 1
+    fi
+    echo "  ✅ ② 发版文件改动（本机是发版机，放行）"
+  else
+    echo "  ✅ ② 未动发版文件"
+  fi
+else
+  echo "  ⚪ ② 无远端跟踪分支，跳过发版出口检查"
+fi
+
+# ── ③ 语法校验 ───────────────────────────────────────────────────────────
+if [ ${#PY_CMD[@]} -eq 0 ]; then
+  echo "  ⚪ ③ 没找到 python，跳过语法校验（可设 VDL_PYTHON=/path/to/python）"
+  exit 0
+fi
+
+CHK_RANGE="${VER_RANGE:-HEAD^1..HEAD}"
+echo "  … ③ 语法校验（${CHK_RANGE}）"
+if "${PY_CMD[@]}" tools/check_syntax.py --range "$CHK_RANGE"; then
+  echo "  ✅ ③ 语法校验通过"
+  exit 0
+else
+  echo ""
+  echo "❌ 语法校验没过，推送已拦下。修完再推；误拦可用 VDL_SKIP_PUSH_GUARD=1 绕过。"
+  exit 1
+fi

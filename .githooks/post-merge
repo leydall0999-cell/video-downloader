@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# 合并/拉取后自动跑一次语法校验（2026-10-27 建立）
+#
+# 为什么单独做：合并冲突解完，最容易留下「两边单独都合法、合完就坏」的残骸
+# ——2026-10-27 那次就是 web/app.js 少一个 `}`，而两侧各自的分支跑 node --check
+# 都是绿的。所以 merge/pull 一结束就立刻验一遍。
+#
+# 只告警不阻断：此时合并已经完成，拦也拦不回去了；真正的硬拦截在 pre-push。
+
+set -uo pipefail
+export PYTHONIOENCODING=utf-8
+
+if [ "${VDL_SKIP_PUSH_GUARD:-0}" = "1" ]; then
+  exit 0
+fi
+
+PY_CMD=()
+if [ -n "${VDL_PYTHON:-}" ] && command -v "$VDL_PYTHON" >/dev/null 2>&1; then
+  PY_CMD=("$VDL_PYTHON")
+else
+  for c in python python3 py; do
+    if command -v "$c" >/dev/null 2>&1; then
+      if [ "$c" = "py" ]; then PY_CMD=(py -3); else PY_CMD=("$c"); fi
+      break
+    fi
+  done
+fi
+
+if [ ${#PY_CMD[@]} -eq 0 ]; then
+  echo "⚪ post-merge：没找到 python，跳过语法校验（可设 VDL_PYTHON=/path/to/python）"
+  exit 0
+fi
+
+echo ""
+echo "── 合并后语法校验（HEAD^1..HEAD）──"
+if "${PY_CMD[@]}" tools/check_syntax.py --range HEAD^1..HEAD; then
+  echo "── 合并后校验通过 ──"
+  exit 0
+else
+  echo ""
+  echo "🔴🔴 合并后有文件语法坏了 —— 先修，别推（pre-push 也会拦）🔴🔴"
+  echo "    重点看冲突区：两侧各新增一段、结尾那行被判成「共有」时最容易少括号。"
+  exit 1
+fi
