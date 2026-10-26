@@ -888,6 +888,38 @@ run_node test_placeholder_contrast.mjs
 #      「只在注释里保留 closest([hidden])」三个自证/定位类用例。
 run_node test_howto_guide.mjs
 
+# 50. test_commentary_source_restore.mjs —— 解说页「切走再回来，原视频没了」（2026-10-24
+#      用户报障）：loadCommentary() 历来无条件清预览（2026-09-18 为修黑屏残留覆层），
+#      从没做过恢复 ⇒ 侧栏切走再点回、或点「刷新」，选中/拖入的源视频就成空占位。
+#      守卫钉死：① 清前必须捞走 pick 与 File 对象；② 恢复必须排在 refreshComSource()
+#      之后（选项是那一刻才重建的，提前恢复会静默失败）；③ 媒体库下拉与本地文件两个
+#      入口都要记账，取消选择要清账；④ 真刷新后本地文件拿不回来必须明示重选；
+#      ⑤ loadedmetadata→comFeatherDetect 自动探测链必须还在（羽化绿条靠它回来）。
+run_node test_commentary_source_restore.mjs
+
+# 51. test_baidu_cookie_share.mjs —— 百度网盘登录态进共享池（2026-10-25 用户定档
+#      「加入共享池，给其他用户一起用」）。BDUSS = 完整网盘账号权限，敏感度远高于
+#      视频平台 Cookie，所以只接受**显式贡献**：
+#      ① 百度进 _CONTRIB_ONLY_DOMAINS，被 _sync_domains_to_cloud 与
+#         /api/cookie/sync/from-local 双双排除（否则等于替所有用户决定共享账号）；
+#      ② 贡献只走网盘页「贡献到共享池」按钮（带确认弹窗），用的是手动保存的 BDUSS；
+#      ③ 贡献前真问百度 uinfo 验真，过期/被踢直接拒；
+#      ④ 取用顺序：手动 BDUSS > 本机缓存 > 浏览器解密 > 共享池（自己的优先）。
+run_node test_baidu_cookie_share.mjs
+
+# 52. test_baidu_pool_fallback.py —— 百度共享池兜底的**运行时**测试（2026-10-25）。
+#      源码守卫（上一条）只能看「有没有那段代码」，看不住「跑不跑得到」：第一版
+#      把兜底写在本机缓存 return 之后成了死代码，池子里有条目却取不到。
+#      本测试直接调 _baidu_login_cookie()：无本机登录态必须落到共享池，
+#      存了手动 BDUSS 必须盖过共享池。HOME/VDL_DATA_DIR 全隔离，不碰真实凭据。
+run_one test_baidu_pool_fallback.py
+
+# 53. test_cloud_drive_auto_contrib.py —— 浏览器/缓存里的百度登录态**自动**入共享池
+#      （2026-10-25 用户定档：用户自己填的入口已隐藏，浏览器里本来有就自动取、
+#      自动共享）。钉住：手动那份仍优先且不被自动共享；缓存/浏览器命中 ⇒ 入本地池
+#      + 推云端两步都做；共享池故障不影响本次取用；共享池兜底仍排最后。
+run_one test_cloud_drive_auto_contrib.py
+
 # 49. test_task_ownership_p0_2.py —— P0-2 下载任务/订阅源 越权隔离（安全审计 2026-10-11）：
 #      此前 `_require_task` 只按 id 取、`/api/tasks` 直接 `store.list_all()` 返回**全站**任务，
 #      攻击者拿到/枚举到 task_id 即可读标题、拉成片、取消/暂停他人任务；订阅源同理。
@@ -1052,6 +1084,36 @@ run_one test_launcher_boot_feedback.py
 #       （_ensure_stdio 补 devnull⇒Config 可构造）+ 不误伤 + 接线棘轮。
 #       ⚠️ 若 uvicorn 升级自修了 None-stdout，A 组「复现」会红——按用例过期删 A 组即可。
 run_one test_win_console_stdio_guard.py
+
+# 61.8 test_win_path_layout.py —— Windows 配置目录布局守卫（2026-10-26）。
+#       **在 macOS 上模拟 Windows 冻结版**，不需要虚拟机、不需要 CI、秒级反馈：
+#       伪造 sys.platform=win32 / sys.frozen / APPDATA 三件套（它们都是运行时求值），
+#       断言业务配置落到 %APPDATA%\VideoDownloader 而非 ~/.video-downloader。
+#       另有一条扫描守卫：任何定义 _config_dir 且用 Path.home() 的模块都必须处理
+#       win32，防止新增配置模块时漏加分支（那种缺陷在 mac 上永远测不出来，只会
+#       表现为「Windows 用户改设置不生效」）。
+#       已知例外 gateway_config（唯一不带 Windows 分支）已登记在测试文件顶部。
+#       变异验证：破坏 vision_config 的 win32 分支 ⇒ 本文件 2 项变红。
+run_one test_win_path_layout.py
+
+# 61.9 test_win_ffmpeg_shim_guard.py —— Windows 打包「ffmpeg shim」陷阱守卫（2026-10-26）。
+#       真机验收连挂两轮的元凶：CI 上 PATH 的 ffmpeg 是 Chocolatey **shim**（靠相对路径
+#       ..\lib\ffmpeg\tools\... 找真身），拷进包后相对路径失效 ⇒ 守门实跑 --version 拦下
+#       ⇒ 整轮中止、安装包产不出来（user「做 Windows 版老是卡住」的真因）。
+#       第一版修复仍被拦：排除规则写成小写 chocolatey，实际路径是**大写 Chocolatey**。
+#       本守卫**不是文本 grep**：把 build_win.sh 的 _resolve_real_bin 原样抽出来，
+#       在假目录树上真跑（大写 Chocolatey + bin/ 放 shim + lib/ 放真身），断言解析到真身。
+#       变异验证：摘掉 lib 分支 + 排除改回大小写敏感 ⇒ 4 项变红（复现 CI 日志里的 shim 路径）。
+run_one test_win_ffmpeg_shim_guard.py
+
+# 61.10 test_win_version_identity.py —— Windows 上 /api/version 不得回落 'dev'（2026-10-26）。
+#       core.py::BUILD_VERSION 是 /api/version 唯一来源，候选路径原本只写 macOS 布局
+#       （<exe>/../../Resources/...），Windows onedir 下变成 C:\Resources ⇒ 恒 'dev'
+#       ⇒ 应用内更新拿不到当前版本。同仓 system.py **有** exe 同级候选 ⇒ 两端不同源、极难察觉。
+#       用 ast 抽出 _read_build_version 真跑（假 sys.executable + 真目录树），
+#       覆盖 macOS / onedir 根 / onedir 6.x(_internal/server) 三种布局。
+#       变异验证：删掉 `ep.parent / 'build_version.txt'` ⇒ Windows 用例变红且 got='dev'（与真机一致）。
+run_one test_win_version_identity.py
 
 # 62. test_cloud_matting_gateway.py —— 云端抠图改走「本产品服务端」（2026-10-13 定档
 #     「钥匙不出保险柜」）：网关接入时必须走网关且出站请求不含任何火山凭据；
@@ -1342,6 +1404,13 @@ run_one test_cookie_sync_auto.py
 # iesdouyin→douyin、b23.tv→bilibili。这些域自身只有设备指纹（did/didv、ttwid），
 # 不换域取 Cookie = 匿名解析。含「主站不得被误映射」和 B站 CDN 回归。
 run_one test_cookie_share_host_map.py
+
+# 解说渲染「绝不慢放」守卫（2026-10-26）：用户实拍成片突然慢动作，根因是
+# 渲染预检检出「旁白字数超片段时长预算」就自动放弃原速（--no-original-speed
+# ⇒ setpts 慢放对齐）。用户拍板：画面绝不慢放、解说保持完整 —— 渲染层原速
+# 模式本就窗口跟随旁白（原速多播几秒/放不下整段跳过），恒原速即可。
+# 本守卫钉死：预检恒 True、渲染链路无降速模式、app.py 慢放开关默认关。
+run_one test_commentary_never_slowdown.py
 
 echo ""
 echo "========================================="

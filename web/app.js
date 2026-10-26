@@ -939,6 +939,7 @@
     cdList: $('cdList'),
     cdCookie: $('cdCookie'),
     cdCookieSave: $('cdCookieSave'),
+    cdCookieShare: $('cdCookieShare'),
     cdCookieState: $('cdCookieState'),
     cdCredBox: $('cdCredBox'),
     tabCloudDrive: $('tabCloudDrive'),
@@ -1187,6 +1188,12 @@
   let comPreviewUrl = null;    // 预览视频 URL（本地文件为 objectURL，需释放）
   let comPreviewW = 0;         // 源视频宽度（像素，0=未加载）
   let comPreviewH = 0;         // 源视频高度（像素，0=未加载）
+  // 2026-10-24：记住「当前选的源」。此前 loadCommentary() 每次进解说页都无条件
+  // setupComPreview(null)（那是 2026-09-18 为修黑屏残留覆层加的），用户切到别的页
+  // 再回来（或点「刷新」）就只剩空占位 —— 报障「看不到原视频文件了，重新加载也没用」。
+  // 切视图不重载页面，File 对象还在，两类源都能恢复；真刷新/重启只剩媒体库档可恢复
+  // （本地文件受浏览器安全限制拿不回 File 对象，只能提示重选）。
+  let comLastPick = null;      // { kind:'library'|'local', id, name }
 
   /** 当前解析结果：{ url, platform, video, qualities, base } */
   let resolved = null;
@@ -10934,10 +10941,25 @@ el.dwVidPlayer.hidden = true;
   /** 成片文件名：renderComArtifact 已把步骤里解析出的产物全路径写在 comArtifact.title，
    *  这里取它的 basename（管线命名是「<原片名>-解说完成<时间>.mp4」）。
    *  拿不到就退回通用名 —— 只是名字不精确，绝不能让保存因取名失败而中断。 */
-  const comFinishedName = () => {
+  const comFinishedName = async (jobId, base = '') => {
+    // 真实成片名：问后端文件端点要（FileResponse 的 Content-Disposition 带产物真名）。
+    // 🔴 旧实现读 el.comArtifact.title —— 那是上一条任务的残留 DOM 属性，本条任务
+    // 经常取不到 ⇒ 自动保存到「下载」全叫「解说成片(1).mp4」（2026-10-26 用户实测）。
+    try {
+      // 本地服务不认 HEAD（404），用 1 字节 Range GET 拿响应头即可（206 只传 1 字节）
+      const resp = await fetch(`${base}/api/commentary/${jobId}/file`,
+        { headers: { Range: 'bytes=0-0' } });
+      const cd = resp.headers.get('content-disposition') || '';
+      // Starlette 对中文名用 filename*=utf-8''<percent-encoding>；ASCII 名用 filename="..."
+      const m = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(cd)
+        || /filename\s*=\s*"?([^";]+)"?/.exec(cd);
+      const n = m ? decodeURIComponent(m[1].replace(/["']/g, '')).trim() : '';
+      if (/\.(mp4|mkv|mov|webm)$/i.test(n)) return n;
+    } catch (_e) { /* 探测失败走兜底，绝不阻塞「已生成」提示 */ }
+    // 兜底：旧逻辑（列表卡片的标题属性）
     const p = (el.comArtifact && el.comArtifact.title) || '';
-    const base = String(p).split('/').pop() || '';
-    return /\.(mp4|mkv|mov|webm)$/i.test(base) ? base : '解说成片.mp4';
+    const fallback = String(p).split('/').pop() || '';
+    return /\.(mp4|mkv|mov|webm)$/i.test(fallback) ? fallback : '解说成片.mp4';
   };
 
   // ═══════════ 🎬 渲染完成弹窗（2026-09-20）═══════════════════════════════════
@@ -11104,7 +11126,7 @@ el.dwVidPlayer.hidden = true;
         if (st.status === 'completed') {
           clearInterval(poll);
           // 成片名用真实产物名，别一律叫「解说成片.mp4」——用户下载/保存到下载夹后要能分辨是哪一条
-          const outName = comFinishedName();
+          const outName = await comFinishedName(job_id, base);
           refs.commentaryStatus.textContent = '解说成片已生成';
           refs.commentaryFile.href = `${base}/api/commentary/${job_id}/file`;
           refs.commentaryFile.setAttribute('download', outName);
@@ -11325,10 +11347,10 @@ el.dwVidPlayer.hidden = true;
     // 片头片尾 2 选 1：默认「保留·不解说」（绝对不解说片头片尾）
     const introOutroMode = el.comIntroOutroMode();
     const skip_intro_outro = introOutroMode === 'skip';
-    // 起点/终点只在「去片头片尾」下生效（2026-09-20 定稿：非 skip 显示 00:00:00 且不参与
-    // 提交——那边填的只是草稿；否则用户在非 skip 模式里的草稿会被当成全片裁剪区间）。
-    const dramaStart = (skip_intro_outro && el.comDramaStart && el.comDramaStart.value) ? parseTimeSec(el.comDramaStart.value) : null;
-    const dramaEnd = (skip_intro_outro && el.comDramaEnd && el.comDramaEnd.value) ? parseTimeSec(el.comDramaEnd.value) : null;
+    // 起点/终点：只要用户填了有效区间就生效，不再依赖「去片头片尾」开关。
+    // 之前限定只在 skip 模式生效，导致「选了范围仍按全片出」（用户诉求：划定区间就按区间解说）。
+    const dramaStart = (el.comDramaStart && el.comDramaStart.value && el.comDramaStart.value.trim()) ? parseTimeSec(el.comDramaStart.value) : null;
+    const dramaEnd = (el.comDramaEnd && el.comDramaEnd.value && el.comDramaEnd.value.trim()) ? parseTimeSec(el.comDramaEnd.value) : null;
     const no_narrate_intro_outro = true; // 两个模式都不解说片头片尾（skip 模式已剪掉）
     return {
       commentary_type: typeEl ? typeEl.value : 'deep_hl',
@@ -11961,7 +11983,10 @@ el.dwVidPlayer.hidden = true;
       // 初始化全局配音选择器（默认选中当前风格联动的音色）。
       // 先拉一次样本状态：选项里要不要带「🎤 我的音色（克隆）」取决于 ready，别吃旧值。
       await comLoadVoiceSample();
-      comFillScriptVoice(STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural');
+      // 2026-10-24：记住上次选的音色（尤其是「我的音色」），下次打开解说默认沿用，
+      // 不用每次重新选 / 重新录（用户诉求：录好的声音要自动保存、自动用上）。
+      const _savedVoice = (() => { try { return localStorage.getItem('vdl_com_voice_choice') || ''; } catch (_) { return ''; } })();
+      comFillScriptVoice(_savedVoice || STYLE_VOICE[comCurrentStyle()] || 'zh-CN-XiaoxiaoNeural');
 
       // 逐段渲染可编辑行
       const segs = data.segments || [];
@@ -12388,6 +12413,8 @@ el.dwVidPlayer.hidden = true;
   // 「起 qwen3tts 服务 / 刷新状态条 / 露出我的音色行」一整套逻辑，别抄第二份。
   if (el.comScriptVoice) {
     el.comScriptVoice.addEventListener('change', () => {
+      // 记住当前选的音色（含「我的音色」），重启后自动沿用，免去重复选择 / 重新录制。
+      try { localStorage.setItem('vdl_com_voice_choice', el.comScriptVoice.value); } catch (_) {}
       if (el.comScriptVoice.value !== COM_CLONE_VOICE) return;
       if (!el.comTtsProvider) return;
       if (COM_CLONE_PROVIDERS.indexOf(el.comTtsProvider.value) >= 0) return;  // 已经是克隆引擎
@@ -12726,6 +12753,11 @@ el.dwVidPlayer.hidden = true;
     el.comStatus.hidden = true;
     el.comFileStatus.hidden = true;
     el.comEta.hidden = true;
+    // 2026-10-24：清之前先把「上次选的源」与本地 File 对象捞出来。selectedLocalFile
+    // 是整个页面唯一持有 File 对象的地方，跟着一起清就再也恢复不了（切视图不重载页面，
+    // 对象还在；真刷新才没）。
+    const _pick = comLastPick || comReadLastPick();
+    const _localFile = selectedLocalFile;
     el.comSource.value = '';
     selectedLocalFile = null;
     setupComPreview(null);
@@ -12745,6 +12777,56 @@ el.dwVidPlayer.hidden = true;
     loadVolumeConfig();
     comLoadVoiceSample();   // 「我的音色」当前态（回填路径/文字稿/徽标）
     comRefreshTtsStatus();
+    // 恢复源视频（必须在 refreshComSource 之后：媒体库下拉选项是那时才重建的）。
+    // 羽化带不用管：loadedmetadata 会自己再跑一次探测，绿条随之回来。
+    try { comRestoreLastPick(_pick, _localFile); } catch (e) { console.warn('[com] restore pick failed', e); }
+  };
+
+  /** 把「上次选的源」写进 localStorage（真刷新/重启后仍能恢复媒体库档）。 */
+  const comSaveLastPick = (pick) => {
+    comLastPick = pick || null;
+    try {
+      if (pick && pick.kind === 'library' && pick.id) {
+        localStorage.setItem('vdl_com_last_pick', JSON.stringify(pick));
+      } else {
+        localStorage.removeItem('vdl_com_last_pick');
+      }
+    } catch (_) { /* 隐私模式/禁用存储：忽略，内存态仍有效 */ }
+  };
+  const comReadLastPick = () => {
+    try {
+      const raw = localStorage.getItem('vdl_com_last_pick');
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      return (p && p.kind === 'library' && p.id) ? p : null;
+    } catch (_) { return null; }
+  };
+
+  /** 恢复上次选的源：媒体库档直接回放；本地文件只有 File 对象还在时才能恢复。 */
+  const comRestoreLastPick = (pick, localFile) => {
+    if (!pick) return;
+    if (pick.kind === 'local') {
+      if (!localFile) {
+        // 真刷新/重启：File 对象拿不回来（浏览器安全限制），明说，别留个空屏让人猜
+        if (el.comFileStatus) {
+          el.comFileStatus.hidden = false;
+          el.comFileStatus.textContent = `刷新后无法自动读回本地文件，请重新选择「${pick.name || '上次的视频'}」`;
+        }
+        return;
+      }
+      selectedLocalFile = localFile;
+      el.comSource.value = '';
+      setupComPreview(URL.createObjectURL(localFile), localFile.name);
+      comProbeLocalDuration(localFile).then((sec) => comRunPrecheck({ durationSec: sec }));
+      return;
+    }
+    // 媒体库档：选项里还有这条才恢复（被删/归档就安静留空，不报错刷屏）
+    if (![...el.comSource.options].some((o) => o.value === pick.id)) return;
+    el.comSource.value = pick.id;
+    const opt = el.comSource.options[el.comSource.selectedIndex];
+    setupComPreview(`/api/library/file/${encodeURIComponent(pick.id)}?play=1`,
+      (opt && opt.textContent) || pick.name || '');
+    comRunPrecheck({ fileId: pick.id });
   };
 
   /** 加载解说(配音/音量)手动设置并回填滑块。 */
@@ -13070,6 +13152,8 @@ el.dwVidPlayer.hidden = true;
     comDramaStash.start = '';
     comDramaStash.end = '';
     comDramaGate();
+    // 🔴 2026-10-26 范围清零后预估回到整片口径，重跑预检保持一致
+    document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh'));
   };
 
   // 名字沿用（调用点较多）：现在只负责刷新卡头那行提示
@@ -13110,8 +13194,8 @@ el.dwVidPlayer.hidden = true;
   let comDramaStash = { start: '', end: '' };
   let comDramaSuggest = null;      // {lo, hi, dur} | null（轻量探测建议值）
   let comDramaSuggestSeq = 0;      // 换片竞态保护：旧请求迟到直接丢弃
-  const COM_DRAMA_GATE_NOTE = '当前是「保留片头片尾·不解说」，<b>不会裁剪</b>，起点/终点显示 00:00:00'
-    + '（这里填的时间只是草稿，切到「去片头片尾」才生效）。';
+  const COM_DRAMA_GATE_NOTE = '「保留片头片尾·不解说」：起点/终点<b>填了就按这段裁剪</b>（与「去片头片尾」无关），'
+    + '只是不额外去除片头片尾。留空＝不裁剪（按全片解说）。';
   const COM_DRAMA_OPEN_NOTE = '「去片头片尾」：<b>留空＝自动检测</b>（读片名/集数画面+人声黑场，识别不到兜底跳过前 90 秒）；'
     + '<b>填了就以你填的为准</b>（人工输入优先级最高，也可直接填秒数如 85）。预填的时间是系统探测到的建议值，可直接改。';
   /** 向后端要轻量边界建议（媒体库/下载源才有 id；本地拖拽文件拿不到服务端路径，
@@ -13142,6 +13226,9 @@ el.dwVidPlayer.hidden = true;
     if (filled) {
       if (typeof syncDramaSlider === 'function') { if (s) syncDramaSlider(s); if (e) syncDramaSlider(e); }
       updateTrimDurationText();
+      // 🔴 2026-10-26 计费预估修正：自动检测刚把正剧范围填进来，按整片算的旧预估
+      //    （如 2:28 电影显示 5 个半小时档）立刻失真 —— 触发重跑预检刷新「本次将消耗」。
+      document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh'));
     }
     return filled;
   };
@@ -13150,11 +13237,10 @@ el.dwVidPlayer.hidden = true;
     const note = el.comDramaNote;
     const open = el.comIntroOutroMode() === 'skip';
     if (!open) {
-      // 非 skip：显示 00:00:00（comGetOptions 里非 skip 不提交这两个值），先暂存手填值
-      if (s && s.value.trim()) comDramaStash.start = s.value.trim();
-      if (e && e.value.trim()) comDramaStash.end = e.value.trim();
-      if (s) { s.value = ''; s.placeholder = '00:00:00'; }
-      if (e) { e.value = ''; e.placeholder = '00:00:00'; }
+      // 非 skip：范围同样生效（起点/终点只要填了就裁剪，与「去片头片尾」开关无关），
+      // 故不再清空用户手填值，只更新提示文案。
+      if (s) s.placeholder = '留空＝不裁剪';
+      if (e) e.placeholder = '留空＝不裁剪';
     } else {
       if (s) s.placeholder = '自动检测';
       if (e) e.placeholder = '自动检测';
@@ -14026,9 +14112,12 @@ el.dwVidPlayer.hidden = true;
           return;
         }
         comRenderVoiceSample(data);
-        // 存好之后立刻把它挂进「全局配音」下拉（2026-09-20 用户要求「保存到全局配音里供选择」）：
-        // 不刷新的话，下拉里那一项要等下次打开审核面板才出现，用户会以为没保存上。
-        comFillScriptVoice();
+        // 存好之后立刻把它挂进「全局配音」下拉并切到「我的音色」：
+        // 用户「录制我的音色」的诉求就是录完即用，下次打开解说默认就是这段录音，
+        // 不用再手动选 / 重新录。changed 事件会把引擎联动切到克隆并记住这个选择。
+        comFillScriptVoice(COM_CLONE_VOICE);
+        try { localStorage.setItem('vdl_com_voice_choice', COM_CLONE_VOICE); } catch (_) {}
+        if (el.comScriptVoice) el.comScriptVoice.dispatchEvent(new Event('change'));
         const shown = (data && data.name) || nm;
         comSetVoiceStatus('ok', '音色已保存 ✓' + (shown ? '（' + shown + '）' : '')
           + '已加进右上「全局配音」与「🎧 全部音色」');
@@ -14415,11 +14504,11 @@ el.dwVidPlayer.hidden = true;
     } else {
       box.classList.remove('is-custom', 'is-center');
       box.classList.add('is-bottom');    // 无自定义 → 底部默认（＝管线 bottom 档）
-      // 逐式复刻管线 _seg_cmd_narration：
-      //   ① 有羽化带时 y_bottom = ch - band_y - band_h/2 - size/2（字幕中心对齐带中心）
-      //   ② clamp 到 [base_margin(8%), ch - size]
-      //   ③ bottom 档再整体上抬 SUBTITLE_RAISE_RATIO(3%)×画面高
-      //   ④ 文字顶 = ch - y_bottom - size（管线 y = h - margin - used）
+      // 逐式复刻管线 _seg_cmd_narration（2026-10-26 同步）：
+      //   ① 有羽化带时 y_bottom = ch - band_y - band_h/2 - subH/2（字幕中心对齐带中心，**不上抬**）
+      //   ② clamp 到 [base_margin(8%), 1 - subH]
+      //   ③ 仅无羽化带兜底档整体上抬 SUBTITLE_RAISE_RATIO(3%)×画面高防贴底（羽化档已居中，再抬会浮到带上方）
+      //   ④ 文字顶 = ch - y_bottom - subH（管线 y = h - margin - used）
       // 🔴 用「真实渲染高度」做比例（含 10px 下限与 line-height），而非纯比例 subH，
       //    否则小预览里字号被下限抬到 10px、文字框比比例值高，预览会比成片偏下、压住羽化带。
       const subH = (txt.offsetHeight || (contentH * COM_SUB_EM_RATIO * size)) / contentH;
@@ -14428,8 +14517,9 @@ el.dwVidPlayer.hidden = true;
         yBottom = 1 - (comFeather.bandY + comFeather.bandH / 2) - subH / 2;
         yBottom = Math.max(yBottom, COM_SUB_BASE_MARGIN);
         yBottom = Math.min(yBottom, 1 - subH);
+      } else {
+        yBottom = Math.min(yBottom + COM_SUB_RAISE_RATIO, 1 - subH);
       }
-      yBottom = Math.min(yBottom + COM_SUB_RAISE_RATIO, 1 - subH);
       const topRatio = 1 - yBottom - subH;
       txt.style.marginTop = Math.max(0, r.y + contentH * topRatio).toFixed(1) + 'px';
       txt.style.marginBottom = '0';
@@ -15386,11 +15476,14 @@ el.dwVidPlayer.hidden = true;
       // ?play=1：内联播放模式（后端按扩展名给 video/mp4 等正确 MIME）。
       // 🔴 不带它时后端回 application/octet-stream + attachment，WKWebView 拒解码 ⇒ 预览恒黑屏。
       setupComPreview(`/api/library/file/${encodeURIComponent(el.comSource.value)}?play=1`, opt ? opt.textContent : '');
+      // 记住这次选择：切页/刷新后要能恢复（2026-10-24 用户报障）
+      comSaveLastPick({ kind: 'library', id: el.comSource.value, name: opt ? opt.textContent : '' });
       // 立刻预检：交给后端 ffprobe 探测真实时长（含裁剪折算），不通过当场提示
       comRunPrecheck({ fileId: el.comSource.value });
     } else {
       setupComPreview(null);
       comClearPrecheck();
+      comSaveLastPick(null);
     }
   });
 
@@ -15434,7 +15527,8 @@ el.dwVidPlayer.hidden = true;
     //    不用等扣费失败或跑完才知道。与扣费点同源（routers/quota.py 同一组函数）。
     let costTip = '';
     if (!blocked && res.credit_cost > 0) {
-      const _u = res.credit_units > 1 ? `（${res.credit_units} 个半小时）` : '';
+      // 🔴 2026-10-26 文案澄清：「5 个半小时」曾被读成「5.5 小时」——改为明确口吻
+      const _u = res.credit_units > 1 ? `（按 ${res.credit_units} 个半小时计）` : '';
       costTip = `本次将消耗 ${res.credit_cost} 积分${_u}。`;
     }
     if (blocked) {
@@ -15495,6 +15589,12 @@ el.dwVidPlayer.hidden = true;
     if (el.comGenerateScript) el.comGenerateScript.disabled = false;
     if (el.comStatus) el.comStatus.style.color = '';
   };
+  // 🔴 2026-10-26 计费预估一致性：正剧范围（起点/终点，含滑块拖动与自动检测回填）
+  //    任何变化都重跑预检 —— 否则预估停留在选片时的整片口径（2:28 电影显示
+  //    「5 个半小时/250 积分」，实际只按 9.8 分钟收 1 档），用户被预估吓到。
+  //    用自定义事件解耦：自动检测逻辑在另一段作用域，拿不到本作用域的
+  //    comRefreshPrecheck 引用。
+  document.addEventListener('vdl:com-precheck-refresh', () => comRefreshPrecheck());
 
   // 入口 2：从本地文件生成
   const setLocalFile = (file) => {
@@ -15507,6 +15607,9 @@ el.dwVidPlayer.hidden = true;
     el.comFileStatus.hidden = true;
     el.comSource.value = '';
     setupComPreview(URL.createObjectURL(file), file.name);
+    // 记住这次选择（只进内存）：切页回来能原样恢复；真刷新后 File 对象没了，
+    // comRestoreLastPick 会提示重选而不是留个空屏。
+    comSaveLastPick({ kind: 'local', id: '', name: file.name });
     // 立刻预检（本地读元数据，零成本、不上传）：超时长或额度不够当场说清楚，
     // 绝不等到转写与脚本跑完才报「额度不足」——那时用户已白等十几分钟。
     comProbeLocalDuration(file).then((sec) => comRunPrecheck({ durationSec: sec }));
@@ -15877,8 +15980,8 @@ el.dwVidPlayer.hidden = true;
     const range = input === el.comDramaStart ? el.comDramaStartRange : el.comDramaEndRange;
     if (range && sec != null) range.value = String(Math.max(0, sec));
   };
-  el.comDramaStart.addEventListener('change', () => normalizeDramaInput(el.comDramaStart));
-  el.comDramaEnd.addEventListener('change', () => normalizeDramaInput(el.comDramaEnd));
+  el.comDramaStart.addEventListener('change', () => { normalizeDramaInput(el.comDramaStart); document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh')); });
+  el.comDramaEnd.addEventListener('change', () => { normalizeDramaInput(el.comDramaEnd); document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh')); });
   // 滑块 → 输入框：拖动即落值（等价于旧「用播放位置设起点/终点」，但可以任意微调）
   if (el.comDramaStartRange) {
     el.comDramaStartRange.addEventListener('input', () => {
@@ -15886,6 +15989,7 @@ el.dwVidPlayer.hidden = true;
       el.comDramaStart.value = formatHMS(Math.max(0, Math.floor(v)));
       updateTrimDurationText();
     });
+    el.comDramaStartRange.addEventListener('change', () => document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh')));
   }
   if (el.comDramaEndRange) {
     el.comDramaEndRange.addEventListener('input', () => {
@@ -15893,6 +15997,7 @@ el.dwVidPlayer.hidden = true;
       el.comDramaEnd.value = formatHMS(Math.max(0, Math.floor(v)));
       updateTrimDurationText();
     });
+    el.comDramaEndRange.addEventListener('change', () => document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh')));
   }
   el.comTrimReset.addEventListener('click', resetTrim);
 
@@ -17695,9 +17800,27 @@ el.dwVidPlayer.hidden = true;
       el.cdList.appendChild(li);
     });
     if (needLogin) {
-      cdSetStatus('已读到文件，但下载需要百度登录态：装了扩展并在浏览器登录过百度网盘会自动带上；否则在下面「百度登录态」里粘贴 BDUSS。', true);
-      if (el.cdCredBox) el.cdCredBox.open = true;
+      // 🔴 2026-10-25 用户定档：用户自助填写登录态的入口已隐藏（由管理员提供），
+      // 所以这里不能再把用户往「下面那个框」引，也不能自动展开它。
+      cdSetStatus('已读到文件，但下载需要百度登录态：装了扩展并在浏览器登录过百度网盘会自动带上；否则请联系管理员提供百度登录态。', true);
     }
+  };
+
+  // 整段分享文案 → (链接, 提取码)（2026-10-25 桌面端同步 web-dev 的 panExtractShare，
+  // 正则口径与 server/cloud_drives/baidu.py 的 extract_share_url 保持一致）
+  const cdExtractShare = (text) => {
+    const s = String(text || '');
+    const m = s.match(/https?:\/\/(?:pan|yun)\.baidu\.com\/[^\s\u4e00-\u9fff"'<>，。；、）)】]+/i);
+    if (!m) return { url: '', pwd: '' };
+    const url = m[0].replace(/[.,;:!?)）】\]」》"']+$/, '');
+    let pwd = '';
+    const pm = s.match(/(?:提取码|密码|pwd)\s*[:：=]?\s*([0-9A-Za-z]{4})(?![0-9A-Za-z])/i);
+    if (pm) pwd = pm[1];
+    if (!pwd) {
+      const q = url.match(/[?&]pwd=([0-9A-Za-z]{4})(?![0-9A-Za-z])/i);
+      if (q) pwd = q[1];
+    }
+    return { url, pwd };
   };
 
   // 登录成功后由登录回调调用：自动继续被门禁拦下的那次网盘下载。
@@ -17738,8 +17861,18 @@ el.dwVidPlayer.hidden = true;
     // 解析一开始就把网盘面板（状态 + 文件列表 + 登录态）露出来，
     // 这样「解析中 / 失败原因」都看得见。
     if (el.clouddriveView) el.clouddriveView.hidden = false;
-    const url = ((el.cdUrl && el.cdUrl.value) || '').trim();
-    if (!url) { cdSetStatus('请先粘贴网盘分享链接', true); return; }
+    const rawInput = ((el.cdUrl && el.cdUrl.value) || '').trim();
+    if (!rawInput) { cdSetStatus('请先粘贴网盘分享链接', true); return; }
+    // 百度「复制链接」给的是整段文案（标题 + 「链接:」 + 「提取码:」），
+    // 先提取真正的 URL 与提取码并回填输入框，让用户看到程序认到了什么。
+    const parsed = cdExtractShare(rawInput);
+    let url = rawInput;
+    if (parsed.url && parsed.url !== rawInput) {
+      url = parsed.url;
+      if (el.cdUrl) el.cdUrl.value = url;
+      if (parsed.pwd && el.cdPwd && !el.cdPwd.value.trim()) el.cdPwd.value = parsed.pwd;
+      cdSetStatus('已识别链接与提取码，正在解析…', false);
+    }
     if (!/pan\.baidu\.com|yun\.baidu\.com/.test(url)) {
       cdSetStatus('目前只支持百度网盘分享链接（pan.baidu.com）', true);
       return;
@@ -17806,8 +17939,43 @@ el.dwVidPlayer.hidden = true;
     } catch (e) { /* 老版本后端没有这些端点：静默忽略 */ }
   };
 
+  // 2026-10-25 用户定档：百度登录态加入共享池，给其他用户一起用。
+  // 三条硬约束：
+  //   ① 必须先保存过登录态（贡献的是「我手动指定的那个账号」，不是顺手抓的）；
+  //   ② 点下去之前必须弹窗说清后果（BDUSS = 完整网盘账号权限）；
+  //   ③ 后端会真问百度验真，过期/被踢的直接拒，不把废 Cookie 共享出去。
+  const cdShareCookie = async () => {
+    if (!el.cdCookieShare) return;
+    const go = await showConfirm(
+      '贡献后，其他用户解析百度网盘时也能用你这个账号的登录态（加密存储、只能本人账号取回自己那份）。\n\n'
+      + '要知道的两点：\n'
+      + '· 百度按账号限速，别人下载会算在你这个账号的带宽/额度上；\n'
+      + '· 这个账号能看到你网盘里的文件，请只用你愿意分享的账号。\n\n'
+      + '确定要贡献到共享池吗？',
+      { okText: '确定贡献', cancelText: '取消', danger: true },
+    );
+    if (!go) return;
+    el.cdCookieShare.disabled = true;
+    if (el.cdCookieState) el.cdCookieState.textContent = '正在验真并贡献…';
+    try {
+      const data = await request('/api/cloud-drive/contribute', { method: 'POST', body: '{}' });
+      if (data && data.ok) {
+        const vip = data.vip_type ? '（会员账号）' : '';
+        const cloud = data.cloud && data.cloud.pushed ? '，已同步到云端池' : '（仅本机池，未上云）';
+        if (el.cdCookieState) el.cdCookieState.textContent = `已贡献到共享池${vip}${cloud}`;
+      } else if (el.cdCookieState) {
+        el.cdCookieState.textContent = (data && data.error) || '贡献失败';
+      }
+    } catch (e) {
+      if (el.cdCookieState) el.cdCookieState.textContent = `贡献失败：${e.message || '请稍后重试'}`;
+    } finally {
+      el.cdCookieShare.disabled = false;
+    }
+  };
+
   if (el.cdResolve) el.cdResolve.addEventListener('click', cdResolve);
   if (el.cdCookieSave) el.cdCookieSave.addEventListener('click', cdSaveCookie);
+  if (el.cdCookieShare) el.cdCookieShare.addEventListener('click', cdShareCookie);
   if (el.cdPwd) el.cdPwd.addEventListener('keydown', (e) => { if (e.key === 'Enter') cdResolve(); });
   if (el.cdUrl) el.cdUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') cdResolve(); });
   cdRefreshCredState();
@@ -18436,6 +18604,14 @@ el.dwVidPlayer.hidden = true;
       }
       const perm = Number(s.permanent_credits || 0);
       if (perm > 0) chips.push(`<span class="member-chip member-chip-perm">🎁 永久积分 ${perm}（不过期）</span>`);
+      // 赠送积分（2026-10-27 云端新增 gift 池，随会员到期清零）：后端 status 透传
+      // gift_credits 后自动露出；未透传时字段为 undefined，静默跳过不显示。
+      const giftN = Number(s.gift_credits || 0);
+      if (giftN > 0) {
+        const _gExp = Number(s.gift_expire_at || 0);
+        const _gTag = _gExp > 0 ? `（${_memberFmtDate(_gExp)} 到期）` : '';
+        chips.push(`<span class="member-chip member-chip-perm">🎉 赠送积分 ${giftN}${_gTag}</span>`);
+      }
       // 免费用户「首次体验」余量（2026-10-05）：让用户**在撞墙之前**知道自己还有几次免费。
       // 只对非会员展示 —— 会员有积分，名额按策略本来也不给他们用，展示出来是误导。
       const ft = s.free_trials || null;
@@ -20494,6 +20670,27 @@ el.dwVidPlayer.hidden = true;
   }
 
   // 个人中心：积分流水（表格样式）
+  // 业务代码 → 中文名（2026-10-27：用户反馈流水里 "commentary:commentary_llm" 这类
+  // 内部代码看不懂）。云端 op 形态有两种：`commentary:commentary_llm`（带功能前缀）
+  // 和裸 `commentary_vision`，取冒号后一段查表；查不到原样显示（不掩盖新代码）。
+  const _CREDIT_OP_NAMES = {
+    commentary_llm: '视频解说 · 解说词生成',
+    commentary_local_mlx: '视频解说 · 本机生成',
+    commentary_vision: '视频解说 · 画面理解',
+    commentary: '视频解说',
+    subtitle_asr: '字幕提取',
+    subtitle_translate: '字幕翻译',
+    dewatermark_ai: '图片去水印',
+    matting: '一键抠图',
+    admin_adjust: '管理员调整',
+  };
+  const _creditOpName = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s || s === '—') return '—';
+    if (s.startsWith('admin_adjust')) return _CREDIT_OP_NAMES.admin_adjust;
+    const key = s.includes(':') ? s.split(':').pop() : s;
+    return _CREDIT_OP_NAMES[key] || _planName(s) || s;
+  };
   function _renderUserCreditsLog(list) {
     if (!el.profCreditsLog) return;
     const HEAD = '<table class="pf-table"><thead><tr><th>时间</th><th>变动积分</th><th>变动后余额</th><th>类型</th><th>业务 / 备注</th></tr></thead>';
@@ -20506,7 +20703,7 @@ el.dwVidPlayer.hidden = true;
       let kind = '其他';
       if (h.type === 'spend') kind = '消耗';
       else if (h.type === 'admin_adjust') kind = delta >= 0 ? '充值' : '扣减';
-      const remark = esc(h.reason || h.via || '—');
+      const remark = esc(_creditOpName(h.reason || h.via));
       return `<tr><td>${esc(t)}</td><td class="pf-num">${esc(deltaTxt)}</td><td class="pf-num">${balance}</td><td>${esc(kind)}</td><td>${remark}</td></tr>`;
     }).join('');
     el.profCreditsLog.innerHTML = `${HEAD}<tbody>${rows}</tbody></table>`;

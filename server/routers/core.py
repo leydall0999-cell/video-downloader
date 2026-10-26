@@ -43,11 +43,16 @@ def _read_build_version() -> str:
     candidates = []
     exe = getattr(app.sys, 'executable', '')
     if exe:
-        candidates.append(app.Path(exe).resolve().parent.parent / 'Resources' / 'build_version.txt')
-        # Windows onedir（PyInstaller）等：构建脚本就写在可执行文件同级。
-        # 缺这一条时 Windows 版 /api/version 恒返回 'dev'（2026-10-20 实测），
-        # 更新自校验、stale 进程识别全都失灵。与 system.py 的 _candidates_build_txt 对齐。
-        candidates.append(app.Path(exe).resolve().parent / 'build_version.txt')
+        ep = app.Path(exe).resolve()
+        # macOS .app：可执行文件在 Contents/MacOS ⇒ 资源在 ../Resources
+        candidates.append(ep.parent.parent / 'Resources' / 'build_version.txt')
+        # Windows / onedir：build_win.sh 把 build_version.txt 写在**产物根**（exe 同级）
+        # 🔴 2026-10-26 真机验收：缺这一条 ⇒ Windows 上 /api/version 恒返回 'dev'
+        #    （system.py 的 _candidates_build_txt 有，core.py 漏了 ⇒ 两端不同源），
+        #    应用内更新拿不到正确当前版本。
+        candidates.append(ep.parent / 'build_version.txt')
+        # PyInstaller onedir 6.x 把运行期文件收进 _internal/
+        candidates.append(ep.parent / '_internal' / 'server' / 'build_version.txt')
     candidates.append(app.Path(__file__).resolve().parent.parent / 'build_version.txt')
     for c in candidates:
         if c.exists():

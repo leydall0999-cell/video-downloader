@@ -70,19 +70,22 @@ def _narration_over_limit(segments: list) -> list:
 
 
 def _plan_original_speed(segments: list, prefer_original_speed: bool = True):
-    """渲染前预检：决定本次渲染要不要保持原速。
+    """渲染前预检：恒定原速。
 
-    原速模式下 out_dur = end - start（固定），ffmpeg 以 -t 收尾，
-    **超出窗口的旁白会被静默截断**（"话说一半被掐断"）。
-    关闭原速后，渲染层按旁白时长放慢画面（k = vdur / win）把窗口撑开，旁白不丢。
+    🔴 2026-10-26 用户拍板：**绝不放慢画面，解说保持完整**。
+    此前逻辑：检出「旁白字数超片段时长预算」→ 返回 False → 渲染层 setpts
+    慢放把窗口撑开 → 成片突然慢动作。已废除。
 
-    取舍：宁可画面轻微放慢，也不出残缺品——所以检出超标段时自动放弃原速。
+    现结论：渲染层原速模式本就自洽（edit_ffmpeg.py build 主链路）——
+    窗口完全跟随旁白真实时长（e = s + vdur），画面**原速多播几秒**；
+    触及片尾则起点前移，实在放不下整段跳过（绝不截断旁白）；相邻段
+    宁可源时间轻微重叠也绝不慢放。⇒ 超标段的正确处置就是"画面多放几秒"，
+    文字一字不动、画面原速、旁白完整，三方全满足。
 
-    返回 (use_original_speed: bool, over_limit: list)。
+    本函数保留只为回传超标明细（供任务留档/前端提示），**永不自动降速**；
+    仅当调用方显式传 prefer_original_speed=False（目前无任何 UI 路径）才透传非原速。
     """
     over = _narration_over_limit(segments)
-    if over and prefer_original_speed:
-        return False, over
     return bool(prefer_original_speed), over
 
 
@@ -1189,9 +1192,13 @@ def render_script(job_id: str, vertical: bool = app.Form(False), voice: str = ap
         saved = {}
 
     # 渲染前统一预检：不管脚本有没有被人工改过，都按「字数 vs 片段时长」校验一遍。
-    # 检出超标段时自动放弃原速（改为放慢画面把窗口撑开），避免旁白被 -t 静默截断。
+    # 🔴 2026-10-26 用户拍板：**绝不放慢画面，解说保持完整**。此前检出超标段会
+    #    自动放弃原速（渲染层 setpts 慢放把窗口撑开对齐旁白）⇒ 成片"突然慢动作"。
+    #    现已废除该降速路径：恒原速渲染。超标段由渲染层原速逻辑自然消化——
+    #    窗口跟随旁白时长（画面原速多播几秒），文字一字不动、旁白完整不截断。
+    #    over_limit 仅留档/提示，不再触发任何画面变速。
     use_original_speed, over_limit = _plan_original_speed(seg_data.get("segments") or [])
-    auto_adjusted = bool(over_limit) and not use_original_speed
+    auto_adjusted = False
 
     commentary_type = saved.get("commentary_type", "deep_hl")
     highlight_source = saved.get("highlight_source", "ai")

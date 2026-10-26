@@ -85,6 +85,12 @@ CHANGELOG: list[dict[str, Any]] = [
         ],
     },
     {
+        "version": "1.0.91",
+        "date": "2026-10-25",
+        # 留白：本版本条目由用户填写，此处保持空列表。
+        "items": [],
+    },
+    {
         "version": "1.0.90",
         "date": "2026-10-24",
         "items": [

@@ -2209,6 +2209,54 @@ def _win_self_cookie_header(host: str) -> str:
         return ""
 
 
+def _cloud_pool_cookie(domain: str) -> str:
+    """桌面端回读云端共享池：本地无该域 Cookie 时，向线上 pool-admin?action=get 取回明文。
+
+    仅桌面端用（桌面本机池通常为空，共享登录态都在云端）。与 _push_cookie_to_cloud
+    同口径：带浏览器 UA 绕过 Cloudflare 对 Python-urllib 的拦截。贡献域（baidu.com）
+    不在此取——走网盘专属链路。任何异常都返回空串，调用方回退浏览器兜底，绝不阻断解析。
+    """
+    domain = (domain or "").strip()
+    if not domain or "baidu.com" in domain:
+        return ""
+    import json as _json
+    import urllib.request as _req
+    import urllib.error as _err  # noqa: F401
+    from pathlib import Path as _P
+    url = (os.environ.get("VDL_COOKIE_SYNC_URL") or "").strip()
+    token = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()
+    cfg = _P.home() / ".videodownloader" / "cloud_sync.json"
+    if (not url or not token) and cfg.exists():
+        try:
+            d = _json.loads(cfg.read_text(encoding="utf-8"))
+            url = url or (d.get("url") or "").strip()
+            token = token or (d.get("token") or "").strip()
+        except Exception:
+            pass
+    if not url or not token:
+        return ""
+    target = url.rstrip("/") + "/api/cookie/pool-admin"
+    body = _json.dumps({"action": "get", "domain": domain, "token": token}).encode()
+    req = _req.Request(
+        target, data=body, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
+        },
+    )
+    try:
+        with _req.urlopen(req, timeout=15) as r:
+            data = _json.loads(r.read().decode("utf-8", "replace"))
+    except Exception:
+        return ""
+    if data.get("ok") and data.get("found"):
+        return (data.get("header") or "").strip()
+    return ""
+
+
 def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: str = "", proxy: str = "") -> dict[str, Any]:
     _cookie_diag("base_options_enter", f"host={host!r} cookie_len={len(cookie)}")
     options: dict[str, Any] = {
@@ -2341,14 +2389,21 @@ def _base_options(retries: int = DOWNLOAD_RETRIES, host: str = "", *, cookie: st
                 headers["Cookie"] = pooled
                 _cookie_diag("pool_hit", f"len={len(pooled)}")
             else:
-                # 公共池 miss 时，异步召唤 VPS 守护进程补推（非阻塞、带冷却），
-                # 下次请求即可命中登录态，实现「容器重建/重启后秒级自愈」。
-                try:
-                    from cookie_pool import request_refill as _pool_refill
-                    _pool_refill(cookie_host)
-                except Exception:
-                    pass
-                browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
+                # 🔴 2026-10-25 新增：本地池空 → 回读云端共享池（桌面本机池通常为空，
+                # 共享登录态都在云端；拿到即可直接复用，无需等 VPS 补推 / 开浏览器）。
+                cloud_ck = _cloud_pool_cookie(cookie_host)
+                if cloud_ck:
+                    headers["Cookie"] = cloud_ck
+                    _cookie_diag("cloud_pool_hit", f"len={len(cloud_ck)}")
+                else:
+                    # 公共池 miss 时，异步召唤 VPS 守护进程补推（非阻塞、带冷却），
+                    # 下次请求即可命中登录态，实现「容器重建/重启后秒级自愈」。
+                    try:
+                        from cookie_pool import request_refill as _pool_refill
+                        _pool_refill(cookie_host)
+                    except Exception:
+                        pass
+                    browser = os.environ.get("VDL_COOKIES_FROM_BROWSER", "").strip()
                 _cookie_diag("cache_miss", f"host={host}")
                 if browser:
                     options["cookiesfrombrowser"] = (browser,)
@@ -5703,12 +5758,18 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # "Remote end closed / 1010 / connection" 类错误，等 3s 重试一次可显著
         # 提高成功率（重试用的是全新 _base_options + _YoutubeDL，无状态残留）。
         _exc_low = str(exc).lower()
+        # 2026-10-26 pomo.mom 实测：该站约 1/3 概率在 TLS 传输中途随机掐连接，
+        # 报 "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of
+        # protocol"。补 "eof occurred"/"unexpected_eof" 两个特征词进网络类判定。
         _net_like = any(
             w in _exc_low
             for w in ("remote end closed", "connection", "timed out", "1010",
-                      "transport", "incompleteread", "reset", "closed")
+                      "transport", "incompleteread", "reset", "closed",
+                      "eof occurred", "unexpected_eof")
         )
-        if _net_like and _h and is_china_host(_h):
+        # 2026-10-26：重试不再限国内站——海外站（pomo.mom 实锤）经代理同样有
+        # 随机 SSL EOF；单次重试对两类站都有效，失败仍走原错误路径，无副作用。
+        if _net_like and _h:
             logger.info("[probe] 网络类错误(%s)，3s 后重试一次", _last_err[:100])
             try:
                 import time as _t
@@ -6656,6 +6717,14 @@ class _NetdiskCanceled(Exception):
     """网盘直链下载被用户取消 / 看门狗终止。"""
 
 
+class _NetdiskPaused(Exception):
+    """网盘直链下载被用户暂停（2026-10-26）。
+
+    🔴 与取消的本质区别：**保留 `netdisk.part`**，下次 run_download 发现
+    part 存在 → 带 `Range: bytes={size}-` 断点续传、追加写入。
+    """
+
+
 # Content-Type → 扩展名（只在解析阶段没给到带扩展名的文件名时兜底）
 _NETDISK_EXT_BY_CT = {
     "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/mp4": ".m4a",
@@ -6725,6 +6794,17 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
         return
     workdir.mkdir(parents=True, exist_ok=True)
 
+    part = workdir / "netdisk.part"
+    # 🔴 断点续传（2026-10-26）：暂停会保留 part；重启下载时若 part 存在 →
+    # 带 Range 从已下字节继续、追加写入。服务端若不按 Range 返回 206
+    # （直链过期/不支持）则回退整文件重下——绝不能把 200 全量 append 进旧 part。
+    resume_from = 0
+    if part.exists():
+        try:
+            resume_from = part.stat().st_size
+        except OSError:
+            resume_from = 0
+
     headers = {
         # UA 不写死：百度按「账号 + UA」分桶，见 _NETDISK_UA_CANDIDATES 注释。
         # 先探 1 字节确认可用的身份，再拿它下发正式请求。
@@ -6733,43 +6813,63 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
         # 且把原因伪装成 31326「无权限」/ 31360「直链过期」，极难排查。
         "Range": "bytes=0-",
     }
+    if resume_from > 0:
+        headers["Range"] = f"bytes={resume_from}-"
     if cookie:
         headers["Cookie"] = cookie
     proxies = {"http": proxy, "https": proxy} if proxy else None
-    part = workdir / "netdisk.part"
     started = time.time()
     last_push = 0.0
+    done = 0
+    total = int(getattr(task, "total_bytes", 0) or 0)
 
-    store.update(task.id, status="downloading", progress=0.0, speed=0.0, eta=0)
-    task.add_step("下载文件", "running", "连接中…")
+    store.update(task.id, status="downloading", speed=0.0, eta=0,
+                 downloaded_bytes=resume_from,
+                 progress=round(resume_from / total * 100.0, 1) if (total and resume_from) else 0.0)
+    task.add_step("下载文件", "running",
+                  f"续传第 {resume_from} 字节…" if resume_from else "连接中…")
 
     try:
         with requests.get(task.url, headers=headers, proxies=proxies, stream=True,
                           timeout=(15, 60), allow_redirects=True) as r:
             if r.status_code >= 400:
                 raise RuntimeError(f"HTTP {r.status_code}")
+            append = False
+            if resume_from > 0 and r.status_code == 206:
+                # 服务端确认从断点继续：Content-Length 是「剩余字节数」
+                append = True
+                done = resume_from
+            elif resume_from > 0:
+                # 服务端没按 Range 续传（返回 200 全量）→ 从头重下，覆盖旧 part
+                resume_from = 0
+                done = 0
             total = int(r.headers.get("Content-Length") or 0)
+            if append:
+                total += resume_from
             if total:
                 store.update(task.id, total_bytes=total, filesize=total)
-            done = 0
-            with open(part, "wb") as fh:
+            with open(part, "ab" if append else "wb") as fh:
                 for chunk in r.iter_content(256 * 1024):
                     if not chunk:
                         continue
                     if task.cancel_requested or task.is_finished:
                         raise _NetdiskCanceled()
+                    if task.pause_requested:
+                        raise _NetdiskPaused()
                     fh.write(chunk)
                     done += len(chunk)
                     now = time.time()
                     if now - last_push >= 0.5:
                         last_push = now
                         elapsed = max(now - started, 0.001)
-                        speed = done / elapsed
+                        # 速度只算本次会话新下的字节：续传时 done 含历史断点，
+                        # 直接除会把 100MB 历史 / 1s 算成 100MB/s 假速度。
+                        speed = (done - resume_from) / elapsed
                         store.update(
                             task.id,
                             downloaded_bytes=done,
                             progress=round(done / total * 100.0, 1) if total else 0.0,
-                            speed=round(speed, 1),
+                            speed=round(max(speed, 0.0), 1),
                             eta=int((total - done) / speed) if (total and speed > 0) else 0,
                         )
             out_name = _netdisk_output_name(task, r.headers.get("Content-Type", ""), r.url)
@@ -6777,6 +6877,18 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
         part.unlink(missing_ok=True)
         if not task.is_finished:
             store.update(task.id, status="canceled", error="已取消")
+        return
+    except _NetdiskPaused:
+        # 🔴 与取消的本质区别：保留 netdisk.part，点「继续」带 Range 断点续传。
+        try:
+            kept = part.stat().st_size
+        except OSError:
+            kept = done
+        task.add_step("下载文件", "pending", "已暂停（点「继续」断点续传）")
+        task.log(f"用户暂停网盘下载：已下 {kept} 字节，保留 .part 供续传")
+        store.update(task.id, status="paused", speed=0.0, eta=0,
+                     downloaded_bytes=kept,
+                     progress=round(kept / total * 100.0, 1) if total else 0.0)
         return
     except Exception as exc:  # noqa: BLE001
         part.unlink(missing_ok=True)

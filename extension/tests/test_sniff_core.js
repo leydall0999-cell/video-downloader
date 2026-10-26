@@ -45,6 +45,14 @@ var MATRIX = [
   // 扩展场景补充：带 charset 参数的 mime、ts 分片带 video/mp2t mime（对齐 python 顺序）
   ['https://v.com/live/index.m3u8', 'application/vnd.apple.mpegurl; charset=utf-8', 'playlist'],
   ['https://v.com/x.m4s', 'video/iso.segment', 'segment'],
+  // TS 传输流 / 哈希裸名分片（2026-10-26 pomo.mom 实测）：几百 KB 的
+  // /.b9cd747a… 被 video/mp4 mime 带成「直链」刷满面板 —— 都是分片命名
+  ['https://v.pomo.mom/hls/.b9cd747a55d43e6eae830ba1e1cf2', 'video/mp4', 'segment'],
+  ['https://cdn.x.com/seg/.f4103b81cc40f6deae269e9063c8bf12', 'video/mp2t', 'segment'],
+  ['https://cdn.x.com/seg/0123456789abcdef0123456789abcdef', 'video/mp4', 'segment'],
+  // 真实扩展名照旧是「直链」：哈希文件名 + .mp4 后缀不受裸名规则影响
+  ['https://v.com/b9cd747a55d43e6eae830ba1e1cf2.mp4', 'video/mp4', 'media'],
+  ['https://v.com/full.mp4', 'video/mp2t', 'segment'],
   // 站内 UI/接口资源（2026-09-27 用户实测）：YouTube 搜索页的语音搜索音效被当成「直链」
   // 列进面板，用户复制粘贴到工坊后按 youtube:tab 页面解析 → 报「视频解析失败」。
   ['https://www.youtube.com/s/search/audio/success.mp3', 'audio/mpeg', ''],
@@ -52,7 +60,14 @@ var MATRIX = [
   ['https://www.youtube.com/youtubei/v1/player', 'application/json', ''],
   // 只吃「该主机的内部路径」：别的站点同样路径、以及 YouTube 的非内部路径都照常展示
   ['https://cdn.example.com/s/search/audio/success.mp3', 'audio/mpeg', 'media'],
-  ['https://www.youtube.com/clip/audio/real.mp3', 'audio/mpeg', 'media']
+  ['https://www.youtube.com/clip/audio/real.mp3', 'audio/mpeg', 'media'],
+  // 本站 /api/ 内部转发流（2026-10-25 实测）：网盘代取/媒体中继的一次性签名流，
+  // 文件名在 name= 查询参数里、路径无后缀，mime video/mp4 → 原被当成「直链」。
+  // 与 python tests/test_cdp_sniffer.py 的 MATRIX 逐条镜像。
+  ['https://hanyuxz.top/api/cloud-drive/download?id=1&name=%E5%9C%B0%E7%90%86.mp4', 'video/mp4', ''],
+  ['https://hk.hanyuxz.top/api/media/proxy?u=abc', 'video/mp4', ''],
+  ['https://cdn.example.com/api/cloud-drive/download?name=x.mp4', 'video/mp4', 'media'],
+  ['https://hanyuxz.top/media/real.mp4', 'video/mp4', 'media']
 ];
 MATRIX.forEach(function (row, i) {
   eq(CORE.classifyMedia(row[0], row[1]), row[2], 'classifyMedia #' + i + ' ' + row[0]);
@@ -68,6 +83,12 @@ MATRIX.forEach(function (row, i) {
   ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', false],
   ['https://cdn.example.com/s/search/audio/open.mp3', false],
   ['https://notyoutube.com/s/search/audio/open.mp3', false],
+  // 本站内部转发流：含全部子域；非 /api/ 路径与形似域照常
+  ['https://hanyuxz.top/api/cloud-drive/download?id=1&name=x.mp4', true],
+  ['https://hk.hanyuxz.top/api/media/proxy?u=abc', true],
+  ['https://vdl-3.hanyuxz.top/api/version', true],
+  ['https://hanyuxz.top/watch/real.mp4', false],
+  ['https://nothanyuxz.top/api/cloud-drive/download', false],
   ['not a url', false]
 ].forEach(function (row, i) {
   eq(CORE.isNoiseUrl(row[0]), row[1], 'isNoiseUrl #' + i + ' ' + row[0]);

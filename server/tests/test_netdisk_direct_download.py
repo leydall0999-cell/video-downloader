@@ -114,6 +114,37 @@ class TestSourcing(unittest.TestCase):
         self.assertEqual(
             set(D._NETDISK_UA_CANDIDATES), {D._NETDISK_DOWNLOAD_UA, D._NETDISK_UA}
         )
+    def test_pause_is_consumed_and_part_kept(self):
+        """2026-10-26 用户实测：点「暂停」还在下载、下完才停。
+
+        三个硬要求：
+        1) 下载循环必须消费 pause_requested（否则暂停永远不落地）；
+        2) 暂停走 _NetdiskPaused 且**保留 part**（区别于取消的 unlink）；
+        3) 续传必须 206 才追加（"ab"），200 全量回退覆盖重下。
+        """
+        src = _src()
+        idx = src.find("def _download_netdisk_direct(")
+        end = src.find("def run_download(")
+        body = src[idx:end]
+        self.assertIn("task.pause_requested", body,
+                      "下载循环没消费 pause_requested，暂停永远不会生效")
+        self.assertIn("raise _NetdiskPaused()", body)
+        _start = body.find("except _NetdiskPaused")
+        self.assertNotEqual(_start, -1, "缺 _NetdiskPaused 处理分支")
+        _next = body.find("    except ", _start + 1)
+        # 只截到下一个 except —— 后面的 except Exception 本来就该 unlink part
+        paused_block = body[_start:_next if _next != -1 else len(body)]
+        self.assertNotIn("part.unlink", paused_block,
+                         "暂停分支不得删除 part（那是取消分支的行为）")
+        self.assertIn('"ab" if append else "wb"', body,
+                      "续传必须 206 才追加，200 全量必须覆盖重下")
+
+    def test_cancel_covers_paused_state(self):
+        """暂停中的任务没有线程在消费标志，request_cancel 必须就地置终态。"""
+        with open(os.path.join(SERVER_DIR, "tasks.py"), encoding="utf-8") as f:
+            tsrc = f.read()
+        self.assertIn('task.status in ("pending", "paused")', tsrc,
+                      "request_cancel 必须同时覆盖 pending 与 paused")
 
 
 if __name__ == "__main__":

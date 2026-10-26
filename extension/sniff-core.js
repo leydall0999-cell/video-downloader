@@ -32,7 +32,11 @@
   // **与 server/cdp_sniffer.py 的 _NOISE_HOST_PATHS 逐条对齐，改一边必须改另一边。**
   var NOISE_HOST_PATHS = [
     [/(^|\.)youtube\.com$/, /^\/(?:s\/search|youtubei)\//],
-    [/(^|\.)youtube\.com$/, /^\/(?:ptracking|generate_204)$/]
+    [/(^|\.)youtube\.com$/, /^\/(?:ptracking|generate_204)$/],
+    // 本站（视频工坊网页版）内部转发流：网盘代取 / 媒体中继等 /api/ 流是一次性
+    // 签名/代理流，发给桌面端必然复不下第二次（2026-10-25 实测误伤）。
+    // **与 server/cdp_sniffer.py 的 _NOISE_HOST_PATHS 逐条对齐。**
+    [/(^|\.)hanyuxz\.top$/, /^\/api\//]
   ];
 
   function isNoiseUrl(url) {
@@ -58,6 +62,19 @@
     return base.slice(dot).toLowerCase();
   }
 
+  /** basename 是「可选前导点 + 纯十六进制（≥16 位）」裸名（无真实扩展名）。
+   *  站点 HLS/fMP4 分片的常见命名，如 /.b9cd747a55d43e6eae830ba1e1cf2
+   *  （2026-10-26 pomo.mom 实测：几百 KB 的分片被当成「直链」刷满面板）。
+   *  与 server/cdp_sniffer.py 的 _bare_hash_name() 逐条对齐，改一边必须改另一边。 */
+  function bareHashName(url) {
+    var path;
+    try { path = new URL(url).pathname; } catch (e) { return false; }
+    var base = path.split('/').pop() || '';
+    if (base.charAt(0) === '.') base = base.slice(1);
+    if (!base || base.indexOf('.') >= 0) return false;  // 有真实扩展名的不算
+    return base.length >= 16 && /^[0-9a-f]+$/i.test(base);
+  }
+
   /** 判定资源类型：'playlist' | 'media' | 'segment' | ''（与媒体无关）。
    *  顺序必须与 python classify_media() 完全一致。 */
   function classifyMedia(url, mime) {
@@ -74,7 +91,13 @@
     for (var i = 0; i < MIME_MEDIA_PREFIX.length; i++) {
       if (mime.indexOf(MIME_MEDIA_PREFIX[i]) === 0) {
         // video/mp4 可能是整片直链也可能是 fMP4 分片：.m4s 一定是分片
-        return suffix === '.m4s' ? 'segment' : 'media';
+        if (suffix === '.m4s') return 'segment';
+        // video/mp2t 是 HLS 的 TS 传输流（整片裸 TS 直链现实中几乎不存在，
+        // 且这类站点必带 m3u8 清单）；「点+纯哈希」裸名是站点分片命名 ——
+        // 两者都不该进「直链」面板（2026-10-26 pomo.mom 实测）。
+        if (mime === 'video/mp2t' || mime === 'audio/mp2t') return 'segment';
+        if (bareHashName(url)) return 'segment';
+        return 'media';
       }
     }
     if (suffix === '.m4s' || suffix === '.ts') return 'segment';

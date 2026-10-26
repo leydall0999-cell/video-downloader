@@ -4368,10 +4368,16 @@ def cookie_sync_from_local(payload: dict, request: Request) -> dict:
     """
     if not _is_local_direct(request):
         raise HTTPException(status_code=403, detail="仅允许本机调用")
-    from cookie_pool import add_cookie, verify_cookie, is_allowed, _norm_domain
+    from cookie_pool import add_cookie, verify_cookie, is_allowed, is_contrib_only, _norm_domain
     domain = _norm_domain((payload or {}).get("domain") or "chrqj.com")
     if not is_allowed(domain):
         raise HTTPException(status_code=400, detail="不支持的域名")
+    if is_contrib_only(domain):
+        # 百度网盘：BDUSS = 完整账号权限，只接受网盘页的显式贡献，不走这条隐式通道
+        raise HTTPException(
+            status_code=400,
+            detail="百度网盘登录态请在网盘页点「贡献到共享池」贡献（需你确认后才会分享）",
+        )
     header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")
     if not header:
         raise HTTPException(
@@ -4523,10 +4529,15 @@ def _sync_domains_to_cloud(url: str, token: str) -> list[dict]:
     避免两条入口各写一份循环而漂移（站间 1s 间隔是为避开 Cloudflare 限流）。
     """
     import time
-    from cookie_pool import _root_domains
+    from cookie_pool import _root_domains, is_contrib_only
 
     results: list[dict] = []
-    domains = [d for d in sorted(_root_domains()) if d != "chrqj.com"]
+    # 🔴 2026-10-25：「仅显式贡献」域（百度网盘）必须跳过自动同步 ——
+    # 本函数会遍历所有白名单域、静默解密用户浏览器里的登录态推上云，
+    # 百度一旦进来就等于替所有用户做了「共享我的网盘账号」这个决定。
+    # 它只能走网盘页那个带确认弹窗的「贡献到共享池」按钮。
+    domains = [d for d in sorted(_root_domains())
+               if d != "chrqj.com" and not is_contrib_only(d)]
     for idx, domain in enumerate(domains):
         try:
             header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")

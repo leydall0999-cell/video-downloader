@@ -85,6 +85,11 @@ _IGNORED_SUFFIXES = (".vtt", ".srt", ".ass", ".jpg", ".jpeg", ".png", ".webp", "
 _NOISE_HOST_PATHS = (
     (re.compile(r"(^|\.)youtube\.com$"), re.compile(r"^/(?:s/search|youtubei)/")),
     (re.compile(r"(^|\.)youtube\.com$"), re.compile(r"^/(?:ptracking|generate_204)$")),
+    # 本站（视频工坊网页版）内部转发流：网盘代取 /api/cloud-drive/download、
+    # 媒体中继 /api/media/proxy、直链下载等都是**一次性签名/代理流**，浏览器嗅探到
+    # 发给桌面端后必然复不下第二次（2026-10-25 实测：报「版权保护」的误分类任务）。
+    # 本站媒体一律用站内下载 UI，嗅探直接丢弃。含所有子域（hk./vdl-N.）。
+    (re.compile(r"(^|\.)hanyuxz\.top$"), re.compile(r"^/api/")),
 )
 
 
@@ -139,6 +144,26 @@ def _as_float(v: Any) -> float:
     return n if n > 0 else 0.0
 
 
+def _bare_hash_name(url: str) -> bool:
+    """basename 是「可选前导点 + 纯十六进制（≥16 位）」裸名（无真实扩展名）。
+
+    站点 HLS/fMP4 分片的常见命名，如 /.b9cd747a55d43e6eae830ba1e1cf2
+    （2026-10-26 pomo.mom 实测：几百 KB 的分片被当成「直链」刷满面板）。
+    真正的整片直链几乎总带真实扩展名（.mp4/.mkv/...）或可读文件名。
+    与 extension/sniff-core.js 的 bareHashName() 逐条对齐，改一边必须改另一边。
+    """
+    try:
+        path = urlsplit(url).path
+    except ValueError:
+        return False
+    base = os.path.basename(path) if path else ""
+    if base.startswith("."):
+        base = base[1:]
+    if not base or "." in base:   # 有真实扩展名的不算
+        return False
+    return len(base) >= 16 and all(c in "0123456789abcdefABCDEF" for c in base)
+
+
 def classify_media(url: str, mime: str = "") -> str:
     """判定 CDP 资源是否值得展示。返回 "playlist" | "media" | "segment" | ""。
 
@@ -162,8 +187,11 @@ def classify_media(url: str, mime: str = "") -> str:
         return "playlist"
     if mime.startswith(_MIME_MEDIA_PREFIX):
         # video/mp4 可能是整片直链也可能是 fMP4 分片：.m4s 一定是分片；
-        # 纯 .mp4 + video/mp4 按直链算（整片直链远多于逐段 .mp4 分片）
-        if suffix == ".m4s":
+        # 纯 .mp4 + video/mp4 按直链算（整片直链远多于逐段 .mp4 分片）。
+        # video/mp2t 是 HLS 的 TS 传输流（整片裸 TS 直链现实中几乎不存在，
+        # 且这类站点必带 m3u8 清单）；「点+纯哈希」裸名是站点分片命名 ——
+        # 两者都不该进「直链」面板（2026-10-26 pomo.mom 实测）。
+        if suffix == ".m4s" or mime in ("video/mp2t", "audio/mp2t") or _bare_hash_name(url):
             return "segment"
         return "media"
     if suffix in (".m4s", ".ts"):
