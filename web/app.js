@@ -24284,7 +24284,7 @@ el.dwVidPlayer.hidden = true;
     };
     const renderMemberTable = () => {
       if (!memberTable) return;
-      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>VIP会员</th><th>AI会员</th><th>AI积分</th><th>永久积分</th><th>合计</th><th>操作</th></tr></thead>';
+      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>VIP会员</th><th>AI会员</th><th>AI积分</th><th>永久+赠送</th><th>合计</th><th>操作</th></tr></thead>';
       const rows = lastMembers.map((m) => {
         const dl = m.download_active ? `✅ ${esc(m.download_plan || '')}` : '—';
         const ai = m.ai_active ? `✅ ${esc(m.ai_plan || '')}` : '—';
@@ -24700,7 +24700,7 @@ el.dwVidPlayer.hidden = true;
           <label class="acd-field">AI 订阅积分（随会员过期清零）
             <input class="admin-input acd-ai" type="number" step="1" placeholder="正=充值，负=扣减，留空不调整">
           </label>
-          <label class="acd-field">永久积分（不过期）
+          <label class="acd-field">永久+赠送积分（赠送部分随会员到期清零）
             <input class="admin-input acd-perm" type="number" step="1" placeholder="正=充值，负=扣减，留空不调整">
           </label>
           <div class="acd-err" hidden></div>
@@ -24717,7 +24717,7 @@ el.dwVidPlayer.hidden = true;
       dlg.querySelector('.acd-user').textContent = m.identifier || m.user_id || '';
       const aiN = (m.ai_credits_left != null) ? m.ai_credits_left : 0;
       const pmN = (m.permanent_credits != null) ? m.permanent_credits : 0;
-      dlg.querySelector('.acd-balance').textContent = `当前余额：AI 订阅积分 ${aiN} ｜ 永久积分 ${pmN} ｜ 合计 ${m.credits_total != null ? m.credits_total : aiN + pmN}`;
+      dlg.querySelector('.acd-balance').textContent = `当前余额：AI 订阅积分 ${aiN} ｜ 永久+赠送积分 ${pmN} ｜ 合计 ${m.credits_total != null ? m.credits_total : aiN + pmN}`;
       dlg.querySelector('.acd-ai').value = '';
       dlg.querySelector('.acd-perm').value = '';
       const errEl = dlg.querySelector('.acd-err');
@@ -24738,11 +24738,14 @@ el.dwVidPlayer.hidden = true;
       if (aiV !== '') {
         const d = parseInt(aiV, 10);
         if (isNaN(d)) { errEl.textContent = 'AI 订阅积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
+        // 云端把 AI 余额钳在 0：扣成负数会被静默吞掉、界面纹丝不动（2026-10-27 「调整不生效」根因）
+        if (d < 0 && -d > aiN) { errEl.textContent = `AI 订阅积分余额只有 ${aiN}，不能扣到负数`; errEl.hidden = false; return; }
         jobs.push({ delta: d, pool: 'ai' });
       }
       if (pmV !== '') {
         const d = parseInt(pmV, 10);
-        if (isNaN(d)) { errEl.textContent = '永久积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
+        if (isNaN(d)) { errEl.textContent = '永久+赠送积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
+        if (d < 0 && -d > pmN) { errEl.textContent = `永久+赠送积分余额只有 ${pmN}，不能扣到负数`; errEl.hidden = false; return; }
         jobs.push({ delta: d, pool: 'permanent' });
       }
       for (let i = 0; i < jobs.length; i++) {
