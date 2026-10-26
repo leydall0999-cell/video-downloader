@@ -12843,6 +12843,8 @@ el.dwVidPlayer.hidden = true;
     comDramaStash.start = '';
     comDramaStash.end = '';
     comDramaGate();
+    // 🔴 2026-10-26 范围清零后预估回到整片口径，重跑预检保持一致
+    document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh'));
   };
 
   // 名字沿用（调用点较多）：现在只负责刷新卡头那行提示
@@ -12915,6 +12917,9 @@ el.dwVidPlayer.hidden = true;
     if (filled) {
       if (typeof syncDramaSlider === 'function') { if (s) syncDramaSlider(s); if (e) syncDramaSlider(e); }
       updateTrimDurationText();
+      // 🔴 2026-10-26 计费预估修正：自动检测刚把正剧范围填进来，按整片算的旧预估
+      //    （如 2:28 电影显示 5 个半小时档）立刻失真 —— 触发重跑预检刷新「本次将消耗」。
+      document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh'));
     }
     return filled;
   };
@@ -15213,7 +15218,8 @@ el.dwVidPlayer.hidden = true;
     //    不用等扣费失败或跑完才知道。与扣费点同源（routers/quota.py 同一组函数）。
     let costTip = '';
     if (!blocked && res.credit_cost > 0) {
-      const _u = res.credit_units > 1 ? `（${res.credit_units} 个半小时）` : '';
+      // 🔴 2026-10-26 文案澄清：「5 个半小时」曾被读成「5.5 小时」——改为明确口吻
+      const _u = res.credit_units > 1 ? `（按 ${res.credit_units} 个半小时计）` : '';
       costTip = `本次将消耗 ${res.credit_cost} 积分${_u}。`;
     }
     if (blocked) {
@@ -15274,6 +15280,12 @@ el.dwVidPlayer.hidden = true;
     if (el.comGenerateScript) el.comGenerateScript.disabled = false;
     if (el.comStatus) el.comStatus.style.color = '';
   };
+  // 🔴 2026-10-26 计费预估一致性：正剧范围（起点/终点，含滑块拖动与自动检测回填）
+  //    任何变化都重跑预检 —— 否则预估停留在选片时的整片口径（2:28 电影显示
+  //    「5 个半小时/250 积分」，实际只按 9.8 分钟收 1 档），用户被预估吓到。
+  //    用自定义事件解耦：自动检测逻辑在另一段作用域，拿不到本作用域的
+  //    comRefreshPrecheck 引用。
+  document.addEventListener('vdl:com-precheck-refresh', () => comRefreshPrecheck());
 
   // 入口 2：从本地文件生成
   const setLocalFile = (file) => {
@@ -15659,8 +15671,8 @@ el.dwVidPlayer.hidden = true;
     const range = input === el.comDramaStart ? el.comDramaStartRange : el.comDramaEndRange;
     if (range && sec != null) range.value = String(Math.max(0, sec));
   };
-  el.comDramaStart.addEventListener('change', () => normalizeDramaInput(el.comDramaStart));
-  el.comDramaEnd.addEventListener('change', () => normalizeDramaInput(el.comDramaEnd));
+  el.comDramaStart.addEventListener('change', () => { normalizeDramaInput(el.comDramaStart); document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh')); });
+  el.comDramaEnd.addEventListener('change', () => { normalizeDramaInput(el.comDramaEnd); document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh')); });
   // 滑块 → 输入框：拖动即落值（等价于旧「用播放位置设起点/终点」，但可以任意微调）
   if (el.comDramaStartRange) {
     el.comDramaStartRange.addEventListener('input', () => {
@@ -15668,6 +15680,7 @@ el.dwVidPlayer.hidden = true;
       el.comDramaStart.value = formatHMS(Math.max(0, Math.floor(v)));
       updateTrimDurationText();
     });
+    el.comDramaStartRange.addEventListener('change', () => document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh')));
   }
   if (el.comDramaEndRange) {
     el.comDramaEndRange.addEventListener('input', () => {
@@ -15675,6 +15688,7 @@ el.dwVidPlayer.hidden = true;
       el.comDramaEnd.value = formatHMS(Math.max(0, Math.floor(v)));
       updateTrimDurationText();
     });
+    el.comDramaEndRange.addEventListener('change', () => document.dispatchEvent(new CustomEvent('vdl:com-precheck-refresh')));
   }
   el.comTrimReset.addEventListener('click', resetTrim);
 
@@ -18210,6 +18224,14 @@ el.dwVidPlayer.hidden = true;
       }
       const perm = Number(s.permanent_credits || 0);
       if (perm > 0) chips.push(`<span class="member-chip member-chip-perm">🎁 永久积分 ${perm}（不过期）</span>`);
+      // 赠送积分（2026-10-27 云端新增 gift 池，随会员到期清零）：后端 status 透传
+      // gift_credits 后自动露出；未透传时字段为 undefined，静默跳过不显示。
+      const giftN = Number(s.gift_credits || 0);
+      if (giftN > 0) {
+        const _gExp = Number(s.gift_expire_at || 0);
+        const _gTag = _gExp > 0 ? `（${_memberFmtDate(_gExp)} 到期）` : '';
+        chips.push(`<span class="member-chip member-chip-perm">🎉 赠送积分 ${giftN}${_gTag}</span>`);
+      }
       // 免费用户「首次体验」余量（2026-10-05）：让用户**在撞墙之前**知道自己还有几次免费。
       // 只对非会员展示 —— 会员有积分，名额按策略本来也不给他们用，展示出来是误导。
       const ft = s.free_trials || null;
