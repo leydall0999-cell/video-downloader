@@ -10718,10 +10718,25 @@ el.dwVidPlayer.hidden = true;
   /** 成片文件名：renderComArtifact 已把步骤里解析出的产物全路径写在 comArtifact.title，
    *  这里取它的 basename（管线命名是「<原片名>-解说完成<时间>.mp4」）。
    *  拿不到就退回通用名 —— 只是名字不精确，绝不能让保存因取名失败而中断。 */
-  const comFinishedName = () => {
+  const comFinishedName = async (jobId, base = '') => {
+    // 真实成片名：问后端文件端点要（FileResponse 的 Content-Disposition 带产物真名）。
+    // 🔴 旧实现读 el.comArtifact.title —— 那是上一条任务的残留 DOM 属性，本条任务
+    // 经常取不到 ⇒ 自动保存到「下载」全叫「解说成片(1).mp4」（2026-10-26 用户实测）。
+    try {
+      // 本地服务不认 HEAD（404），用 1 字节 Range GET 拿响应头即可（206 只传 1 字节）
+      const resp = await fetch(`${base}/api/commentary/${jobId}/file`,
+        { headers: { Range: 'bytes=0-0' } });
+      const cd = resp.headers.get('content-disposition') || '';
+      // Starlette 对中文名用 filename*=utf-8''<percent-encoding>；ASCII 名用 filename="..."
+      const m = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(cd)
+        || /filename\s*=\s*"?([^";]+)"?/.exec(cd);
+      const n = m ? decodeURIComponent(m[1].replace(/["']/g, '')).trim() : '';
+      if (/\.(mp4|mkv|mov|webm)$/i.test(n)) return n;
+    } catch (_e) { /* 探测失败走兜底，绝不阻塞「已生成」提示 */ }
+    // 兜底：旧逻辑（列表卡片的标题属性）
     const p = (el.comArtifact && el.comArtifact.title) || '';
-    const base = String(p).split('/').pop() || '';
-    return /\.(mp4|mkv|mov|webm)$/i.test(base) ? base : '解说成片.mp4';
+    const fallback = String(p).split('/').pop() || '';
+    return /\.(mp4|mkv|mov|webm)$/i.test(fallback) ? fallback : '解说成片.mp4';
   };
 
   // ═══════════ 🎬 渲染完成弹窗（2026-09-20）═══════════════════════════════════
@@ -10888,7 +10903,7 @@ el.dwVidPlayer.hidden = true;
         if (st.status === 'completed') {
           clearInterval(poll);
           // 成片名用真实产物名，别一律叫「解说成片.mp4」——用户下载/保存到下载夹后要能分辨是哪一条
-          const outName = comFinishedName();
+          const outName = await comFinishedName(job_id, base);
           refs.commentaryStatus.textContent = '解说成片已生成';
           refs.commentaryFile.href = `${base}/api/commentary/${job_id}/file`;
           refs.commentaryFile.setAttribute('download', outName);
