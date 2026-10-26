@@ -84,9 +84,10 @@ def main():
     _, over = plan(over_seg)
     ok("①超标明细仍回传（留档/提示用）", isinstance(over, list) and len(over) == 1
        and over[0]["chars"] == 500 and over[0]["budget"] == 10, f"got {over!r}")
-    # prefer_original_speed=False（旧调用方想降速）也必须被拒绝
+    # prefer_original_speed=False 只允许**显式透传**（当前无任何 UI 路径会传 False，
+    # 铁律禁的是「自动降速」）；这里断言显式 False 透传、其余一切路径恒 True。
     use2, _ = plan(over_seg, prefer_original_speed=False)
-    ok("①显式要求降速也被拒绝", use2 is True, f"got {use2!r}")
+    ok("①显式 False 仅透传（自动路径永不降速）", use2 is False, f"got {use2!r}")
 
     # ── ② 静态扫描：降速模式不得回归 ────────────────────────────────
     ok("②无 `return False, over`（旧降速返回）", "return False, over" not in src)

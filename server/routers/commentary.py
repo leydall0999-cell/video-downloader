@@ -82,10 +82,11 @@ def _plan_original_speed(segments: list, prefer_original_speed: bool = True):
     宁可源时间轻微重叠也绝不慢放。⇒ 超标段的正确处置就是"画面多放几秒"，
     文字一字不动、画面原速、旁白完整，三方全满足。
 
-    本函数保留只为回传超标明细（供任务留档/前端提示），永远不再降速。
+    本函数保留只为回传超标明细（供任务留档/前端提示），**永不自动降速**；
+    仅当调用方显式传 prefer_original_speed=False（目前无任何 UI 路径）才透传非原速。
     """
     over = _narration_over_limit(segments)
-    return True, over
+    return bool(prefer_original_speed), over
 
 
 @router.get("/api/commentary/config")

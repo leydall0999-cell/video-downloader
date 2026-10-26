@@ -317,16 +317,18 @@ def test_plan_original_speed_keeps_original_when_within_budget():
     print("✅ 未超长时保持原速")
 
 
-def test_plan_original_speed_auto_disabled_when_over_limit():
-    """检出超标段 → 自动放弃原速（宁可画面放慢，也不出截断的残片）。"""
+def test_plan_original_speed_keeps_original_even_when_over_limit():
+    """🔴 2026-10-26 用户拍板：**画面绝不慢放**。检出超标段也恒原速
+    （渲染层原速模式窗口自动跟随旁白延长，画面多播几秒，话不砍、帧不慢）。
+    旧断言「超长时放弃原速」是已被废除的自动慢放行为，勿装回。"""
     use, over = cm._plan_original_speed([{"start": 0, "end": 10, "narration": "这" * 80}])
-    assert use is False, "超长时必须放弃原速，否则旁白会被 -t 截断"
-    assert len(over) == 1 and over[0]["index"] == 1
-    print("✅ 超长时自动放弃原速（防截断）")
+    assert use is True, "超长时也必须恒原速（用户拍板：绝不放慢画面）"
+    assert len(over) == 1 and over[0]["index"] == 1  # 超标明细仍回传，供留档/提示
+    print("✅ 超长时仍恒原速（超标明细照常回传）")
 
 
 def test_plan_original_speed_respects_existing_preference():
-    """本就非原速时，即使超长也不能被反向改回原速。"""
+    """显式要求非原速时保持非原速（开关本身仍可用，只是不再被自动触发）。"""
     use, over = cm._plan_original_speed([{"start": 0, "end": 10, "narration": "这" * 80}],
                                         prefer_original_speed=False)
     assert use is False and len(over) == 1
@@ -365,7 +367,7 @@ if __name__ == "__main__":
 
     test_option_args_emits_no_original_speed_flag()
     test_plan_original_speed_keeps_original_when_within_budget()
-    test_plan_original_speed_auto_disabled_when_over_limit()
+    test_plan_original_speed_keeps_original_even_when_over_limit()
     test_plan_original_speed_respects_existing_preference()
     test_plan_original_speed_skips_when_no_duration()
 
