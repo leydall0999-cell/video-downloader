@@ -20285,6 +20285,27 @@ el.dwVidPlayer.hidden = true;
   }
 
   // 个人中心：积分流水（表格样式）
+  // 业务代码 → 中文名（2026-10-27：用户反馈流水里 "commentary:commentary_llm" 这类
+  // 内部代码看不懂）。云端 op 形态有两种：`commentary:commentary_llm`（带功能前缀）
+  // 和裸 `commentary_vision`，取冒号后一段查表；查不到原样显示（不掩盖新代码）。
+  const _CREDIT_OP_NAMES = {
+    commentary_llm: '视频解说 · 解说词生成',
+    commentary_local_mlx: '视频解说 · 本机生成',
+    commentary_vision: '视频解说 · 画面理解',
+    commentary: '视频解说',
+    subtitle_asr: '字幕提取',
+    subtitle_translate: '字幕翻译',
+    dewatermark_ai: '图片去水印',
+    matting: '一键抠图',
+    admin_adjust: '管理员调整',
+  };
+  const _creditOpName = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s || s === '—') return '—';
+    if (s.startsWith('admin_adjust')) return _CREDIT_OP_NAMES.admin_adjust;
+    const key = s.includes(':') ? s.split(':').pop() : s;
+    return _CREDIT_OP_NAMES[key] || _planName(s) || s;
+  };
   function _renderUserCreditsLog(list) {
     if (!el.profCreditsLog) return;
     const HEAD = '<table class="pf-table"><thead><tr><th>时间</th><th>变动积分</th><th>变动后余额</th><th>类型</th><th>业务 / 备注</th></tr></thead>';
@@ -20297,7 +20318,7 @@ el.dwVidPlayer.hidden = true;
       let kind = '其他';
       if (h.type === 'spend') kind = '消耗';
       else if (h.type === 'admin_adjust') kind = delta >= 0 ? '充值' : '扣减';
-      const remark = esc(h.reason || h.via || '—');
+      const remark = esc(_creditOpName(h.reason || h.via));
       return `<tr><td>${esc(t)}</td><td class="pf-num">${esc(deltaTxt)}</td><td class="pf-num">${balance}</td><td>${esc(kind)}</td><td>${remark}</td></tr>`;
     }).join('');
     el.profCreditsLog.innerHTML = `${HEAD}<tbody>${rows}</tbody></table>`;
