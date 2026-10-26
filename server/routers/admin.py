@@ -538,7 +538,8 @@ def _cloud_credit_ops(ident: str, tok: str, delta: int, pool: str) -> list:
     - auto：正=充永久；负=先扣 AI 订阅余量再扣永久（与 membership.add_credits 一致）。
       云端账号没有本地 store，AI 余量改从云端 authority 取（多一次只读调用）。
     """
-    if pool in ("ai", "permanent"):
+    # 2026-10-27（1.0.97）：gift=会员赠送池，只存在于云端授权中心，原样转发一条
+    if pool in ("ai", "permanent", "gift"):
         return [(pool, delta)]
     if delta >= 0:
         return [("permanent", delta)]
@@ -582,9 +583,10 @@ def admin_credits(payload: dict[str, Any] = Body(...), request: Request = None) 
         delta = int(payload.get("delta"))
     except (TypeError, ValueError):
         return {"ok": False, "error": "delta 必须为整数"}
-    # pool: "ai"=AI 订阅积分 / "permanent"=永久积分；缺省 auto=旧语义（正充永久，负先 AI 后永久）
+    # pool: "ai"=AI 订阅积分 / "permanent"=永久积分 / "gift"=会员赠送积分（随会员到期清零）；
+    # 缺省 auto=旧语义（正充永久，负先 AI 后永久）
     pool = str(payload.get("pool") or "auto").strip() or "auto"
-    if pool not in ("auto", "ai", "permanent"):
+    if pool not in ("auto", "ai", "permanent", "gift"):
         return {"ok": False, "error": f"未知积分池：{pool}"}
 
     def _cloud_adjust(ident: str, tok: str) -> dict[str, Any]:
@@ -598,6 +600,14 @@ def admin_credits(payload: dict[str, Any] = Body(...), request: Request = None) 
         return last
 
     # 本机账号：adjust_credits 落本机账本后内部已推云 ⇒ 不再重复推
+    # 2026-10-27（1.0.97）：gift 池本机账本没有（只有云端授权中心有），本机一侧空过，
+    # 直接走云端；cloud_when_local=True 才会触发 _cloud_sync。
+    if pool == "gift":
+        return _admin_mutate(
+            user_id,
+            lambda uid: {"ok": True, "gift_cloud_only": True},
+            _cloud_adjust,
+            cloud_when_local=True)
     return _admin_mutate(
         user_id,
         lambda uid: adjust_credits(uid, delta, pool),

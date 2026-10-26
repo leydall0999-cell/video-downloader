@@ -18602,7 +18602,9 @@ el.dwVidPlayer.hidden = true;
         // 标注「到期清零」：AI 订阅积分随 AI 会员到期日一起失效，与永久积分区别开来
         chips.push(`<span class="member-chip member-chip-ai">🤖 AI 会员 至 ${_memberFmtDate(ai.expire_at)} · 积分 ${ai.credits_left || 0}${ai.grant_credits ? '/' + ai.grant_credits : ''}（到期清零）</span>`);
       }
-      const perm = Number(s.permanent_credits || 0);
+      // 2026-10-27（1.0.97）：permanent_credits 是「永久+赠送」可花合计，直接标成
+      // 「永久积分（不过期）」会把随会员到期的赠送分说成不过期。优先用 perm_credits_pure。
+      const perm = Number(s.perm_credits_pure != null ? s.perm_credits_pure : Math.max(Number(s.permanent_credits || 0) - Number(s.gift_credits || 0), 0));
       if (perm > 0) chips.push(`<span class="member-chip member-chip-perm">🎁 永久积分 ${perm}（不过期）</span>`);
       // 赠送积分（2026-10-27 云端新增 gift 池，随会员到期清零）：后端 status 透传
       // gift_credits 后自动露出；未透传时字段为 undefined，静默跳过不显示。
@@ -24284,7 +24286,9 @@ el.dwVidPlayer.hidden = true;
     };
     const renderMemberTable = () => {
       if (!memberTable) return;
-      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>VIP会员</th><th>AI会员</th><th>AI积分</th><th>永久+赠送</th><th>合计</th><th>操作</th></tr></thead>';
+      // 2026-10-27（1.0.97）：原「永久+赠送」合并列会误导调分（照它填负数会扣错池），
+      // 拆成 永久 / 赠送 两列，合计改名「可花合计」。
+      const head = '<thead><tr><th>账号</th><th>用户 ID</th><th>VIP会员</th><th>AI会员</th><th>AI积分</th><th>永久</th><th>赠送</th><th>可花合计</th><th>操作</th></tr></thead>';
       const rows = lastMembers.map((m) => {
         const dl = m.download_active ? `✅ ${esc(m.download_plan || '')}` : '—';
         const ai = m.ai_active ? `✅ ${esc(m.ai_plan || '')}` : '—';
@@ -24299,7 +24303,8 @@ el.dwVidPlayer.hidden = true;
           <td>${dl}</td>
           <td>${ai}</td>
           <td>${m.ai_credits_left != null ? m.ai_credits_left : '—'}</td>
-          <td>${m.permanent_credits != null ? m.permanent_credits : '—'}</td>
+          <td>${m.perm_credits_pure != null ? m.perm_credits_pure : (m.permanent_credits != null ? Math.max(m.permanent_credits - Number(m.gift_credits || 0), 0) : '—')}</td>
+          <td>${m.gift_credits != null ? m.gift_credits : '—'}</td>
           <td>${m.credits_total != null ? m.credits_total : '—'}</td>
           <td class="admin-ops">${ops}</td>
         </tr>`;
@@ -24571,8 +24576,11 @@ el.dwVidPlayer.hidden = true;
             ['会员来源', dl.source || '—'],
             ['AI 会员', ai.active ? _usageChip(true, '有效至 ' + _usageFmtDate(ai.expire_at), '无') : _usageChip(false, '', '无')],
             ['AI 订阅积分', `${Number(ai.credits_left || 0)}（随会员到期清零）`],
-            ['永久积分', `${Number(m.permanent_credits || 0)}（不过期）`],
-            ['积分合计', String(m.credits_total != null ? m.credits_total : 0)],
+            // 2026-10-27（1.0.97）：permanent_credits 是「永久+赠送」可花合计，单列会让人
+            // 误判余额归属（照它调永久池会扣错池）。分池展示：永久 / 赠送 / 可花合计。
+            ['永久积分', `${Number(m.perm_credits_pure != null ? m.perm_credits_pure : Math.max(Number(m.permanent_credits || 0) - Number(m.gift_credits || 0), 0))}（不过期）`],
+            ['赠送积分', `${Number(m.gift_credits || 0)}${Number(m.gift_credits || 0) > 0 && Number(m.gift_expire_at || 0) > 0 ? '（' + _usageFmtDate(Number(m.gift_expire_at)) + ' 到期清零）' : ''}`],
+            ['可花合计', String(m.credits_total != null ? m.credits_total : 0)],
             ['设备指纹', u.device_fp ? `<code>${esc(u.device_fp)}</code>` : '—'],
             ['首次绑定', _usageFmtDate(u.account_bound_at)],
           ])
@@ -24700,8 +24708,11 @@ el.dwVidPlayer.hidden = true;
           <label class="acd-field">AI 订阅积分（随会员过期清零）
             <input class="admin-input acd-ai" type="number" step="1" placeholder="正=充值，负=扣减，留空不调整">
           </label>
-          <label class="acd-field">永久+赠送积分（赠送部分随会员到期清零）
+          <label class="acd-field">永久积分（不过期）
             <input class="admin-input acd-perm" type="number" step="1" placeholder="正=充值，负=扣减，留空不调整">
+          </label>
+          <label class="acd-field">赠送积分（随会员到期清零）
+            <input class="admin-input acd-gift" type="number" step="1" placeholder="正=充值，负=扣减，留空不调整">
           </label>
           <div class="acd-err" hidden></div>
           <div class="acd-btns">
@@ -24715,11 +24726,23 @@ el.dwVidPlayer.hidden = true;
       const dlg = _creditDlg;
       dlg.dataset.uid = m.user_id || '';
       dlg.querySelector('.acd-user').textContent = m.identifier || m.user_id || '';
+      // 2026-10-27（1.0.97）：三池分开。m.permanent_credits 是云端「永久+赠送」可花合计，
+      // 永久真实值取 perm_credits_pure（后端未下发时退化为 合计-赠送）。余额存 dataset，
+      // 供 submitCreditDlg 校验扣负（原来直接引用这里的局部变量 ⇒ ReferenceError）。
       const aiN = (m.ai_credits_left != null) ? m.ai_credits_left : 0;
-      const pmN = (m.permanent_credits != null) ? m.permanent_credits : 0;
-      dlg.querySelector('.acd-balance').textContent = `当前余额：AI 订阅积分 ${aiN} ｜ 永久+赠送积分 ${pmN} ｜ 合计 ${m.credits_total != null ? m.credits_total : aiN + pmN}`;
+      const giftN = (m.gift_credits != null) ? m.gift_credits : 0;
+      const pmTotal = (m.permanent_credits != null) ? m.permanent_credits : 0;
+      const pmN = (m.perm_credits_pure != null) ? m.perm_credits_pure : Math.max(pmTotal - giftN, 0);
+      dlg.dataset.aiN = String(aiN);
+      dlg.dataset.pmN = String(pmN);
+      dlg.dataset.giftN = String(giftN);
+      const geAt = Number(m.gift_expire_at || 0);
+      const geTxt = (giftN > 0 && geAt > 0) ? `（${_memberFmtDate ? _memberFmtDate(geAt) : new Date(geAt * 1000).toLocaleDateString('zh-CN')} 到期清零）` : '';
+      dlg.querySelector('.acd-balance').textContent =
+        `当前余额：AI 订阅积分 ${aiN}（随会员过期清零） ｜ 永久积分 ${pmN} ｜ 赠送积分 ${giftN}${geTxt} ｜ 可花合计 ${m.credits_total != null ? m.credits_total : aiN + pmTotal}`;
       dlg.querySelector('.acd-ai').value = '';
       dlg.querySelector('.acd-perm').value = '';
+      dlg.querySelector('.acd-gift').value = '';
       const errEl = dlg.querySelector('.acd-err');
       errEl.hidden = true; errEl.textContent = '';
       if (typeof dlg.showModal === 'function') { if (!dlg.open) dlg.showModal(); }
@@ -24733,7 +24756,11 @@ el.dwVidPlayer.hidden = true;
       errEl.hidden = true; errEl.textContent = '';
       const aiV = dlg.querySelector('.acd-ai').value.trim();
       const pmV = dlg.querySelector('.acd-perm').value.trim();
-      if (aiV === '' && pmV === '') { errEl.textContent = '两个积分池至少填一个'; errEl.hidden = false; return; }
+      const gfV = dlg.querySelector('.acd-gift').value.trim();
+      if (aiV === '' && pmV === '' && gfV === '') { errEl.textContent = '三个积分池至少填一个'; errEl.hidden = false; return; }
+      const aiN = parseInt(dlg.dataset.aiN || '0', 10) || 0;
+      const pmN = parseInt(dlg.dataset.pmN || '0', 10) || 0;
+      const giftN = parseInt(dlg.dataset.giftN || '0', 10) || 0;
       const jobs = [];
       if (aiV !== '') {
         const d = parseInt(aiV, 10);
@@ -24744,9 +24771,15 @@ el.dwVidPlayer.hidden = true;
       }
       if (pmV !== '') {
         const d = parseInt(pmV, 10);
-        if (isNaN(d)) { errEl.textContent = '永久+赠送积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
-        if (d < 0 && -d > pmN) { errEl.textContent = `永久+赠送积分余额只有 ${pmN}，不能扣到负数`; errEl.hidden = false; return; }
+        if (isNaN(d)) { errEl.textContent = '永久积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
+        if (d < 0 && -d > pmN) { errEl.textContent = `永久积分余额只有 ${pmN}，不能扣到负数`; errEl.hidden = false; return; }
         jobs.push({ delta: d, pool: 'permanent' });
+      }
+      if (gfV !== '') {
+        const d = parseInt(gfV, 10);
+        if (isNaN(d)) { errEl.textContent = '赠送积分请输入整数（如 100 / -50）'; errEl.hidden = false; return; }
+        if (d < 0 && -d > giftN) { errEl.textContent = `赠送积分余额只有 ${giftN}，不能扣到负数`; errEl.hidden = false; return; }
+        jobs.push({ delta: d, pool: 'gift' });
       }
       for (let i = 0; i < jobs.length; i++) {
         try {

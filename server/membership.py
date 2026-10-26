@@ -1554,6 +1554,15 @@ class MembershipStore:
             },
             "permanent_credits": int(st["permanent_credits"].get("total", 0)),
             "credits_total": int(ai.get("credits_left", 0)) + int(st["permanent_credits"].get("total", 0)),
+            # 2026-10-27（1.0.97）：云端 perm_credits 是「永久+赠送」可花合计，本机 total
+            # 同步后也含赠送 ⇒ 会员中心会把它整块标成「永久积分（不过期）」。分池下发，
+            # 前端按 perm_credits_pure 显示真永久、gift_credits 单独成 chip 并标到期日。
+            # 从未同步过云端时 pure 缺席 ⇒ 回退到 total（本地买的永久分仍要显示出来）
+            "perm_credits_pure": int(st["permanent_credits"]["pure"]
+                                     if st["permanent_credits"].get("pure") is not None
+                                     else st["permanent_credits"].get("total", 0)),
+            "gift_credits": int(st["permanent_credits"].get("gift", 0) or 0),
+            "gift_expire_at": float(st["permanent_credits"].get("gift_expire_at", 0) or 0),
             "daily_usage": dict(st["daily_usage"]),
         }
 
@@ -1889,7 +1898,12 @@ class MembershipStore:
             ai["plan"] = None
             ai["credits_left"] = 0  # AI 订阅积分随订阅失效清零
 
+        # 2026-10-27（1.0.97）：云端 perm_credits = 永久+赠送 可花合计。total 仍存合计
+        # （扣费口径不变），另存 pure/gift/gift_expire_at 供展示与调分分池。
         st["permanent_credits"]["total"] = max(0, int(auth.get("perm_credits") or 0))
+        st["permanent_credits"]["pure"] = max(0, int(auth.get("perm_credits_pure") or 0))
+        st["permanent_credits"]["gift"] = max(0, int(auth.get("gift_credits") or 0))
+        st["permanent_credits"]["gift_expire_at"] = float(auth.get("gift_expire_at") or 0)
 
         # 账号级每日用量同步（同一账号 App/网页共用每日配额）：
         # 取 max(本地, 云端) —— 云端只大不小，既不冲掉本地在途未报的增量，

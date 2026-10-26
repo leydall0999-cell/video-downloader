@@ -303,6 +303,14 @@ def _cloud_membership_row(u: dict[str, Any], now: float) -> dict[str, Any]:
         "ai_plan": plan_ai if ai_active else None,
         "ai_credits_left": ai_left,
         "permanent_credits": perm,
+        # 2026-10-27（1.0.97）：perm 是「永久+赠送」可花合计，后台此前把它整列标成
+        # 「永久积分」——赠送池显示在永久列里，管理员照着它调「永久池」就会扣错池
+        # （真实永久池为 0 时填负数会被静默吞/写成负余额）。故把三池分开下发。
+        "perm_credits_pure": int(auth["perm_credits_pure"])
+                             if auth.get("perm_credits_pure") is not None
+                             else max(int(auth.get("perm_credits") or 0) - int(auth.get("gift_credits") or 0), 0),
+        "gift_credits": int(auth.get("gift_credits") or 0),
+        "gift_expire_at": float(auth.get("gift_expire_at") or 0),
         "credits_total": ai_left + perm,
         "disabled": bool(u.get("banned")),
         "source": "cloud",
