@@ -2000,6 +2000,22 @@ def _handle_exit(*_args) -> None:
     os._exit(0)
 
 def _pid_alive(pid: int) -> bool:
+    # 🔴 Windows（2026-10-26 实锤「双击出 4 个窗口」根因之一）：绝不能用
+    # os.kill(pid, 0) —— CPython 在 Windows 上把非 CTRL 信号一律交给
+    # TerminateProcess 执行，sig=0 不是「探测」而是**把对方杀掉**（退出码 0）。
+    # 必须走 OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) 只查不杀。
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            k32 = ctypes.windll.kernel32
+            h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if not h:
+                return False
+            k32.CloseHandle(h)
+            return True
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
     except OSError:
@@ -2088,6 +2104,39 @@ def _activate_existing_window() -> None:
                 check=False, capture_output=True, timeout=3,
             )
             raised = (r.returncode == 0)
+        except Exception:
+            raised = False
+
+    # 2.5) Windows 提窗（2026-10-26 单实例锁配套）：EnumWindows 模糊匹配标题，
+    #      找到就 SW_RESTORE + SetForegroundWindow。标题可能带后缀，所以不能用
+    #      FindWindowW 的精确匹配。
+    if not raised and sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            hits = []
+
+            _EnumProc = ctypes.WINFUNCTYPE(
+                wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            def _on_window(hwnd, _lparam):
+                if user32.IsWindowVisible(hwnd):
+                    n = user32.GetWindowTextLengthW(hwnd)
+                    if n > 0:
+                        buf = ctypes.create_unicode_buffer(n + 1)
+                        user32.GetWindowTextW(hwnd, buf, n + 1)
+                        text = buf.value
+                        if ("视频工坊" in text) or ("VideoDownloader" in text):
+                            hits.append(hwnd)
+                return True
+
+            user32.EnumWindows(_EnumProc(_on_window), 0)
+            for hwnd in hits:
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            if hits:
+                user32.SetForegroundWindow(hits[0])
+                raised = True
         except Exception:
             raised = False
 
@@ -2225,7 +2274,40 @@ def _browser_fallback(server_thread) -> None:
     except Exception:
         pass
 
+_WIN_MUTEX_NAME = "Local\\VideoDownloader_SingleInstance_Mutex"
+
+class _WindowsMutexHandle:
+    """占位句柄：Windows 单实例由内核互斥锁保证，无需文件锁。
+
+    main() 把返回值当「成功拿到锁」的信号（None=失败→激活旧窗退出），
+    所以这里必须返回一个非 None 对象。互斥锁生命周期随进程，崩溃/被杀
+    由内核自动释放，不存在僵尸锁问题。
+    """
+
+def _ensure_single_instance_windows():
+    """Windows 单实例：内核命名互斥锁（CreateMutexW），微信/Chrome 同款做法。
+
+    修复 2026-10-26 用户真机「双击出 4 个窗口」：旧方案在 Windows 上
+    ① 无 fcntl（文件锁互斥缺失）；② os.kill(pid,0) 判活实为杀进程；
+    ③ 锁写在端口绑定前 + 判活依赖端口绑定 ⇒ 冷启动空窗期内连点全放行。
+    互斥锁由内核保证原子性，从根上堵死以上三条，与端口/锁文件时序无关。
+    """
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    k32.CreateMutexW(None, False, _WIN_MUTEX_NAME)
+    ERROR_ALREADY_EXISTS = 183
+    if k32.GetLastError() == ERROR_ALREADY_EXISTS:
+        _launch_log("检测到已有实例（Windows 互斥锁命中），激活其窗口并退出（保持单实例）")
+        _activate_existing_window()
+        sys.exit(0)
+    _launch_log("成为 singleton（Windows 互斥锁持有）")
+    return _WindowsMutexHandle()
+
 def _ensure_single_instance():
+    # Windows：互斥锁主防线，一票定音，不进入下方文件锁/端口判定逻辑
+    # （那套逻辑在 Windows 上有上述三条硬伤，留着只会帮倒忙）。
+    if sys.platform == "win32":
+        return _ensure_single_instance_windows()
     """同一用户只保留一个 GUI 实例，且确保运行的是最新构建版本。
 
     健壮化（修复「双击打不开 / 闪退」根因）：

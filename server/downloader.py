@@ -4839,12 +4839,18 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         # "Remote end closed / 1010 / connection" 类错误，等 3s 重试一次可显著
         # 提高成功率（重试用的是全新 _base_options + _YoutubeDL，无状态残留）。
         _exc_low = str(exc).lower()
+        # 2026-10-26 pomo.mom 实测：该站约 1/3 概率在 TLS 传输中途随机掐连接，
+        # 报 "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of
+        # protocol"。补 "eof occurred"/"unexpected_eof" 两个特征词进网络类判定。
         _net_like = any(
             w in _exc_low
             for w in ("remote end closed", "connection", "timed out", "1010",
-                      "transport", "incompleteread", "reset", "closed")
+                      "transport", "incompleteread", "reset", "closed",
+                      "eof occurred", "unexpected_eof")
         )
-        if _net_like and _h and is_china_host(_h):
+        # 2026-10-26：重试不再限国内站——海外站（pomo.mom 实锤）经代理同样有
+        # 随机 SSL EOF；单次重试对两类站都有效，失败仍走原错误路径，无副作用。
+        if _net_like and _h:
             logger.info("[probe] 网络类错误(%s)，3s 后重试一次", _last_err[:100])
             try:
                 import time as _t
