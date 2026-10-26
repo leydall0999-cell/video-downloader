@@ -1,0 +1,4 @@
+# 钩子必须 LF：本机 core.autocrlf=true，若 .githooks/* 被转成 CRLF，
+# Git Bash 执行时会去找 "bash\r" 解释器 ⇒ bad interpreter，钩子静默失效。
+.githooks/* text eol=lf
+tools/check_syntax.py text eol=lf
