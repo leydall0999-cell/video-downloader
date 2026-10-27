@@ -190,6 +190,41 @@ def case_structural_check_login_fields(tmp: str) -> None:
           m._structural_check("douyin.com", "odin_tt=abc; ttwid=xyz") is None)
 
 
+def case_baidu_member_first_ordering(tmp: str) -> None:
+    """会员优先排序守卫（2026-10-28）。
+
+    之前的真 bug：百度网盘按账号等级分流（会员明文直链、非会员 AES 密文），
+    但 cookie 池没给百度登记身份字段 ⇒ 多账号被去重塌缩成「anon」单条，
+    且永远取最新一条——若最新是非会员号，会员号被静默丢弃，解析必报红条。
+    修复：① 百度按 BDUSS 区分账号（多号不再塌缩）；② 入池时探 vip_type 标 member；
+    ③ get_cookies 把会员号排在最前。本用例锁住这三件事。
+    """
+    m = _load(tmp)
+    m.verify_cookie = lambda domain, header: True   # 跳过站点验真，专注排序逻辑
+    # 入池时 baidu_probe 探会员身份：按 BDUSS 前缀区分
+    def fake_probe(header):
+        if "BDUSS=M" in header:
+            return (True, {"errno": 0, "vip_type": 2})   # 会员(SVIP)
+        return (True, {"errno": 0, "vip_type": 0})        # 非会员
+    m.baidu_probe = fake_probe
+    non_member = "BDUSS=N1; STOKEN=n; SCRC=n"   # 非会员，先入池
+    member = "BDUSS=M1; STOKEN=m; SCRC=m"       # 会员，后入池
+    m.add_cookie("baidu.com", non_member, source="sync")
+    m.add_cookie("baidu.com", member, source="sync")
+    # 两个账号 BDUSS 不同 ⇒ 身份不同 ⇒ 不会被去重塌缩成单条
+    pool = m.get_cookies("pan.baidu.com")
+    check("百度两个账号都被保留（未塌缩）", len(pool) == 2)
+    # 无论入池先后，会员号必须排在最前
+    check("会员号排在最前（非会员不抢跑）", "BDUSS=M" in pool[0] and "BDUSS=N" in pool[1])
+    # member 标记已随条目落盘（_save 白名单必须保留它）
+    import json
+    entries = json.loads(m._pool_file("baidu.com").read_text())["cookies"]
+    m_entries = [e for e in entries if "BDUSS=M" in (e.get("header") or "")]
+    check("会员条目落盘 member=True", any(e.get("member") is True for e in m_entries))
+    check("非会员条目 member 非 True", all(e.get("member") is not True
+          for e in entries if "BDUSS=N" in (e.get("header") or "")))
+
+
 def main() -> int:
     print("== test_cookie_pool_identity ==")
     tmpdir = tempfile.mkdtemp(prefix="vdl_pool_test_")
@@ -200,7 +235,8 @@ def main() -> int:
         for fn in (case_add_rejects_logged_out, case_add_keeps_only_newest_per_account,
                    case_add_keeps_multiple_accounts, case_prune_verifies_once_per_session,
                    case_verify_dispatch_prefers_bilibili_probe,
-                   case_structural_check_login_fields):
+                   case_structural_check_login_fields,
+                   case_baidu_member_first_ordering):
             d = tempfile.mkdtemp(prefix="vdl_pool_test_")
             try:
                 fn(d)

@@ -236,6 +236,7 @@ _IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "qq.com": ("wxuin", "uin", "vus_session", "wap_sid2"),
     "tiktok.com": ("sid_tt", "sessionid"),
     "chenzhongtech.com": ("userId",),
+    "baidu.com": ("BDUSS",),
 }
 
 # 会话变体字段：同账号可能同时存在多份「会话」（重新登录会换 SESSDATA），
@@ -343,6 +344,11 @@ def _save(domain: str, cookies: list) -> bool:
             used = int(c.get("used_ts") or 0)
             if used:
                 item["used_ts"] = used
+            # 会员标记（仅百度）要随条目存活：会员号（vip_type>0）标记为 True，
+            # get_cookies 据此把会员账号排在最前，确保换直链先吃会员带宽。
+            member = c.get("member")
+            if member:
+                item["member"] = True
             header = c.get("header") or ""
             enc = c.get("header_enc") or ""
             if not header and not enc:
@@ -432,6 +438,7 @@ def get_cookies(domain: str, limit: int = 8) -> list:
     上层（解析成功后）决定，把候选全标成「最近使用」会让后台的清理判断失真。
     """
     out: list = []
+    out_members: list = []
     seen: set = set()
     for d in _candidates(domain):
         f = _pool_file(d)
@@ -454,8 +461,16 @@ def get_cookies(domain: str, limit: int = 8) -> list:
                 continue
             seen.add(key)
             out.append(header)
+            out_members.append(bool(c.get("member")))
             if len(out) >= limit:
-                return out
+                break
+        if len(out) >= limit:
+            break
+    # 百度网盘：会员账号（vip_type>0）排在最前，确保换直链先吃会员带宽；
+    # 会员失效（限速/掉会员）时再落到后面的非会员号。其他域不做重排。
+    if domain == "baidu.com" and len(out) > 1:
+        ranked = sorted(zip(out, out_members), key=lambda x: (not x[1],))
+        out = [h for h, _ in ranked]
     logger.info("[cookie_pool] get_cookies domain=%s n=%s", domain, len(out))
     return out
 
@@ -514,6 +529,15 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
                        domain, source, len(header))
         return False
     ident = _identity(domain, header)
+    # 百度网盘：入池时探一次会员身份（uinfo 的 vip_type>0=会员），给「会员优先」排序用。
+    # 网络不通时静默降级为 False（非会员），不影响入池，只是排序优先级低。
+    member = False
+    if domain == "baidu.com":
+        try:
+            _ok, _info = baidu_probe(header)
+            member = int((_info or {}).get("vip_type") or 0) > 0
+        except Exception:
+            member = False
     now = int(time.time())
     with _LOCK:
         f = _pool_file(domain)
@@ -530,10 +554,12 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
                 c["source"] = source
                 if ident:
                     c["id"] = ident
+                c["member"] = member
                 return _save(domain, _cap_cookies(domain, cookies))
         item = {"header": header, "ts": now, "source": source}
         if ident:
             item["id"] = ident
+        item["member"] = member
         cookies.append(item)
         ok = _save(domain, _cap_cookies(domain, cookies))
         logger.info("[cookie_pool] add saved domain=%s total=%s ident=%s ok=%s",
