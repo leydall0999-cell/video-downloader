@@ -3539,20 +3539,61 @@ def main() -> None:
         api = VdlApi()
 
         # ---- 窗口尺寸/位置记忆（2026-09-17：用户要求按上次手动调整后的宽高打开） ----
-        # 存 _app_data_dir()/window_frame.json；首次运行无文件 → 用默认 1280x800 居中。
+        # 存 _app_data_dir()/window_frame.json；无文件 → 按屏幕可用区 94% 计算。
         _win_frame_file = _app_data_dir() / "window_frame.json"
+
+        def _logical_workarea():
+            """屏幕尺寸的**逻辑像素**（已除 DPI 缩放）；拿不到就 1280x800。
+
+            🔴 2026-10-28（用户反馈「页面变这么小了、界面都变形了」）：
+               此前默认写死 1280x800 逻辑。但 125% DPI 的 1920x1080 屏逻辑只有
+               1536x864，1280x800 仅比 web 的 901px 断点宽一点点 → 界面被压进紧凑
+               布局（侧栏变窄、卡片两列、字号显小），用户体感就是「变形」。
+               改成按屏幕算，任何 DPI 下都占屏 ~94%，不再靠猜固定数字。
+            """
+            try:
+                if sys.platform == "win32":
+                    import ctypes as _ct
+                    _u32 = _ct.WinDLL("user32")
+                    _g32 = _ct.WinDLL("gdi32")
+                    pw = _u32.GetSystemMetrics(0) or 1920
+                    ph = _u32.GetSystemMetrics(1) or 1080
+                    dc = _u32.GetDC(0)
+                    dpi = _g32.GetDeviceCaps(dc, 88) or 96
+                    _u32.ReleaseDC(0, dc)
+                    return int(pw * 96 / dpi), int(ph * 96 / dpi)
+            except Exception:
+                pass
+            return 1280, 800
+
+        _scr_w, _scr_h = _logical_workarea()
+        # 默认尺寸：占屏 94% 宽 / 92% 高（留出任务栏与窗口边框），带绝对下限
+        _def_w = max(1120, min(int(_scr_w * 0.94), 2560))
+        _def_h = max(740, min(int(_scr_h * 0.92), 1600))
+        _launch_log(f"屏幕逻辑尺寸 {_scr_w}x{_scr_h} → 默认窗口 {_def_w}x{_def_h}")
 
         def _load_win_frame():
             import json as _json
             try:
                 d = _json.loads(_win_frame_file.read_text(encoding="utf-8"))
-                # 🔴 2026-10-19：最小宽高抬到 960x640，确保不低于 web 的 901px 断点，
-                #    否则侧边栏（桌面版导航）被隐藏、顶部 pills 横向 nav 换行成多行 → 排版错乱
-                #    （与 Mac 版对齐：Mac 窗口始终宽于断点，渲染竖向侧边栏）。
-                # 🔵 2026-10-19 15:55：首启默认从 1100x750 调大到 1280x800（用户反馈默认窗口偏小；
-                #    125% DPI 下 1280x800 逻辑像素 = 1600x1000 物理，1920x1080 屏内舒适容纳）
-                w = max(960, min(3840, int(d.get("width", 1280))))
-                h = max(640, min(2160, int(d.get("height", 800))))
+                # 🔴 2026-10-28：记忆值「过小」视为无效历史脏数据，直接回默认尺寸。
+                #    实测本机存过 {"width":960,"height":640}（正是旧 min_size），于是每次
+                #    启动都被钉在最小窗口，用户侧表现为「界面变小、排版变形」。
+                _raw_w = int(d.get("width", _def_w) or 0)
+                _raw_h = int(d.get("height", _def_h) or 0)
+                if _raw_w <= 0 or _raw_h <= 0 or _raw_w < 1120 or _raw_h < 740:
+                    _launch_log(
+                        f"记忆窗口尺寸过小({_raw_w}x{_raw_h})，已忽略 → 用默认 {_def_w}x{_def_h}")
+                    return _def_w, _def_h, None, None
+                # 🔴 2026-10-19：最小宽高保证宽于 web 的 901px 断点，否则侧边栏被隐藏、
+                #    顶部 pills 换行 → 排版错乱（与 Mac 版对齐）。
+                # 🔴 2026-10-28：下限从 960x640 抬到 1120x740 —— 960 逻辑在 125% DPI 下
+                #    等于物理 1200x800，正是用户截图里「小得变形」的那个尺寸。
+                w = max(1120, min(3840, _raw_w))
+                h = max(740, min(2160, _raw_h))
+                # 记忆值可能来自换屏前（旧屏更大）：超出当前屏幕就按当前屏幕上限收回来
+                w = min(w, max(1120, int(_scr_w * 0.98)))
+                h = min(h, max(740, int(_scr_h * 0.96)))
                 x = d.get("x"); y = d.get("y")
                 x = int(x) if isinstance(x, (int, float)) else None
                 y = int(y) if isinstance(y, (int, float)) else None
@@ -3575,9 +3616,10 @@ def main() -> None:
                         x, y = None, None
                 return w, h, x, y
             except Exception:
-                return 1280, 800, None, None
+                return _def_w, _def_h, None, None
 
         _win_w, _win_h, _win_x, _win_y = _load_win_frame()
+        _launch_log(f"窗口请求尺寸 {_win_w}x{_win_h} @ {_win_x},{_win_y}")
         window = webview.create_window(
             title="视频工坊",
             url=URL,
@@ -3585,10 +3627,35 @@ def main() -> None:
             height=_win_h,
             x=_win_x,
             y=_win_y,
-            min_size=(960, 640),
+            min_size=(1120, 740),
             text_select=True,
             js_api=api,
         )
+
+        # 🔴 2026-10-28 兜底：实测有机器上 pywebview 会把窗口直接顶到 min_size
+        #    （请求 1880x1010 却得到 1200x800 = 960x640 逻辑，界面被压成紧凑布局）。
+        #    这里在窗口就绪后复测一次，明显小于请求值就强制 resize 回目标尺寸。
+        def _enforce_window_size():
+            for _ in range(20):
+                time.sleep(0.4)
+                try:
+                    cw, ch = int(window.width), int(window.height)
+                except Exception:
+                    continue
+                if cw <= 0 or ch <= 0:
+                    continue
+                if cw >= _win_w * 0.94 and ch >= _win_h * 0.94:
+                    _launch_log(f"窗口尺寸校验通过：{cw}x{ch}")
+                    return
+                try:
+                    window.resize(_win_w, _win_h)
+                    _launch_log(f"窗口尺寸被压到 {cw}x{ch}，已强制 resize → {_win_w}x{_win_h}")
+                    return
+                except Exception as _e:  # noqa: BLE001
+                    _launch_log(f"强制 resize 失败：{_e!r}")
+
+        threading.Thread(target=_enforce_window_size, daemon=True,
+                         name="vdl-window-size").start()
 
         def _save_win_frame(*_args):
             """resized/moved 时持久化窗口框架（失败静默，不影响主流程）。"""
@@ -3600,7 +3667,12 @@ def main() -> None:
                 #    （实测 159x27 @ (-25600,-25600)），旧代码照单全收 → 写坏
                 #    frame 文件 → 下次启动窗口永久屏幕外。低于 min_size 或负坐标
                 #    一律视为"非正常展示态"，跳过保存。
-                if _w < 960 or _h < 640 or _x < 0 or _y < 0:
+                # 🔴 2026-10-28：下限 960x640 → 1120x740。
+                #    真凶复盘：旧下限恰好等于 min_size，于是「窗口被顶到最小」那一次的
+                #    尺寸被当成正常值存了下来（Roaming\window_frame.json = 960x640），
+                #    之后每次启动都读它 → 125% DPI 下物理仅 1200x800，web 断点 901 刚过，
+                #    界面被压成紧凑布局。用户看到的就是「页面变这么小、都变形了」。
+                if _w < 1120 or _h < 740 or _x < 0 or _y < 0:
                     return
                 _win_frame_file.parent.mkdir(parents=True, exist_ok=True)
                 _json.dump(
