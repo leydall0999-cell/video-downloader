@@ -66,9 +66,23 @@ def _secret() -> bytes:
     )
 
 
+_MK_CACHE: dict = {}
+
+
 def _master_key() -> bytes:
-    """由密钥派生主密钥（固定 salt：数据文件本身已 600 + 加密，不需要每文件 salt）。"""
-    return hashlib.pbkdf2_hmac("sha256", _secret(), b"vdl-baidu-cred-v1", _PBKDF2_ITERS, dklen=32)
+    """由密钥派生主密钥（固定 salt：数据文件本身已 600 + 加密，不需要每文件 salt）。
+
+    ⚠️ 必须缓存：PBKDF2 12 万次迭代单次约 80ms，而文件夹分享一次解析要给
+    **每个文件**签一个直链令牌（2026-10-27 实测 201 个文件 ⇒ 不缓存时
+    光这一步就 16 秒，整个解析 21~30 秒；缓存后回到 5 秒内）。
+    """
+    secret = _secret()
+    key = _MK_CACHE.get(secret)
+    if key is None:
+        key = hashlib.pbkdf2_hmac("sha256", secret, b"vdl-baidu-cred-v1", _PBKDF2_ITERS, dklen=32)
+        _MK_CACHE.clear()          # 只驻留当前密钥，密钥轮换后旧的自动丢弃
+        _MK_CACHE[secret] = key
+    return key
 
 
 def _aad(uid: str, prefix: bytes) -> bytes:
