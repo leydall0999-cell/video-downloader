@@ -126,10 +126,19 @@ def new_session(referer: str) -> requests.Session:
 
 
 def _json(resp) -> dict:
+    """解析百度接口的 JSON。
+
+    百度偶发返回非对象（HTML 风控页、被 gzip 成字符串、空体）——直接交回调用方
+    会炸成 `'str' object has no attribute 'get'` 这种看不懂的报错（2026-10-27 线上
+    出过），所以这里统一转成人话异常。
+    """
     try:
-        return resp.json()
+        data = resp.json()
     except Exception:  # noqa: BLE001
-        return {}
+        data = None
+    if not isinstance(data, dict):
+        raise ValueError("百度网盘接口返回异常（可能触发了风控，或分享链接已失效），请稍后重试")
+    return data
 
 
 # ——————————————————————————————————————————————————————————————
@@ -424,6 +433,28 @@ def resolve_personal(path: str, cookie: str = "") -> list[CloudFile]:
     raise ValueError("暂不支持个人网盘路径（阶段 2 支持），请先使用分享链接")
 
 
+def _share_page_missing(s: requests.Session, share_url: str) -> bool:
+    """分享页是否直接 404（链接被取消 / 过期 / 压根不存在）。
+
+    早一步判掉比让后面的 verify 返回 errno=105 好得多：105 会显示成「提取码校验
+    失败」，用户会以为是自己提取码打错了，实际是链接没了（2026-10-27 线上踩过）。
+    """
+    try:
+        r = s.get(share_url, timeout=_TIMEOUT)
+    except Exception:  # noqa: BLE001
+        return False
+    if r.status_code == 200:
+        return False
+    # 错误页不带 charset，requests 会按 latin-1 猜 ⇒ 中文变乱码，必须自己按 utf-8 解
+    try:
+        body = (r.content or b"").decode("utf-8", "ignore")
+    except Exception:  # noqa: BLE001
+        body = ""
+    if r.status_code == 404:
+        return "yunData" not in body
+    return ("页面不存在" in body or "分享的文件已经被取消" in body) and "yunData" not in body
+
+
 def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[CloudFile]:
     """分享链接 → 直链列表。
 
@@ -440,6 +471,9 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
 
     q = common_query()
     s = new_session(share_url)
+
+    if _share_page_missing(s, share_url):
+        raise ValueError("分享链接不存在或已失效 —— 请在百度网盘里重新生成分享链接再粘贴")
 
     sekey = share_verify(s, surl, pwd, q)
     if not sekey:
