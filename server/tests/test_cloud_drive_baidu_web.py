@@ -228,6 +228,77 @@ def test_download_sends_range_and_cookie_server_side():
     print("✅ 下载带 Range + 登录态，字节原样透传，cookie 不出现在响应里")
 
 
+def test_range_start_parser():
+    """续传起点解析：只认 `bytes=N-`，其余一律当 0（从头），宁可重下也不拼错位数据。"""
+    assert CD._range_start("bytes=0-") == 0
+    assert CD._range_start("bytes=4096-") == 4096
+    assert CD._range_start("  bytes=77-  ") == 77
+    assert CD._range_start("") == 0
+    assert CD._range_start("bytes=-500") == 0, "尾部 N 字节不是续传语义，必须从头"
+    assert CD._range_start("items=5-") == 0, "非 bytes 单位不认"
+    assert CD._range_start("bytes=0-99,200-299") == 0, "多段范围不猜，从头重来"
+    print("✅ Range 起点解析：仅 bytes=N- 认，其余一律从头")
+
+
+def test_download_resume_passes_client_range():
+    """浏览器带断点（bytes=40-）时必须原样转给百度，而不是硬写 bytes=0-。"""
+    BCS.save_bduss(_UID, "BDUSS=secret-in-server")
+    orig_req = A.requests
+    _CALLS.clear()
+    A.requests = types.SimpleNamespace(get=_fake_get)
+    try:
+        dlink = "https://d.pcs.baidu.com/file?sign=abc"
+        token = BCS.seal_token(_UID, dlink)
+        r = _client().get(f"/api/cloud-drive/download?id={token}&name=a.zip",
+                          headers={**_AUTH, "Range": "bytes=40-"})
+        assert r.status_code in (200, 206), f"实际 {r.status_code}：{r.text[:200]}"
+        call = _CALLS[-1]
+        assert call["headers"].get("Range") == "bytes=40-", \
+            f"续传起点必须透传给百度；实际 {call['headers'].get('Range')!r}"
+        assert r.headers.get("content-range") == "bytes 0-4/100", \
+            "206 的 Content-Range 必须回传给浏览器（前端据此校准总长）"
+    finally:
+        A.requests = orig_req
+    print("✅ 断点续传：客户端 Range 原样转给百度，Content-Range 回传")
+
+
+def test_download_resume_does_not_charge_quota_again():
+    """同一个文件的续传不得重复扣每日次数（网络抖动不该吃光配额）。"""
+    BCS.save_bduss(_UID, "BDUSS=secret-in-server")
+
+    class _Store:
+        def __init__(self):
+            self.used = 0
+            self.checked = 0
+
+        def quota_state(self, key):
+            self.checked += 1
+            return {"unlimited": True}
+
+        def use_daily(self, key, n, **kw):
+            self.used += n
+
+    store = _Store()
+    orig_store = A.current_member_store
+    orig_req = A.requests
+    A.current_member_store = lambda request: store
+    A.requests = types.SimpleNamespace(get=_fake_get)
+    try:
+        token = BCS.seal_token(_UID, "https://d.pcs.baidu.com/file?sign=abc")
+        url = f"/api/cloud-drive/download?id={token}&name=a.zip"
+        c = _client()
+        c.get(url, headers=_AUTH)
+        assert store.used == 1, f"首次下载应计 1 次，实际 {store.used}"
+        for start in (1024, 2048, 4096):
+            c.get(url, headers={**_AUTH, "Range": f"bytes={start}-"})
+        assert store.used == 1, f"续传不得重复计次，实际累计 {store.used} 次"
+        assert store.checked == 1, "续传连配额预检都不该再跑"
+    finally:
+        A.current_member_store = orig_store
+        A.requests = orig_req
+    print("✅ 配额：首次计 1 次，后续续传不再计次也不再预检")
+
+
 def test_media_proxy_force_range_wiring():
     """force_range 必须真的落到上游请求头（百度场景的关键前置）。"""
     src = open(os.path.join(_SERVER_DIR, "routers", "core.py"), encoding="utf-8").read()
@@ -247,6 +318,9 @@ if __name__ == "__main__":
         test_resolve_never_leaks_dlink_or_cookie,
         test_download_rejects_bad_token_and_non_baidu_host,
         test_download_sends_range_and_cookie_server_side,
+        test_range_start_parser,
+        test_download_resume_passes_client_range,
+        test_download_resume_does_not_charge_quota_again,
         test_media_proxy_force_range_wiring,
     ):
         fn()

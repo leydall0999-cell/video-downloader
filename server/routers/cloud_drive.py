@@ -257,6 +257,27 @@ def cloud_drive_clear_credential(request: app.Request) -> dict:
 # 下载（服务器中转）
 # ——————————————————————————————————————————————————————————————
 
+def _range_start(raw: str) -> int:
+    """取 `Range: bytes=N-` 里的起点 N；不是字节范围 / 没有起点时返回 0（视为从头）。
+
+    只认「单段、开头锚定」这一种形态。百度直链只支持 `bytes=N-` 这种开区间续传，
+    `bytes=-500`（尾部 N 字节）和 `bytes=0-99,200-299`（多段）都不支持，一律退回 0，
+    宁可从头下一遍，也不要拿一段错位的数据去拼文件。
+    """
+    try:
+        unit, _, spec = (raw or "").partition("=")
+        if unit.strip().lower() != "bytes":
+            return 0
+        if "," in spec:  # 多段范围：不猜，整段从头重来
+            return 0
+        head = spec.split("-", 1)[0].strip()
+        if not head.isdigit():
+            return 0
+        return int(head)
+    except Exception:  # noqa: BLE001 — 解析失败按从头处理，不阻断下载
+        return 0
+
+
 @router.get('/api/cloud-drive/download')
 def cloud_drive_download(request: app.Request):
     """按令牌取文件：服务器带登录态去百度取，再流式转发给浏览器。
@@ -279,28 +300,39 @@ def cloud_drive_download(request: app.Request):
 
     name = (request.query_params.get("name") or "").strip() or "baidu-file"
 
+    # —— 断点续传：浏览器带 Range 就从断点续，不带就从头 ——
+    # 百度直链**裸 GET 一律 403**（还伪装成 31326/31360），所以无论如何都必须带 Range；
+    # 区别只在于起点取浏览器的断点还是 0。实测这台机器出口带宽只有约 3 Mbps，
+    # 400MB 级文件要下十几分钟，中途抖一下整包作废的代价太大 ⇒ 透传续传。
+    _client_range = (request.headers.get("range") or "").strip()
+    _resume_from = _range_start(_client_range)
+
     # —— 每日配额门禁（资源键 cloud_drive，独立计次，不污染普通下载配额）——
     # 免费 3 次/日、会员 200 次/日（见 membership.py）。预检超限抛 402 引导开通会员；
     # 放行即计数（同步流式中转没有「任务完成」回写点，请求即代表一次使用）。
-    _cd_store = app.current_member_store(request)
-    _cd_q = _cd_store.quota_state("cloud_drive")
-    if not (_cd_q.get("unlimited") or _cd_q.get("unknown") or _cd_q.get("allowed", True)):
-        if _cd_q.get("tier") == "free":
-            _cd_detail = (f"今日免费网盘下载次数已用尽（{_cd_q['limit']}/日），"
-                          f"开通VIP会员可解锁 {_cd_q.get('member_limit', 0)} 次/日")
-        else:
-            _cd_detail = f"今日网盘下载配额已用尽（{_cd_q['limit']}/日）"
-        raise app.HTTPException(status_code=402, detail=_cd_detail)
-    try:
-        _cd_store.use_daily("cloud_drive", 1, title=name, platform="百度网盘")
-    except Exception:  # noqa: BLE001 — 计数失败 fail-open，绝不阻断下载
-        pass
+    # 🔴 续传请求（起点 > 0）**不重复计次**：同一个文件重连十次也只算用了一次，
+    #    否则网络每抖一次就扣一次，用户的每日次数会被白白吃光。
+    if not _resume_from:
+        _cd_store = app.current_member_store(request)
+        _cd_q = _cd_store.quota_state("cloud_drive")
+        if not (_cd_q.get("unlimited") or _cd_q.get("unknown") or _cd_q.get("allowed", True)):
+            if _cd_q.get("tier") == "free":
+                _cd_detail = (f"今日免费网盘下载次数已用尽（{_cd_q['limit']}/日），"
+                              f"开通VIP会员可解锁 {_cd_q.get('member_limit', 0)} 次/日")
+            else:
+                _cd_detail = f"今日网盘下载配额已用尽（{_cd_q['limit']}/日）"
+            raise app.HTTPException(status_code=402, detail=_cd_detail)
+        try:
+            _cd_store.use_daily("cloud_drive", 1, title=name, platform="百度网盘")
+        except Exception:  # noqa: BLE001 — 计数失败 fail-open，绝不阻断下载
+            pass
 
     # 复用网页版既有的媒体中继 /api/media/proxy（它已具备 SSRF 护栏、Range 透传、
     # Content-Length 回传、防盗链 Referer、浏览器 UA）。这里只额外做两件事：
-    #   ① force_range：百度直链裸 GET 一律 403，必须带 Range；
+    #   ① force_range：百度直链裸 GET 一律 403，必须带 Range —— 起点优先用浏览器的断点，
+    #      没有断点才从 0 开始（同时保证 206 / Content-Range 被原样透传回去）；
     #   ② cookie：传服务器存的百度登录态（浏览器拿不到，只能由服务器带）。
     # dlink 不出现在 URL 里（令牌 → dlink 在服务端解开），百度 cookie 也不出服务器。
     from routers.core import media_proxy
     return media_proxy(u=dlink, cookie=cookie, dl=name, request=request,
-                       force_range="bytes=0-")
+                       force_range=_client_range or "bytes=0-")

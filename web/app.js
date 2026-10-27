@@ -7407,64 +7407,141 @@
     }
   };
 
+  const panSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Content-Range: `bytes 1234-5678/9999` → 9999（文件总长）；拿不到返回 0。
+  // 只取末尾的 `/总长`：区间起点用我们自己累加的 done，不采信服务端那段。
+  const panRangeTotal = (contentRange) => {
+    const m = /\/(\d+)\s*$/.exec(String(contentRange || ''));
+    return m ? (Number(m[1]) || 0) : 0;
+  };
+
   const panDownload = async (f, btn, li) => {
     if (!panRequireLogin()) return;
     const label = btn.textContent;
     btn.textContent = '下载中…';
     if (li) li.classList.add('is-busy');
-    const total = Number(f.size) || 0;
+    const name = f.name || 'baidu-file';
+    const url = '/api/cloud-drive/download?id=' + encodeURIComponent(f.id)
+      + '&name=' + encodeURIComponent(name);
+    // 解析时 list 给的 size 只作预估；真正准的是响应头 Content-Range 里的总长，
+    // 拿到就覆盖（否则进度百分比可能永远到不了 100%）。
+    let total = Number(f.size) || 0;
+    let done = 0;
+    let chunks = [];
+    let writable = null;
+    let handle = null;
+    let lastPaint = 0;
+    let baseDone = 0;      // 本轮开始时的已收字节 —— 算速度要减掉它，否则续传时会虚高
+    let t0 = Date.now();
+    const paint = (extra) => {
+      const sec = Math.max(0.001, (Date.now() - t0) / 1000);
+      const sp = Math.max(0, Math.round((done - baseDone) / sec));
+      const head = total
+        ? `下载中 ${Math.min(100, Math.floor(done * 100 / total))}% · ${formatBytes(sp)}/s`
+        : `下载中 ${formatBytes(done)} · ${formatBytes(sp)}/s`;
+      btn.textContent = head + (extra || '');
+    };
     try {
-      const url = '/api/cloud-drive/download?id=' + encodeURIComponent(f.id)
-        + '&name=' + encodeURIComponent(f.name || 'baidu-file');
-      const resp = await fetch(url, { headers: authBearerHeaders(), credentials: 'same-origin' });
-      if (!resp.ok) {
-        let msg = '下载失败';
-        try { const p = await resp.json(); msg = p.detail || p.error || msg; } catch (_) { /* ignore */ }
-        if (resp.status === 402) {
-          panSetStatus(msg + ' · 点右上角「订阅」开通会员解锁', true);
-          try { promptSubscribe(); } catch (_) { /* ignore */ }
-          return;
-        }
-        if (resp.status === 403 && /登录/.test(msg)) {
-          try { if (window.__vdlOpenAuthModal) window.__vdlOpenAuthModal(); } catch (_) { /* ignore */ }
-        }
-        throw new Error(msg);
-      }
-      const name = f.name || 'baidu-file';
-      // 流式读取，边下边累计字节，实时刷新按钮上的进度与速度（解析时已返回文件总大小 f.size）。
-      const reader = resp.body.getReader();
-      const chunks = [];
-      let done = 0;
-      let lastPaint = 0;
-      const t0 = Date.now();
-      const paint = () => {
-        const sec = Math.max(0.001, (Date.now() - t0) / 1000);
-        const sp = Math.round(done / sec);
-        btn.textContent = total
-          ? `下载中 ${Math.floor(done * 100 / total)}% · ${formatBytes(sp)}/s`
-          : `下载中 ${formatBytes(done)} · ${formatBytes(sp)}/s`;
-      };
-      let writable = null;
       // 大文件优先流式落盘（Chrome/Edge 的 File System Access API），避免整包进内存；
       // 浏览器不支持时回退 blob（文件太大会吃内存，但保证能下）。
+      // handle 拿到后就复用：重试时用 keepExistingData 打开，从断点续写。
       if (window.showSaveFilePicker) {
-        try { writable = await (await window.showSaveFilePicker({ suggestedName: name })).createWritable(); }
-        catch (e) { if (e && e.name === 'AbortError') { panSetStatus('已取消保存'); return; } writable = null; }
+        try { handle = await window.showSaveFilePicker({ suggestedName: name }); }
+        catch (e) { if (e && e.name === 'AbortError') { panSetStatus('已取消保存'); return; } handle = null; }
       }
+      // 这台服务器出口只有约 3 Mbps，400MB 要下十几分钟 ⇒ 中途断流必须能接上，
+      // 否则一次抖动就把十几分钟白等。最多续 5 次，退避递增。
+      const MAX_RETRY = 5;
+      let attempt = 0;
       for (;;) {
-        const { done: end, value } = await reader.read();
-        if (end) break;
-        if (value) {
+        baseDone = done;
+        t0 = Date.now();
+        lastPaint = 0;
+        let resp = null;
+        try {
+          const headers = authBearerHeaders ? authBearerHeaders() : {};
+          if (done > 0) headers.Range = 'bytes=' + done + '-';
+          resp = await fetch(url, { headers, credentials: 'same-origin' });
+        } catch (netErr) {
+          if (attempt >= MAX_RETRY) throw netErr;
+          attempt += 1;
+          panSetStatus(`网络中断，第 ${attempt}/${MAX_RETRY} 次从 ${formatBytes(done)} 处续传…`);
+          await panSleep(1200 * attempt);
+          continue;
+        }
+        if (resp.status === 416 && done > 0) break;   // 请求起点已到文件末尾 ⇒ 其实下完了
+        if (!resp.ok) {
+          let msg = '下载失败';
+          try { const p = await resp.json(); msg = p.detail || p.error || msg; } catch (_) { /* ignore */ }
+          if (resp.status === 402) {
+            panSetStatus(msg + ' · 点右上角「订阅」开通会员解锁', true);
+            try { promptSubscribe(); } catch (_) { /* ignore */ }
+            return;
+          }
+          if (resp.status === 403 && /登录/.test(msg)) {
+            try { if (window.__vdlOpenAuthModal) window.__vdlOpenAuthModal(); } catch (_) { /* ignore */ }
+          }
+          throw new Error(msg);
+        }
+        // 服务端没吃 Range（回 200 整包）⇒ 已收的作废，从头重新攒，别拼出错位文件
+        if (done > 0 && resp.status !== 206) {
+          done = 0;
+          chunks = [];
+          if (writable) { try { await writable.abort(); } catch (_) { /* ignore */ } writable = null; }
+        }
+        const rangeTotal = panRangeTotal(resp.headers.get('Content-Range'));
+        if (rangeTotal > 0) {
+          total = rangeTotal;
+        } else if (!total) {
+          const cl = Number(resp.headers.get('Content-Length')) || 0;
+          if (cl > 0) total = done + cl;
+        }
+        if (handle && !writable) {
+          writable = await handle.createWritable({ keepExistingData: done > 0 });
+        }
+        if (writable && done > 0) {
+          try { await writable.seek(done); } catch (_) { /* 老浏览器无 seek，按顺序写也基本对 */ }
+        }
+        const reader = resp.body.getReader();
+        let broke = null;
+        for (;;) {
+          let step;
+          try { step = await reader.read(); }
+          catch (readErr) { broke = readErr; break; }
+          if (step.done) break;
+          const value = step.value;
+          if (!value || !value.byteLength) continue;
           done += value.byteLength;
-          chunks.push(value);
           if (writable) await writable.write(value);
+          else chunks.push(value);
           const now = Date.now();
           if (now - lastPaint > 200) { lastPaint = now; paint(); }
         }
+        if (broke) {
+          if (attempt >= MAX_RETRY) throw broke;
+          attempt += 1;
+          panSetStatus(`网络中断，第 ${attempt}/${MAX_RETRY} 次从 ${formatBytes(done)} 处续传…`);
+          await panSleep(1200 * attempt);
+          continue;
+        }
+        // 流正常结束但没到下发的总长 ⇒ 上游提前收尾，续接而不是当作完成
+        if (total > 0 && done < total && attempt < MAX_RETRY) {
+          attempt += 1;
+          panSetStatus(`只收到 ${formatBytes(done)}/${formatBytes(total)}，正在续传…`);
+          await panSleep(800);
+          continue;
+        }
+        break;
       }
       paint();
       if (writable) {
         await writable.close();
+        writable = null;
+        if (total > 0 && done < total) {
+          panSetStatus(`只下到 ${formatBytes(done)}/${formatBytes(total)}，请重新点击下载`, true);
+          return;
+        }
         panSetStatus('已保存：' + name);
         return;
       }
@@ -7478,6 +7555,7 @@
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       panSetStatus('已开始下载：' + name);
     } catch (e) {
+      try { if (writable) await writable.abort(); } catch (_) { /* ignore */ }
       panSetStatus((e && e.message) || '下载失败', true);
     } finally {
       btn.textContent = label;
