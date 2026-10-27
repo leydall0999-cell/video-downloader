@@ -304,21 +304,27 @@ def test_logged_in_encrypted_dlink_raises_actionable_error():
     assert "直链" in msg and "加密" in msg
 
 
-def test_filemetas_plain_dlink_is_preferred():
-    """主路径：/api/filemetas?dlink=1 直接给明文直链，命中后不再调 sharedownload。
+def test_sharedownload_is_primary_and_filemetas_falls_back():
+    """主路径 = /api/sharedownload；filemetas 只在 sharedownload 给密文时兜底。
 
-    2026-10-24 实测：sharedownload 已把 list 换成 AES 密文（带不带登录态都一样，
-    4184/4192 字符、16 字节对齐、客户端解不开），而同一账号体系的 filemetas
-    仍返回明文 dlink，故改成 filemetas 优先、sharedownload 兜底。
+    2026-10-27 语义再变（推翻 10-24 的「filemetas 优先」）：同一链接 × 三个
+    池内账号实测，filemetas 对分享文件普遍回 `errno=0, info=[]`（与账号等级无关），
+    而 sharedownload 对**会员账号**回明文数组含真直链、对普通账号回 AES 密文串。
+    所以顺序改回 sharedownload 主路径，filemetas 留作兜底（成本只有一次请求）。
     """
-    p, box = _patch_session(fm_info=[{"fs_id": int(FS_ID), "dlink": DLINK}])
+    p, box = _patch_session(dl_list="ENCRYPTED_BASE64_BLOB==",
+                            fm_info=[{"fs_id": int(FS_ID), "dlink": DLINK}])
     with p:
         files = baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=abc", pwd=PWD)
     s = box["s"]
-    assert files[0].dlink == DLINK
+    assert files[0].dlink == DLINK, "sharedownload 给密文时应退到 filemetas 拿明文链"
     urls = [u for _, u, _ in s.calls]
+    assert any("/api/sharedownload" in u for u in urls)
     assert any("/api/filemetas" in u for u in urls)
-    assert not any("/api/sharedownload" in u for u in urls), "命中 filemetas 后不该再调 sharedownload"
+    # 顺序也要锁：先 sharedownload，密文才轮到 filemetas
+    i_dl = next(i for i, u in enumerate(urls) if "/api/sharedownload" in u)
+    i_fm = next(i for i, u in enumerate(urls) if "/api/filemetas" in u)
+    assert i_dl < i_fm, "应先试 sharedownload，再退 filemetas"
     fm = [u for u in urls if "/api/filemetas" in u][0]
     assert "dlink=1" in fm and "type=dlink" in fm
 
@@ -544,7 +550,7 @@ def test_router_resolve_third_state_parsed_but_needs_login():
 
 def test_router_resolve_error_flags_credential():
     rt = _router()
-    with mock.patch.object(rt, "_baidu_login_cookie", return_value=""), \
+    with mock.patch.object(rt, "_baidu_login_cookies", return_value=[]), \
          mock.patch.object(rt.baidu, "resolve",
                            side_effect=ValueError("不是有效的百度网盘分享链接")):
         out = rt.cloud_drive_resolve(rt.CloudDriveResolveReq(url="https://pan.baidu.com/x"))
@@ -596,3 +602,48 @@ def test_router_credential_rejects_empty():
     rt = _router()
     out = rt.cloud_drive_set_credential(rt.CloudDriveCredentialReq(bduss="  "))
     assert out["ok"] is False
+
+
+def test_resolve_share_retries_next_account_when_cipher():
+    """普通号（密文）→ 自动换会员号重试，不许直接甩给用户。
+
+    2026-10-27 线上真因：百度只对**会员账号**回明文直链。池里同时有会员号和
+    普通号时，只取最新一条会随机踩到普通号 ⇒ 用户看到「百度这次没返回可用的
+    下载直链（接口返回了加密数据）」。契约：按候选顺序逐个试，第一个给出明文
+    直链的胜出，且下载用的就是它。
+    """
+    p, box = _patch_session(fm_info=[])
+    tried: list = []
+    real = baidu.share_dlinks
+
+    def fake_dl(s, sign, ts, uk, share_id, ids, sekey, q):
+        tried.append(1)
+        if len(tried) == 1:
+            raise baidu.NeedMemberLogin("普通账号只回密文")
+        return {str(FS_ID): DLINK}
+
+    with p, mock.patch.object(baidu, "share_dlinks", side_effect=fake_dl):
+        files = baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=vip_first",
+                                    pwd=PWD,
+                                    extra_cookies=["BDUSS=plain_second"])
+    assert len(tried) == 2, "第一个账号拿不到明文链时必须换下一个"
+    assert files[0].dlink == DLINK
+    assert "plain_second" in (files[0].cookie or ""), "下载要沿用拿到直链的那个账号"
+    assert real is baidu.share_dlinks
+
+
+def test_all_accounts_cipher_raises_member_hint():
+    """全池都是普通号 → 必须是「需要会员账号」的人话，不是英文堆栈。"""
+    p, _ = _patch_session(dl_list="ENCRYPTED_BASE64_BLOB==")
+    with p:
+        with pytest.raises(baidu.NeedMemberLogin) as ei:
+            baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=plain",
+                                pwd=PWD, extra_cookies=["BDUSS=plain2"])
+    msg = str(ei.value)
+    assert "会员" in msg and "加密数据" in msg
+    assert " object has no attribute " not in msg
+
+
+def test_cookie_candidates_dedupes_by_bduss_and_drops_anonymous():
+    out = baidu._cookie_candidates("BAIDUID=anon; PSTM=1", ["BDUSS=A; x=1", "BDUSS=A; y=2", "BDUSS=B"])
+    assert out == ["BDUSS=A; x=1", "BDUSS=B"]

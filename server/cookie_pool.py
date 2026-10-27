@@ -415,6 +415,51 @@ def get_cookie(domain: str) -> str | None:
     return None
 
 
+def get_cookies(domain: str, limit: int = 8) -> list:
+    """返回该域**全部**可用明文 Cookie（最新在前，按登录会话去重）。
+
+    与 get_cookie 的唯一区别是「给多条」。存在的理由是百度网盘 2026-10-27 起
+    把「换下载直链」按**账号等级**分流（实测三个账号，同一链接交叉复现）：
+
+      · vip_type=2（SVIP）→ /api/sharedownload 返回明文 list，含真直链；
+      · vip_type=0（普通）→ 同一接口返回 4 KB 的 AES 密文串，无法使用。
+
+    池里同时存在会员号和普通号时，只取最新一条会随机踩到普通号 ⇒ 解析必然
+    报「返回了加密数据」。所以换直链这一环必须能按序换号重试（见
+    cloud_drives/baidu.py 的 resolve_share）。其他域仍用 get_cookie。
+
+    ⚠️ 这里**不**调 `_mark_used`：多读出来的是「候选」，真正被用掉的那条由
+    上层（解析成功后）决定，把候选全标成「最近使用」会让后台的清理判断失真。
+    """
+    out: list = []
+    seen: set = set()
+    for d in _candidates(domain):
+        f = _pool_file(d)
+        if not f.exists():
+            continue
+        try:
+            data = json.loads(f.read_text())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[cookie_pool] get_cookies read error domain=%s file=%s: %s",
+                           domain, f, e)
+            continue
+        for c in reversed(data.get("cookies", [])):   # 最新优先
+            if time.time() - c.get("ts", 0) > _TTL:
+                continue
+            header = _decrypt_item(c)
+            if not header:
+                continue
+            key = _session_key(d, header)
+            if key in seen:      # 同一登录会话的多个快照只留最新一条
+                continue
+            seen.add(key)
+            out.append(header)
+            if len(out) >= limit:
+                return out
+    logger.info("[cookie_pool] get_cookies domain=%s n=%s", domain, len(out))
+    return out
+
+
 def _mark_used(f: Path, header: str) -> None:
     """把这条 Cookie 标记为「刚被用过」（后台「最近一次使用」列的数据源）。
 

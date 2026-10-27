@@ -57,7 +57,9 @@ _TIMEOUT = 20
 _ERRNO_MSG = {
     0: "成功",
     2: "参数错误",
-    -6: "接口已下线",
+    # -6 曾被写成「接口已下线」，是误判：2026-10-27 实测 filemetas 匿名请求回 -6、
+    # 带上 BDUSS 后回 0（只是 info 为空），说明它是「缺登录态」而不是接口没了。
+    -6: "缺少有效的百度登录态",
     -12: "提取码校验失败",
     116: "分享不存在",
     105: "分享链接已失效，或提取码不正确",
@@ -104,10 +106,23 @@ class CloudFile:
         }
 
 
+class NeedMemberLogin(ValueError):
+    """换直链时百度返回密文 —— 说明当前用的是**普通账号**（vip_type=0）。
+
+    2026-10-27 实测，同一分享链接 × 三个池内账号，可稳定复现：
+
+      · vip_type=2（SVIP）→ /api/sharedownload 的 list 是明文数组，元素含 dlink；
+      · vip_type=0（普通）→ 同一接口的 list 是 4 KB 的 AES 密文 base64 串。
+
+    密钥不在客户端可得范围（sekey / sign / md5 都试过），所以这条路对普通账号
+    是死的。结论：这不是「百度换了接口、要升级客户端」，而是「这个账号等级
+    拿不到明文直链」—— 上层应当换池里下一个账号重试，而不是让用户去升级。
+    """
+
+
 # ——————————————————————————————————————————————————————————————
 # 底层 HTTP（独立成函数，便于单测 mock）
 # ——————————————————————————————————————————————————————————————
-
 def _logid() -> str:
     """百度要求的 logid：base64(32位大写hex + ':FG=1')。"""
     h = binascii.hexlify(os.urandom(16)).decode().upper()
@@ -131,6 +146,31 @@ def new_session(referer: str) -> requests.Session:
         "Accept-Encoding": "identity",
     })
     return s
+
+
+def _apply_login_cookie(s: requests.Session, cookie: str) -> None:
+    """把一整段 Cookie 头逐条塞进 session（域 .baidu.com）。
+
+    不用 `s.headers["Cookie"] = cookie`：那样会把分享页刚种下的 BDCLND（本次
+    分享的提取码票据）整个顶掉，实测后续 /share/list 直接 errno=-9。逐条 set
+    只加不减，BDCLND 保留 share_verify 刚写进去的新值。
+
+    跳过 cookie 自带的 BDCLND：那是**上一次**分享的票据，串到本次分享上会失效。
+    """
+    if not cookie:
+        return
+    for part in cookie.split(";"):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if not k or k.upper() == "BDCLND":
+            continue
+        try:
+            s.cookies.set(k, v, domain=".baidu.com", path="/")
+        except Exception:  # noqa: BLE001 — 个别畸形键名不该拖垮整次解析
+            continue
 
 
 def _json(resp) -> dict:
@@ -419,53 +459,13 @@ DLINK_UA = "netdisk;P2SP;3.0.20.138"
 _FILEMETAS_BATCH = 100
 
 
-def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str,
-                 fs_ids: list, sekey: str, q: str) -> dict:
-    """④ 换直链。返回 {fs_id: dlink}。
+def _sharedownload(s: requests.Session, sign: str, ts: str, uk: str, share_id: str,
+                   ids: list, sekey: str, q: str) -> tuple:
+    """调 /api/sharedownload，返回 (dlinks, 密文长度)。
 
-    2026-10-24 改为双路径，顺序不能反：
-
-    ① **/api/filemetas?dlink=1 —— 主路径（明文）**
-       直接返回 `info[].dlink`，一次可批 100 个 fsid。
-       发现经过：`/api/sharedownload` 现在对谁都返回密文（见下），
-       而同一账号体系的 filemetas 仍给明文直链，且带登录态时更完整。
-
-    ② **/api/sharedownload —— 回退（老路径）**
-       实测它已把 `list` 从数组换成了 **AES 密文的 base64 字符串**
-       （单文件分享 4184 字符 / 3136 字节，正好 16 字节对齐；
-       带上登录态后变 4192 字符 —— 内容变了，但依然是密文）。
-       密钥不在客户端可得范围内（sekey / sign / md5 各种候选都试过解不开），
-       所以这条路现在基本不可用，只作兜底。
-       ⚠️ 它必须 form 编码（data=），用 json= 百度会返回 errno=2。
+    密文长度 > 0 就是百度给的是 AES 密文串 —— 这不是网络问题，是**账号等级**
+    问题（普通账号拿不到明文），由调用方决定换号还是报错。
     """
-    ids = [int(f) for f in fs_ids if str(f).isdigit()]
-    if not ids:
-        return {}
-
-    out: dict = {}
-    for i in range(0, len(ids), _FILEMETAS_BATCH):
-        batch = ids[i:i + _FILEMETAS_BATCH]
-        url = (
-            f"{_BASE}/api/filemetas?dlink=1"
-            f"&fsids={urllib.parse.quote(json.dumps(batch))}"
-            f"&uk={uk}&shareid={share_id}&type=dlink&{q}"
-        )
-        try:
-            j = _json(s.get(url, timeout=_TIMEOUT))
-        except Exception:  # noqa: BLE001  网络抖动 → 走回退/下一个批次
-            continue
-        if j.get("errno") != 0:
-            continue
-        for item in j.get("info") or []:
-            if not isinstance(item, dict):
-                continue
-            fid = str(item.get("fs_id") or "")
-            if fid and item.get("dlink"):
-                out[fid] = item["dlink"]
-    if out:
-        return out
-
-    # ② 回退老接口
     url = (f"{_BASE}/api/sharedownload?sign={urllib.parse.quote(sign)}"
            f"&timestamp={ts}&{q}")
     body = {
@@ -480,25 +480,89 @@ def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str
         "isPublic": "false",
         "extra": json.dumps({"sekey": sekey}),
     }
+    # ⚠️ 必须 form 编码（data=），用 json= 百度回 errno=2
     j = _json(s.post(url, data=body, timeout=_TIMEOUT))
-    if j.get("errno") != 0:
-        raise ValueError(_errno_msg(j.get("errno"), "获取下载直链失败"))
+    errno = j.get("errno")
     lst = j.get("list")
     if isinstance(lst, str):
-        # 走到这里说明 filemetas 也没给直链，只剩密文响应
-        logger.warning("[baidu] sharedownload 返回密文串（len=%s），filemetas 未给直链", len(lst))
-        raise ValueError(
-            "百度这次没返回可用的下载直链（接口返回了加密数据）。"
-            "请稍后重试；持续出现说明百度换了接口，需要更新版本"
-        )
+        return {}, len(lst)
+    if errno != 0:
+        # 抛而不是静默返回 {}：上层要能「换下一个账号再试」，全试完还要把
+        # 真实原因（errno + 人话）报给用户，不能被吞成一句「没拿到直链」。
+        logger.info("[baidu] sharedownload errno=%s", errno)
+        raise ValueError("%s（errno=%s）" % (_errno_msg(errno, "获取下载直链失败"), errno))
     if not isinstance(lst, list):
-        return {}
+        return {}, 0
+    out: dict = {}
     for item in lst:
-        if not isinstance(item, dict):   # 防御：偶发夹带非对象条目
+        if not isinstance(item, dict):     # 防御：偶发夹带非对象条目
             continue
         fid = str(item.get("fs_id") or "")
         if fid and item.get("dlink"):
             out[fid] = item["dlink"]
+    return out, 0
+
+
+def _filemetas(s: requests.Session, uk: str, share_id: str, ids: list, q: str) -> dict:
+    """调 /api/filemetas?dlink=1（兜底路径，返回 {fs_id: dlink}）。"""
+    out: dict = {}
+    for i in range(0, len(ids), _FILEMETAS_BATCH):
+        batch = ids[i:i + _FILEMETAS_BATCH]
+        url = (
+            f"{_BASE}/api/filemetas?dlink=1"
+            f"&fsids={urllib.parse.quote(json.dumps(batch))}"
+            f"&uk={uk}&shareid={share_id}&type=dlink&{q}"
+        )
+        try:
+            j = _json(s.get(url, timeout=_TIMEOUT))
+        except Exception:  # noqa: BLE001  网络抖动 → 下一个批次 / 交给上层
+            continue
+        if j.get("errno") != 0:
+            continue
+        for item in j.get("info") or []:
+            if not isinstance(item, dict):
+                continue
+            fid = str(item.get("fs_id") or "")
+            if fid and item.get("dlink"):
+                out[fid] = item["dlink"]
+    return out
+
+
+def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str,
+                 fs_ids: list, sekey: str, q: str) -> dict:
+    """④ 换直链。返回 {fs_id: dlink}；拿不到返回 {}，普通账号则抛 NeedMemberLogin。
+
+    顺序（2026-10-27 重排，依据同一链接 × 三个账号的交叉实测）：
+
+    ① **/api/sharedownload —— 主路径**
+       会员账号（vip_type>0）返回明文数组，元素直接带 dlink，一次可批全部 fsid。
+       ⚠️ 这一步**必须带登录态**：匿名会话拿到的是游客缓存的旧链（1 小时过期，
+          下载必报 31360），普通账号拿到的是 AES 密文串。
+
+    ② **/api/filemetas?dlink=1 —— 兜底**
+       2026-10-24 曾作主路径；现在对分享文件普遍返回 `errno=0, info=[]`（与
+       账号等级无关），所以降为兜底。留着成本只有一次请求，且万一吃到转存场景
+       还能给链。
+
+    旧结论「sharedownload 对谁都返回密文」是错的：当时池里只有普通账号，
+    把「账号等级」误判成了「百度换接口」。
+    """
+    ids = [int(f) for f in fs_ids if str(f).isdigit()]
+    if not ids:
+        return {}
+
+    out, cipher_len = _sharedownload(s, sign, ts, uk, share_id, ids, sekey, q)
+    if out:
+        return out
+
+    out = _filemetas(s, uk, share_id, ids, q)
+    if out:
+        return out
+
+    if cipher_len:
+        raise NeedMemberLogin(
+            "百度对普通账号只返回加密数据（密文 %d 字节），拿不到下载直链" % cipher_len
+        )
     return out
 
 
@@ -517,6 +581,30 @@ def _has_baidu_login(cookie: str) -> bool:
     把「缺登录」这条可读提示盖成一句莫名的解密失败。
     """
     return bool(cookie) and "BDUSS=" in cookie
+
+
+def _bduss_of(cookie: str) -> str:
+    """取出 BDUSS 值（用于候选去重）。"""
+    for part in (cookie or "").split(";"):
+        k, _, v = part.partition("=")
+        if k.strip() == "BDUSS":
+            return v.strip()
+    return ""
+
+
+def _cookie_candidates(login_cookie: str, extra: Optional[list] = None) -> list:
+    """合并候选登录态：只留含 BDUSS 的，按 BDUSS 去重保持顺序（首选在前）。"""
+    out: list = []
+    seen: set = set()
+    for c in [login_cookie] + list(extra or []):
+        if not _has_baidu_login(c):
+            continue
+        key = _bduss_of(c)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
 
 
 def resolve_personal(path: str, cookie: str = "") -> list[CloudFile]:
@@ -546,11 +634,16 @@ def _share_page_missing(s: requests.Session, share_url: str) -> bool:
     return ("页面不存在" in body or "分享的文件已经被取消" in body) and "yunData" not in body
 
 
-def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[CloudFile]:
+def resolve_share(url: str, login_cookie: str = "", pwd: str = "",
+                  extra_cookies: Optional[list] = None) -> list[CloudFile]:
     """分享链接 → 直链列表。
 
-    login_cookie：用户百度登录态（完整 Cookie 头）。解析过程不需要它，
-    但没有它拿到的 dlink 下载会 403，所以会标记 CloudFile.need_login=True。
+    login_cookie：首选百度登录态（完整 Cookie 头）。
+    extra_cookies：备选登录态（池里其他账号）。百度只给会员账号明文直链，
+      所以换直链这一步要能按序换号（见函数内的候选循环）。
+
+    没登录态也能拿到**文件清单**（verify / list 不需要登录），只是换不到直链，
+    这时返回的 CloudFile.need_login=True，前端据此提示去配凭据。
     """
     p = parse_baidu_url(url)
     if p.get("kind") != "share" or not p.get("surl"):
@@ -608,34 +701,71 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
     # dstime=now、expires=8h 的活链，下载 206 正常（SVIP 实测 3.6 MB/s）。
     # ⌁ 注意只有**这一步**要登录态：verify / tplconfig / list 仍必须匿名，
     #   带登录态请求 tplconfig 会返回 HTML（踩过）。
-    s_dl = s
-    login_ok = _has_baidu_login(login_cookie)
-    if login_ok:
-        s_dl = new_session(share_url)
-        s_dl.headers["Cookie"] = login_cookie
+    # 🔴🔴 换直链必须用**会员账号的会话**（2026-10-27 实测，同一链接 × 三个账号）：
+    #   · 匿名会话  → 游客缓存里的旧链（1 小时过期，下载必报 31360）；
+    #   · 普通账号  → /api/sharedownload 直接回 AES 密文串，根本拿不到 dlink；
+    #   · 会员账号  → 明文数组，dlink 有效期 8 小时。
+    # 所以这里按「候选账号」逐个试，第一个给出明文直链的胜出。只试一条会随机踩到
+    # 普通号 —— 线上「百度这次没返回可用的下载直链（返回了加密数据）」的真因。
+    cands = _cookie_candidates(login_cookie, extra_cookies)
+    login_ok = bool(cands)
     dlinks: dict = {}
-    try:
-        dlinks = share_dlinks(s_dl, sign, ts, uk, share_id, fs_ids, sekey, q)
-    except ValueError:
-        if login_ok:
-            raise       # 有登录态仍失败 = 真错误（errno 语义 / 风控），照旧抛给上层
-        # 匿名申请直链会拿到加密响应（见 share_dlinks 内注释，2026-10-24 实测）。
-        # 不当作致命错误：继续往下走，把「文件清单 + need_login」返回给前端，
-        # 让用户看到「有什么文件、缺什么才能下」，而不是一个空白面板。
-        dlinks = {}
+    used_cookie = ""
+    last_err: Optional[Exception] = None
+    for ck in (cands or [""]):
+        s_dl = new_session(share_url)
+        if ck:
+            _apply_login_cookie(s_dl, ck)
+        try:
+            got = share_dlinks(s_dl, sign, ts, uk, share_id, fs_ids, sekey, q)
+        except NeedMemberLogin as e:
+            last_err = e
+            logger.info("[baidu] 该账号非会员，换下一个：%s", e)
+            continue
+        except ValueError as e:
+            last_err = e
+            logger.info("[baidu] 换直链失败，换下一个：%s", e)
+            continue
+        if got:
+            dlinks = got
+            used_cookie = ck
+            break
+
+    if not dlinks:
+        if not login_ok:
+            # 完全没有登录态（匿名 / 只有百度搜索匿名 Cookie）：不当作致命错误，
+            # 把「文件清单 + need_login」返回给前端，让用户看到「有什么文件、
+            # 缺什么才能下」，而不是一个空白面板半句英文报错。
+            dlinks = {}
+        elif isinstance(last_err, NeedMemberLogin):
+            raise NeedMemberLogin(
+                "百度只对会员账号返回可用的下载直链：已试 %d 个百度账号，拿到的"
+                "都是加密数据。请在「高级选项」填写一个百度网盘会员账号的 Cookie"
+                "（需含 BDUSS），或让管理员更新共享登录态"
+                % max(1, len(cands)))
+        elif last_err is not None:
+            # 有登录态但接口真的报错（errno≠0 / 风控）：把原始语义抛给用户，
+            # 不要退化成「列表有了、下载按钮全是灰的」这种猜谜状态。
+            raise last_err
+        else:
+            dlinks = {}
+
     # 批量漏掉的逐个补一次（百度偶发只回一部分）
     missing = [f for f in fs_ids if str(f) not in dlinks]
-    for fid in missing:
-        try:
-            dlinks.update(share_dlinks(s_dl, sign, ts, uk, share_id, [fid], sekey, q))
-        except Exception:  # noqa: BLE001
-            continue
+    if missing and used_cookie:
+        s_dl = new_session(share_url)
+        _apply_login_cookie(s_dl, used_cookie)
+        for fid in missing:
+            try:
+                dlinks.update(share_dlinks(s_dl, sign, ts, uk, share_id, [fid], sekey, q))
+            except Exception:  # noqa: BLE001
+                continue
 
     results: list[CloudFile] = []
     for r, rel in files:
         fid = str(r.get("fs_id") or "")
         dlink = dlinks.get(fid) or ""
-        if not dlink and login_ok:
+        if not dlink and used_cookie:
             continue     # 有登录态却拿不到直链 = 这条真失败（最后统一报错）
         try:
             size = int(r.get("size") or 0)
@@ -645,9 +775,9 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
             name=r.get("server_filename") or r.get("filename") or "file",
             size=size,
             dlink=dlink,
-            cookie=login_cookie or "",
+            cookie=used_cookie or "",
             headers={"User-Agent": DLINK_UA},
-            need_login=not login_ok,
+            need_login=not used_cookie,
             path=rel,
         ))
     if not results:
@@ -655,12 +785,13 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
     return results
 
 
-def resolve(url: str, login_cookie: str = "", pwd: str = "") -> list[CloudFile]:
+def resolve(url: str, login_cookie: str = "", pwd: str = "",
+            extra_cookies: Optional[list] = None) -> list[CloudFile]:
     """根据链接类型分发。"""
     p = parse_baidu_url(url)
     kind = p.get("kind")
     if kind == "share":
-        return resolve_share(url, login_cookie, pwd)
+        return resolve_share(url, login_cookie, pwd, extra_cookies)
     if kind == "personal":
         return resolve_personal(p.get("path", "/"), login_cookie)
     raise ValueError("无法识别的百度网盘链接")

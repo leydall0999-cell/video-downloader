@@ -143,6 +143,68 @@ def _baidu_login_cookie() -> str:
         return ""
 
 
+def _baidu_login_cookies() -> list:
+    """候选登录态列表（首选在前）：手动保存 → 本机缓存 → 浏览器解密 → 共享池全部。
+
+    为什么需要「多条」：百度 2026-10-27 起把「换下载直链」按**账号等级**分流，
+    只有会员账号（vip_type>0）才回明文 list，普通账号回 4 KB 的 AES 密文串
+    （实测同一链接 × 三个池内账号，稳定复现）。本机缓存里可能同时有会员号和
+    普通号，只取一条会随机踩到普通号 ⇒ 解析必报「返回了加密数据」。
+
+    所以解析时把候选交给 baidu.resolve(..., extra_cookies=cands) 逐个重试；
+    `_baidu_login_cookie()` 仍返回第一条，供单条场合（如「是否已配置登录态」）。
+    """
+    out: list = []
+    stored = get_baidu_bduss() or ""
+    if stored:
+        out.append(stored if "=" in stored else f"BDUSS={stored}")
+
+    try:
+        import cookie_cache
+        for host in _BAIDU_HOSTS:
+            got = cookie_cache.peek_cached_cookie_header(host)
+            if got:
+                _auto_contrib(got, "cache")
+                out.append(got)
+                break
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        import cookie_cache
+        got = cookie_cache.get_cached_cookie_header("pan.baidu.com")
+        if got:
+            _auto_contrib(got, "browser")
+            out.append(got)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 共享池：全部候选（池里可能混着普通号，交给解析器逐个试）
+    try:
+        from cookie_pool import get_cookies
+        out.extend(get_cookies("pan.baidu.com") or [])
+    except Exception:  # noqa: BLE001 — 池读失败不该挡住已拿到的本机登录态
+        logger.warning("[cloud_drive] read cookie pool failed", exc_info=True)
+
+    # 只留含 BDUSS 的真登录态，按 BDUSS 去重（顺序不变）
+    picked: list = []
+    seen: set = set()
+    for c in out:
+        if not c or "BDUSS=" not in c:
+            continue
+        key = ""
+        for part in c.split(";"):
+            k, _, v = part.partition("=")
+            if k.strip() == "BDUSS":
+                key = v.strip()
+                break
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        picked.append(c)
+    return picked
+
+
 @router.post('/api/cloud-drive/contribute')
 def cloud_drive_contribute() -> dict:
     """把已保存的百度登录态贡献到共享池（用户在网盘页显式点击，弹窗已说明后果）。
@@ -196,9 +258,10 @@ def cloud_drive_contribute() -> dict:
 
 @router.post('/api/cloud-drive/resolve')
 def cloud_drive_resolve(req: CloudDriveResolveReq) -> dict:
-    cookie = _baidu_login_cookie()
+    cands = _baidu_login_cookies()
+    cookie = cands[0] if cands else ""
     try:
-        files = baidu.resolve(req.url, cookie, req.pwd or "")
+        files = baidu.resolve(req.url, cookie, req.pwd or "", cands)
     except ValueError as e:
         # 链接无法识别 / 解析失败：返回语义清晰的错误，便于前端提示
         return {"ok": False, "error": str(e), "need_credential": (not cookie)}
