@@ -2,3 +2,4 @@
 # Git Bash 执行时会去找 "bash\r" 解释器 ⇒ bad interpreter，钩子静默失效。
 .githooks/* text eol=lf
 tools/check_syntax.py text eol=lf
+tools/verify_hooks.sh text eol=lf
