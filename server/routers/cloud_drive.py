@@ -220,18 +220,23 @@ def cloud_drive_contribute() -> dict:
 
     header = get_baidu_bduss() or ""
     if not header:
-        return {"ok": False, "error": "请先保存百度登录态（在上面填 BDUSS）"}
+        # 真实原因（用户还没保存 BDUSS）只进日志；上屏统一 baidu.USER_ERROR_TEXT。
+        logger.warning("[cloud_drive] contribute 被拒：本机未保存百度登录态")
+        return {"ok": False, "error": baidu.USER_ERROR_TEXT}
     if not header.lower().startswith("bduss="):
         header = f"BDUSS={header}"
 
     ok, info = baidu_probe(header)
     if ok is False:
-        return {"ok": False, "error": "登录态无效或已过期，请重新保存后再贡献"}
+        logger.warning("[cloud_drive] contribute 被拒：登录态验真未通过（info=%s）",
+                       str(info)[:200])
+        return {"ok": False, "error": baidu.USER_ERROR_TEXT}
     vip_type = int((info or {}).get("vip_type") or 0)
 
     added = add_cookie("baidu.com", header, source="contrib")
     # 本机已有同内容时不重复记（add_cookie 返回 False 表示内容已存在，仍算成功）
-    cloud: dict = {"pushed": False, "reason": "未配置云端同步"}
+    # reason 上屏用统一文案，真实原因（未配置云端同步 / 推送异常）见下面 logger。
+    cloud: dict = {"pushed": False, "reason": baidu.USER_ERROR_TEXT}
     try:
         import app as _app
         url, token = _app._cloud_sync_config()
@@ -239,8 +244,11 @@ def cloud_drive_contribute() -> dict:
             resp = _app._push_cookie_to_cloud("baidu.com", header, url, token)
             cloud = {"pushed": bool((resp or {}).get("ok")),
                      "verified": (resp or {}).get("verified")}
+        else:
+            logger.info("[cloud_drive] contribute 未推云端：未配置云端同步")
     except Exception as e:  # 网络/限流：本机池已生效，不影响主流程
-        cloud = {"pushed": False, "reason": str(e)[:120]}
+        cloud = {"pushed": False, "reason": baidu.USER_ERROR_TEXT}
+        logger.warning("[cloud_drive] contribute 推云端失败：%s", str(e)[:200])
 
     # 回读确认池里真能取到（别对用户谎报成功）
     reachable = bool(_pool_get("pan.baidu.com"))
@@ -263,11 +271,15 @@ def cloud_drive_resolve(req: CloudDriveResolveReq) -> dict:
     try:
         files = baidu.resolve(req.url, cookie, req.pwd or "", cands)
     except ValueError as e:
-        # 链接无法识别 / 解析失败：返回语义清晰的错误，便于前端提示
-        return {"ok": False, "error": str(e), "need_credential": (not cookie)}
+        # 🔴 2026-10-27 乐懂定档：前端统一只显示 baidu.USER_ERROR_TEXT。
+        # 真实原因（errno / 账号等级 / 分享状态）一律进日志，交运维监控排查。
+        logger.warning("[cloud_drive] resolve 失败：%s", str(e)[:300])
+        return {"ok": False, "error": baidu.USER_ERROR_TEXT, "need_credential": (not cookie)}
     except Exception as e:  # noqa: BLE001
+        # ⚠️ 别写成 f"百度网盘解析失败：{_human_err(e)}" —— _human_err 的兜底句
+        #    正是这句统一文案，拼起来会变成「…失败：…返回异常…」（2026-10-27 踩过）。
         logger.warning("[cloud_drive] resolve failed: %s", str(e)[:200], exc_info=True)
-        return {"ok": False, "error": f"百度网盘解析失败：{_human_err(e)}", "need_credential": (not cookie)}
+        return {"ok": False, "error": baidu.USER_ERROR_TEXT, "need_credential": (not cookie)}
     # 第三态：解析成功但缺下载登录态（百度 dlink 匿名下载会 403）
     need_login = any(getattr(f, "need_login", False) for f in files)
     return {
@@ -285,7 +297,8 @@ def cloud_drive_resolve(req: CloudDriveResolveReq) -> dict:
 def cloud_drive_set_credential(req: CloudDriveCredentialReq) -> dict:
     bduss = (req.bduss or "").strip()
     if not bduss:
-        return {"ok": False, "error": "登录态不能为空"}
+        logger.warning("[cloud_drive] credential 保存被拒：BDUSS 为空")
+        return {"ok": False, "error": baidu.USER_ERROR_TEXT}
     loc = set_baidu_bduss(bduss)   # 内部兼容完整 Cookie 头 / 裸 BDUSS
     return {"ok": True, "stored_in": loc}
 

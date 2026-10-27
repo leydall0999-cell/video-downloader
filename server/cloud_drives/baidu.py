@@ -53,7 +53,15 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36")
 _TIMEOUT = 20
 
+# 🔴 面向用户的**唯一**失败文案（2026-10-27 乐懂定档，别改回去）。
+# 前端不再展示 errno / 会员等级 / 浏览器锁库等内部细节，一律只显示这一句；
+# 真实原因必须走 logger 进运维监控（每条替换点都已配 logger.warning/info）。
+# 其他模块请引用本常量（routers/cloud_drive.py → baidu.USER_ERROR_TEXT；
+# downloader.py → _user_error_text()），不要在别处再写一份字面量，否则又会漂。
+USER_ERROR_TEXT = "百度网盘接口返回异常（可能触发了风控，或分享链接已失效），请稍后重试"
+
 # 百度 errno → 人话（实测汇总，详见 FINDINGS §3）
+# ⚠️ 仅供**日志与运维监控**使用：这些细节不再直接上屏（见上面的 USER_ERROR_TEXT）。
 _ERRNO_MSG = {
     0: "成功",
     2: "参数错误",
@@ -489,8 +497,12 @@ def _sharedownload(s: requests.Session, sign: str, ts: str, uk: str, share_id: s
     if errno != 0:
         # 抛而不是静默返回 {}：上层要能「换下一个账号再试」，全试完还要把
         # 真实原因（errno + 人话）报给用户，不能被吞成一句「没拿到直链」。
-        logger.info("[baidu] sharedownload errno=%s", errno)
-        raise ValueError("%s（errno=%s）" % (_errno_msg(errno, "获取下载直链失败"), errno))
+        # 🔧 2026-10-27 修：_errno_msg 自己已拼「（errno=N）」，外层再 "（errno=%s）"
+        #    会打成「参数错误（errno=2）（errno=2）」。这条只进日志与运维监控，
+        #    上屏一律走 USER_ERROR_TEXT（routers/cloud_drive.py 统一收口）。
+        logger.info("[baidu] sharedownload errno=%s → %s",
+                    errno, _errno_msg(errno, "获取下载直链失败"))
+        raise ValueError(_errno_msg(errno, "获取下载直链失败"))
     if not isinstance(lst, list):
         return {}, 0
     out: dict = {}
@@ -560,9 +572,10 @@ def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str
         return out
 
     if cipher_len:
-        raise NeedMemberLogin(
-            "百度对普通账号只返回加密数据（密文 %d 字节），拿不到下载直链" % cipher_len
-        )
+        # 真实原因只进日志（前端统一 USER_ERROR_TEXT）。样本：vip_type=2 给明文，
+        # vip_type=0/1 都回密文 —— 所以「会员」不够，得是超会。
+        logger.warning("[baidu] 换直链只拿到密文：%d 字节（该账号等级不够，非超会）", cipher_len)
+        raise NeedMemberLogin(USER_ERROR_TEXT)
     return out
 
 
@@ -609,7 +622,8 @@ def _cookie_candidates(login_cookie: str, extra: Optional[list] = None) -> list:
 
 def resolve_personal(path: str, cookie: str = "") -> list[CloudFile]:
     """个人网盘路径 —— 阶段 2 再做（新接口 /api/ostp/file/* 已定位未细测）。"""
-    raise ValueError("暂不支持个人网盘路径（阶段 2 支持），请先使用分享链接")
+    logger.warning("[baidu] 收到个人网盘路径（本版未实现）：%s", (path or "")[:120])
+    raise ValueError(USER_ERROR_TEXT)
 
 
 def _share_page_missing(s: requests.Session, share_url: str) -> bool:
@@ -738,11 +752,11 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "",
             # 缺什么才能下」，而不是一个空白面板半句英文报错。
             dlinks = {}
         elif isinstance(last_err, NeedMemberLogin):
-            raise NeedMemberLogin(
-                "百度只对会员账号返回可用的下载直链：已试 %d 个百度账号，拿到的"
-                "都是加密数据。请在「高级选项」填写一个百度网盘会员账号的 Cookie"
-                "（需含 BDUSS），或让管理员更新共享登录态"
-                % max(1, len(cands)))
+            # 真实原因（试了几个号、都拿密文）只进日志；上屏统一 USER_ERROR_TEXT。
+            logger.warning(
+                "[baidu] 换直链失败：已试 %d 个百度账号，全部只拿到密文"
+                "（百度仅对超级会员 vip_type=2 返回明文 dlink）", max(1, len(cands)))
+            raise NeedMemberLogin(USER_ERROR_TEXT)
         elif last_err is not None:
             # 有登录态但接口真的报错（errno≠0 / 风控）：把原始语义抛给用户，
             # 不要退化成「列表有了、下载按钮全是灰的」这种猜谜状态。

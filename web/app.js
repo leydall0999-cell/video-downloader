@@ -17721,6 +17721,11 @@ el.dwVidPlayer.hidden = true;
     el.cdStatus.classList.toggle('is-error', !!isErr);
   };
 
+  // 2026-10-27 乐懂定档：网盘类失败**只显示这一句**，不再暴露 errno / 账号等级 /
+  // 浏览器锁库等内部细节；真实原因全部由后端写日志，进运维监控。
+  // 文案唯一真源是 server/cloud_drives/baidu.py 的 USER_ERROR_TEXT，后端改这里要同步。
+  const CD_ERR_TEXT = '百度网盘接口返回异常（可能触发了风控，或分享链接已失效），请稍后重试';
+
   const cdFmtSize = (n) => {
     let v = Number(n) || 0;
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -17852,21 +17857,14 @@ el.dwVidPlayer.hidden = true;
    *  是纯粹的误导 —— 必须让用户关掉浏览器或改用扩展推送。
    */
   const cdLoginSourceHint = async (url) => {
+    // 2026-10-27 定档：不管真实原因是「浏览器没登录 / 库被锁 / v20 解不出 / 已读到但仍判未登录」，
+    // 前端一律只显示 CD_ERR_TEXT。探测请求照发 —— 后端会按真实 status/reason 写日志。
     try {
-      const s = await request('/api/cookie/status?url=' + encodeURIComponent(url));
-      if (!s) return '';
-      const label = s.label || s.browser || '浏览器';
-      if (s.status === 'ok' && s.available) {
-        return `已从「${label}」读到 ${s.count} 条百度 Cookie${s.running ? '（该浏览器正在使用）' : ''}，`
-          + '但百度仍判定为未登录 —— 请在这个浏览器里登录百度账号后重新解析，或在下面粘贴 BDUSS。';
-      }
-      if (s.status === 'locked' || s.status === 'abe' || s.status === 'decrypt_failed') {
-        return (s.hint || `${label} 的登录态读不出来`) + '。';
-      }
-      return `本机浏览器里没有百度登录态（已查 ${label} 等已装浏览器）—— 请先在浏览器登录百度账号，或在下面粘贴 BDUSS。`;
+      await request('/api/cookie/status?url=' + encodeURIComponent(url));
     } catch (e) {
-      return '';
+      // 老版本后端没有该端点：忽略，仍给统一文案
     }
+    return CD_ERR_TEXT;
   };
 
   const cdResolve = async () => {
@@ -17922,7 +17920,7 @@ el.dwVidPlayer.hidden = true;
   const cdSaveCookie = async () => {
     const v = ((el.cdCookie && el.cdCookie.value) || '').trim();
     if (!v) {
-      if (el.cdCookieState) el.cdCookieState.textContent = '请先粘贴 BDUSS';
+      if (el.cdCookieState) el.cdCookieState.textContent = CD_ERR_TEXT;
       return;
     }
     try {
@@ -17934,10 +17932,10 @@ el.dwVidPlayer.hidden = true;
         if (el.cdCookieState) el.cdCookieState.textContent = '已保存到本机';
         if (el.cdCookie) el.cdCookie.value = '';
       } else if (el.cdCookieState) {
-        el.cdCookieState.textContent = (data && data.error) || '保存失败';
+        el.cdCookieState.textContent = (data && data.error) || CD_ERR_TEXT;
       }
     } catch (e) {
-      if (el.cdCookieState) el.cdCookieState.textContent = '保存失败';
+      if (el.cdCookieState) el.cdCookieState.textContent = CD_ERR_TEXT;
     }
   };
 

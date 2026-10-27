@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import urllib.parse
 from pathlib import Path
@@ -293,15 +294,15 @@ def test_anonymous_encrypted_dlink_returns_list_only():
 def test_logged_in_encrypted_dlink_raises_actionable_error():
     """带登录态仍拿不到直链 = 真异常，必须是人话（不再崩成 AttributeError）。
 
-    2026-10-24 语义变更：sharedownload 现在**对谁都返回密文**（带不带 BDUSS 都一样），
-    所以这不再是「缺登录态」的问题，文案改为「接口变了 / 稍后重试」。
+    2026-10-27 文案定档（乐懂）：上屏一律 `baidu.USER_ERROR_TEXT`，真实原因
+    （密文字节数 / 账号等级 / errno）只进日志。所以这里断言统一文案；
+    根因日志由 test_all_accounts_cipher_raises_member_hint 覆盖。
     """
     p, _ = _patch_session(dl_list="ENCRYPTED_BASE64_BLOB==")
     with p:
         with pytest.raises(ValueError) as ei:
             baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=abc", pwd=PWD)
-    msg = str(ei.value)
-    assert "直链" in msg and "加密" in msg
+    assert str(ei.value) == baidu.USER_ERROR_TEXT
 
 
 def test_sharedownload_is_primary_and_filemetas_falls_back():
@@ -477,9 +478,21 @@ def test_dlink_failure_raises():
 
 
 def test_personal_path_not_supported_yet():
+    """个人网盘路径本版未实现 —— 上屏同样是统一文案（真实原因进日志）。"""
     with pytest.raises(ValueError) as ei:
         baidu.resolve_personal("/docs/demo.mp4", "BDUSS=a")
-    assert "阶段 2" in str(ei.value)
+    assert str(ei.value) == baidu.USER_ERROR_TEXT
+
+
+def test_errno_message_printed_once():
+    """回归：errno 只能出现一次。
+
+    曾把 `_errno_msg()` 的结果再套一层 "（errno=%s）"，线上日志打成
+    「参数错误（errno=2）（errno=2）」（2026-10-27 修）。
+    """
+    msg = baidu._errno_msg(2, "获取下载直链失败")
+    assert msg.count("errno=") == 1
+    assert msg == "参数错误（errno=2）"
 
 
 def test_resolve_dispatch_and_unknown():
@@ -632,16 +645,24 @@ def test_resolve_share_retries_next_account_when_cipher():
     assert real is baidu.share_dlinks
 
 
-def test_all_accounts_cipher_raises_member_hint():
-    """全池都是普通号 → 必须是「需要会员账号」的人话，不是英文堆栈。"""
+def test_all_accounts_cipher_raises_member_hint(caplog):
+    """全池都拿不到明文 → 上屏统一文案，**根因进日志**（运维监控要能定位）。
+
+    2026-10-27 定档：前端不再解释「会员 / 加密数据」，一律 USER_ERROR_TEXT；
+    但「试了几个号、是否全部密文」这类真实原因必须落日志，否则线上无从排查。
+    """
     p, _ = _patch_session(dl_list="ENCRYPTED_BASE64_BLOB==")
-    with p:
-        with pytest.raises(baidu.NeedMemberLogin) as ei:
-            baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=plain",
-                                pwd=PWD, extra_cookies=["BDUSS=plain2"])
+    with caplog.at_level(logging.WARNING, logger="cloud_drives.baidu"):
+        with p:
+            with pytest.raises(baidu.NeedMemberLogin) as ei:
+                baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=plain",
+                                    pwd=PWD, extra_cookies=["BDUSS=plain2"])
     msg = str(ei.value)
-    assert "会员" in msg and "加密数据" in msg
+    assert msg == baidu.USER_ERROR_TEXT
     assert " object has no attribute " not in msg
+    # 根因必须能从日志里查到
+    assert "已试 2 个百度账号" in caplog.text
+    assert "密文" in caplog.text
 
 
 def test_cookie_candidates_dedupes_by_bduss_and_drops_anonymous():

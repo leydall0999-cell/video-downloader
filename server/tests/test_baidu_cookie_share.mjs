@@ -59,8 +59,10 @@ ok(/xpan\/nas\?method=uinfo/.test(pool), '验真接口不是 xpan/nas uinfo');
 // ---- ③ 贡献端点：只此一个入口，且先验真后入池 ----
 ok(/@router\.post\('\/api\/cloud-drive\/contribute'\)/.test(routerJs),
   '缺少 POST /api/cloud-drive/contribute 端点');
-ok(/header = get_baidu_bduss\(\) or ""[\s\S]{0,200}请先保存百度登录态/.test(routerJs),
-  '贡献前必须先有手动保存的 BDUSS（不能顺手抓一份就共享）');
+// 2026-10-27 文案定档：所有失败上屏统一 baidu.USER_ERROR_TEXT（细节只进日志），
+// 所以这里断言「守卫结构 + 统一文案常量」，不再绑死旧的那句中文。
+ok(/header = get_baidu_bduss\(\) or ""[\s\S]{0,300}if not header:[\s\S]{0,300}return \{"ok": False, "error": baidu\.USER_ERROR_TEXT\}/.test(routerJs),
+  '贡献前必须先有手动保存的 BDUSS（不能顺手抓一份就共享），无 BDUSS 须以统一文案拒绝');
 ok(/ok, info = baidu_probe\(header\)[\s\S]{0,160}if ok is False:/.test(routerJs),
   '贡献前必须验真，验伪必须拒（不把过期 BDUSS 共享出去）');
 ok(/add_cookie\("baidu\.com", header, source="contrib"\)/.test(routerJs),

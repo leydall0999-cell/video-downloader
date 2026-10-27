@@ -2005,6 +2005,21 @@ def find_browser_cookie_source(host: str) -> dict[str, Any] | None:
         return None
 
 
+def _user_error_text() -> str:
+    """网盘类失败的统一上屏文案（唯一真源：cloud_drives/baidu.py 的 USER_ERROR_TEXT）。
+
+    2026-10-27 乐懂定档：前端不再展示 errno / 账号等级 / 浏览器锁库等内部细节，
+    一律只显示这一句；真实原因由各调用点写 logger，进运维监控。
+    函数内 import 是刻意为之 —— 避免 downloader 在 server 启动早期就拉起
+    cloud_drives 包（也避开潜在的 import 顺序问题）。
+    """
+    try:
+        from cloud_drives.baidu import USER_ERROR_TEXT
+        return USER_ERROR_TEXT
+    except Exception:  # noqa: BLE001 - 兜底：失败路径本身绝不能再抛异常
+        return "百度网盘接口返回异常（可能触发了风控，或分享链接已失效），请稍后重试"
+
+
 def locked_browser_hint() -> str:
     """有浏览器正开着、但 Cookie 库读不出来时，返回可操作的提示语；否则空串。
 
@@ -2020,7 +2035,9 @@ def locked_browser_hint() -> str:
     if not locked:
         return ""
     names = "、".join(dict.fromkeys(x["label"] for x in locked))
-    return f"{names} 正在运行并锁定了 Cookie 库：请关闭它后重试，或改用「扩展同步」"
+    # 真实原因（浏览器锁库）只进日志；上屏统一文案（2026-10-27 定档）。
+    logger.warning("[cookie] %s 正在运行并锁定了 Cookie 库，登录态读不出来", names)
+    return _user_error_text()
 
 def get_browser_cookie_header(host: str, url: str) -> str | None:
     """若本机浏览器含目标站点的登录 Cookie，提取并构造可用于请求头的 Cookie 字符串。
@@ -2148,6 +2165,9 @@ def detect_browser_cookie(host: str) -> dict[str, Any]:
                 "hint": "",
             }
         is_abe = reason == "abe_v20"
+        # 真实原因（v20 加密 / 解密失败）只进日志；上屏统一文案（2026-10-27 定档）。
+        logger.warning("[cookie] %s 有该站记录但解不出：status=%s reason=%s",
+                       label, "abe_v20" if is_abe else "decrypt_failed", reason or "未知")
         return {
             "available": False,
             "browser": src.get("browser"),
@@ -2156,11 +2176,7 @@ def detect_browser_cookie(host: str) -> dict[str, Any]:
             "running": src.get("running", False),
             "count": src.get("count", 0),
             "status": "abe" if is_abe else "decrypt_failed",
-            "hint": (
-                f"{label} 启用了应用绑定加密（v20），第三方无法解密，请改用「扩展同步」"
-                if is_abe else
-                f"{label} 里有该站记录但解不出有效值（{reason or '未知原因'}），请在该浏览器重新登录一次"
-            ),
+            "hint": _user_error_text(),
         }
     # 没有可读来源：优先提示「开着但被锁」，因为这是 Windows 上最常见的情况
     hint = locked_browser_hint()
@@ -6920,10 +6936,12 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
         part.unlink(missing_ok=True)
         msg = str(exc)[:200]
         task.add_step("下载文件", "error", msg)
+        # 真实原因（直链过期 / 登录态失效的原始异常）只进日志，且步骤里仍保留原文
+        # 给「过程日志」看；上屏 hint 统一文案（2026-10-27 定档）。
+        logger.warning("[netdisk] 百度直链下载失败 task=%s：%s", task.id, msg)
         store.update(
             task.id, status="failed", error="网盘下载失败",
-            hint=(f"百度直链下载失败：{msg}。直链有效期 8 小时且必须带登录态；"
-                  "如果中途切换过百度账号或登录态失效，重新点一次「解析网盘」再下载。"),
+            hint=_user_error_text(),
         )
         return
 
