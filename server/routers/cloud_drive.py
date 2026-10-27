@@ -38,6 +38,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Python 内部错误的特征串 —— 这类文本绝不能原样甩给用户（2026-10-27 线上出现过
+# 「百度网盘解析失败: 'str' object has no attribute 'get'」这种英文堆栈碎片）。
+_PY_ERR_RE = re.compile(
+    r"object has no attribute|not subscriptable|NoneType|positional argument|"
+    r"unexpected keyword|Traceback|KeyError|IndexError|TypeError|AttributeError"
+)
+
+
+def _human_err(msg: object) -> str:
+    """把后端异常洗成一句用户能看懂的中文。"""
+    t = str(msg or "").strip()
+    if not t:
+        return "百度网盘解析失败，请稍后重试"
+    if _PY_ERR_RE.search(t) or not re.search(r"[\u4e00-\u9fff]", t):
+        return "百度网盘接口返回异常（可能触发了风控，或分享链接已失效），请稍后重试"
+    return t[:120]
+
 # 百度网盘直链域（与桌面端 downloader._NETDISK_HOST_RE 同一口径）
 _NETDISK_HOST_RE = re.compile(r"(?:^|\.)(?:baidupcs\.com|pcs\.baidu\.com)$")
 
@@ -139,7 +156,7 @@ def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request) -> dict
     except Exception as e:  # noqa: BLE001
         # exc_info：只打 str(e) 时看不出来是哪个环节炸的（2026-10-27 排查吃过亏）
         logger.warning("[cloud_drive] resolve failed: %s", str(e)[:200], exc_info=True)
-        return {"ok": False, "error": f"百度网盘解析失败：{str(e)[:120]}", "need_credential": (not cookie)}
+        return {"ok": False, "error": f"百度网盘解析失败：{_human_err(e)}", "need_credential": (not cookie)}
 
     out = []
     for f in files:

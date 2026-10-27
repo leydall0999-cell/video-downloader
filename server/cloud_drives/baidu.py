@@ -25,6 +25,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import os
 import re
 import time
@@ -33,6 +34,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 _PAN = "pan.baidu.com"
 _BASE = f"https://{_PAN}"
@@ -47,6 +50,7 @@ _ERRNO_MSG = {
     -6: "接口已下线",
     -12: "提取码校验失败",
     116: "分享不存在",
+    105: "分享链接已失效，或提取码不正确",
     118: "没有下载权限",
     113: "页面已过期",
     121: "文件数量过多",
@@ -129,6 +133,50 @@ def _json(resp) -> dict:
     if not isinstance(data, dict):
         raise ValueError("百度网盘接口返回异常（可能触发了风控，或分享链接已失效），请稍后重试")
     return data
+
+
+def _dict_items(j: dict) -> tuple[list, list]:
+    """把百度返回里的 `list` 归一成「dict 列表」+「附带提示文本」。
+
+    🔴 2026-10-27 线上踩过：`/api/sharedownload` 有时期望返回 `[{fs_id, dlink}]`，
+    实际却回了 `"list": ["..."]`（或整个 list 是个字符串），直接 `item.get()`
+    就炸成 `'str' object has no attribute 'get'`，用户看到的是英文堆栈碎片。
+    这里统一过滤掉非 dict 元素，并把字符串当成百度给的提示留作错误文案。
+    """
+    lst = j.get("list") if isinstance(j, dict) else None
+    if isinstance(lst, dict):
+        lst = [lst]
+    if isinstance(lst, str):
+        return [], [lst.strip()] if lst.strip() else []
+    if not isinstance(lst, list):
+        return [], []
+    items: list = []
+    hints: list = []
+    for it in lst:
+        if isinstance(it, dict):
+            items.append(it)
+        elif isinstance(it, str) and it.strip():
+            # 百度个别接口把每个元素再套一层 JSON 字符串，能解就解（省一次线上事故）
+            s = it.strip()
+            if s[:1] == "{" and s[-1:] == "}":
+                try:
+                    obj = json.loads(s)
+                except Exception:  # noqa: BLE001
+                    obj = None
+                if isinstance(obj, dict):
+                    items.append(obj)
+                    continue
+            hints.append(s)
+    return items, hints
+
+
+def _hint_text(hints: list) -> str:
+    """把百度给的字符串提示洗成人话（去 HTML 标签、截断）。"""
+    if not hints:
+        return ""
+    txt = re.sub(r"<[^>]{1,80}>", " ", hints[0])
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt[:60]
 
 
 # ——————————————————————————————————————————————————————————————
@@ -303,7 +351,12 @@ def share_list(s: requests.Session, surl: str, q: str) -> tuple[list, str, str]:
     j = _json(s.get(url, timeout=_TIMEOUT))
     if j.get("errno") != 0:
         raise ValueError(_errno_msg(j.get("errno"), "读取分享内容失败"))
-    return (j.get("list") or [],
+    records, hints = _dict_items(j)
+    if not records and hints:
+        logger.warning("[baidu] share/list 返回非结构化内容: %s | raw=%s",
+                       _hint_text(hints), json.dumps(j, ensure_ascii=False)[:400])
+        raise ValueError(f"读取分享内容失败：{_hint_text(hints)}")
+    return (records,
             str(j.get("uk") or ""),
             str(j.get("share_id") or ""))
 
@@ -333,11 +386,17 @@ def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str
     j = _json(s.post(url, data=body, timeout=_TIMEOUT))
     if j.get("errno") != 0:
         raise ValueError(_errno_msg(j.get("errno"), "获取下载直链失败"))
+    items, hints = _dict_items(j)
     out: dict = {}
-    for item in j.get("list") or []:
+    for item in items:
         fid = str(item.get("fs_id") or "")
         if fid and item.get("dlink"):
             out[fid] = item["dlink"]
+    if not out and (hints or not items):
+        logger.warning("[baidu] sharedownload 未给出可用直链: hints=%s | raw=%s",
+                       hints[:3], json.dumps(j, ensure_ascii=False)[:500])
+        why = _hint_text(hints)
+        raise ValueError(f"获取下载直链失败：{why}" if why else "获取下载直链失败（百度未返回直链）")
     return out
 
 
