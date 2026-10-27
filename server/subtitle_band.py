@@ -18,6 +18,12 @@
 """
 from __future__ import annotations
 
+# 「小字副行」不并入主行的判据（2026-10-27，**必须与管线 scripts/edit_ffmpeg.py
+# 的 _SUBLINE_MIN_RATIO 同值**）：候选段高度 ≥ 主行高度 × 本值才并入羽化带。
+# 真·双行中文字幕两行等高（比值 ~1.0）照常合并；「中文大字 + 下方英文小字」的副行
+# 只有主行的 14%，判为小字副行而不并入 —— 即「只擦上面大字、下面小字不动」。
+_SUBLINE_MIN_RATIO = 0.4
+
 
 def _band_rows(gray, w0: int, h0: int, min_runs: int = 3, avg_run_max: float | None = None):
     """在图像底部 30% 区域内找「白字字幕行」的行范围，找不到返回 None。
@@ -135,15 +141,29 @@ def _band_rows(gray, w0: int, h0: int, min_runs: int = 3, avg_run_max: float | N
     # 2026-09-16 实测（合成双行帧，行距 8.3% 画面高）3% 阈值只够吞单倍行距，
     # 稍宽的行距就差 1 行没并上、只羽化到第二行；4.5% 能覆盖主流双行排版的间隙。
     # ⚠️ 与管线 _band_rows 同步（那边 v9 已是 4.5%，App 侧 2026-09-18 补齐）。
-    merged = []
-    for seg in sorted(segments, key=lambda s: s[0]):
-        if not merged or seg[0] - merged[-1][1] > max(6, int(h0 * 0.045)):
-            merged.append(list(seg))
-        else:
-            merged[-1][1] = seg[1]
-
-    best = max(merged, key=lambda s: s[1] - s[0])
-    top, bot = y0 + best[0], y0 + best[1]
+    # ---- 主行优先合并（2026-10-27，**必须与管线 scripts/edit_ffmpeg.py 同逻辑**）----
+    # 旧实现：相近段无差别全并，再取最长段。问题是「双行」有两种形态被一视同仁：
+    #   ① 真·双行中文（两行等高）→ 都该擦；
+    #   ② 中文大字 + 下方一行英文小字（译制片常见）→ 用户只要擦上面大字，英文小字不动。
+    # 区分看**行高**：② 的副行实测只有主行的 14%（14 行 vs 2 行）。
+    # 改成「以主行（最长段）为核心，只并入高度与主行相当的邻近段」，更矮的小字副行
+    # /噪点行不并入。顺带修掉旧实现的副作用：主行上方一行孤立噪点会被当成起点一路
+    # 并下来，把带顶抬高、带变宽。
+    segs = sorted(segments, key=lambda s: s[0])
+    main = max(segs, key=lambda s: s[1] - s[0])
+    main_h = main[1] - main[0]
+    lo, hi = main[0], main[1]
+    for seg in segs:
+        if seg is main:
+            continue
+        sh = seg[1] - seg[0]
+        if sh < main_h * _SUBLINE_MIN_RATIO:   # 小字副行：不并入，下方小字保持不动
+            continue
+        if seg[0] - hi <= max(6, int(h0 * 0.045)):
+            hi = seg[1]
+        elif lo - seg[1] <= max(6, int(h0 * 0.045)):
+            lo = seg[0]
+    top, bot = y0 + lo, y0 + hi
     # 亮场景溢出守卫（2026-09-18）：白窗/天空/白墙的高光常从扫描区顶（0.70h）
     # 一路亮到底，拼出的「带」贴着扫描区顶且很高 —— 真字幕几乎不会顶到 0.75h
     # 还超过画面高 15%。这种点判为亮场景溢出而非字幕，整帧弃用（其余帧会补上
