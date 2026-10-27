@@ -3543,34 +3543,53 @@ def main() -> None:
         _win_frame_file = _app_data_dir() / "window_frame.json"
 
         def _logical_workarea():
-            """屏幕尺寸的**逻辑像素**（已除 DPI 缩放）；拿不到就 1280x800。
+            """屏幕**可用区**的逻辑像素（已除 DPI 缩放）：(宽, 高, 原点x, 原点y)。
 
             🔴 2026-10-28（用户反馈「页面变这么小了、界面都变形了」）：
                此前默认写死 1280x800 逻辑。但 125% DPI 的 1920x1080 屏逻辑只有
                1536x864，1280x800 仅比 web 的 901px 断点宽一点点 → 界面被压进紧凑
                布局（侧栏变窄、卡片两列、字号显小），用户体感就是「变形」。
                改成按屏幕算，任何 DPI 下都占屏 ~94%，不再靠猜固定数字。
+            🔴 同时改用 SPI_GETWORKAREA 而不是整屏：可用区已扣掉任务栏，否则
+               92% 高 + 居中会压到任务栏下面。
             """
             try:
                 if sys.platform == "win32":
                     import ctypes as _ct
+
+                    class _R(_ct.Structure):
+                        _fields_ = [("left", _ct.c_long), ("top", _ct.c_long),
+                                    ("right", _ct.c_long), ("bottom", _ct.c_long)]
+
                     _u32 = _ct.WinDLL("user32")
                     _g32 = _ct.WinDLL("gdi32")
-                    pw = _u32.GetSystemMetrics(0) or 1920
-                    ph = _u32.GetSystemMetrics(1) or 1080
+                    r = _R()
+                    ok = _u32.SystemParametersInfoW(0x0030, 0, _ct.byref(r), 0)  # SPI_GETWORKAREA
                     dc = _u32.GetDC(0)
                     dpi = _g32.GetDeviceCaps(dc, 88) or 96
                     _u32.ReleaseDC(0, dc)
-                    return int(pw * 96 / dpi), int(ph * 96 / dpi)
+                    k = 96.0 / dpi
+                    if ok and r.right > r.left and r.bottom > r.top:
+                        return (int((r.right - r.left) * k), int((r.bottom - r.top) * k),
+                                int(r.left * k), int(r.top * k))
+                    pw = _u32.GetSystemMetrics(0) or 1920
+                    ph = _u32.GetSystemMetrics(1) or 1080
+                    return int(pw * k), int(ph * k), 0, 0
             except Exception:
                 pass
-            return 1280, 800
+            return 1280, 800, 0, 0
 
-        _scr_w, _scr_h = _logical_workarea()
-        # 默认尺寸：占屏 94% 宽 / 92% 高（留出任务栏与窗口边框），带绝对下限
+        _scr_w, _scr_h, _org_x, _org_y = _logical_workarea()
+        # 默认尺寸：占屏 94% 宽 / 92% 高（可用区已扣任务栏），带绝对下限
         _def_w = max(1120, min(int(_scr_w * 0.94), 2560))
         _def_h = max(740, min(int(_scr_h * 0.92), 1600))
-        _launch_log(f"屏幕逻辑尺寸 {_scr_w}x{_scr_h} → 默认窗口 {_def_w}x{_def_h}")
+        # 🔴 2026-10-28：默认位置改为**居中**明确算出来，不再交给 pywebview 猜。
+        #    实测传 x=None,y=None 时窗口落在 (224,224)，1803x992 物理的窗口右下角
+        #    直接出屏（1920x1080 上右溢 107px、下溢 136px），用户看到界面被切边。
+        _def_x = _org_x + max(0, (_scr_w - _def_w) // 2)
+        _def_y = _org_y + max(0, (_scr_h - _def_h) // 2)
+        _launch_log(
+            f"屏幕可用区 {_scr_w}x{_scr_h} @{_org_x},{_org_y} → 默认窗口 {_def_w}x{_def_h} @{_def_x},{_def_y}")
 
         def _load_win_frame():
             import json as _json
@@ -3584,7 +3603,7 @@ def main() -> None:
                 if _raw_w <= 0 or _raw_h <= 0 or _raw_w < 1120 or _raw_h < 740:
                     _launch_log(
                         f"记忆窗口尺寸过小({_raw_w}x{_raw_h})，已忽略 → 用默认 {_def_w}x{_def_h}")
-                    return _def_w, _def_h, None, None
+                    return _def_w, _def_h, _def_x, _def_y
                 # 🔴 2026-10-19：最小宽高保证宽于 web 的 901px 断点，否则侧边栏被隐藏、
                 #    顶部 pills 换行 → 排版错乱（与 Mac 版对齐）。
                 # 🔴 2026-10-28：下限从 960x640 抬到 1120x740 —— 960 逻辑在 125% DPI 下
@@ -3614,9 +3633,16 @@ def main() -> None:
                             x, y = None, None
                     except Exception:
                         x, y = None, None
+                # 🔴 2026-10-28：位置一律**收回可用区内**（记忆值可能是换屏前存的，
+                #    也可能本来就是 pywebview 猜出来的出屏坐标）。宽高已按当前屏幕
+                #    收过一次，这里只保证「整窗可见」。
+                if x is None or y is None:
+                    x, y = _def_x, _def_y
+                x = min(max(x, _org_x), max(_org_x, _org_x + _scr_w - w))
+                y = min(max(y, _org_y), max(_org_y, _org_y + _scr_h - h))
                 return w, h, x, y
             except Exception:
-                return _def_w, _def_h, None, None
+                return _def_w, _def_h, _def_x, _def_y
 
         _win_w, _win_h, _win_x, _win_y = _load_win_frame()
         _launch_log(f"窗口请求尺寸 {_win_w}x{_win_h} @ {_win_x},{_win_y}")
@@ -3635,6 +3661,41 @@ def main() -> None:
         # 🔴 2026-10-28 兜底：实测有机器上 pywebview 会把窗口直接顶到 min_size
         #    （请求 1880x1010 却得到 1200x800 = 960x640 逻辑，界面被压成紧凑布局）。
         #    这里在窗口就绪后复测一次，明显小于请求值就强制 resize 回目标尺寸。
+        def _ensure_window_on_screen(tag=""):
+            """把窗口拉回可用区内（尺寸也一起收）。实测默认落点 (224,224) 会让
+            1803x992 的窗口右下角出屏。全部按本进程坐标系（DPI 未感知即虚拟化坐标）
+            操作，与 _logical_workarea 同一套口径。"""
+            try:
+                import ctypes as _ct
+
+                class _R(_ct.Structure):
+                    _fields_ = [("left", _ct.c_long), ("top", _ct.c_long),
+                                ("right", _ct.c_long), ("bottom", _ct.c_long)]
+
+                _u32 = _ct.WinDLL("user32")
+                hwnd = _u32.FindWindowW(None, "视频工坊")
+                if not hwnd:
+                    return
+                r = _R()
+                _u32.GetWindowRect(hwnd, _ct.byref(r))
+                w, h = r.right - r.left, r.bottom - r.top
+                wa = _R()
+                _u32.SystemParametersInfoW(0x0030, 0, _ct.byref(wa), 0)
+                nx = min(max(r.left, wa.left), max(wa.left, wa.right - w))
+                ny = min(max(r.top, wa.top), max(wa.top, wa.bottom - h))
+                if (nx, ny) != (r.left, r.top):
+                    # SWP_NOSIZE=0x1 | SWP_NOZORDER=0x4
+                    _u32.SetWindowPos(hwnd, 0, nx, ny, 0, 0, 0x0001 | 0x0004)
+                    _launch_log(
+                        f"窗口位置出屏({r.left},{r.top})，已拉回 ({nx},{ny})，"
+                        f"尺寸 {w}x{h}，可用区 {wa.left},{wa.top}-{wa.right},{wa.bottom}{tag}")
+                else:
+                    _launch_log(
+                        f"窗口位置正常 ({r.left},{r.top})，尺寸 {w}x{h}，"
+                        f"可用区 {wa.left},{wa.top}-{wa.right},{wa.bottom}{tag}")
+            except Exception as _e:  # noqa: BLE001
+                _launch_log(f"窗口位置校验失败：{_e!r}")
+
         def _enforce_window_size():
             for _ in range(20):
                 time.sleep(0.4)
@@ -3646,10 +3707,13 @@ def main() -> None:
                     continue
                 if cw >= _win_w * 0.94 and ch >= _win_h * 0.94:
                     _launch_log(f"窗口尺寸校验通过：{cw}x{ch}")
+                    _ensure_window_on_screen()
                     return
                 try:
                     window.resize(_win_w, _win_h)
                     _launch_log(f"窗口尺寸被压到 {cw}x{ch}，已强制 resize → {_win_w}x{_win_h}")
+                    time.sleep(0.5)
+                    _ensure_window_on_screen("（resize 后）")
                     return
                 except Exception as _e:  # noqa: BLE001
                     _launch_log(f"强制 resize 失败：{_e!r}")
