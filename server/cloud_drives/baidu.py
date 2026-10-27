@@ -35,6 +35,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import os
 import re
 import time
@@ -43,6 +44,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 _PAN = "pan.baidu.com"
 _BASE = f"https://{_PAN}"
@@ -57,6 +60,7 @@ _ERRNO_MSG = {
     -6: "接口已下线",
     -12: "提取码校验失败",
     116: "分享不存在",
+    105: "分享链接已失效，或提取码不正确",
     118: "没有下载权限",
     113: "页面已过期",
     121: "文件数量过多",
@@ -313,7 +317,13 @@ def share_list(s: requests.Session, surl: str, q: str) -> tuple[list, str, str]:
     j = _json(s.get(url, timeout=_TIMEOUT))
     if j.get("errno") != 0:
         raise ValueError(_errno_msg(j.get("errno"), "读取分享内容失败"))
-    return (j.get("list") or [],
+    lst = j.get("list")
+    if not isinstance(lst, list):
+        # 只有遇到被风控改写的响应才会到这里 —— 别让上层拿字符串去 .get()
+        logger.warning("[baidu] share/list 非数组: %s", json.dumps(j, ensure_ascii=False)[:300])
+        raise ValueError("读取分享内容失败（百度返回了异常数据），请稍后重试")
+    records = [it for it in lst if isinstance(it, dict)]
+    return (records,
             str(j.get("uk") or ""),
             str(j.get("share_id") or ""))
 
@@ -396,6 +406,7 @@ def share_dlinks(s: requests.Session, sign: str, ts: str, uk: str, share_id: str
     lst = j.get("list")
     if isinstance(lst, str):
         # 走到这里说明 filemetas 也没给直链，只剩密文响应
+        logger.warning("[baidu] sharedownload 返回密文串（len=%s），filemetas 未给直链", len(lst))
         raise ValueError(
             "百度这次没返回可用的下载直链（接口返回了加密数据）。"
             "请稍后重试；持续出现说明百度换了接口，需要更新版本"

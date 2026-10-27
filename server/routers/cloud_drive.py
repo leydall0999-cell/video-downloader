@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -26,6 +27,23 @@ from credential_store import get_baidu_bduss, set_baidu_bduss
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Python 内部错误的特征串 —— 这类文本绝不能原样甩给用户（2026-10-27 线上出现过
+# 「百度网盘解析失败: 'str' object has no attribute 'get'」这种英文堆栈碎片）。
+_PY_ERR_RE = re.compile(
+    r"object has no attribute|not subscriptable|NoneType|positional argument|"
+    r"unexpected keyword|Traceback|KeyError|IndexError|TypeError|AttributeError"
+)
+
+
+def _human_err(msg: object) -> str:
+    """把后端异常洗成一句用户能看懂的中文。"""
+    t = str(msg or "").strip()
+    if not t:
+        return "百度网盘解析失败，请稍后重试"
+    if _PY_ERR_RE.search(t) or not re.search(r"[\u4e00-\u9fff]", t):
+        return "百度网盘接口返回异常（可能触发了风控，或分享链接已失效），请稍后重试"
+    return t[:120]
 
 _BAIDU_HOSTS = ("pan.baidu.com", "baidu.com")
 
@@ -185,7 +203,8 @@ def cloud_drive_resolve(req: CloudDriveResolveReq) -> dict:
         # 链接无法识别 / 解析失败：返回语义清晰的错误，便于前端提示
         return {"ok": False, "error": str(e), "need_credential": (not cookie)}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"百度网盘解析失败：{e}", "need_credential": (not cookie)}
+        logger.warning("[cloud_drive] resolve failed: %s", str(e)[:200], exc_info=True)
+        return {"ok": False, "error": f"百度网盘解析失败：{_human_err(e)}", "need_credential": (not cookie)}
     # 第三态：解析成功但缺下载登录态（百度 dlink 匿名下载会 403）
     need_login = any(getattr(f, "need_login", False) for f in files)
     return {

@@ -64,9 +64,13 @@ PAGE_DOT = (
 
 
 class _Resp:
-    def __init__(self, payload=None, text=""):
+    """假响应。status_code/content 供 _share_page_missing 判定死链用（默认 200 = 正常页）。"""
+
+    def __init__(self, payload=None, text="", status_code=200):
         self._payload = payload if payload is not None else {}
         self.text = text
+        self.status_code = status_code
+        self.content = (text or "").encode("utf-8")
 
     def json(self):
         return self._payload
