@@ -366,6 +366,18 @@ def _ensure_stdio() -> None:
         pass
 
 
+def _is_port_in_use(e: OSError) -> bool:
+    """只有『端口真的被占用』才值得顺延重试。其余 OSError（如 ENOENT 文件缺失、
+    EACCES 权限不足）在任一候选端口都会以完全相同的方式失败，重试只是把同一个
+    错误重复 12 遍并掩盖真凶（典型如 `[Errno 2] No such file or directory`：
+    那是 uvicorn 加载 app 阶段抛的，跟端口毫无关系）。"""
+    import errno as _errno
+    if e.errno in (_errno.EADDRINUSE, 10048):  # Linux=98 / Windows WSAEADDRINUSE=10048
+        return True
+    msg = str(e).lower()
+    return "address already in use" in msg or "10048" in msg
+
+
 def _run_server_with_retry(start_port: int, host: str, app_dir: str, lock_file=None) -> None:
     """启动 uvicorn；若首端口绑定失败（EADDRINUSE 等），自动顺延到下一端口重试，
     最多尝试 12 个端口，彻底消除“kill 旧实例后立刻启动新实例”的端口竞态导致的假启动。"""
@@ -382,18 +394,23 @@ def _run_server_with_retry(start_port: int, host: str, app_dir: str, lock_file=N
             return
         except OSError as e:
             last_err = e
-            # 🔴 2026-10-26 排障教训：这里过去只记 {e}，遇到
-            #    「[Errno 2] No such file or directory」这种**根本不是端口问题**的
-            #    OSError（uvicorn 加载 app 阶段就抛的），12 个端口全试一遍却只有一行
-            #    无堆栈的报错，真凶藏得死死的。端口是无关的：同一异常会重复 12 次。
-            #    现在把堆栈一并写进启动日志，下次直接看 traceback 即可定位。
+            # 🔴 2026-10-26 修复：过去只要 OSError 就当「端口被占」顺延 12 个端口，
+            #    结果 `[Errno 2] No such file or directory` 这类根本不是端口问题的
+            #    ENOENT 被误判，12 个端口同一秒全失败、真凶藏死。现在先判是否真·端口
+            #    被占；不是的话把完整堆栈写进启动日志并**立即抛出**，不再无脑顺延。
             try:
                 import traceback as _tb
                 _detail = _tb.format_exc()
             except Exception:  # noqa: BLE001
                 _detail = "(traceback unavailable)"
-            _launch_log(f"端口 {p} 启动失败（{type(e).__name__}: {e}），自动重试下一端口 {p+1}\n{_detail}")
-            continue
+            if _is_port_in_use(e):
+                _launch_log(f"端口 {p} 被占用（{e}），自动重试下一端口 {p+1}")
+                continue
+            _launch_log(
+                f"端口 {p} 启动失败（非端口问题，{type(e).__name__}: {e}），"
+                f"停止重试并上报真实错误\n{_detail}"
+            )
+            raise
         except SystemExit as e:
             # 冻结版 uvicorn 在 bind 失败时抛 SystemExit(非0)，需当作可重试的绑定失败；
             # 仅 code==0 视为干净退出，不再重试。
