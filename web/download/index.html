@@ -26,6 +26,7 @@
     .dl-top-bar .btn-ghost { font-size: .85rem; padding: .45rem .7rem; }
     .dl-back { text-align: center; margin-top: 2rem; }
     .dl-note { text-align:center; color: var(--text-mute); font-size: .82rem; margin-top: 1.4rem; }
+    .dl-card .dl-ver { margin: .2rem 0 0; font-size: .78rem; color: var(--text-mute); }
     .dl-slow { margin-top: .7rem; text-align: left; }
     .dl-slow summary { cursor: pointer; color: var(--text-mute); font-size: .82rem; list-style: none; }
     .dl-slow summary::-webkit-details-marker { display: none; }
@@ -59,7 +60,8 @@
       <div class="dl-card">
         <div class="dl-ico">🍎</div>
         <h3>macOS</h3>
-        <p>DMG · <span data-dl-size="macos">296 MB</span> · macOS 11+（Intel / Apple Silicon 通用版）<span data-dl-ver="macos"></span>。</p>
+        <p>DMG · <span data-dl-size="macos">296 MB</span> · macOS 11+（Intel / Apple Silicon 通用版）。</p>
+        <p class="dl-ver" hidden><span data-dl-ver="macos"></span></p>
         <!-- 2026-10-18 去掉 download 属性：该地址会 302 到跨域 CDN，Safari / 微信内置浏览器
              对「download 属性 + 跨域跳转」会静默不下载（点了没反应）。普通导航在所有浏览器
              都会被 CDN 的二进制响应直接触发下载，也仍然走本机计数端点。 -->
@@ -161,8 +163,13 @@
             if (ver) {
               /* 版本号写在对象自定义元数据里，但 Cloudflare 公开域名不回传
                  x-amz-meta-*，所以以「更新日期」兜底——这个一定真，不会撒谎。 */
-              if (info.version) ver.textContent = '（v' + info.version + '）';
-              else if (info.updated) ver.textContent = '（' + info.updated + ' 更新）';
+              var text = info.version ? ('当前版本 v' + info.version)
+                                      : (info.updated ? ('安装包更新于 ' + info.updated) : '');
+              if (text) {
+                ver.textContent = text;
+                var line = ver.closest('.dl-ver');
+                if (line) line.hidden = false;
+              }
             }
           });
         })
