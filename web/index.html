@@ -382,6 +382,11 @@
          网盘不放在页面底部单独一块，而是紧跟输入区的「第二种下载类型」——
          顶部切换器切到「网盘下载」时就地展开，解析结果直接出现在当前页。
          登录态由管理员提供，用户无需填写。 ===== -->
+  <!-- 网盘带宽提示（2026-10-27）：**必须独立于 panPanel**。panPanel 只在「已解析出文件
+       或有状态」时才显示（app.js setMode），提示放里面就变成「解析出来才看得见」。
+       这里跟网盘模式开关联动：切到「网盘下载」立刻显示，不用等解析。 -->
+  <p class="pan-note pan-note-top" id="panNoteTop" hidden>网页版受下载带宽限制，想跑满下载速度请<strong class="pan-note-hl">安装桌面端</strong></p>
+
   <section class="panel pan-panel" id="panPanel" aria-labelledby="panTitle" hidden>
     <h2 id="panTitle" class="guide-title">☁️ 百度网盘下载</h2>
     <div class="cd-form">
@@ -395,7 +400,6 @@
       </label>
       <button type="button" class="btn btn-primary" id="panResolveBtn">解析</button>
     </div>
-    <p class="pan-note">网页版受下载带宽限制，想跑满下载速度请<strong class="pan-note-hl">安装桌面端</strong></p>
     <p class="cd-status" id="panStatus" hidden aria-live="polite"></p>
     <ul class="cd-list" id="panList"></ul>
   </section>

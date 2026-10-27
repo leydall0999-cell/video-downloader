@@ -677,6 +677,11 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
   color: var(--text);
 }
 .pan-note .pan-note-hl { color: var(--brand-strong); }
+/* 网盘模式常驻提示（独立于解析结果卡片，panel 左右内边距 1.25rem 对齐） */
+.pan-note-top {
+  margin: .2rem 0 1rem;
+  padding: 0 1.25rem;
+}
 
 /* 下载类型切换（2026-10-25 对齐桌面端）：视频下载 / 网盘下载 并列在输入区顶部，
    网盘不再作为页面底部单独一块上下分开放，切过来就地展开。 */

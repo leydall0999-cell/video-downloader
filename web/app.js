@@ -434,6 +434,8 @@
     panPanel: $('panPanel'),
     panUrl: $('panUrl'), panPwd: $('panPwd'), panResolveBtn: $('panResolveBtn'), panStatus: $('panStatus'),
     panList: $('panList'),
+    // 带宽提示：独立于 panPanel，跟网盘模式联动（切到网盘即显示，不等解析）
+    panNoteTop: $('panNoteTop'),
     // —— 个人中心（2026-09-29 对齐 App）——
     profileView: $('profileView'),
     pfAuthBox: $('pfAuthBox'), pfAuthModeTitle: $('pfAuthModeTitle'),
@@ -1127,6 +1129,10 @@
     // 切回视频模式时它们自动恢复（不碰 resultPanel 的 hidden，否则会把
     // 「本来就没结果」和「被网盘模式藏起来」两种状态搞混）。
     if (el.downloadView) el.downloadView.classList.toggle('mode-netdisk', _nd);
+    // 带宽提示跟模式开关走：切到网盘模式立刻可见，与「有没有解析出文件」无关
+    // （2026-10-27 用户三次反馈「提示要等文件解析出来才显示」——根因是它原来在
+    //   panPanel 里，而 panPanel 的显示条件绑在 hasList/hasStatus 上）。
+    if (el.panNoteTop) el.panNoteTop.hidden = !_nd;
     if (el.panPanel) {
       if (!_nd) {
         el.panPanel.hidden = true;
