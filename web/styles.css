@@ -671,18 +671,12 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 .pan-panel { margin-top: 1rem; }
 .pan-note {
   margin: .55rem 0 0;
-  font-size: 13px;
+  font-size: 14.5px;
   line-height: 1.65;
-  font-weight: 500;
-  color: #8a5a00;
-  background: #fff7e0;
-  border: 1px solid #f2d38a;
-  border-left: 3px solid #f0a819;
-  border-radius: 8px;
-  padding: .55rem .8rem;
+  font-weight: 600;
+  color: var(--text);
 }
-.pan-note strong { font-weight: 700; color: #6b4400; }
-.pan-note .pan-note-hl { color: #d97a00; }
+.pan-note .pan-note-hl { color: var(--brand-strong); }
 
 /* 下载类型切换（2026-10-25 对齐桌面端）：视频下载 / 网盘下载 并列在输入区顶部，
    网盘不再作为页面底部单独一块上下分开放，切过来就地展开。 */
