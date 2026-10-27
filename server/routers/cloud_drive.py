@@ -137,7 +137,8 @@ def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request) -> dict
     except ValueError as e:
         return {"ok": False, "error": str(e), "need_credential": (not cookie)}
     except Exception as e:  # noqa: BLE001
-        logger.warning("[cloud_drive] resolve failed: %s", str(e)[:200])
+        # exc_info：只打 str(e) 时看不出来是哪个环节炸的（2026-10-27 排查吃过亏）
+        logger.warning("[cloud_drive] resolve failed: %s", str(e)[:200], exc_info=True)
         return {"ok": False, "error": f"百度网盘解析失败：{str(e)[:120]}", "need_credential": (not cookie)}
 
     out = []
