@@ -148,6 +148,27 @@ def case_verify_dispatch_prefers_bilibili_probe(tmp: str) -> None:
           m.verify_cookie("youtube.com", "SID=RELAYTEST; HSID=RELAYTEST") is False)
 
 
+def case_baidu_identity_distinguishes_accounts(tmp: str) -> None:
+    m = _load(tmp)
+    m.verify_cookie = lambda domain, header: True
+    acct_a = "BDUSS=AAAA1111; STOKEN=sa; PTOKEN=pa"
+    acct_b = "BDUSS=BBBB2222; STOKEN=sb; PTOKEN=pb"
+    check("不同百度账号 BDUSS => 身份不同",
+          m._identity("baidu.com", acct_a) != m._identity("baidu.com", acct_b))
+    check("百度账号身份基于 BDUSS（非空）", m._identity("baidu.com", acct_a) is not None)
+    m.add_cookie("baidu.com", acct_a, source="admin")
+    m.add_cookie("baidu.com", acct_b, source="sync")
+    cookies = m.get_cookies("baidu.com") or []
+    check("两个不同百度账号都保留（不塌缩成 1）", len(cookies) == 2)
+    bduss = set()
+    for h in cookies:
+        for p in h.split(";"):
+            k, _, v = p.partition("=")
+            if k.strip() == "BDUSS":
+                bduss.add(v.strip())
+    check("保留的两个账号 BDUSS 各异", bduss == {"AAAA1111", "BBBB2222"})
+
+
 def main() -> int:
     print("== test_cookie_pool_identity ==")
     tmpdir = tempfile.mkdtemp(prefix="vdl_pool_test_")
@@ -157,7 +178,8 @@ def main() -> int:
 
         for fn in (case_add_rejects_logged_out, case_add_keeps_only_newest_per_account,
                    case_add_keeps_multiple_accounts, case_prune_verifies_once_per_session,
-                   case_verify_dispatch_prefers_bilibili_probe):
+                   case_verify_dispatch_prefers_bilibili_probe,
+                   case_baidu_identity_distinguishes_accounts):
             d = tempfile.mkdtemp(prefix="vdl_pool_test_")
             try:
                 fn(d)

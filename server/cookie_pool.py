@@ -233,6 +233,7 @@ _IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "qq.com": ("wxuin", "uin", "vus_session", "wap_sid2"),
     "tiktok.com": ("sid_tt", "sessionid"),
     "chenzhongtech.com": ("userId",),
+    "baidu.com": ("BDUSS",),
 }
 
 # 会话变体字段：同账号可能同时存在多份「会话」（重新登录会换 SESSDATA），
