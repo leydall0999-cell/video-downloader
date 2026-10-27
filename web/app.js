@@ -2468,7 +2468,11 @@
       refs.togglePause.title = '暂停下载';
       refs.root.classList.remove('is-paused');
     }
-    refs.cancel.hidden = isPaused || isPausing;
+    // 取消按钮：仅「已暂停」时隐藏（暂停的任务没有线程在跑，取消没有意义）。
+    // 🔴 2026-10-27：pausing 状态下**必须保留取消**——暂停标志只在进度钩子里被消费，
+    // 合并/后处理/连接停滞阶段没有任何钩子，任务会长期停在 pausing；此前这里把取消
+    // 一起隐藏，用户既等不到暂停、也点不了取消（死锁，用户实测「赞停中一直点不了取消」）。
+    refs.cancel.hidden = isPaused;
     refs.root.classList.toggle('is-active', active);
     refs.root.classList.toggle('is-done', task.status === 'completed');
     refs.root.classList.toggle('is-error', task.status === 'failed' || task.status === 'canceled');

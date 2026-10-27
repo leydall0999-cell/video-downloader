@@ -76,6 +76,11 @@ DOWNLOAD_STALL_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_STALL_TIMEOUT", "180")
 # 腾讯等站按 IP/单连接限速（实测 ~16KB/s），1800s 仅够下 29MB，故放宽到 7200s 兜底
 DOWNLOAD_HARD_TIMEOUT = int(os.environ.get("VDL_DOWNLOAD_HARD_TIMEOUT", "7200"))
 WATCHDOG_POLL = int(os.environ.get("VDL_WATCHDOG_POLL", "5"))  # 看门狗轮询间隔（秒）
+# 暂停标志在「无进度回调阶段」（合并/后处理/socket 停滞）的兜底宽限：暂停/取消都只挂在
+# yt-dlp 进度钩子上，而这些阶段一条钩子都不发 ⇒ 标志永远没人消费。取消有主等待循环兜底，
+# 暂停此前没有 ⇒ 任务永久卡在 pausing（2026-10-27 用户实测：抖音分离轨下载中点暂停）。
+# 宽限超过该秒数仍没落地，就由主等待循环就地置 paused。
+PAUSE_FORCE_LAND_SECONDS = int(os.environ.get("VDL_PAUSE_FORCE_LAND", "30"))
 
 def _macos_system_proxy() -> str:
     """读取 macOS 系统代理设置（系统偏好里开启的那个），返回 yt-dlp 可用的代理 URL。
@@ -2981,15 +2986,36 @@ def _call_vps_worker(platform: str, url: str, cookie: str = "") -> dict[str, Any
 
 _PLAYLIST_PATHS = ("/playlist", "/discover/toplist", "/album/")
 
-def _douyin_info(url: str) -> dict[str, Any]:
+def _douyin_info(url: str, cookie: str = "") -> dict[str, Any]:
     """调 VPS worker 拿抖音真实流，构造成 yt-dlp 兼容的 info dict。
+
+    ``cookie``：用户抖音登录态（高级选项粘贴 / Cookie 池），原样透传给 worker。
+    2026-10-27 实测：抖音对**匿名**网页解析启用 Argus 风控，worker 匿名通道被拦；
+    带登录态注入浏览器会话可绕过该限制（worker 侧已支持该参数）。
 
     抖音 PC 网页两种流形态（2026-08-23 无声问题根因）：
     - 混合轨（v{id}-web.douyinvod.com 带音轨 mp4）→ 单直链下载（HttpFD，最稳）
     - 分离轨（media-video-avc1 纯视频 + media-audio 音频）→ formats + requested_formats
-      让 yt-dlp 走 FFmpegFD 双轨合并分支；各自带 Referer（抖音 CDN 校验，缺则 403）。
+      让 yt-dlp 逐轨原生下载后 ffmpeg 合并（Windows 无 aria2c，fd=None ⇒ 逐轨 HttpFD，
+      有进度回调；此形态下「分片数」参数对直链无效，见 PAUSE_FORCE_LAND_SECONDS 注释）。
     """
-    data = _call_vps_worker("douyin", url)
+    try:
+        data = _call_vps_worker("douyin", url, cookie)
+    except ResolveError as _e:
+        # 风控类失败补一句可操作指引（worker 的 hint 只说明现象，没给解法）
+        _hint = str(getattr(_e, "hint", "") or "")
+        _msg = str(getattr(_e, "message", "") or "")
+        if ("风控" in _hint or "Argus" in _hint or "风控" in _msg
+                or "匿名" in _hint or "匿名" in _msg):
+            raise ResolveError(
+                _msg or "抖音解析失败",
+                _hint.rstrip() + (
+                    "\n\n👉 可点「高级选项 → Cookie」粘贴抖音网页版 Cookie 后重试："
+                    "登录态会注入 worker 的浏览器会话，不受匿名风控限制。"
+                ),
+                category=getattr(_e, "category", None) or "parse_failed",
+            ) from _e
+        raise
     headers = {"Referer": "https://www.douyin.com/", "User-Agent": _DOUYIN_UA}
     video_url = data.get("video_url") or ""
     audio_url = data.get("audio_url") or ""
@@ -5555,7 +5581,7 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
         )
     # 抖音/快手/微博/爱奇艺：yt-dlp 提取器失效或分享页 JS-only，走 VPS Playwright 真实浏览器解析
     if _is_douyin_host(host):
-        return _douyin_info(url)
+        return _douyin_info(url, cookie=cookie)
     # DAZN：认证墙 + Widevine DRM + 地区封锁（2026-08-22 深度评估），明确提示
     if "dazn.com" in (host or ""):
         raise ResolveError(
@@ -6918,6 +6944,24 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
                  total_bytes=size, speed=0.0, eta=0)
 
 
+def _force_land_paused(task: DownloadTask, store: TaskStore) -> None:
+    """暂停标志长期未被进度钩子消费时，由主等待循环就地落 paused。
+
+    背景（2026-10-27 用户实测）：暂停/取消都只在 `_ProgressReporter`（yt-dlp 进度钩子）
+    里被消费；合并与后处理、以及 socket 停滞阶段**一条钩子都不发**，暂停标志无人消费 ⇒
+    UI 永久停在「暂停中…」，且取消按钮当时被前端一并隐藏，用户两条路都走不了。
+
+    孤儿下载线程可能还活着（停滞的 socket 会在 socket_timeout 后醒来写终态）：
+    这里自增 `_run_gen`，`_run_once` 退出时的代际守卫会拦下它的终态写入，
+    避免把用户已暂停的任务又改写成 completed/failed。
+    """
+    task._run_gen = getattr(task, "_run_gen", 0) + 1
+    task.pause_requested = False
+    task.add_step("下载音视频", "done", "已暂停（可继续下载）")
+    task.log("下载正处于无进度回调阶段，暂停已就地生效（点「继续」可续传）")
+    store.update(task.id, status="paused", speed=0.0, eta=0)
+
+
 def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie: str = "", proxy: str = "", max_retries: int = 0, format_id: str = "", concurrent_fragments: int = 0, downloader_type: str = "", resume: bool = False) -> None:
     """在后台线程执行，全部异常都写回任务状态，不向外抛。
 
@@ -6938,6 +6982,10 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                                  cookie=(cookie or task.cookie or ""),
                                  proxy=(proxy or task.proxy or ""))
         return
+
+    # 运行代际：每次监督（首次下载 / resume 重提）自增。_run_once 在入口捕获自己的代际，
+    # 退出时若代际已变（被「就地暂停」或新一轮取代）就不再写终态，防孤儿线程覆盖。
+    task._run_gen = getattr(task, "_run_gen", 0) + 1
 
     stop = threading.Event()
     last = {"bytes": 0, "disk": 0, "ts": time.time()}
@@ -7000,6 +7048,9 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 last["bytes"] = 0
                 last["ts"] = time.time()
             task.cancel_reason = ""   # 新一轮尝试：清掉上一轮的停滞/超时标记
+            # 每次尝试独立代际：上一轮若留了孤儿线程（停滞/硬超时强制终态后它仍活着），
+            # 它醒来时不得再写终态覆盖本轮结果。
+            task._run_gen = getattr(task, "_run_gen", 0) + 1
             # 实际下载放到子线程，主线程带「整体硬超时」等待，避免解析/下载任意阶段无限挂起
             th = threading.Thread(
                 target=_run_once, args=(task, store, quality_key, cookie, proxy, format_id, concurrent_fragments, _dt, resume, _alt),
@@ -7016,6 +7067,9 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                 # 改为短切片 join：一旦发现取消/停滞标志立即落终态并跳出。
                 _wait_left = float(DOWNLOAD_HARD_TIMEOUT)
                 _early = False
+                _pause_stuck = False
+                _pause_since = time.time() if (
+                    getattr(task, "pause_requested", False) and task.status == "pausing") else 0.0
                 while _wait_left > 0 and th.is_alive():
                     _slice = min(WATCHDOG_POLL, _wait_left)
                     th.join(timeout=_slice)
@@ -7025,11 +7079,26 @@ def run_download(task: DownloadTask, store: TaskStore, quality_key: str, cookie:
                     if task.cancel_requested and not task.is_finished:
                         _early = True
                         break
+                    # 暂停兜底（2026-10-27）：取消有上面的 cancel_requested 分支兜底，
+                    # 暂停此前没有 —— 而暂停标志同样只在进度钩子里被消费，合并/后处理/
+                    # socket 停滞阶段没有任何钩子，任务会永久停在 pausing。宽限
+                    # PAUSE_FORCE_LAND_SECONDS 秒仍没落地就就地落 paused。
+                    if getattr(task, "pause_requested", False) and task.status == "pausing":
+                        if not _pause_since:
+                            _pause_since = time.time()
+                        elif time.time() - _pause_since >= PAUSE_FORCE_LAND_SECONDS:
+                            _pause_stuck = True
+                            break
+                    else:
+                        _pause_since = 0.0
                 if not th.is_alive():
                     break
                 if _early:
                     # 看门狗/用户已判定终止：用与子线程同一份逻辑落终态，不再干等硬超时。
                     _finalize_terminated(task, store)
+                    break
+                if _pause_stuck:
+                    _force_land_paused(task, store)
                     break
                 if task.status == "downloading" and (time.time() - last["ts"]) <= DOWNLOAD_STALL_TIMEOUT:
                     task.log(
@@ -7184,6 +7253,12 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
     A2（2026-10-02）：alt_protocol=True 时解析后尝试把格式选择切到 HLS 分片链路
     （重试策略②，见 _switch_to_hls / _retry_matrix）。
     """
+    _my_gen = getattr(task, "_run_gen", 0)
+
+    def _gen_stale() -> bool:
+        """孤儿守卫：代际已变（被就地暂停 / 新一轮尝试 / resume 取代）时禁止再写终态。"""
+        return getattr(task, "_run_gen", 0) != _my_gen
+
     effective_proxy = task.proxy or _resolve_proxy(_host_of(task.url) or "")
     task.url = _normalize_share_url(task.url, proxy=effective_proxy)
     reporter = _ProgressReporter(task, store)
@@ -7237,7 +7312,8 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
             # 阶段 1：只解析元数据，不下载
             if _is_douyin_host(_task_host):
                 # 抖音：yt-dlp 提取器已失效，直接用 VPS 解析出的真实音视频轨 URL
-                info = _douyin_info(task.url)
+                # 传用户登录态：匿名解析会被 Argus 风控拦截（2026-10-27 实测）
+                info = _douyin_info(task.url, cookie=cookie)
             elif "ixigua.com" in (_task_host or ""):
                 # 西瓜：原生 IxiguaIE + 浏览器 Cookie（与 probe 同一路径）
                 info = _ixigua_info(task.url, cookie=cookie, proxy=effective_proxy)
@@ -7486,18 +7562,24 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                 output = _ensure_audio_track(output, info, task)
             _write_sidecar(output, task, info)
     except DownloadPaused:
+        if _gen_stale():
+            return
         task.add_step("下载音视频", "done", "已暂停（可继续下载）")
         task.log("用户暂停下载")
         store.update(task.id, status="paused",
                      progress=task.progress, downloaded_bytes=task.downloaded_bytes)
         # 保留 .part 文件，不清除——后续继续时 yt-dlp 断点续传
     except DownloadCanceled:
+        if _gen_stale():
+            return
         # A3（2026-10-02）：看门狗停滞 / 硬超时的系统终止此前伪装成「用户已取消」，
         # 用户看到 canceled「已取消下载」一头雾水。按 cancel_reason 分流终态。
         # 实测 F2（2026-10-11）：逻辑抽到 `_finalize_terminated`，与主等待循环共用同一份，
         # 避免「子线程阻塞时代码路径根本走不到这里」导致任务僵在 downloading。
         _finalize_terminated(task, store)
     except (UnsupportedError, GeoRestrictedError, ExtractorError, DownloadError) as exc:
+        if _gen_stale():
+            return
         err = _friendly_error(exc, _build_diag_context(task.url, cookie=cookie, proxy=proxy, options=_dl_opts))
         _mark_step_error(task, err.message)
         # 下载中断类失败（网络抖动/限速假死）往往残留部分分片，标记可续传
@@ -7505,6 +7587,8 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
                      category=getattr(err, "category", None) or "unknown",
                      resumable=_has_partial(task.workdir))
     except (OSError, ResolveError) as exc:
+        if _gen_stale():
+            return
         message = getattr(exc, "message", None) or "下载过程中出现错误"
         # OSError 多为网络层错误（DNS/连接/超时），归为 network 便于前端给「重试」建议；
         # ResolveError 自带 category（如优酷 -3007 的 cookie_required），优先采用
@@ -7520,12 +7604,15 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         store.update(task.id, status="failed", error=message, hint=_clean_message(str(exc)),
                      category=cat, resumable=_has_partial(task.workdir))
     except Exception as exc:  # noqa: BLE001 - 兜底，保证任务状态一定收敛
+        if _gen_stale():
+            return
         logger.exception("下载任务 %s 未预期失败", task.id)
         _mark_step_error(task, "未预期错误")
         store.update(task.id, status="failed", error="下载失败", hint=_clean_message(str(exc)),
                      category="unknown", resumable=_has_partial(task.workdir))
     else:
-        if task.cancel_requested or task.is_finished:  # 已被看门狗/硬超时/用户终止，不再写完成态
+        if task.cancel_requested or task.is_finished or _gen_stale():
+            # 已被看门狗/硬超时/用户终止（或已被就地暂停、新一轮接手），不再写完成态
             return
         # 可选：下载完成后提取文案（口播/简介），失败不影响下载完成态
         if task.extract_mode:
