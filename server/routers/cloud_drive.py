@@ -211,6 +211,8 @@ def cloud_drive_resolve(req: CloudDriveResolveReq) -> dict:
         "ok": True,
         "platform": "baidupan",
         "files": [f.to_dict() for f in files],
+        # 文件夹分享是一次性展开的（上限见 baidu._SHARE_MAX_FILES），到顶要说明
+        "truncated": len(files) >= getattr(baidu, "_SHARE_MAX_FILES", 300),
         "need_credential": need_login,
         "need_login": need_login,
     }

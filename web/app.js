@@ -17780,7 +17780,15 @@ el.dwVidPlayer.hidden = true;
       li.className = 'cd-item';
       const name = document.createElement('span');
       name.className = 'cd-item-name';
-      name.textContent = f.name || '(未命名)';
+      // 文件夹分享展开出来的文件带相对目录（如 "言情/"）⇒ 浅色前缀，同名文件才分得清；
+      // 落盘/入队名仍只用 f.name（带 "/" 会变成子目录甚至非法文件名）。
+      if (f.path) {
+        const pth = document.createElement('span');
+        pth.className = 'cd-item-path';
+        pth.textContent = f.path;
+        name.appendChild(pth);
+      }
+      name.appendChild(document.createTextNode(f.name || '(未命名)'));
       const size = document.createElement('span');
       size.className = 'cd-item-size';
       size.textContent = cdFmtSize(f.size);
@@ -17897,7 +17905,7 @@ el.dwVidPlayer.hidden = true;
       const files = data.files || [];
       cdRender(files, !!data.need_login);
       if (!data.need_login) {
-        cdSetStatus(`解析到 ${files.length} 个文件`, false);
+        cdSetStatus(`解析到 ${files.length} 个文件` + (data.truncated ? '（文件夹太大，只展开前这么多）' : ''), false);
       } else {
         // 把「登录态从哪个浏览器读的 / 为什么读不到」补进状态行：
         // 只说「需要登录态」用户不知道该去哪登录（Windows 上还可能是库被锁）。

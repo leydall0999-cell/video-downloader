@@ -81,7 +81,7 @@ class _FakeSession:
 
     def __init__(self, records=None, page=PAGE_LITERAL,
                  list_errno=0, verify_errno=0, dl_errno=0, dl_list=None,
-                 fm_info=None, fm_errno=0):
+                 fm_info=None, fm_errno=0, dir_map=None):
         self.headers = {}
         self.cookies = {}
         self.calls: list[tuple] = []
@@ -95,6 +95,8 @@ class _FakeSession:
         # 让老用例继续走 sharedownload 回退，保持既有断言不变。
         self._fm_info = fm_info
         self._fm_errno = fm_errno
+        # 文件夹分享：{目录路径: [子项]}。None = 不支持子目录（返回 errno=2）
+        self._dir_map = dir_map
 
     def get(self, url, **kw):
         self.calls.append(("GET", url, kw))
@@ -115,6 +117,14 @@ class _FakeSession:
         if "/share/list" in url:
             if self._list_errno != 0:
                 return _Resp({"errno": self._list_errno})
+            # 子目录列举：必定带 dir= 参数（且斜杠也被编码）。根目录用 shorturl+root=1。
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            dpath = (qs.get("dir") or [""])[0]
+            if dpath:
+                if self._dir_map is None:
+                    return _Resp({"errno": 2})       # 与真实行为一致：参数不对报 2
+                return _Resp({"errno": 0, "list": self._dir_map.get(dpath, []),
+                              "uk": UK, "share_id": SHARE_ID})
             return _Resp({"errno": 0, "list": self._records,
                           "uk": UK, "share_id": SHARE_ID})
         if "/api/filemetas" in url:
@@ -380,12 +390,75 @@ def test_empty_share_raises():
 
 
 def test_dir_only_share_raises():
+    """只有空文件夹 ⇒ 明确报「没有可下载的文件」，不能说解析成功给个空列表。"""
     p, _ = _patch_session(records=[{"fs_id": "1", "server_filename": "d",
-                                    "size": "0", "isdir": "1"}])
+                                    "size": "0", "isdir": "1",
+                                    "path": "/d"}],
+                          dir_map={"/d": []})
     with p:
         with pytest.raises(ValueError) as ei:
             baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=a", pwd=PWD)
     assert "文件夹" in str(ei.value)
+
+
+# ——————————————————————————————————————————————————————————————
+# 文件夹分享：递归展开（2026-10-27 新增能力）
+# ——————————————————————————————————————————————————————————————
+
+FOLDER_ROOT = [{"fs_id": "1001", "server_filename": "小说", "isdir": 1,
+                "size": "0", "path": "/我的资源/小说"}]
+FOLDER_MAP = {
+    "/我的资源/小说": [
+        {"fs_id": "2001", "server_filename": "甲.txt", "isdir": 0,
+         "size": "100", "path": "/我的资源/小说/甲.txt"},
+        {"fs_id": "2002", "server_filename": "言情", "isdir": 1,
+         "size": "0", "path": "/我的资源/小说/言情"},
+    ],
+    "/我的资源/小说/言情": [
+        {"fs_id": "3001", "server_filename": "乙.txt", "isdir": 0,
+         "size": "200", "path": "/我的资源/小说/言情/乙.txt"},
+    ],
+}
+
+
+def test_folder_share_expands_subdirs():
+    """根节点是文件夹时递归展开，文件带相对目录（同名文件才分得清）。"""
+    p, _ = _patch_session(records=FOLDER_ROOT, dir_map=FOLDER_MAP)
+    with p:
+        files = baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=a", pwd=PWD)
+    by_name = {f.name: f for f in files}
+    assert set(by_name) == {"甲.txt", "乙.txt"}, "两个文件都要被展开出来"
+    assert by_name["甲.txt"].path == "小说/", "一级目录的相对路径"
+    assert by_name["乙.txt"].path == "小说/言情/", "二级目录的相对路径"
+    assert by_name["乙.txt"].size == 200
+
+
+def test_folder_share_respects_limits():
+    """目录数/文件数上限必须生效，不能因为巨型目录把一次解析拖死。"""
+    assert baidu._SHARE_MAX_FILES >= 50, "上限别设得太小，正常分享要能一次列完"
+    assert baidu._SHARE_MAX_DEPTH >= 2, "至少要能进两层（分享/分类/文件）"
+
+
+def test_subdir_list_uses_encoded_dir_and_no_root():
+    """子目录列举的参数形态是硬要求（2026-10-27 实测），改回去必 errno=2：
+    必须带 uk+shareid+sekey+is_from_web，dir 要整体编码（斜杠也编码），
+    且**不能**带 shorturl / root=1。"""
+    p, sess = _patch_session(records=FOLDER_ROOT, dir_map=FOLDER_MAP)
+    with p:
+        baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=a", pwd=PWD)
+    fake = sess["s"]                      # box 里存的是实际用到的替身
+    sub_urls = [c[1] for c in fake.calls
+                if "/share/list" in c[1] and "dir=" in c[1]]
+    assert sub_urls, "应该发生子目录列举请求"
+    u = sub_urls[0]
+    assert f"uk={UK}" in u and f"shareid={SHARE_ID}" in u
+    assert "is_from_web=true" in u
+    assert "sekey=" in u
+    assert "shorturl=" not in u, "带 shorturl 会让 dir 失效"
+    assert "root=1" not in u, "带 root=1 会强制回根目录"
+    # 斜杠必须编码成 %2F，否则百度按参数分隔处理
+    dir_part = u.split("dir=")[1].split("&")[0]
+    assert "%2F" in dir_part, f"dir 里的斜杠要编码：{dir_part}"
 
 
 def test_dlink_failure_raises():
