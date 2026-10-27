@@ -169,6 +169,57 @@ def case_baidu_identity_distinguishes_accounts(tmp: str) -> None:
     check("保留的两个账号 BDUSS 各异", bduss == {"AAAA1111", "BBBB2222"})
 
 
+def case_baidu_member_first_ordering(tmp: str) -> None:
+    """百度网盘 2026-10-28：换直链只有会员号（vip_type>0）才回明文直链，
+    所以 get_cookies 必须「会员号优先、非会员号垫后」，与 ts 新旧无关；
+    add_cookie 入池时要按 vip_type 打 member 标记并落盘。"""
+    import json
+    import time
+    m = _load(tmp)
+    now = int(time.time())
+
+    # 1) 直接写池文件：会员号（member=True，ts 较旧）与非会员号（无标记，ts 较新）。
+    #    无论 ts 新旧，会员号必须排在最前，非会员号仍保留。
+    entries = [
+        {"header": "BDUSS=NONMEMBER; STOKEN=s1", "ts": now, "source": "sync"},
+        {"header": "BDUSS=MEMBEROLD; STOKEN=s2", "ts": now - 100, "source": "admin", "member": True},
+    ]
+    m._pool_file("baidu.com").write_text(json.dumps({"cookies": entries}, ensure_ascii=False))
+    out = m.get_cookies("baidu.com") or []
+    check("百度：会员号排在非会员号前面（无视 ts）",
+          out and "MEMBEROLD" in out[0] and "NONMEMBER" in out[1])
+    check("百度：非会员号仍被保留", len(out) == 2)
+
+    # 2) 非会员号更新、会员号更旧，仍应会员优先。
+    entries2 = [
+        {"header": "BDUSS=NONNEW; STOKEN=s3", "ts": now, "source": "sync"},
+        {"header": "BDUSS=MEMBEROLD2; STOKEN=s4", "ts": now - 500, "source": "admin", "member": True},
+    ]
+    m._pool_file("baidu.com").write_text(json.dumps({"cookies": entries2}, ensure_ascii=False))
+    out2 = m.get_cookies("baidu.com") or []
+    check("百度：会员号旧于非会员号时仍排在最前",
+          out2 and "MEMBEROLD2" in out2[0] and "NONNEW" in out2[1])
+
+    # 3) add_cookie 入池时按 vip_type 打 member 标记并落盘。
+    m.verify_cookie = lambda domain, header: True
+
+    def fake_probe(header):
+        return (True, {"vip_type": 2 if "MEM" in header else 0})
+
+    m.baidu_probe = fake_probe
+    m.add_cookie("baidu.com", "BDUSS=MEMNEW; STOKEN=s5", source="admin")
+    m.add_cookie("baidu.com", "BDUSS=NONNEW2; STOKEN=s6", source="sync")
+    data = json.loads(m._pool_file("baidu.com").read_text())["cookies"]
+    flag = {}
+    for e in data:
+        key = "MEMNEW" if "MEMNEW" in e["header"] else "NONNEW2"
+        flag[key] = e.get("member", False)
+    check("add_cookie 给会员号打 member=True", flag.get("MEMNEW") is True)
+    check("add_cookie 给非会员号不打 member", flag.get("NONNEW2") is False)
+    out3 = m.get_cookies("baidu.com") or []
+    check("add_cookie 入池后会员号仍排在前", out3 and "MEMNEW" in out3[0])
+
+
 def main() -> int:
     print("== test_cookie_pool_identity ==")
     tmpdir = tempfile.mkdtemp(prefix="vdl_pool_test_")
@@ -179,7 +230,8 @@ def main() -> int:
         for fn in (case_add_rejects_logged_out, case_add_keeps_only_newest_per_account,
                    case_add_keeps_multiple_accounts, case_prune_verifies_once_per_session,
                    case_verify_dispatch_prefers_bilibili_probe,
-                   case_baidu_identity_distinguishes_accounts):
+                   case_baidu_identity_distinguishes_accounts,
+                   case_baidu_member_first_ordering):
             d = tempfile.mkdtemp(prefix="vdl_pool_test_")
             try:
                 fn(d)

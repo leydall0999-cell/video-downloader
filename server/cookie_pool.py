@@ -340,6 +340,11 @@ def _save(domain: str, cookies: list) -> bool:
             ident = c.get("id") or _identity(domain, _decrypt_item(c))
             if ident:
                 item["id"] = ident
+            # 会员标记（百度网盘：vip_type>0 的账号才回明文直链）。
+            # 必须在落盘时保留，否则每次 _save 都会把 member 冲掉，
+            # get_cookies 的「会员优先」排序就失效了。
+            if c.get("member"):
+                item["member"] = True
             header = c.get("header") or ""
             enc = c.get("header_enc") or ""
             if not header and not enc:
@@ -434,7 +439,16 @@ def get_cookies(domain: str, limit: int = 8) -> list:
             logger.warning("[cookie_pool] get_cookies read error domain=%s file=%s: %s",
                            domain, f, e)
             continue
-        for c in reversed(data.get("cookies", [])):   # 最新优先
+        raw = data.get("cookies", [])
+        # 百度网盘 2026-10-28：换直链按账号等级分流，只有会员号（vip_type>0）
+        # 才回明文直链。把会员号排到最前、非会员号垫后，让 resolve_share 优先
+        # 吃会员带宽、会员失效才落非会员（按序重试仍保留兜底）。其他域保持原
+        # 行为（最新优先）。
+        if d == "baidu.com":
+            entries = sorted(raw, key=lambda c: (not bool(c.get("member")), -(c.get("ts", 0))))
+        else:
+            entries = list(reversed(raw))
+        for c in entries:
             if time.time() - c.get("ts", 0) > _TTL:
                 continue
             header = _decrypt_item(c)
@@ -473,6 +487,15 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
         logger.warning("[cookie_pool] reject-invalid domain=%s source=%s len=%s",
                        domain, source, len(header))
         return False
+    # 百度网盘：入池时顺手问一次 uinfo 拿 vip_type，标记 member，
+    # 供 get_cookies 做「会员优先」排序（避免换直链踩到普通号）。
+    member = False
+    if domain == "baidu.com":
+        try:
+            _ok, _info = baidu_probe(header)
+            member = int((_info or {}).get("vip_type") or 0) > 0
+        except Exception:
+            member = False
     ident = _identity(domain, header)
     now = int(time.time())
     with _LOCK:
@@ -490,10 +513,14 @@ def add_cookie(domain: str, header: str, source: str = "sync") -> bool:
                 c["source"] = source
                 if ident:
                     c["id"] = ident
+                if member:
+                    c["member"] = True
                 return _save(domain, _cap_cookies(domain, cookies))
         item = {"header": header, "ts": now, "source": source}
         if ident:
             item["id"] = ident
+        if member:
+            item["member"] = True
         cookies.append(item)
         ok = _save(domain, _cap_cookies(domain, cookies))
         logger.info("[cookie_pool] add saved domain=%s total=%s ident=%s ok=%s",
