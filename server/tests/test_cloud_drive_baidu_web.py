@@ -157,7 +157,7 @@ def test_resolve_never_leaks_dlink_or_cookie():
     BCS.save_bduss(_UID, "BDUSS=secret-in-server")
     orig = CD.baidu.resolve
 
-    def _fake_resolve(url, cookie="", pwd=""):
+    def _fake_resolve(url, cookie="", pwd="", extra_cookies=None):
         assert cookie == "BDUSS=secret-in-server", "应带上服务器上存的登录态"
         return [CD.baidu.CloudFile(name="素材包.zip", size=1024,
                                    dlink="https://d.pcs.baidu.com/file?sign=SECRET_DLINK",

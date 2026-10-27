@@ -92,13 +92,10 @@ def _admin_login_cookie() -> str:
 
     2026-10-25 用户定档：「网盘 cookies 主要由管理员提供，用户自己获取的入口隐藏」。
 
-    来源优先级：
-      ① 环境变量 `VDL_BAIDU_BDUSS` —— 管理员/运维直接在服务器上配这一份；
-      ② 云端 cookie 池里 baidu.com 的条目 —— 桌面端用户浏览器里登录过百度网盘时
-         会自动取到并贡献进来（用户无需手填），管理员手工放进去的也走这里。
+    来源：环境变量 `VDL_BAIDU_BDUSS` —— 管理员/运维直接在服务器上配这一份。
 
-    取到 ① 时顺手把它写回池里：这样「管理员那份」始终在共享池中，桌面端也能
-    通过共享池拿到同一份账号（两端一份凭据，不用各填各的）。
+    取到后顺手写回池里：这样「管理员那份」始终在共享池中，桌面端也能通过共享池
+    拿到同一份账号（两端一份凭据，不用各填各的）。
     """
     env = (os.environ.get("VDL_BAIDU_BDUSS") or "").strip()
     if env:
@@ -109,22 +106,64 @@ def _admin_login_cookie() -> str:
         except Exception:  # noqa: BLE001 — 入池失败不影响本次使用
             pass
         return header
+    # 🔴 这里**不再**回退 get_cookie("pan.baidu.com")：那等于把「共享池最新一条」
+    # 冒充成「管理员那份」，而池里可能只有百度搜索的匿名 Cookie（BAIDUID/PSTM，
+    # 没有 BDUSS）—— 匿名态换直链必拿密文、下载必 403。池里的账号统一在
+    # _login_cookies 里作为候选加入（会过滤掉无 BDUSS 的条目）。
+    return ""
+
+
+def _login_cookies(uid: str) -> list:
+    """本次可用的百度登录态**候选列表**（首选在前，已去重）。
+
+    为什么是列表：百度 2026-10-27 起只对**会员账号**（vip_type>0）返回明文
+    下载直链，普通账号回的是 AES 密文串。池里同时存在会员号和普通号时，只取
+    最新一条会随机踩到普通号 ⇒ 解析必报「返回了加密数据」。所以把池里所有
+    账号都交给解析器逐个试（见 cloud_drives/baidu.py resolve_share）。
+
+    顺序沿用老口径「管理员那份 > 用户自己存的 > 共享池」，池放最后是因为
+    池里可能有普通号（会员号必须由解析器逐个试出来，见 resolve_share）。
+    """
+    cands: list = []
+    admin = _admin_login_cookie()
+    if admin:
+        cands.append(admin)
     try:
-        from cookie_pool import get_cookie
-        return get_cookie("pan.baidu.com") or get_cookie("baidu.com") or ""
+        own = baidu_cred_store.load_bduss(uid) or ""
     except Exception:  # noqa: BLE001
-        return ""
+        own = ""
+    if own:
+        cands.append(own)
+    try:
+        from cookie_pool import get_cookies
+        cands.extend(get_cookies("pan.baidu.com") or [])
+    except Exception:  # noqa: BLE001 — 池读失败不该挡住用户自己配的凭据
+        logger.warning("[cloud_drive] read cookie pool failed", exc_info=True)
+
+    # 只留含 BDUSS 的（= 真登录态）。池里常混入浏览器自动贡献的百度搜索匿名
+    # Cookie（BAIDUID/BIDUPSID/PSTM），拿它换直链必得密文、下载必 403。
+    out: list = []
+    seen: set = set()
+    for c in cands:
+        if not c or "BDUSS=" not in c:
+            continue
+        key = ""
+        for part in c.split(";"):
+            k, _, v = part.partition("=")
+            if k.strip() == "BDUSS":
+                key = v.strip()
+                break
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
 
 
 def _login_cookie(uid: str) -> str:
-    """本次要用的百度登录态：管理员那份优先，其次用户自己存的（接口保留，界面已隐藏）。"""
-    admin = _admin_login_cookie()
-    if admin:
-        return admin
-    try:
-        return baidu_cred_store.load_bduss(uid) or ""
-    except Exception:  # noqa: BLE001
-        return ""
+    """单条登录态（下载中转等只需一条的场合用）。"""
+    cands = _login_cookies(uid)
+    return cands[0] if cands else ""
 
 
 # ——————————————————————————————————————————————————————————————
@@ -148,9 +187,10 @@ def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request) -> dict
     if not url:
         return {"ok": False, "error": "链接格式不对，应是 https://pan.baidu.com/..."}
 
-    cookie = _login_cookie(uid)
+    cands = _login_cookies(uid)
+    cookie = cands[0] if cands else ""
     try:
-        files = baidu.resolve(url, cookie, (req.pwd or "").strip() or text_pwd)
+        files = baidu.resolve(url, cookie, (req.pwd or "").strip() or text_pwd, cands)
     except ValueError as e:
         return {"ok": False, "error": str(e), "need_credential": (not cookie)}
     except Exception as e:  # noqa: BLE001
