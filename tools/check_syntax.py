@@ -12,6 +12,10 @@
   - *.py            → py_compile
   - web/app.js 等 js → node --check（找不到 node 就 SKIP，不误伤）
   - *.yml / *.yaml  → yaml.safe_load（没装 pyyaml 就 SKIP）
+  - *.sh            → bash -n（找不到 bash 就 SKIP）
+                      🔴 2026-10-27 补：desktop/build_win.sh、build_mac.sh 都是
+                      几千行的构建脚本，此前这道闸对 .sh 直接 SKIP —— 改完推上去
+                      无人校验，等于闸门漏了半扇。
 
 用法：
   python tools/check_syntax.py                    # 校验工作区相对 HEAD 的改动
@@ -103,6 +107,38 @@ def check_js(path: str) -> tuple[bool, str]:
     return False, " | ".join(msg[:3])
 
 
+def _find_bash() -> str | None:
+    env = os.environ.get("VDL_BASH")
+    if env and (shutil.which(env) or os.path.isfile(env)):
+        return env
+    w = shutil.which("bash") or shutil.which("bash.exe")
+    if w:
+        return w
+    # Windows：PATH 上没有时兜底找 Git Bash（CI 的 shell 自带，本机装 Git 就有）
+    for p in (r"C:\Program Files\Git\bin\bash.exe",
+              r"C:\Program Files (x86)\Git\bin\bash.exe"):
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def check_sh(path: str) -> tuple[bool, str]:
+    """bash -n：只解析不执行，能抓括号/引号/if-fi 不配对（不跑脚本本身）。"""
+    full = os.path.join(ROOT, path)
+    if not os.path.isfile(full):
+        return True, ""
+    bash = _find_bash()
+    if not bash:
+        return True, "SKIP(未找到 bash)"
+    # MSYS/Git Bash 会把反斜杠当转义 ⇒ 统一成正斜杠，Windows 路径也能吃
+    r = subprocess.run([bash, "-n", full.replace("\\", "/")], capture_output=True,
+                       text=True, encoding="utf-8", errors="replace")
+    if r.returncode == 0:
+        return True, ""
+    msg = (r.stderr or "").strip().splitlines()
+    return False, " | ".join(msg[:3])
+
+
 def check_yaml(path: str) -> tuple[bool, str]:
     full = os.path.join(ROOT, path)
     if not os.path.isfile(full):
@@ -126,7 +162,7 @@ def main() -> int:
     args = ap.parse_args()
 
     files = collect_files(args.range, args.files)
-    targets = [f for f in files if f.endswith((".py", ".js", ".yml", ".yaml"))]
+    targets = [f for f in files if f.endswith((".py", ".js", ".yml", ".yaml", ".sh"))]
     if not targets:
         print("check_syntax: 本次没有需要校验的文件 —— SKIP")
         return 0
@@ -138,6 +174,8 @@ def main() -> int:
             ok, msg = check_py(p)
         elif p.endswith(".js"):
             ok, msg = check_js(p)
+        elif p.endswith(".sh"):
+            ok, msg = check_sh(p)
         else:
             ok, msg = check_yaml(p)
         if not ok:
