@@ -101,6 +101,17 @@ def resolve(url, timeout=35):
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
+            # 图集 / 幻灯片作品（2026-10-28 实测）：短链展开后 final URL 带
+            # `subBiz=BROWSE_SLIDE_PHOTO`，页面只有 HLS 幻灯片流（vod-rt-remux/
+            # hls-ts/*.m3u8），**没有** progressive mp4 直链。此前一律走下面 25s
+            # 轮询 → 必然超时 → 抛「APOLLO_STATE 无 mp4 直链」，用户白等 30s 且
+            # 报错看不懂。这里按 URL 判据立即失败，给可读原因。
+            # 正常视频的 final URL 是 /short-video/<id>，不带 subBiz 参数。
+            if "BROWSE_SLIDE_PHOTO" in (page.url or ""):
+                raise RuntimeError(
+                    "这是快手图集/图文作品，只有幻灯片播放流，没有可下载的视频直链"
+                )
+
             # 轮询等 __APOLLO_STATE__ 里出现 mp4 直链（首访建 cookie 可能较慢）
             # ⚠️ 2026-08 实测：快手新版签名直链（oskwai.com/ksc2/...）已不带 .mp4 后缀，
             #    只靠 .mp4 判定会漏掉真实流。改为「CDN 域 + (含 .mp4 或含 /ksc2/ 签名)」。

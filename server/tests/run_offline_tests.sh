@@ -177,6 +177,10 @@ run_one test_subtitle_minimal.py              # I8：web AI 字幕路径护栏 +
 #  且校验必须在「经隧道拉 Cookie 写公共池」的重操作之前（2026-10-12 安全盘点实测：
 #  该端点经 nginx/CF 公网可达，未带令牌即 200，默认 mode=full 是状态变更重操作）。
 run_one test_cookie_pull_diag_auth.py
+#  test_kuaishou_slide_photo.py —— 快手图集/图文作品必须**快速失败 + 可读文案**
+#  （2026-10-28 巡检实测：短链展开后 final URL 带 subBiz=BROWSE_SLIDE_PHOTO，
+#  只有幻灯片 HLS 流、无 mp4 直链 ⇒ 旧逻辑白等 25s 再抛「APOLLO_STATE 无 mp4」）。
+run_one test_kuaishou_slide_photo.py
 run_one test_ai_free_trial_web.py
 run_one e2e_ai_trial_check.py
 
