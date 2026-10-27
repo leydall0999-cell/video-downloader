@@ -164,6 +164,7 @@ def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request) -> dict
             "id": baidu_cred_store.seal_token(uid, f.dlink),
             "name": f.name,
             "size": int(f.size or 0),
+            "path": getattr(f, "path", "") or "",
             "need_login": bool(getattr(f, "need_login", False)),
         })
     need_login = any(x["need_login"] for x in out) or (not cookie)
@@ -171,6 +172,9 @@ def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request) -> dict
         "ok": True,
         "platform": "baidupan",
         "files": out,
+        # 文件夹分享是一次性展开的（默认最多 300 个文件），到顶了要说清楚，
+        # 否则用户会以为大文件夹里只剩这点东西。
+        "truncated": len(out) >= getattr(baidu, "_SHARE_MAX_FILES", 300),
         "need_credential": need_login,
         "need_login": need_login,
         "has_credential": bool(cookie),

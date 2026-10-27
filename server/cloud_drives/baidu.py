@@ -88,6 +88,9 @@ class CloudFile:
     cookie: str = ""
     headers: dict = field(default_factory=dict)
     need_login: bool = False   # True = 直链已拿到但没有百度登录态，下载会 403
+    # 文件在分享里的相对目录（如 "言情/"），只用于**展示与去重**；
+    # 落盘文件名永远只用 name —— 带 "/" 会让 showSaveFilePicker / a.download 直接报错。
+    path: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -97,6 +100,7 @@ class CloudFile:
             "cookie": self.cookie,
             "headers": self.headers,
             "need_login": self.need_login,
+            "path": self.path,
         }
 
 
@@ -328,6 +332,82 @@ def share_list(s: requests.Session, surl: str, q: str) -> tuple[list, str, str]:
             str(j.get("share_id") or ""))
 
 
+# ——————————————————————————————————————————————————————————————
+# 文件夹分享：进子目录 + 递归展开（2026-10-27 实测）
+# ——————————————————————————————————————————————————————————————
+# 现实里 90% 的百度分享根节点是一个文件夹，只列根目录等于什么都看不到。
+# 子目录列举**不是**根目录那条接口，参数差三处，少一个都 errno=2 / 不生效：
+#   ① 必须用 uk + shareid（**不要** shorturl、**不要** root=1）
+#   ② dir = 该目录**真实路径**（如 /我的资源/小说/xxx），取自父级记录自带的 path 字段
+#   ③ dir 要整体 URL 编码（连斜杠一起编成 %2F），sekey 也要编
+# 另需 is_from_web=true；sekey 就是提取码换算出来的 BDCLND。
+_SHARE_MAX_FILES = 300     # 单次解析最多返回 300 个文件（足够用，且不会把响应撑爆）
+_SHARE_MAX_DIRS = 50       # 最多翻 50 个目录
+_SHARE_MAX_DEPTH = 4       # 最多翻 4 层
+_SHARE_PAGE_SIZE = 100     # 每页 100 条，单目录最多翻 3 页
+
+
+def share_list_dir(s: requests.Session, uk: str, share_id: str, sekey: str,
+                   dirpath: str, q: str) -> list:
+    """列分享内的一个子目录，返回 records（dict 列表）。
+
+    dirpath 用父级记录自带的 `path`；失败返回 []（不抛），
+    —— 单个目录读不到不该让整次解析失败，其它目录的文件照样能用。
+    """
+    if not (uk and share_id and dirpath):
+        return []
+    sk = f"&sekey={urllib.parse.quote(sekey, safe='')}" if sekey else ""
+    out: list = []
+    for page in range(1, 4):
+        url = (f"{_BASE}/share/list?uk={uk}&shareid={share_id}{sk}&is_from_web=true"
+               f"&dir={urllib.parse.quote(dirpath, safe='')}"
+               f"&page={page}&num={_SHARE_PAGE_SIZE}"
+               f"&order=name&desc=0&showempty=0&view_mode=1&{q}")
+        try:
+            j = _json(s.get(url, timeout=_TIMEOUT))
+        except Exception:  # noqa: BLE001
+            logger.warning("[baidu] 列子目录异常 dir=%s", dirpath, exc_info=True)
+            break
+        if j.get("errno") != 0:
+            logger.warning("[baidu] 列子目录失败 dir=%s errno=%s", dirpath, j.get("errno"))
+            break
+        lst = j.get("list")
+        if not isinstance(lst, list):
+            break
+        out.extend(it for it in lst if isinstance(it, dict))
+        if len(lst) < _SHARE_PAGE_SIZE:
+            break
+    return out
+
+
+def _share_walk(s: requests.Session, uk: str, share_id: str, sekey: str,
+                roots: list, files: list, q: str) -> None:
+    """BFS 展开 roots 里的所有目录，把文件追加进 files（元素 = (record, 相对路径)）。
+
+    防炸：目录数 / 层数 / 文件数三重上限；单目录失败只跳过它自己。
+    """
+    queue = []
+    for r in roots:
+        name = str(r.get("server_filename") or "")
+        dpath = r.get("path") or ""
+        queue.append((dpath, name + "/", 1))
+    seen = 0
+    while queue and seen < _SHARE_MAX_DIRS and len(files) < _SHARE_MAX_FILES:
+        dpath, rel, depth = queue.pop(0)
+        if depth > _SHARE_MAX_DEPTH:
+            continue
+        seen += 1
+        for k in share_list_dir(s, uk, share_id, sekey, dpath, q):
+            kname = str(k.get("server_filename") or k.get("filename") or "")
+            if int(k.get("isdir") or 0):
+                kpath = k.get("path") or (dpath.rstrip("/") + "/" + kname if dpath else "")
+                queue.append((kpath, rel + kname + "/", depth + 1))
+            else:
+                files.append((k, rel))
+            if len(files) >= _SHARE_MAX_FILES:
+                break
+
+
 # 百度 dlink（d.pcs.baidu.com）的 UA 白名单 —— 2026-10-24 实测：
 #   带**浏览器 UA** 一律 403 `{"error_code":31326,"error_msg":"user is not authorized"}`；
 #   官方客户端 UA / 空 UA / 非浏览器 UA（aria2、requests 默认）都能正常 206。
@@ -500,11 +580,27 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
         uk = uk or str(yun.get("uk") or "")
         share_id = share_id or str(yun.get("shareid") or "")
 
-    files = [r for r in records if int(r.get("isdir") or 0) == 0]
-    if not files:
-        raise ValueError("分享里只有文件夹，暂不支持（阶段 2 再上）")
+    # 根节点常常就是一个文件夹（现实里的分享 90% 如此）⇒ 递归展开，
+    # 每个文件带上它相对分享根的目录，前端才能区分「言情/同名.txt」这类重名。
+    picked: list = [(r, "") for r in records if int(r.get("isdir") or 0) == 0]
+    roots = [r for r in records if int(r.get("isdir") or 0)]
+    if roots:
+        _share_walk(s, uk, share_id, sekey, roots, picked, q)
 
-    fs_ids = [r.get("fs_id") for r in files if r.get("fs_id")]
+    files: list = []
+    _seen: set = set()
+    for rec, rel in picked:            # 去重：多目录翻页偶发重复回同一条
+        fid_key = str(rec.get("fs_id") or "")
+        if not fid_key or fid_key in _seen:
+            continue
+        _seen.add(fid_key)
+        files.append((rec, rel))
+        if len(files) >= _SHARE_MAX_FILES:
+            break
+    if not files:
+        raise ValueError("分享里没有可下载的文件（可能只有空文件夹）")
+
+    fs_ids = [r.get("fs_id") for r, _rel in files if r.get("fs_id")]
     # 🔴🔴 换直链必须用**带登录态的会话**（2026-10-24 实测）：
     # 用匿名会话请求 /api/sharedownload，百度会返回「游客缓存」里的旧直链 ——
     # dstime 停在一小时前、expires=1h，一拿到就过期，下载必报
@@ -536,7 +632,7 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
             continue
 
     results: list[CloudFile] = []
-    for r in files:
+    for r, rel in files:
         fid = str(r.get("fs_id") or "")
         dlink = dlinks.get(fid) or ""
         if not dlink and login_ok:
@@ -552,6 +648,7 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "") -> list[Cloud
             cookie=login_cookie or "",
             headers={"User-Agent": DLINK_UA},
             need_login=not login_ok,
+            path=rel,
         ))
     if not results:
         raise ValueError("未能从分享链接取到下载直链")

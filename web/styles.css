@@ -666,6 +666,8 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 .cd-list { list-style: none; margin: 0 0 .8rem; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
 .cd-item { display: flex; align-items: center; gap: .6rem; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
 .cd-item-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
+/* 文件夹分享展开后的相对目录前缀：弱化显示，不跟文件名抢注意力 */
+.cd-item-path { opacity: .55; font-size: .78rem; margin-right: 2px; }
 .cd-item-size { flex: 0 0 auto; color: var(--text-mute); font-size: .78rem; }
 .cd-item.is-busy { opacity: .6; pointer-events: none; }
 .pan-panel { margin-top: 1rem; }
@@ -699,6 +701,10 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 /* 网盘模式下让位的两块：① 视频解析结果（否则与网盘文件列表同屏打架）；
    ② 网盘面板里那行重复的「分享链接 / 提取码」—— 输入已由主输入框承担。
    ⚠️ 只藏内容，不藏 .input-panel 本身：切换器就在里面，整块藏掉就切不回来了。 */
+/* 网盘模式：视频结果区让位；下面那套「网盘分享链接/提取码」表单也藏掉 ——
+   网盘的正式入口是上方主输入框（提交时把它桥接进 #panUrl 再触发解析），
+   两套同时出现就是重复输入（见 app.js 主提交逻辑）。
+   注意 #panNoteTop 不在这里，它必须常显（2026-10-27 用户三次反馈）。 */
 #downloadView.mode-netdisk .result-panel,
 #downloadView.mode-netdisk .cd-form,
 #downloadView.mode-netdisk #panTitle { display: none; }

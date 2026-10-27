@@ -1137,8 +1137,9 @@
       if (!_nd) {
         el.panPanel.hidden = true;
       } else {
-        // 进网盘模式时，只有已经有文件列表/状态才把面板露出来；
-        // 否则保持跟视频模式「还没解析」时一样的干净页面（只有输入框）。
+        // 网盘模式下：只有已经有文件列表/状态才把面板露出来。
+        // 空面板会让页面多出一块空白卡片 —— 没解析时干净的只有主输入框
+        // （网盘正式入口是主输入框，提交时桥接进 #panUrl，见主提交逻辑）。
         const hasList = el.panList && el.panList.children.length > 0;
         const hasStatus = el.panStatus && el.panStatus.textContent.trim();
         el.panPanel.hidden = !(hasList || hasStatus);
@@ -7330,7 +7331,16 @@
       const li = document.createElement('li');
       li.className = 'cd-item';
       const nm = document.createElement('span');
-      nm.className = 'cd-item-name'; nm.textContent = f.name || '文件';
+      nm.className = 'cd-item-name';
+      // 文件夹分享展开出来的文件带相对目录 ⇒ 用浅色前缀显示，
+      // 同名文件（言情/1.txt 与 耽新/1.txt）才区分得开。落盘名仍只用 f.name。
+      if (f.path) {
+        const pth = document.createElement('span');
+        pth.className = 'cd-item-path';
+        pth.textContent = f.path;
+        nm.appendChild(pth);
+      }
+      nm.appendChild(document.createTextNode(f.name || '文件'));
       const sz = document.createElement('span');
       sz.className = 'cd-item-size';
       sz.textContent = formatBytes(f.size) + (f.need_login ? ' · 需要百度登录态' : '');
@@ -7385,9 +7395,11 @@
         return;
       }
       panRenderFiles(r.files || []);
+      const _pn = (r.files || []).length;
+      const _trunc = r.truncated ? '（文件太多，只展开前 ' + _pn + ' 个）' : '';
       panSetStatus(r.need_credential
-        ? '已列出文件，但暂无可用的百度登录态，下载会失败 —— 请联系管理员提供'
-        : ('已列出 ' + (r.files || []).length + ' 个文件'));
+        ? ('已列出 ' + _pn + ' 个文件' + _trunc + '，但暂无可用的百度登录态，下载会失败 —— 请联系管理员提供')
+        : ('已列出 ' + _pn + ' 个文件' + _trunc));
     } catch (e) {
       panSetStatus((e && e.message) || '解析失败', true);
     } finally {
