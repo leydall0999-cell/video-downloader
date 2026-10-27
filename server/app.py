@@ -119,6 +119,39 @@ from commentary_config import get_voice_sample, inject_commentary_env
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("vdl")
 
+
+def _attach_file_logging():
+    """root logger 额外写一份到磁盘，返回日志文件路径（失败返回 None）。
+
+    🔴 2026-10-27：打包版是 console=False（runw.exe），desktop_launcher._ensure_stdio()
+       把 sys.stdout/stderr 换成 devnull —— basicConfig 的 StreamHandler 写进去
+       等于**扔掉**。而这轮把网盘失败的用户可见文案统一成一句话后，真实原因
+       （errno / 账号等级 / 密文字节数 / 浏览器锁库）只剩 logger 这一个出口，
+       不落盘就等于线上无从排查。所以这里补文件日志（8MB × 轮转 3 份）。
+    任何异常都吞掉：日志落盘失败绝不能影响启动。
+    """
+    try:
+        from logging.handlers import RotatingFileHandler
+
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        log_dir = Path(base) / "VideoDownloader" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / "vdl.log"
+        fh = RotatingFileHandler(
+            str(path), maxBytes=8 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        fh.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        fh.setLevel(logging.INFO)
+        logging.getLogger().addHandler(fh)
+        return path
+    except Exception:  # noqa: BLE001 - 日志自身失败不能拖垮启动
+        return None
+
+
+LOG_FILE = _attach_file_logging()
+
 if getattr(sys, "frozen", False):
     # PyInstaller 打包后资源位置：
     #   - 单文件模式：解压到 sys._MEIPASS
