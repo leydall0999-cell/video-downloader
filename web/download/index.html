@@ -59,13 +59,13 @@
       <div class="dl-card">
         <div class="dl-ico">🍎</div>
         <h3>macOS</h3>
-        <p>DMG · 296 MB · macOS 11+（Intel / Apple Silicon 通用版）。</p>
+        <p>DMG · <span data-dl-size="macos">296 MB</span> · macOS 11+（Intel / Apple Silicon 通用版）<span data-dl-ver="macos"></span>。</p>
         <!-- 2026-10-18 去掉 download 属性：该地址会 302 到跨域 CDN，Safari / 微信内置浏览器
              对「download 属性 + 跨域跳转」会静默不下载（点了没反应）。普通导航在所有浏览器
              都会被 CDN 的二进制响应直接触发下载，也仍然走本机计数端点。 -->
         <a class="btn btn-block btn-primary" href="/download/installer?p=macos" target="_blank" rel="noopener">下载 macOS</a>
         <p class="dl-note" style="margin-top:.6rem">安装：打开下载的 DMG，把「视频工坊」拖进「应用程序」文件夹。首次打开若提示无法验证，请右键点按图标再选「打开」（仅需一次）。</p>
-        <p class="dl-note" style="margin-top:.4rem">打不开 DMG？<a href="/download/installer?p=macos-zip">下载 ZIP 版</a>（270 MB，解压后同样拖进「应用程序」）</p>
+        <p class="dl-note" style="margin-top:.4rem">打不开 DMG？<a href="/download/installer?p=macos-zip">下载 ZIP 版</a>（<span data-dl-size="macos-zip">270 MB</span>，解压后同样拖进「应用程序」）</p>
         <p class="dl-note" style="margin-top:.4rem">点了没反应？改用<a href="https://download.hanyuxz.top/VideoDownloader.dmg" target="_blank" rel="noopener">直连地址下载</a>（同一个文件，不经过本站跳转）。</p>
         <details class="dl-slow">
           <summary>下载太慢？点这里提速</summary>
@@ -142,5 +142,32 @@
     <p class="dl-note">在微信 / QQ 里打开本页时，请先点右上角「···」→「在浏览器打开」再下载：微信内置浏览器会拦截 .dmg / .exe 这类安装包，表现就是点了没有任何反应。</p>
 
   </main>
+  <script>
+    /* 体积 / 版本从「真实安装包」读（GET /download/meta 会 HEAD 一下 CDN 上的文件）。
+       这样发版只要把新包传上去，页面文案自动跟上，不会再出现「页面写 296MB、
+       实际下到 290MB」这种对不上；接口取不到时保留上面的静态文案。 */
+    (function () {
+      if (!window.fetch) return;
+      var fmt = function (n) { return n > 0 ? (Math.round(n / 1e5) / 10) + ' MB' : ''; };
+      fetch('/download/meta', { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          var p = (d && d.platforms) || {};
+          Object.keys(p).forEach(function (k) {
+            var info = p[k] || {};
+            var size = document.querySelector('[data-dl-size="' + k + '"]');
+            if (size && info.size) size.textContent = fmt(info.size);
+            var ver = document.querySelector('[data-dl-ver="' + k + '"]');
+            if (ver) {
+              /* 版本号写在对象自定义元数据里，但 Cloudflare 公开域名不回传
+                 x-amz-meta-*，所以以「更新日期」兜底——这个一定真，不会撒谎。 */
+              if (info.version) ver.textContent = '（v' + info.version + '）';
+              else if (info.updated) ver.textContent = '（' + info.updated + ' 更新）';
+            }
+          });
+        })
+        .catch(function () { /* 静默：保留静态文案 */ });
+    })();
+  </script>
 </body>
 </html>

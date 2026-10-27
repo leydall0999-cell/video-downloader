@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import time
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
@@ -174,6 +175,57 @@ _INSTALLER_MEDIA_TYPES: dict[str, str] = {
 }
 
 _R2_HEALTH_TIMEOUT = 3.0
+
+# —— 安装包元信息（让下载页的体积/版本跟着真实文件走，不再写死）——————————
+# 背景：`web/download/index.html` 原来把「296 MB / 270 MB」写死在文案里，每次发版
+# 都要人工改，漏改就会出现「页面写 296MB、实际下到 290MB」。这里直接 HEAD 真实对象
+# 取体积与更新时间；版本号取对象自定义元数据（上传时写 x-amz-meta-version）。
+# 只读无副作用；结果缓存 5 分钟，避免每访问一次页面就打一次 R2。
+_INSTALLER_META_TTL = 300.0
+_INSTALLER_META_CACHE: dict = {"ts": 0.0, "payload": {}}
+
+
+def _head_installer(url: str, timeout: float = 4.0) -> dict:
+    import email.utils
+    import urllib.request
+
+    info = {"size": 0, "updated": "", "version": ""}
+    req = urllib.request.Request(url, method="HEAD",
+                                 headers={"User-Agent": "vdl-installer-meta/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        info["size"] = int(resp.headers.get("Content-Length") or 0)
+        last_mod = resp.headers.get("Last-Modified") or ""
+        if last_mod:
+            try:
+                info["updated"] = (email.utils.parsedate_to_datetime(last_mod)
+                                   .astimezone().strftime("%Y-%m-%d"))
+            except Exception:  # noqa: BLE001 — 时间格式异常不影响体积
+                pass
+        ver = (resp.headers.get("x-amz-meta-version") or "").strip()
+        if ver:
+            info["version"] = ver
+    return info
+
+
+@router.get("/download/meta")
+def download_meta() -> dict:
+    """返回各平台安装包的真实体积 / 更新时间 / 版本（给下载页自动渲染）。"""
+    now = time.time()
+    cached = _INSTALLER_META_CACHE
+    if cached["payload"] and now - float(cached["ts"] or 0) < _INSTALLER_META_TTL:
+        return cached["payload"]
+    platforms: dict[str, dict] = {}
+    for plat in ("macos", "macos-zip"):
+        url = _R2_INSTALLER_URLS.get(plat)
+        if not url or not _INSTALLER_ENABLED.get(plat, True):
+            continue
+        try:
+            platforms[plat] = _head_installer(url)
+        except Exception:  # noqa: BLE001 — 取不到就留空，页面回退静态文案
+            platforms[plat] = {"size": 0, "updated": "", "version": ""}
+    payload = {"ok": True, "platforms": platforms}
+    cached["ts"], cached["payload"] = now, payload
+    return payload
 
 
 def _r2_reachable(url: str) -> bool:
