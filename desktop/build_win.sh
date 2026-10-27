@@ -460,6 +460,25 @@ else
   exit 1
 fi
 
+# ── 包内资源硬核查（2026-10-27）──
+# 🔴 1.0.95-win1 事故的同类风险：pywebview 6.x 在 **import 期**无条件遍历
+#    ('win-arm64','win-x64','win-x86') 三个运行时目录，缺任一个就 FileNotFoundError
+#    ⇒ 只剩一句「本地服务启动失败」弹窗（后端其实可能已起来，极误导）。
+#    而 `--collect-all webview` 把 .dll 归到 binaries，PyInstaller 按目标架构过滤 ⇒
+#    包里只剩 win-x64，arm64/x86 静默丢掉、**构建日志全绿**。
+#    build_win.sh 已用 --add-data 显式收三目录（data 不过架构过滤），这里补产物级
+#    硬断言：此前只有 CI（.github/workflows/build-win.yml）跑它，本地手打绿版没有闸。
+echo "▶ 核查包内资源（webview 三平台运行时 / server 资产）"
+if "$VENV/Scripts/python.exe" "$REPO/desktop/ci_assert_win_bundle.py" "$DIST_APP"; then
+  echo "   ✔ 包内资源齐备"
+else
+  echo "❌ 包内资源缺失（webview win-x64/win-arm64/win-x86 运行时 或 server/assets），已中止打包。" >&2
+  echo "   修法：① 确认 venv 内 webview/lib/runtimes 三个平台目录都在（$VENV/Lib/site-packages/webview/lib/runtimes）；" >&2
+  echo "         ② 确认上面三个 --add-data 生效（不要用 --collect-all 收 .dll，会被架构过滤）；" >&2
+  echo "         ③ 确认 --add-data server/assets 未被跳过；然后重跑构建。" >&2
+  exit 1
+fi
+
 echo "▶ 打包安装程序（Inno Setup → dist/VideoDownloader-Setup-${APP_VERSION}.exe）"
 # iscc 查找顺序：PATH → 常见安装路径（Git Bash 的 /c/ 路径，MSYS 会转成 Windows 风格传给原生 exe）
 _ISCC=""
