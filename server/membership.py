@@ -115,6 +115,11 @@ DAILY_QUOTA_LIMITS: dict[str, int] = {
     #    （与视频拼接 / 图片转换同一口径；用户 2026-10-23 选定「每日免费次数」而不是扣积分）。
     #    计数点在 routers/idphoto.py 的 make（发起即计一次；render 微调不计次）。
     "idphoto": 200,           # 证件照（会员）
+    # 🔴 2026-10-28 补齐（对齐网页版同键同档）：网盘下载（百度分享直链）并入账号级
+    # 每日配额 —— 免费 3 次/日、会员 200 次/日，与网页版 cloud_drive 完全同口径。
+    # 拦截点在 routers/cloud_drive.py 的 resolve 成功处（先实现再进表，
+    # 守卫 test_feature_usage_gate 钉住「表里必须有真拦截点」）。
+    "cloud_drive": 200,       # 网盘下载 / 日（会员）
     # 老键：仅用于存量归集与后台对照，不再有写入点
     "app_compute": 200,
 }
@@ -150,6 +155,8 @@ FREE_DAILY_LIMITS: dict[str, int] = {
     "share_page": 20,         # 生成网页 免费 20 次/日
     # 🔴 2026-10-23：证件照免费档 5 次/日（与视频拼接 / 图片转换同档），会员 200 次/日
     "idphoto": 5,             # 证件照 免费 5 次/日
+    # 🔴 2026-10-28：网盘下载免费档 3 次/日（与网页版同值），会员 200 次/日
+    "cloud_drive": 3,         # 网盘下载 免费 3 次/日
     # 老键：存量归集用
     "app_compute": 5,
 }
@@ -354,6 +361,9 @@ FEATURE_USAGE_DEFS: list[dict[str, Any]] = [
     #    记录（底层每次都真跑一遍人像抠图），个人中心「使用统计」与管理后台配额面板
     #    两处都看不到。现并入每日配额体系：免费 5 次/日、会员 200 次/日、不扣积分。
     {"key": "idphoto",     "name": "证件照",     "resource": "idphoto",     "unit": "次", "free_limit": 5,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "上传生活照 → 换底色 → 出标准规格（含冲印排版）；预览里拖动微调不重复计次"},
+    # 🔴 2026-10-28 补齐（对齐网页版）：网盘下载进「使用统计」/ 后台配额面板，
+    # 拦截点 = routers/cloud_drive.py resolve 成功处 use_daily("cloud_drive")。
+    {"key": "baidu_pan",   "name": "网盘下载",   "resource": "cloud_drive", "unit": "次", "free_limit": 3,  "member_limit": 200, "ai_bonus": 0, "credit_cost": 0, "shared_note": "百度分享链接解析 → 直链下载；重新解析同一链接会再计一次"},
 ]
 
 # ── 🔴 纯 AI 积分功能（2026-10-12）──────────────────────────────────────────
@@ -1407,6 +1417,9 @@ _BENEFIT_FROM_LIMITS: tuple[tuple[str, str], ...] = (
     ("share_page", "生成网页 {v} 次/日"),
     # 2026-10-23：证件照并入每日配额（此前无任何计数，等于免费无限次）
     ("idphoto", "证件照 {v} 次/日"),
+    # 🔴 2026-10-28 补齐（对齐网页版 10-25 已加，漏了 App 分支）：网盘下载
+    # （百度分享直链，免费 3 次/日、会员 200 次/日，与网页版 cloud_drive 同键同档）
+    ("cloud_drive", "网盘下载 {v} 次/日"),
     # 老键：仅存量归集用，不作为对外权益展示（否则用户看到「视频处理」会以为
     # 转换/压缩/超分还共用一份额度 —— 拆键后已不共用）
 )

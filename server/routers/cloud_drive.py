@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import re
 
+import app
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -265,7 +266,7 @@ def cloud_drive_contribute() -> dict:
 
 
 @router.post('/api/cloud-drive/resolve')
-def cloud_drive_resolve(req: CloudDriveResolveReq) -> dict:
+def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request) -> dict:
     cands = _baidu_login_cookies()
     cookie = cands[0] if cands else ""
     try:
@@ -282,6 +283,21 @@ def cloud_drive_resolve(req: CloudDriveResolveReq) -> dict:
         return {"ok": False, "error": baidu.USER_ERROR_TEXT, "need_credential": (not cookie)}
     # 第三态：解析成功但缺下载登录态（百度 dlink 匿名下载会 403）
     need_login = any(getattr(f, "need_login", False) for f in files)
+    # 🔴 账号级每日配额（2026-10-28，对齐网页版同键同档）：资源键 cloud_drive，
+    # 免费 3 次/日、会员 200 次/日（membership.py 两张配额表）。计数点 = 解析成功
+    # （拿到 dlink）即一次 —— 桌面端真下载走通用 /api/download（无百度专用回写点），
+    # 与网页版「下载流起始计一次」口径对齐取最接近的实现点。need_login（没有可用
+    # 直链，用户下不了）不计次，等补了登录态重新解析才计。
+    if not need_login:
+        try:
+            _q = app.current_member_store(request).use_daily(
+                "cloud_drive", 1, title="百度网盘", platform="baidupan")
+        except Exception:  # noqa: BLE001 — fail-open：配额引擎异常不打断本机使用
+            _q = {"ok": True}
+        if not _q.get("ok"):
+            raise app.HTTPException(
+                status_code=402,
+                detail="MEMBER_QUOTA|" + (_q.get("error") or "今日网盘下载次数已用完，开通VIP会员可解锁 200 次/日"))
     return {
         "ok": True,
         "platform": "baidupan",
