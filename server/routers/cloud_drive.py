@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 import app
 from fastapi import APIRouter
@@ -144,16 +145,98 @@ def _baidu_login_cookie() -> str:
         return ""
 
 
-def _baidu_login_cookies() -> list:
-    """候选登录态列表（首选在前）：手动保存 → 本机缓存 → 浏览器解密 → 共享池全部。
+_CLOUD_BD_TTL_OK = 300      # 云端命中缓存 5 分钟（池约 20 分钟轮换，够新鲜）
+_CLOUD_BD_TTL_MISS = 60     # 未命中/失败负缓存 1 分钟，避免每次解析都吃满超时
+_CLOUD_BD_TIMEOUT = 6       # 国内 ECS 单程 6s 足够，再慢当作不可达
+_cloud_bd_mem: dict = {"ts": 0.0, "headers": []}
 
-    为什么需要「多条」：百度 2026-10-27 起把「换下载直链」按**账号等级**分流，
-    只有会员账号（vip_type>0）才回明文 list，普通账号回 4 KB 的 AES 密文串
-    （实测同一链接 × 三个池内账号，稳定复现）。本机缓存里可能同时有会员号和
-    普通号，只取一条会随机踩到普通号 ⇒ 解析必报「返回了加密数据」。
 
-    所以解析时把候选交给 baidu.resolve(..., extra_cookies=cands) 逐个重试；
-    `_baidu_login_cookie()` 仍返回第一条，供单条场合（如「是否已配置登录态」）。
+def _baidu_cloud_cookies() -> list:
+    """从云端共享池取百度登录态候选（字段多的在前）。
+
+    背景（2026-10-28）：百度是 contrib_only 域 —— 只有用户显式点过「贡献到共享池」
+    的账号才会进云端。上一版云端 `pool-admin get` 对百度一律回
+    `reason=contrib_only`，于是「贡献了、云端也存着，但谁也取不回来」，共享池对
+    百度彻底空转。云端已放行读取（同一把同步令牌），这里补桌面端的回读分支。
+
+    约定：
+      · 失败一律返回 []，绝不影响本机解析主流程；
+      · 6s 超时 + 命中 5 分钟 / 未命中 1 分钟缓存，别让解析预算被拖垮；
+      · 显式禁用环境代理 —— 云端是国内 IP，桌面进程常继承 clash，走代理必 407。
+    """
+    now = time.time()
+    age = now - float(_cloud_bd_mem.get("ts") or 0)
+    if age < (_CLOUD_BD_TTL_OK if _cloud_bd_mem.get("headers") else _CLOUD_BD_TTL_MISS):
+        return list(_cloud_bd_mem["headers"] or []) if _cloud_bd_mem.get("headers") else []
+
+    headers: list = []
+    try:
+        from downloader import _cloud_pool_cfg
+        url, token = _cloud_pool_cfg()
+        if url and token:
+            import json as _json
+            import urllib.request as _url
+            body = _json.dumps({"action": "get", "domain": "pan.baidu.com",
+                                "token": token}).encode("utf-8")
+            req = _url.Request(url.rstrip("/") + "/api/cookie/pool-admin", data=body,
+                               headers={"Content-Type": "application/json",
+                                        "User-Agent": "VDL-Desktop"},
+                               method="POST")
+            opener = _url.build_opener(_url.ProxyHandler({}))   # 显式不走代理
+            with opener.open(req, timeout=_CLOUD_BD_TIMEOUT) as resp:
+                d = _json.loads(resp.read().decode("utf-8") or "{}")
+            if d.get("ok") and d.get("found"):
+                headers = [h for h in (d.get("headers") or []) if h]
+                if not headers and d.get("header"):
+                    headers = [d["header"]]
+    except Exception as e:  # noqa: BLE001 — 网络/旧版云端/令牌失效都只当没有
+        logger.info("[cloud_drive] 云端百度登录态回读失败：%s", str(e)[:160])
+        headers = []
+    if headers:
+        _cloud_bd_mem["ts"], _cloud_bd_mem["headers"] = now, headers
+    else:
+        # 未命中也要写 ts，否则每次解析都重试一次 6s 超时
+        _cloud_bd_mem["ts"] = now - _CLOUD_BD_TTL_OK + _CLOUD_BD_TTL_MISS
+        _cloud_bd_mem["headers"] = []
+    logger.info("[cloud_drive] 云端百度登录态 n=%s", len(headers))
+    return headers
+
+
+def _baidu_key(cookie: str) -> str:
+    """候选去重键：BDUSS|STOKEN（同账号不同 STOKEN 是不同会话，见下）。"""
+    kv: dict = {}
+    for part in (cookie or "").split(";"):
+        k, _, v = part.partition("=")
+        kv.setdefault(k.strip(), v.strip())
+    bduss = kv.get("BDUSS") or ""
+    if not bduss:
+        return ""
+    return bduss + "|" + (kv.get("STOKEN") or "")
+
+
+def _baidu_rank_key(cookie: str) -> int:
+    """排序键：字段越多越靠前（换直链要完整的 pan cookie）。"""
+    return -sum(1 for part in (cookie or "").split(";") if "=" in part)
+
+
+def _dedupe_baidu(cands) -> list:
+    picked: list = []
+    seen: set = set()
+    for c in cands or []:
+        key = _baidu_key(c or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        picked.append(c)
+    return picked
+
+
+def _baidu_local_cookies() -> list:
+    """**本机**百度登录态候选（字段多的在前）：手动保存 → 本机缓存 → 浏览器 → 本机池。
+
+    为什么需要「多条」：同一个 BDUSS 可以有多个 STOKEN，而换直链的结果可能一个
+    明文一个密文（2026-10-28 实测）。只取一条等于赌运气，所以把候选全交出去，
+    由 baidu.resolve(..., extra_cookies=cands) 逐个试。
     """
     out: list = []
     stored = get_baidu_bduss() or ""
@@ -180,47 +263,36 @@ def _baidu_login_cookies() -> list:
     except Exception:  # noqa: BLE001
         pass
 
-    # 共享池：全部候选（池里可能混着普通号，交给解析器逐个试）
+    # 本机共享池：全部候选（池里可能混着普通号，交给解析器逐个试）
     try:
         from cookie_pool import get_cookies
         out.extend(get_cookies("pan.baidu.com") or [])
     except Exception:  # noqa: BLE001 — 池读失败不该挡住已拿到的本机登录态
         logger.warning("[cloud_drive] read cookie pool failed", exc_info=True)
 
-    # 只留含 BDUSS 的真登录态；去重键 = BDUSS + STOKEN。
-    #
-    # 🔴 2026-10-28 实测（那个什么都笑的女孩英国童话故事.mp4）：**同一个 BDUSS**
-    #    可以有多个 STOKEN，而它们的「换直链」结果完全不同：
-    #      · STOKEN=cc795c…（1.7 天前的缓存快照，38 字段，带 PANPSC/pcsett）
-    #        → /api/sharedownload 回明文 list，拿到真直链；
-    #      · STOKEN=8e6dc3…（浏览器扩展刚同步，32 字段）
-    #        → 同一账号同一链接回 4248 字节 AES 密文，被误判成「非超会」。
-    #    只按 BDUSS 去重会把前者裁掉、只留最新那条密文快照 ⇒ 必失败。
-    #    STOKEN 是 pan 域的会话票，不同快照的 STOKEN 不同 ⇒ 必须以它为二级键，
-    #    让解析器逐个试（见 baidu.resolve 的 extra_cookies）。
-    picked: list = []
-    seen: set = set()
-    for c in out:
-        if not c or "BDUSS=" not in c:
-            continue
-        kv: dict = {}
-        for part in c.split(";"):
-            k, _, v = part.partition("=")
-            kv.setdefault(k.strip(), v.strip())
-        bduss = kv.get("BDUSS") or ""
-        if not bduss:
-            continue
-        key = bduss + "|" + (kv.get("STOKEN") or "")
-        if key in seen:
-            continue
-        seen.add(key)
-        picked.append(c)
+    picked = _dedupe_baidu(out)
     # 字段更全的快照优先：换直链要的是**完整的 pan cookie**，实测残缺快照
     # （32 字段）回密文、完整快照（38 字段）回明文。按字段数降序能一般命中最优
     # 那条，省掉一次 4~9 秒的失败往返（也少一次撞风控的机会）。稳定排序，
-    # 字段数相同的仍保持「手动保存 → 本机缓存 → 共享池」的原有先后。
-    picked.sort(key=lambda c: -sum(1 for part in c.split(";") if "=" in part))
+    # 字段数相同的仍保持「手动保存 → 本机缓存 → 本机池」的原有先后。
+    picked.sort(key=_baidu_rank_key)
     return picked
+
+
+def _baidu_login_cookies() -> list:
+    """解析用候选（首选在前）：本机全部 → 云端共享池（别人显式贡献的账号）。
+
+    `_baidu_login_cookie()` 仍返回第一条，供单条场合（如「是否已配置登录态」）。
+    """
+    local = _baidu_local_cookies()
+
+    # 云端共享池兜底（2026-10-28 打通）：排在本机全部候选**之后** ——
+    # 自己的登录态（尤其会员带宽）不该被别人的号抢在前面。
+    cloud = _dedupe_baidu(_baidu_cloud_cookies())
+    cloud.sort(key=_baidu_rank_key)
+    seen = {_baidu_key(c) for c in local}
+    local.extend(c for c in cloud if _baidu_key(c) not in seen)
+    return local
 
 
 @router.post('/api/cloud-drive/contribute')
@@ -233,16 +305,28 @@ def cloud_drive_contribute() -> dict:
 
     流程：读已存 BDUSS → 真问百度验真（顺带取会员等级）→ 入本机池 → 有云端配置
     就推一份上云。验真不过（errno≠0，BDUSS 过期/被踢）直接拒，不把废Cookie共享出去。
+
+    🔴 2026-10-28：推上云的必须是**字段最全**的那份快照，不能只推手动保存的裸
+    BDUSS。实测同一账号：32 字段那份换直链只回 4 KB 密文、38 字段那份回明文
+    —— 推残缺份上去，共享池对别人就是废的（提交时也看不到任何异常）。
+    所以这里从本机全部候选里挑字段最多的一条推。
     """
     from cookie_pool import add_cookie, baidu_probe, get_cookie as _pool_get
 
-    header = get_baidu_bduss() or ""
-    if not header:
+    stored = get_baidu_bduss() or ""
+    if not stored:
         # 真实原因（用户还没保存 BDUSS）只进日志；上屏统一 baidu.USER_ERROR_TEXT。
         logger.warning("[cloud_drive] contribute 被拒：本机未保存百度登录态")
         return {"ok": False, "error": baidu.USER_ERROR_TEXT}
-    if not header.lower().startswith("bduss="):
-        header = f"BDUSS={header}"
+    # 手动保存的 BDUSS 只作为「明确同意」的凭据；实际上云用字段最全的快照。
+    manual = stored if "=" in stored else f"BDUSS={stored}"
+    header = manual
+    try:
+        cands = _baidu_local_cookies()
+        if cands:
+            header = cands[0]      # 已按字段数降序
+    except Exception:  # noqa: BLE001 — 取候选失败就退回手动保存那条
+        logger.warning("[cloud_drive] contribute 取最全快照失败，退用手动保存", exc_info=True)
 
     ok, info = baidu_probe(header)
     if ok is False:

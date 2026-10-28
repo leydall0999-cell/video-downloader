@@ -28,6 +28,12 @@ if _SERVER_DIR not in sys.path:
 _TMP = tempfile.mkdtemp(prefix="vdl_baidu_pool_")
 os.environ["HOME"] = _TMP
 os.environ["VDL_DATA_DIR"] = os.path.join(_TMP, "data")
+# 🔴 池目录必须用 VDL_COOKIE_POOL_DIR 显式隔离（2026-10-28 事故）：
+#    cookie_pool._POOL_DIR 走 `Path.home()`，而 Windows 上 Path.home() 读的是
+#    USERPROFILE、不认 HOME ⇒ 只设 HOME 的隔离在这台机器上等于没设，本测试
+#    的 `pool_file.write_text(...)` 会把**真实池文件整个覆盖掉**（实测把一份
+#    能换到明文直链的 38 字段快照冲没了，解析立刻退回「只拿到密文」）。
+os.environ["VDL_COOKIE_POOL_DIR"] = os.path.join(_TMP, "cookie_pool")
 os.environ.setdefault("VDL_CLOUD_LINK", "0")
 
 from credential_store import clear_baidu_bduss, set_baidu_bduss  # noqa: E402
@@ -50,16 +56,34 @@ def test_pool_fallback_and_priority():
 
     # ① 本机没有登录态 → 必须落到共享池（第一版死代码就死在这一步）
     clear_baidu_bduss()
+    # ⚠️ 先 import app 完成初始化：routers.cloud_drive 顶层 `import app`，而 app 底部
+    #    include 该 router —— 若入口直接是 cloud_drive，会拿到半初始化的模块
+    #    （AttributeError: partially initialized module ... has no attribute 'router'）。
+    import app  # noqa: F401
     from routers.cloud_drive import _baidu_login_cookie
-    got = _baidu_login_cookie()
-    assert got and "POOLSHARED123" in got, f"共享池兜底没接上，实际取到: {got!r}"
-    print("✅ 本机无登录态 → 落到共享池（别人贡献的那条）")
 
-    # ② 本机存了自己的 → 必须盖过共享池
-    set_baidu_bduss("BDUSS=MYOWN456")
-    got2 = _baidu_login_cookie()
-    assert got2 and "MYOWN456" in got2, f"手动 BDUSS 必须优先于共享池，实际: {got2!r}"
-    print("✅ 本机有登录态 → 盖过共享池（自己的账号优先）")
+    # 隔离「本机浏览器缓存」：Windows 上 `Path.home()` 读 USERPROFILE，上面设的
+    # HOME 不生效 ⇒ cookie_cache 会指向真实缓存目录，真实登录态一旦存在就把
+    # 顺序断言污染掉（2026-10-28 本机有缓存后此例必挂）。直接把浏览器读取置空，
+    # 测的仍是「本机没登录态 → 落共享池」这个语义。
+    import cookie_cache
+    _orig = (cookie_cache.peek_cached_cookie_header,
+             cookie_cache.get_cached_cookie_header)
+    cookie_cache.peek_cached_cookie_header = lambda *a, **k: ""
+    cookie_cache.get_cached_cookie_header = lambda *a, **k: ""
+    try:
+        got = _baidu_login_cookie()
+        assert got and "POOLSHARED123" in got, f"共享池兜底没接上，实际取到: {got!r}"
+        print("✅ 本机无登录态 → 落到共享池（别人贡献的那条）")
+
+        # ② 本机存了自己的 → 必须盖过共享池
+        set_baidu_bduss("BDUSS=MYOWN456")
+        got2 = _baidu_login_cookie()
+        assert got2 and "MYOWN456" in got2, f"手动 BDUSS 必须优先于共享池，实际: {got2!r}"
+        print("✅ 本机有登录态 → 盖过共享池（自己的账号优先）")
+    finally:
+        (cookie_cache.peek_cached_cookie_header,
+         cookie_cache.get_cached_cookie_header) = _orig
 
 
 if __name__ == "__main__":

@@ -785,8 +785,34 @@ def test_router_login_cookies_keeps_same_bduss_distinct_stoken():
     with mock.patch.object(rt, "get_baidu_bduss", return_value=""), \
          mock.patch("cookie_cache.peek_cached_cookie_header", return_value=""), \
          mock.patch("cookie_cache.get_cached_cookie_header", return_value=""), \
+         mock.patch.object(rt, "_baidu_cloud_cookies", return_value=[]), \
          mock.patch.object(cookie_pool, "get_cookies", return_value=[partial, full]):
         got = rt._baidu_login_cookies()
     assert len(got) == 2, got
     assert got[0] == full          # 字段多的优先，少一次失败往返
     assert got[1] == partial
+
+
+def test_router_login_cookies_appends_cloud_after_local():
+    """云端共享池只做兜底：本机候选全部排在前面（自己的账号/会员带宽优先）。
+
+    2026-10-28 打通云端回读后，必须守住这个次序 —— 否则别人贡献的号（哪怕字段
+    更多）会抢在自己账号前面，出现「填了自己的会员号，实际走的是别人的免费号」。
+    """
+    rt = _router()
+    import cookie_pool
+
+    local_full = "BDUSS=L1; STOKEN=a; P1=1; P2=1"
+    cloud_only = "BDUSS=C1; STOKEN=b; P1=1; P2=1; P3=1; P4=1; P5=1; P6=1"
+    with mock.patch.object(rt, "get_baidu_bduss", return_value="BDUSS=L1"), \
+         mock.patch("cookie_cache.peek_cached_cookie_header", return_value=""), \
+         mock.patch("cookie_cache.get_cached_cookie_header", return_value=""), \
+         mock.patch.object(rt, "_baidu_cloud_cookies", return_value=[cloud_only]), \
+         mock.patch.object(cookie_pool, "get_cookies", return_value=[local_full]):
+        got = rt._baidu_login_cookies()
+    assert got[0] == local_full, f"本机候选必须排最前，实际: {got[0]!r}"
+    assert cloud_only in got, "云端候选应被追加（兜底）"
+    # 手动保存的裸 BDUSS（无 STOKEN）与完整快照是不同会话键，两条都留 ——
+    # 裸 BDUSS 换直链成功率低但成本也低，留着当最后一张牌。
+    assert got[1] == "BDUSS=L1"
+    assert len(got) == 3
