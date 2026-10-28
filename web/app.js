@@ -7150,6 +7150,28 @@
     if (el.tabs) el.tabs.hidden = false;
   }
 
+  // Tab 栏右滑提示（2026-10-28）：tab 溢出且未滑到最右时，nav.tabs 加 .has-more
+  // 显示右缘 » （提示手机用户右滑还有功能）；滑到最右或宽度足够（桌面端）自动隐藏。
+  // 纯提示不可点，异常一律吞掉，绝不影响主流程。
+  (function tabsMoreHint() {
+    try {
+      const nav = document.getElementById('tabs');
+      const inner = nav && nav.querySelector('.tabs-inner');
+      if (!nav || !inner || nav.querySelector('.tabs-more')) return;
+      const update = () => {
+        const over = inner.scrollWidth - inner.clientWidth > 4;
+        const atEnd = inner.scrollLeft + inner.clientWidth >= inner.scrollWidth - 4;
+        nav.classList.toggle('has-more', over && !atEnd);
+      };
+      inner.addEventListener('scroll', update, { passive: true });
+      window.addEventListener('resize', update);
+      if (document.fonts && document.fonts.ready && document.fonts.ready.then) {
+        document.fonts.ready.then(update).catch(() => {});
+      }
+      update();
+    } catch (_) {}
+  })();
+
 
   // ===================== 操作引导「怎么用」（2026-10-09，自 app-dev 移植）=====================
   // 规则：当前可见视图里的 details.howto —— 首次进入自动展开一次并记为已读；

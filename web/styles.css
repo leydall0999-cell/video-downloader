@@ -1115,6 +1115,7 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
    注意：display:flex 会覆盖 hidden 属性，必须显式写 .tabs[hidden]。 */
 .tabs {
   display: flex; min-width: 0; margin-left: .35rem;
+  position: relative;
   background: none; border: 0;
 }
 .tabs[hidden] { display: none; }
@@ -1123,6 +1124,17 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
   overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
 }
 .tabs-inner::-webkit-scrollbar { display: none; }
+/* 右滑提示（2026-10-28）：tab 溢出且未滑到最右时，右缘渐隐 + »。
+   纯提示（pointer-events:none 不可点），顶栏是半透明白 → 渐隐用白过渡。
+   由 app.js 检测 .tabs-inner 溢出后给 nav.tabs 加 .has-more 才显示。 */
+.tabs-more {
+  display: none; position: absolute; top: 0; right: 0; bottom: 0;
+  width: 2.4rem; align-items: center; justify-content: center;
+  font-size: 1.05rem; font-weight: 700; line-height: 1; color: var(--brand);
+  background: linear-gradient(to right, rgba(255, 255, 255, 0), rgba(255, 255, 255, .92) 42%);
+  pointer-events: none;
+}
+.tabs.has-more .tabs-more { display: flex; }
 .tab {
   position: relative; flex: none; display: inline-flex; align-items: center;
   padding: 0 .85rem; border: 0; background: none; cursor: pointer;

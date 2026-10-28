@@ -68,6 +68,9 @@
         <button type="button" class="tab" data-view="profile" id="tabProfile">个人中心</button>
         <button type="button" class="tab" data-view="appIntro" id="tabAppIntro">更多功能</button>
       </div>
+      <!-- 右滑提示（2026-10-28）：tab 溢出且未滑到最右时显示 »，提示手机用户右滑还有功能。
+           默认 display:none，由 app.js 检测溢出后加 .has-more 才显示。 -->
+      <span class="tabs-more" aria-hidden="true">»</span>
     </nav>
     <div class="header-actions">
       <button type="button" class="badge" id="engineBadge" aria-haspopup="dialog" title="点击查看支持的平台">支持 100+ 平台</button>
