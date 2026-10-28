@@ -266,7 +266,7 @@ def cloud_drive_contribute() -> dict:
 
 
 @router.post('/api/cloud-drive/resolve')
-def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request) -> dict:
+def cloud_drive_resolve(req: CloudDriveResolveReq, request: app.Request = None) -> dict:
     cands = _baidu_login_cookies()
     cookie = cands[0] if cands else ""
     try:
