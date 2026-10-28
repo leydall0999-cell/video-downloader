@@ -620,10 +620,211 @@ def _cookie_candidates(login_cookie: str, extra: Optional[list] = None) -> list:
     return out
 
 
-def resolve_personal(path: str, cookie: str = "") -> list[CloudFile]:
-    """个人网盘路径 —— 阶段 2 再做（新接口 /api/ostp/file/* 已定位未细测）。"""
-    logger.warning("[baidu] 收到个人网盘路径（本版未实现）：%s", (path or "")[:120])
+_PERSONAL_MAX_FILES = 300      # 个人网盘单次最多展开多少个文件
+_PERSONAL_MAX_DEPTH = 3        # 目录最多翻 3 层
+_PERSONAL_PAGE_SIZE = 100
+
+
+def _personal_list(s: requests.Session, dirpath: str, q: str) -> list:
+    """列个人网盘目录（**必须带登录态**，匿名回 errno=-6）。
+
+    与分享的 /share/list 完全不同的接口：参数是 dir + limit，没有 uk / shareid。
+    """
+    j = _json(s.get(f"{_BASE}/api/list", params={
+        "dir": dirpath or "/", "order": "time", "desc": "1",
+        "limit": str(_PERSONAL_PAGE_SIZE), "web": "1",
+        "clienttype": "0", "app_id": "250528",
+    }, timeout=_TIMEOUT))
+    errno = j.get("errno")
+    if errno not in (0, None):
+        raise ValueError(_errno_msg(errno, "读取个人网盘目录失败"))
+    return [it for it in (j.get("list") or []) if isinstance(it, dict)]
+
+
+def _personal_metas(s: requests.Session, paths: list, q: str) -> dict:
+    """个人网盘：路径列表 → {path: (dlink, size)}。
+
+    🔴 2026-10-28 实测：这是**唯一**对非超会账号也给明文的取链路径。
+       分享接口（/api/sharedownload）对 vip_type=0/1 一律回 4KB 密文，
+       但对**自己名下**的文件，/api/filemetas?dlink=1 返回的 dlink 是明文
+       （298~400 字符），与账号等级无关。⇒ 「转存 / 本来就在自己网盘」就能下。
+    """
+    out: dict = {}
+    batch_size = 50
+    for i in range(0, len(paths), batch_size):
+        batch = [p for p in paths[i:i + batch_size] if p]
+        if not batch:
+            continue
+        url = (f"{_BASE}/api/filemetas?dlink=1"
+               f"&target={urllib.parse.quote(json.dumps(batch, ensure_ascii=False))}"
+               f"&type=dlink&{q}")
+        try:
+            j = _json(s.get(url, timeout=_TIMEOUT))
+        except Exception as e:  # noqa: BLE001
+            logger.info("[baidu] 个人网盘 filemetas 异常：%r", e)
+            continue
+        errno = j.get("errno")
+        if errno not in (0, None):
+            logger.info("[baidu] 个人网盘 filemetas errno=%s → %s",
+                        errno, _errno_msg(errno, "取个人网盘直链失败"))
+            continue
+        for item in j.get("info") or []:
+            if not isinstance(item, dict):
+                continue
+            p = item.get("path") or ""
+            if p and item.get("dlink"):
+                try:
+                    size = int(item.get("size") or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                out[p] = (item["dlink"], size)
+    return out
+
+
+def _personal_walk(s: requests.Session, root: str, q: str,
+                   depth: int = 0, out: Optional[list] = None) -> list:
+    """递归展开个人网盘目录，返回文件记录列表（带 path 字段）。"""
+    out = out if out is not None else []
+    try:
+        items = _personal_list(s, root, q)
+    except ValueError as e:
+        logger.info("[baidu] 个人网盘列目录跳过 %s：%s", (root or "")[:80], e)
+        return out
+    for it in items:
+        if len(out) >= _PERSONAL_MAX_FILES:
+            return out
+        if int(it.get("isdir") or 0):
+            if depth < _PERSONAL_MAX_DEPTH:
+                _personal_walk(s, it.get("path") or root, q, depth + 1, out)
+        else:
+            out.append(it)
+    return out
+
+
+def _personal_files(s: requests.Session, cookie: str, path: str, q: str) -> list:
+    """个人网盘路径（文件或目录）→ CloudFile 列表（明文直链）。"""
+    p = (path or "/").strip() or "/"
+    metas = _personal_metas(s, [p], q)
+    hit = metas.get(p)
+    if hit and hit[0]:
+        return [CloudFile(name=os.path.basename(p.rstrip("/")) or p,
+                          size=hit[1], dlink=hit[0], cookie=cookie,
+                          headers={"User-Agent": DLINK_UA})]
+
+    items = _personal_walk(s, p, q)
+    if not items:
+        return []
+    paths = [it.get("path") for it in items if it.get("path")]
+    metas = _personal_metas(s, paths, q)
+    files: list = []
+    for it in items:
+        path_i = it.get("path") or ""
+        m = metas.get(path_i)
+        if not m or not m[0]:
+            continue
+        rel = "/".join(path_i.split("/")[1:-1])
+        files.append(CloudFile(
+            name=it.get("server_filename") or "file",
+            size=m[1] or int(it.get("size") or 0),
+            dlink=m[0], cookie=cookie,
+            headers={"User-Agent": DLINK_UA},
+            path=rel,
+        ))
+    return files
+
+
+def resolve_personal(path: str, cookie: str = "",
+                     extra_cookies: Optional[list] = None) -> list[CloudFile]:
+    """个人网盘路径 / 文件夹 → 明文直链列表。
+
+    2026-10-28 由「阶段 2 再做」的空壳改成可用实现：个人网盘走
+    /api/list + /api/filemetas?dlink=1，**不需要超会**也拿得到明文 dlink。
+    这条路同时是分享链路的兜底（见 _reuse_from_own_netdisk）。
+    """
+    cands = _cookie_candidates(cookie, extra_cookies)
+    if not cands:
+        logger.warning("[baidu] 收到个人网盘路径但没有任何百度登录态：%s",
+                       (path or "")[:120])
+        raise ValueError(USER_ERROR_TEXT)
+
+    q = common_query()
+    for ck in cands:
+        s = new_session(f"{_BASE}/disk/home")
+        _apply_login_cookie(s, ck)
+        try:
+            files = _personal_files(s, ck, path, q)
+        except ValueError as e:
+            logger.info("[baidu] 个人网盘解析失败（换下一个账号）：%s", e)
+            continue
+        if files:
+            logger.info("[baidu] 个人网盘 \u2192 %d 个文件（明文直链）", len(files))
+            return files
+    logger.warning("[baidu] 个人网盘路径解析失败（已试 %d 个账号）：%s",
+                   len(cands), (path or "")[:120])
     raise ValueError(USER_ERROR_TEXT)
+
+
+def _find_own_path(s: requests.Session, name: str, size: int, q: str) -> str:
+    """在自己网盘里按文件名（+ 大小）找一条路径；找不到返回 ""。
+
+    只读，不写盘。用于「分享里这份文件其实我网盘里已经有了」的场景 —— 直接复用
+    自己的文件取明文直链，既不用转存，也不占额度。
+    """
+    if not name:
+        return ""
+    try:
+        j = _json(s.get(f"{_BASE}/api/search", params={
+            "dir": "/", "recursion": "1", "wd": name, "web": "1",
+            "clienttype": "0", "app_id": "250528",
+        }, timeout=_TIMEOUT))
+    except Exception:  # noqa: BLE001
+        return ""
+    if j.get("errno") not in (0, None):
+        logger.info("[baidu] 自己网盘搜索 errno=%s", j.get("errno"))
+        return ""
+    for it in j.get("list") or []:
+        if not isinstance(it, dict) or int(it.get("isdir") or 0):
+            continue
+        if (it.get("server_filename") or "") != name:
+            continue
+        try:
+            fsize = int(it.get("size") or 0)
+        except (TypeError, ValueError):
+            fsize = 0
+        if size and fsize and fsize != size:
+            continue          # 同名不同大小 = 不是同一个文件
+        return it.get("path") or ""
+    return ""
+
+
+def _reuse_from_own_netdisk(files: list, cands: list, q: str) -> tuple:
+    """分享换不到明文时，尝试复用自己网盘里同名同大小的文件。
+
+    返回 ({fs_id: dlink}, 使用的 cookie)。全程只读：不转存、不写盘、不占额度。
+    """
+    for ck in cands:
+        s = new_session(f"{_BASE}/disk/home")
+        _apply_login_cookie(s, ck)
+        out: dict = {}
+        for rec, _rel in files:
+            fid = str(rec.get("fs_id") or "")
+            if not fid:
+                continue
+            name = rec.get("server_filename") or rec.get("filename") or ""
+            try:
+                size = int(rec.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            own = _find_own_path(s, name, size, q)
+            if not own:
+                continue
+            m = _personal_metas(s, [own], q).get(own)
+            if m and m[0]:
+                out[fid] = m[0]
+                logger.info("[baidu] 自己网盘已有同名文件，直接复用明文直链：%s", own[:100])
+        if out:
+            return out, ck
+    return {}, ""
 
 
 def _share_page_missing(s: requests.Session, share_url: str) -> bool:
@@ -756,7 +957,16 @@ def resolve_share(url: str, login_cookie: str = "", pwd: str = "",
             logger.warning(
                 "[baidu] 换直链失败：已试 %d 个百度账号，全部只拿到密文"
                 "（百度仅对超级会员 vip_type=2 返回明文 dlink）", max(1, len(cands)))
-            raise NeedMemberLogin(USER_ERROR_TEXT)
+            # 🔴 2026-10-28 兜底：非超会账号换不到**分享**直链，但**自己网盘**里
+            #    同名同大小的文件给的是明文 dlink。命中就直接复用 —— 只读、不转存、
+            #    不占额度，也不需要超会。
+            dlinks, reused_ck = _reuse_from_own_netdisk(files, cands, q)
+            if dlinks:
+                used_cookie = reused_ck
+                logger.info("[baidu] 改用自己网盘的明文直链：%d 个文件", len(dlinks))
+            else:
+                logger.info("[baidu] 自己网盘里也没有同名文件；如需下载请先转存到自己网盘")
+                raise NeedMemberLogin(USER_ERROR_TEXT)
         elif last_err is not None:
             # 有登录态但接口真的报错（errno≠0 / 风控）：把原始语义抛给用户，
             # 不要退化成「列表有了、下载按钮全是灰的」这种猜谜状态。
@@ -807,5 +1017,5 @@ def resolve(url: str, login_cookie: str = "", pwd: str = "",
     if kind == "share":
         return resolve_share(url, login_cookie, pwd, extra_cookies)
     if kind == "personal":
-        return resolve_personal(p.get("path", "/"), login_cookie)
+        return resolve_personal(p.get("path", "/"), login_cookie, extra_cookies)
     raise ValueError("无法识别的百度网盘链接")

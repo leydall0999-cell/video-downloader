@@ -82,7 +82,8 @@ class _FakeSession:
 
     def __init__(self, records=None, page=PAGE_LITERAL,
                  list_errno=0, verify_errno=0, dl_errno=0, dl_list=None,
-                 fm_info=None, fm_errno=0, dir_map=None):
+                 fm_info=None, fm_errno=0, dir_map=None,
+                 own_fm_info=None, own_search=None, own_dir=None):
         self.headers = {}
         self.cookies = {}
         self.calls: list[tuple] = []
@@ -98,6 +99,11 @@ class _FakeSession:
         self._fm_errno = fm_errno
         # 文件夹分享：{目录路径: [子项]}。None = 不支持子目录（返回 errno=2）
         self._dir_map = dir_map
+        # 🔴 个人网盘（2026-10-28）：filemetas 用 target=（路径）而不是 fsids=，
+        #    必须按这一点区分，否则分享侧的 filemetas 会串到个人网盘用例里。
+        self._own_fm_info = own_fm_info
+        self._own_search = own_search
+        self._own_dir = own_dir
 
     def get(self, url, **kw):
         self.calls.append(("GET", url, kw))
@@ -108,6 +114,11 @@ class _FakeSession:
         return self._dispatch("POST", url, kw)
 
     def _dispatch(self, method, url, kw):
+        # 个人网盘那几条接口用 params= 传参（分享链路是拼在 URL 里的）。
+        # 替身必须把它们并进 URL，否则按 dir= / target= 分支的断言永远拿到默认值。
+        params = kw.get("params")
+        if params:
+            url = f"{url}?{urllib.parse.urlencode(params, doseq=True)}"
         if "/share/verify" in url:
             if self._verify_errno != 0:
                 return _Resp({"errno": self._verify_errno})
@@ -129,9 +140,20 @@ class _FakeSession:
             return _Resp({"errno": 0, "list": self._records,
                           "uk": UK, "share_id": SHARE_ID})
         if "/api/filemetas" in url:
+            # 个人网盘用 target=（路径），分享用 fsids=（文件 id）——必须分开回放
+            if "target=" in url:
+                if self._own_fm_info is None:
+                    return _Resp({"errno": 0, "info": []})
+                return _Resp({"errno": 0, "info": self._own_fm_info})
             if self._fm_errno != 0:
                 return _Resp({"errno": self._fm_errno})
             return _Resp({"errno": 0, "info": self._fm_info or []})
+        if "/api/search" in url:
+            return _Resp({"errno": 0, "list": self._own_search or []})
+        if "/api/list" in url:
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            dpath = (qs.get("dir") or ["/"])[0]
+            return _Resp({"errno": 0, "list": (self._own_dir or {}).get(dpath, [])})
         if "/api/sharedownload" in url:
             if self._dl_errno != 0:
                 return _Resp({"errno": self._dl_errno})
@@ -477,10 +499,78 @@ def test_dlink_failure_raises():
     assert "errno=2" in str(ei.value)
 
 
-def test_personal_path_not_supported_yet():
-    """个人网盘路径本版未实现 —— 上屏同样是统一文案（真实原因进日志）。"""
+def test_personal_path_without_login_is_unified_text():
+    """个人网盘没有登录态 —— 上屏统一文案，真实原因进日志（不打网络）。"""
     with pytest.raises(ValueError) as ei:
-        baidu.resolve_personal("/docs/demo.mp4", "BDUSS=a")
+        baidu.resolve_personal("/docs/demo.mp4", "")
+    assert str(ei.value) == baidu.USER_ERROR_TEXT
+
+
+def test_personal_path_returns_plaintext_dlink():
+    """个人网盘单文件 → 明文 dlink（2026-10-28 起真正实现，原先只是空壳）。
+
+    这是非超会账号唯一的取链路径：分享接口回密文，但自己名下文件给明文。
+    """
+    own = [{"path": "/影视/demo.mp4", "size": "378978423", "dlink": DLINK}]
+    p, _ = _patch_session(own_fm_info=own)
+    with p:
+        files = baidu.resolve_personal("/影视/demo.mp4", "BDUSS=a")
+    assert len(files) == 1
+    assert files[0].name == "demo.mp4"
+    assert files[0].size == 378978423
+    assert files[0].dlink == DLINK
+    assert files[0].need_login is False
+
+
+def test_personal_path_folder_expands_to_files():
+    """目录 → 递归展开成文件列表（每个都带明文 dlink）。"""
+    name = "001.17岁-刘德华.mp3"
+    own_dir = {"/音乐": [{"fs_id": FS_ID, "server_filename": name, "size": "9610033",
+                          "isdir": 0, "path": f"/音乐/{name}"}]}
+    own = [{"path": f"/音乐/{name}", "size": "9610033", "dlink": DLINK}]
+    p, _ = _patch_session(own_fm_info=own, own_dir=own_dir)
+    with p:
+        files = baidu.resolve_personal("/音乐", "BDUSS=a")
+    assert [f.name for f in files] == [name]
+    assert files[0].dlink == DLINK
+    assert files[0].size == 9610033
+
+
+def test_share_reuses_own_netdisk_when_ciphertext(caplog):
+    """分享只给密文，但自己网盘里有同名同大小文件 → 复用它的明文直链。
+
+    这是「非超会账号也能下分享」的核心兜底（只读：不转存、不占额度）。
+    """
+    name = RECORDS[0]["server_filename"]
+    own_path = f"/已存/{name}"
+    p, _ = _patch_session(
+        dl_list="ENCRYPTED_BASE64_BLOB==",          # 分享侧：密文
+        fm_info=[],                                  # 分享侧 filemetas 也不给
+        own_search=[{"server_filename": name, "size": "9610033",
+                     "isdir": 0, "path": own_path}],
+        own_fm_info=[{"path": own_path, "size": "9610033", "dlink": DLINK}],
+    )
+    with caplog.at_level(logging.INFO, logger="cloud_drives.baidu"):
+        with p:
+            files = baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=a", pwd=PWD)
+    assert files and files[0].dlink == DLINK
+    assert files[0].need_login is False
+    assert "自己网盘已有同名文件" in caplog.text
+
+
+def test_share_reuse_requires_matching_size():
+    """同名但大小不同 ⇒ 不是同一个文件，不许复用（防止下错片）。"""
+    name = RECORDS[0]["server_filename"]
+    p, _ = _patch_session(
+        dl_list="ENCRYPTED_BASE64_BLOB==",
+        fm_info=[],
+        own_search=[{"server_filename": name, "size": "42",     # 大小对不上
+                     "isdir": 0, "path": f"/别处/{name}"}],
+        own_fm_info=[{"path": f"/别处/{name}", "size": "42", "dlink": DLINK}],
+    )
+    with p:
+        with pytest.raises(baidu.NeedMemberLogin) as ei:
+            baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=a", pwd=PWD)
     assert str(ei.value) == baidu.USER_ERROR_TEXT
 
 

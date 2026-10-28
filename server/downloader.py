@@ -6851,12 +6851,16 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
         # UA 不写死：百度按「账号 + UA」分桶，见 _NETDISK_UA_CANDIDATES 注释。
         # 先探 1 字节确认可用的身份，再拿它下发正式请求。
         "User-Agent": _pick_netdisk_ua(task.url, cookie, proxy),
-        # 🔴 必需，不能省：百度 CDN 对不带 Range 的 GET 直接 403，
-        # 且把原因伪装成 31326「无权限」/ 31360「直链过期」，极难排查。
-        "Range": "bytes=0-",
     }
-    if resume_from > 0:
-        headers["Range"] = f"bytes={resume_from}-"
+    # 🔴 2026-10-28：Range 必须**有界**（bytes=start-end），这里不再放一个固定的
+    #   "bytes=0-"，改成下面按块循环里逐块设置。
+    #   实测同一条 dlink（非超会账号的个人网盘直链）：
+    #     · 不带 Range            → 403
+    #     · bytes=0-（开放区间）  → 403
+    #     · bytes=0-1023 / 0-4MB  → 206
+    #   所以「一次整包 GET」在百度这条路是死的，只能按块拉；这也解释了为什么
+    #   浏览器能播、下载器一律 403。
+    CHUNK = max(256 * 1024, int(os.environ.get("VDL_NETDISK_CHUNK", str(4 * 1024 * 1024))))
     if cookie:
         headers["Cookie"] = cookie
     proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -6872,49 +6876,66 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
                   f"续传第 {resume_from} 字节…" if resume_from else "连接中…")
 
     try:
-        with requests.get(task.url, headers=headers, proxies=proxies, stream=True,
-                          timeout=(15, 60), allow_redirects=True) as r:
-            if r.status_code >= 400:
-                raise RuntimeError(f"HTTP {r.status_code}")
-            append = False
-            if resume_from > 0 and r.status_code == 206:
-                # 服务端确认从断点继续：Content-Length 是「剩余字节数」
-                append = True
-                done = resume_from
-            elif resume_from > 0:
-                # 服务端没按 Range 续传（返回 200 全量）→ 从头重下，覆盖旧 part
-                resume_from = 0
-                done = 0
-            total = int(r.headers.get("Content-Length") or 0)
-            if append:
-                total += resume_from
-            if total:
-                store.update(task.id, total_bytes=total, filesize=total)
-            with open(part, "ab" if append else "wb") as fh:
-                for chunk in r.iter_content(256 * 1024):
-                    if not chunk:
-                        continue
-                    if task.cancel_requested or task.is_finished:
-                        raise _NetdiskCanceled()
-                    if task.pause_requested:
-                        raise _NetdiskPaused()
-                    fh.write(chunk)
-                    done += len(chunk)
-                    now = time.time()
-                    if now - last_push >= 0.5:
-                        last_push = now
-                        elapsed = max(now - started, 0.001)
-                        # 速度只算本次会话新下的字节：续传时 done 含历史断点，
-                        # 直接除会把 100MB 历史 / 1s 算成 100MB/s 假速度。
-                        speed = (done - resume_from) / elapsed
-                        store.update(
-                            task.id,
-                            downloaded_bytes=done,
-                            progress=round(done / total * 100.0, 1) if total else 0.0,
-                            speed=round(max(speed, 0.0), 1),
-                            eta=int((total - done) / speed) if (total and speed > 0) else 0,
-                        )
-            out_name = _netdisk_output_name(task, r.headers.get("Content-Type", ""), r.url)
+        offset = resume_from           # 本块起始字节
+        done = resume_from             # 已落盘字节（含历史断点）
+        append = resume_from > 0
+        last_ct, last_url = "", task.url
+        with open(part, "ab" if append else "wb") as fh:
+            while True:
+                h = dict(headers)
+                h["Range"] = f"bytes={offset}-{offset + CHUNK - 1}"
+                with requests.get(task.url, headers=h, proxies=proxies, stream=True,
+                                  timeout=(15, 60), allow_redirects=True) as r:
+                    last_ct = r.headers.get("Content-Type", "") or last_ct
+                    last_url = r.url or last_url
+                    if r.status_code == 416:
+                        break                       # 已经到文件末尾，正常收尾
+                    if r.status_code >= 400:
+                        raise RuntimeError(f"HTTP {r.status_code}")
+                    # Content-Range: bytes 0-4194303/378978423 → 从右半边拿总长
+                    cr = r.headers.get("Content-Range") or ""
+                    if "/" in cr:
+                        tot = cr.rsplit("/", 1)[-1].strip()
+                        if tot.isdigit() and int(tot) > 0:
+                            total = int(tot)
+                            store.update(task.id, total_bytes=total, filesize=total)
+                    elif not total:
+                        # 服务端给了 200 全量（忽略 Range）→ 用 Content-Length 当总长
+                        total = int(r.headers.get("Content-Length") or 0)
+                        if total:
+                            store.update(task.id, total_bytes=total, filesize=total)
+                    got = 0
+                    for chunk in r.iter_content(256 * 1024):
+                        if not chunk:
+                            continue
+                        if task.cancel_requested or task.is_finished:
+                            raise _NetdiskCanceled()
+                        if task.pause_requested:
+                            raise _NetdiskPaused()
+                        fh.write(chunk)
+                        got += len(chunk)
+                        done += len(chunk)
+                        now = time.time()
+                        if now - last_push >= 0.5:
+                            last_push = now
+                            elapsed = max(now - started, 0.001)
+                            # 速度只算本次会话新下的字节：续传时 done 含历史断点，
+                            # 直接除会把 100MB 历史 / 1s 算成 100MB/s 假速度。
+                            speed = (done - resume_from) / elapsed
+                            store.update(
+                                task.id,
+                                downloaded_bytes=done,
+                                progress=round(done / total * 100.0, 1) if total else 0.0,
+                                speed=round(max(speed, 0.0), 1),
+                                eta=int((total - done) / speed) if (total and speed > 0) else 0,
+                            )
+                # 收尾判定：下满总长 / 本块不足 CHUNK（= 已到文件尾）/ 一块没拿到
+                if total and done >= total:
+                    break
+                if got < CHUNK or got <= 0:
+                    break
+                offset = done
+        out_name = _netdisk_output_name(task, last_ct, last_url)
     except _NetdiskCanceled:
         part.unlink(missing_ok=True)
         if not task.is_finished:
