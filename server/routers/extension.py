@@ -184,6 +184,41 @@ _R2_HEALTH_TIMEOUT = 3.0
 _INSTALLER_META_TTL = 300.0
 _INSTALLER_META_CACHE: dict = {"ts": 0.0, "payload": {}}
 
+# 版本号来源（2026-10-28）：Cloudflare 自定义域转发 R2 **会剥掉 x-amz-meta-***，
+# 所以 HEAD 永远拿不到 version，下载页只能退回「更新于某日」。这里改读发版机本机的
+# 权威发布清单（publish_update.sh 每次发版都会写 latest.json），并做**绑定校验**：
+# 只有安装包与这次发布对得上（体积/日期）才标版本，绝不凭空标一个可能撒谎的号。
+_LATEST_JSON_PATH = os.environ.get("VDL_RELEASE_LATEST") or "/opt/vdl-update/latest.json"
+
+
+def _read_release_info() -> dict:
+    """读本机发版清单；取不到就返回 {}（体积/日期照旧，版本留空）。"""
+    try:
+        with open(_LATEST_JSON_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and str(data.get("version") or "").strip():
+            return data
+    except Exception:  # noqa: BLE001 — 清单缺失/损坏等价于「版本未知」
+        pass
+    return {}
+
+
+def _bind_release_version(info: dict, rel: dict, plat: str) -> None:
+    """把发布版本号绑到该安装包上；对不上就不绑（页面退回显示更新日期）。"""
+    if info.get("version") or not rel:
+        return
+    ver = str(rel.get("version") or "").strip()
+    if not ver or not info.get("updated"):
+        return
+    pub = str(rel.get("published_at") or "").strip()
+    if pub and info["updated"] < pub:
+        return  # 安装包比这次发布还旧 ⇒ 不是同一版，不标
+    size = rel.get("size")
+    if (plat == "macos-zip" and isinstance(size, int) and size > 0
+            and info.get("size") != size):
+        return  # 体积对不上 ⇒ 不是该次发布的产物，不标
+    info["version"] = ver
+
 
 def _head_installer(url: str, timeout: float = 4.0) -> dict:
     import email.utils
@@ -214,6 +249,7 @@ def download_meta() -> dict:
     cached = _INSTALLER_META_CACHE
     if cached["payload"] and now - float(cached["ts"] or 0) < _INSTALLER_META_TTL:
         return cached["payload"]
+    rel = _read_release_info()
     platforms: dict[str, dict] = {}
     for plat in ("macos", "macos-zip"):
         url = _R2_INSTALLER_URLS.get(plat)
@@ -221,6 +257,7 @@ def download_meta() -> dict:
             continue
         try:
             platforms[plat] = _head_installer(url)
+            _bind_release_version(platforms[plat], rel, plat)
         except Exception:  # noqa: BLE001 — 取不到就留空，页面回退静态文案
             platforms[plat] = {"size": 0, "updated": "", "version": ""}
     payload = {"ok": True, "platforms": platforms}
