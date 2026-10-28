@@ -2032,6 +2032,10 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
   .header-inner { flex-wrap: wrap; row-gap: .3rem; align-items: center; }
   .tabs { order: 3; flex: 1 1 100%; min-width: 100%; margin-left: 0; }
   .tab { min-height: 34px; }
+  /* » 箭头右移与卡片右缘对齐（2026-10-28 用户反馈「太靠左」）：
+     本断点 .wrap 边距 1rem/侧 vs 顶栏 .wrap-wide 1.25rem/侧 ⇒ 右移 0.25rem；
+     并让 » 贴近带子右缘（justify-end），视觉上正好落在卡片右缘内侧一点。 */
+  .tabs-more { right: -0.25rem; justify-content: flex-end; padding-right: .45rem; }
 }
 
 @media (max-width: 640px) {
@@ -2046,6 +2050,9 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
   .hero p { font-size: .88rem; }
   .hero-note { display: block; width: 100%; font-size: .82rem; padding: .45rem .7rem; }
   .tabs { margin-left: 0; }
+  /* 本断点 .wrap 边距收窄到 0.5rem/侧（见下 .wrap 规则）⇒ 箭头再右移到 -0.75rem
+     才能继续与卡片右缘对齐（wrap-wide 仍是 1.25rem/侧，差 0.75rem）。 */
+  .tabs-more { right: -0.75rem; }
   .tabs-inner { gap: 0; }
   .tab { padding: 0 .7rem; font-size: .8rem; }
   .tab-sep { margin-left: .15rem; }

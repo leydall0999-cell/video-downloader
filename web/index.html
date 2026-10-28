@@ -72,6 +72,21 @@
            默认 display:none，由 app.js 检测溢出后加 .has-more 才显示。 -->
       <span class="tabs-more" aria-hidden="true">»</span>
     </nav>
+    <script>
+      /* 右滑提示「一进页就显示」（2026-10-28 用户反馈）：app.js 有 597KB，手机网络下
+         要好几秒才加载执行完，期间箭头一直不出现。这段内联微脚本在 DOM 解析到 nav 时
+         就同步判一次溢出（styles.css 在 head 已生效，scrollWidth 可测），提前把
+         .has-more 加上；app.js 加载后由 tabsMoreHint 的 scroll/resize 接管统一开关。 */
+      (function () {
+        try {
+          var nav = document.getElementById('tabs'), inner = nav && nav.querySelector('.tabs-inner');
+          if (!nav || !inner) return;
+          var over = inner.scrollWidth - inner.clientWidth > 4;
+          var atEnd = inner.scrollLeft + inner.clientWidth >= inner.scrollWidth - 4;
+          if (over && !atEnd) nav.classList.add('has-more');
+        } catch (_) {}
+      })();
+    </script>
     <div class="header-actions">
       <button type="button" class="badge" id="engineBadge" aria-haspopup="dialog" title="点击查看支持的平台">支持 100+ 平台</button>
       <a class="badge badge-link" id="headerDownloadBtn" href="/download" title="下载桌面客户端">Download下载</a>
