@@ -187,22 +187,39 @@ def _baidu_login_cookies() -> list:
     except Exception:  # noqa: BLE001 — 池读失败不该挡住已拿到的本机登录态
         logger.warning("[cloud_drive] read cookie pool failed", exc_info=True)
 
-    # 只留含 BDUSS 的真登录态，按 BDUSS 去重（顺序不变）
+    # 只留含 BDUSS 的真登录态；去重键 = BDUSS + STOKEN。
+    #
+    # 🔴 2026-10-28 实测（那个什么都笑的女孩英国童话故事.mp4）：**同一个 BDUSS**
+    #    可以有多个 STOKEN，而它们的「换直链」结果完全不同：
+    #      · STOKEN=cc795c…（1.7 天前的缓存快照，38 字段，带 PANPSC/pcsett）
+    #        → /api/sharedownload 回明文 list，拿到真直链；
+    #      · STOKEN=8e6dc3…（浏览器扩展刚同步，32 字段）
+    #        → 同一账号同一链接回 4248 字节 AES 密文，被误判成「非超会」。
+    #    只按 BDUSS 去重会把前者裁掉、只留最新那条密文快照 ⇒ 必失败。
+    #    STOKEN 是 pan 域的会话票，不同快照的 STOKEN 不同 ⇒ 必须以它为二级键，
+    #    让解析器逐个试（见 baidu.resolve 的 extra_cookies）。
     picked: list = []
     seen: set = set()
     for c in out:
         if not c or "BDUSS=" not in c:
             continue
-        key = ""
+        kv: dict = {}
         for part in c.split(";"):
             k, _, v = part.partition("=")
-            if k.strip() == "BDUSS":
-                key = v.strip()
-                break
-        if not key or key in seen:
+            kv.setdefault(k.strip(), v.strip())
+        bduss = kv.get("BDUSS") or ""
+        if not bduss:
+            continue
+        key = bduss + "|" + (kv.get("STOKEN") or "")
+        if key in seen:
             continue
         seen.add(key)
         picked.append(c)
+    # 字段更全的快照优先：换直链要的是**完整的 pan cookie**，实测残缺快照
+    # （32 字段）回密文、完整快照（38 字段）回明文。按字段数降序能一般命中最优
+    # 那条，省掉一次 4~9 秒的失败往返（也少一次撞风控的机会）。稳定排序，
+    # 字段数相同的仍保持「手动保存 → 本机缓存 → 共享池」的原有先后。
+    picked.sort(key=lambda c: -sum(1 for part in c.split(";") if "=" in part))
     return picked
 
 

@@ -605,15 +605,32 @@ def _bduss_of(cookie: str) -> str:
     return ""
 
 
+def _stoken_of(cookie: str) -> str:
+    """取出 STOKEN 值（百度网盘的会话票，同账号可有多个）。"""
+    for part in (cookie or "").split(";"):
+        k, _, v = part.partition("=")
+        if k.strip() == "STOKEN":
+            return v.strip()
+    return ""
+
+
 def _cookie_candidates(login_cookie: str, extra: Optional[list] = None) -> list:
-    """合并候选登录态：只留含 BDUSS 的，按 BDUSS 去重保持顺序（首选在前）。"""
+    """合并候选登录态：只留含 BDUSS 的，按 BDUSS+STOKEN 去重（首选在前）。
+
+    🔴 不能只按 BDUSS 去重（2026-10-28 实测）：同一账号的两个 STOKEN 快照，
+    换直链结果可能一个明文一个密文 —— 只留第一条等于赌运气。STOKEN 不同就是
+    不同会话，必须都作为候选逐个试。
+    """
     out: list = []
     seen: set = set()
     for c in [login_cookie] + list(extra or []):
         if not _has_baidu_login(c):
             continue
         key = _bduss_of(c)
-        if not key or key in seen:
+        if not key:
+            continue
+        key = key + "|" + _stoken_of(c)
+        if key in seen:
             continue
         seen.add(key)
         out.append(c)

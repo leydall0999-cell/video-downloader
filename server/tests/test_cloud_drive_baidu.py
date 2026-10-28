@@ -758,3 +758,35 @@ def test_all_accounts_cipher_raises_member_hint(caplog):
 def test_cookie_candidates_dedupes_by_bduss_and_drops_anonymous():
     out = baidu._cookie_candidates("BAIDUID=anon; PSTM=1", ["BDUSS=A; x=1", "BDUSS=A; y=2", "BDUSS=B"])
     assert out == ["BDUSS=A; x=1", "BDUSS=B"]
+
+
+def test_cookie_candidates_keeps_same_bduss_distinct_stoken():
+    """同一 BDUSS 的不同 STOKEN 快照必须都留（2026-10-28 真 bug 守卫）。
+
+    实测（那个什么都笑的女孩英国童话故事.mp4，同一账号）：
+      · STOKEN=cc795c…（缓存快照，38 字段）→ sharedownload 回明文直链；
+      · STOKEN=8e6dc3…（浏览器扩展同步，32 字段）→ 同一链接回 4248 字节密文。
+    只按 BDUSS 去重会裁掉能用的那条 ⇒ 上屏统一文案，看起来像「分享失效」。
+    """
+    out = baidu._cookie_candidates(
+        "BDUSS=A; STOKEN=s1; PANPSC=p",
+        ["BDUSS=A; STOKEN=s2", "BDUSS=A; STOKEN=s1; PANPSC=p"],
+    )
+    assert out == ["BDUSS=A; STOKEN=s1; PANPSC=p", "BDUSS=A; STOKEN=s2"]
+
+
+def test_router_login_cookies_keeps_same_bduss_distinct_stoken():
+    """上报路径同样不能把同 BDUSS 的另一 STOKEN 快照吃掉，且字段多的排前。"""
+    rt = _router()
+    import cookie_pool
+
+    full = "BDUSS=SAME; STOKEN=aaa; PANPSC=1; pcsett=1; P1=1"
+    partial = "BDUSS=SAME; STOKEN=bbb"
+    with mock.patch.object(rt, "get_baidu_bduss", return_value=""), \
+         mock.patch("cookie_cache.peek_cached_cookie_header", return_value=""), \
+         mock.patch("cookie_cache.get_cached_cookie_header", return_value=""), \
+         mock.patch.object(cookie_pool, "get_cookies", return_value=[partial, full]):
+        got = rt._baidu_login_cookies()
+    assert len(got) == 2, got
+    assert got[0] == full          # 字段多的优先，少一次失败往返
+    assert got[1] == partial

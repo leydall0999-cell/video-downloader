@@ -244,6 +244,11 @@ _IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
 _SESSION_FIELDS: dict[str, tuple[str, ...]] = {
     "bilibili.com": ("SESSDATA", "bili_jct"),
     "youtube.com": ("SAPISID", "SSID"),
+    # 百度：同一 BDUSS 下可以有多个 STOKEN，换直链的成功率还不一样
+    # （2026-10-28 实测：一个 STOKEN 拿明文直链，另一个只拿 4 KB 密文，
+    #  被误判成「非超会」）。不加这条 → 两条快照同会话 → 只留最新那条
+    #  ⇒ 恰好留下密文那份，解析必失败。见 routers/cloud_drive._baidu_login_cookies。
+    "baidu.com": ("STOKEN",),
 }
 
 _MAX_PER_IDENTITY = 3   # 同一账号最多留几条快照

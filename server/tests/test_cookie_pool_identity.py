@@ -225,6 +225,32 @@ def case_baidu_member_first_ordering(tmp: str) -> None:
           for e in entries if "BDUSS=N" in (e.get("header") or "")))
 
 
+def case_baidu_same_bduss_distinct_stoken(tmp: str) -> None:
+    """同 BDUSS、不同 STOKEN 必须留成两条（2026-10-28 真 bug 守卫）。
+
+    之前的真 bug：`_SESSION_FIELDS` 没登记 baidu.com ⇒ 同 BDUSS 的两个快照被
+    判成同一会话、只留最新那条；而实测里**最新的那条恰好只拿到密文**
+    （4248 字节），旧的完整快照才拿得到明文直链 ⇒ 解析必报统一文案。
+    修复：把 STOKEN 登记成百度的会话字段。
+    """
+    m = _load(tmp)
+    m.verify_cookie = lambda domain, header: True
+    m.baidu_probe = lambda header: (True, {"errno": 0, "vip_type": 2})
+    full = "BDUSS=SAME; STOKEN=aaa; PANPSC=1; pcsett=1"
+    partial = "BDUSS=SAME; STOKEN=bbb"
+    m.add_cookie("baidu.com", full, source="cache")
+    m.add_cookie("baidu.com", partial, source="browser")
+    pool = m.get_cookies("pan.baidu.com")
+    check("同 BDUSS 不同 STOKEN => 两条都保留", len(pool) == 2)
+    check("两条 STOKEN 都在池里",
+          any("STOKEN=aaa" in h for h in pool) and any("STOKEN=bbb" in h for h in pool))
+    check("同 BDUSS 不同 STOKEN => 会话变体不同",
+          m._session_key("baidu.com", full) != m._session_key("baidu.com", partial))
+    check("同 BDUSS 同 STOKEN => 会话变体相同",
+          m._session_key("baidu.com", partial)
+          == m._session_key("baidu.com", "BDUSS=SAME; STOKEN=bbb; X=1"))
+
+
 def main() -> int:
     print("== test_cookie_pool_identity ==")
     tmpdir = tempfile.mkdtemp(prefix="vdl_pool_test_")
@@ -236,7 +262,8 @@ def main() -> int:
                    case_add_keeps_multiple_accounts, case_prune_verifies_once_per_session,
                    case_verify_dispatch_prefers_bilibili_probe,
                    case_structural_check_login_fields,
-                   case_baidu_member_first_ordering):
+                   case_baidu_member_first_ordering,
+                   case_baidu_same_bduss_distinct_stoken):
             d = tempfile.mkdtemp(prefix="vdl_pool_test_")
             try:
                 fn(d)
