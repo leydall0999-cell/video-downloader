@@ -1200,21 +1200,37 @@ def _do_get(domain: str) -> dict[str, Any]:
 # ─── 云端侧入口（共享令牌，供桌面 App 后台代理）─────────────────────────────
 
 def _pool_get_action(domain: str) -> dict[str, Any]:
-    """回读云端公共池：返回指定域最新有效 Cookie 明文（供桌面端「回读云端池」兜底）。
+    """回读云端公共池：返回指定域有效 Cookie 明文（供桌面端「回读云端池」兜底）。
 
     与 inject/delete 同持 VDL_COOKIE_SYNC_TOKEN：持有者本就能写池，允许读池
-    （仅返回明文、不写盘）不扩大暴露面。贡献域（baidu.com）不在此通道返回——
-    BDUSS 敏感度远高于视频站 Cookie，桌面端走网盘专属链路取。
+    （仅返回明文、不写盘）不扩大暴露面。
+
+    🔴 2026-10-28：贡献域（baidu.com）**放行读取**。上一版以「BDUSS 敏感度更高」
+    为由把百度挡在这里，后果是「用户显式点过贡献、云端也真存了，但谁也取不回来」
+    —— 共享池对百度彻底空转（桌面端解析 100% 拿不到别人的登录态）。
+    现在的边界：仍需同一把同步令牌（等价于已持有写池权限）、只读显式贡献过的
+    账号、不回写、不进自动同步。暴露面与 inject 对等。
+
+    返回**全部候选**（`headers`），不只一条：同账号可能有多份快照，字段完整度
+    不同、换直链成功率也不同（2026-10-28 实测：32 字段那份回密文、38 字段那份
+    回明文）。只回一条等于替调用方赌运气，所以把候选全给出、由调用方逐个试。
     """
     if not domain:
         raise HTTPException(status_code=400, detail="缺少 domain")
     norm = cp._norm_domain(domain)
-    if cp.is_contrib_only(norm):
+    try:
+        cands = list(cp.get_cookies(domain) or [])
+    except Exception:  # noqa: BLE001 — 池读异常退化成单条口径，不打断回读
+        cands = []
+    if not cands:
+        single = cp.get_cookie(domain)
+        if single:
+            cands = [single]
+    if not cands:
         return {"ok": True, "found": False, "domain": norm,
-                "header": None, "reason": "contrib_only"}
-    header = cp.get_cookie(domain)
-    if not header:
-        return {"ok": True, "found": False, "domain": norm, "header": None}
+                "header": None, "headers": []}
+    # 字段多的排前：换直链要的是完整的 pan cookie，残缺快照大概率只回密文
+    cands.sort(key=lambda c: -sum(1 for p in c.split(";") if "=" in p))
     matched = norm
     for c in cp._candidates(domain):
         try:
@@ -1223,7 +1239,8 @@ def _pool_get_action(domain: str) -> dict[str, Any]:
                 break
         except Exception:
             pass
-    return {"ok": True, "found": True, "domain": matched, "header": header}
+    return {"ok": True, "found": True, "domain": matched,
+            "header": cands[0], "headers": cands}
 
 
 @router.post("/api/cookie/pool-admin")
@@ -1233,7 +1250,8 @@ def cookie_pool_admin(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     鉴权用 `VDL_COOKIE_SYNC_TOKEN`（与 /api/cookie/sync 同一把钥匙）：
     这把钥匙本来就允许「写池」，所以再允许「读池概况 / 验真 / 删除」不扩大暴露面。
     注意：`get` 动作会返回指定域 Cookie **明文**（仅持有该令牌的桌面端可取），
-    用于「桌面端未登录也能复用云端共享登录态」；贡献域（baidu.com）不在此通道返回。
+    用于「桌面端未登录也能复用云端共享登录态」；贡献域（baidu.com）同样放行，
+    但只读显式贡献过的账号，且不回写、不进自动同步（2026-10-28 起）。
     其余动作（overview / verify / delete）仍只暴露脱敏信息。
     """
     tok = (os.environ.get("VDL_COOKIE_SYNC_TOKEN") or "").strip()

@@ -246,6 +246,10 @@ _SESSION_FIELDS: dict[str, tuple[str, ...]] = {
     # 验真冷却按这个 key 算：同会话 6 小时只打一次，重新登录立刻放行。
     "kuaishou.com": ("passToken",),
     "douyin.com": ("sessionid", "sessionid_ss"),
+    # 百度：同一 BDUSS 下可以有多个 STOKEN，且换直链成功率不同（2026-10-28 实测：
+    # 一个 STOKEN 拿明文直链、另一个只回 4 KB 密文，被误判成「非超会」）。不登记
+    # 这条 → 同账号多快照被塌缩成一条，云端回读就永远只发那一份可能解不开的。
+    "baidu.com": ("STOKEN",),
 }
 
 _MAX_PER_IDENTITY = 3   # 同一账号最多留几条快照
