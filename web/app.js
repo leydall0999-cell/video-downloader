@@ -7320,6 +7320,7 @@
     return false;
   };
 
+  const panTasks = new Map();   // f.id -> { paused, cancelled, abort }，供暂停/取消控制
   const panRenderFiles = (files) => {
     if (!el.panList) return;
     el.panList.innerHTML = '';
@@ -7409,6 +7410,15 @@
 
   const panSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  // 暂停/取消的中断统一收口：被 AbortController 打断时，按 ctrl 状态决定走向。
+  // 返回 'cancel'（上层抛「已取消」清理）或 'resume'（继续外层循环、不消耗重试次数）。
+  const panOnAbort = async (ctrl) => {
+    if (ctrl.cancelled) return 'cancel';
+    while (ctrl.paused && !ctrl.cancelled) await panSleep(150);  // 暂停态：原地等恢复
+    if (ctrl.cancelled) return 'cancel';
+    return 'resume';
+  };
+
   // Content-Range: `bytes 1234-5678/9999` → 9999（文件总长）；拿不到返回 0。
   // 只取末尾的 `/总长`：区间起点用我们自己累加的 done，不采信服务端那段。
   const panRangeTotal = (contentRange) => {
@@ -7419,8 +7429,33 @@
   const panDownload = async (f, btn, li) => {
     if (!panRequireLogin()) return;
     const label = btn.textContent;
-    btn.textContent = '下载中…';
-    if (li) li.classList.add('is-busy');
+    // 下载进行中：主按钮换成「暂停/继续」+「取消」，并实时显示进度。
+    // 注意不能用 is-busy（它会整条 pointer-events:none，把暂停/取消也禁掉），改用不阻断点击的 is-downloading。
+    btn.hidden = true;
+    if (li) li.classList.add('is-downloading');
+    const prog = document.createElement('span');
+    prog.className = 'cd-item-prog';
+    const pauseBtn = document.createElement('button');
+    pauseBtn.type = 'button'; pauseBtn.className = 'btn btn-sm btn-secondary'; pauseBtn.textContent = '暂停';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button'; cancelBtn.className = 'btn btn-sm btn-ghost'; cancelBtn.textContent = '取消';
+    if (li) { li.appendChild(prog); li.appendChild(pauseBtn); li.appendChild(cancelBtn); }
+    const ctrl = { paused: false, cancelled: false, abort: new AbortController() };
+    panTasks.set(f.id, ctrl);
+    pauseBtn.addEventListener('click', () => {
+      if (ctrl.cancelled) return;
+      if (!ctrl.paused) {
+        ctrl.paused = true; ctrl.abort.abort();
+        pauseBtn.textContent = '继续'; panSetStatus('已暂停');
+      } else {
+        ctrl.paused = false; pauseBtn.textContent = '暂停';
+        ctrl.abort = new AbortController(); panSetStatus('继续下载…');
+      }
+    });
+    cancelBtn.addEventListener('click', () => {
+      if (ctrl.cancelled) return;
+      ctrl.cancelled = true; ctrl.abort.abort();
+    });
     const name = f.name || 'baidu-file';
     const url = '/api/cloud-drive/download?id=' + encodeURIComponent(f.id)
       + '&name=' + encodeURIComponent(name);
@@ -7440,7 +7475,7 @@
       const head = total
         ? `下载中 ${Math.min(100, Math.floor(done * 100 / total))}% · ${formatBytes(sp)}/s`
         : `下载中 ${formatBytes(done)} · ${formatBytes(sp)}/s`;
-      btn.textContent = head + (extra || '');
+      if (prog) prog.textContent = head + (extra || '');
     };
     try {
       // 大文件优先流式落盘（Chrome/Edge 的 File System Access API），避免整包进内存；
@@ -7462,8 +7497,13 @@
         try {
           const headers = authBearerHeaders ? authBearerHeaders() : {};
           if (done > 0) headers.Range = 'bytes=' + done + '-';
-          resp = await fetch(url, { headers, credentials: 'same-origin' });
+          resp = await fetch(url, { headers, credentials: 'same-origin', signal: ctrl.abort.signal });
         } catch (netErr) {
+          if (netErr && netErr.name === 'AbortError') {
+            const k = await panOnAbort(ctrl);
+            if (k === 'cancel') throw new Error('已取消下载');
+            continue;   // 'resume'：外层循环会带 Range 从断点重连，不消耗重试次数
+          }
           if (attempt >= MAX_RETRY) throw netErr;
           attempt += 1;
           panSetStatus(`网络中断，第 ${attempt}/${MAX_RETRY} 次从 ${formatBytes(done)} 处续传…`);
@@ -7519,6 +7559,11 @@
           if (now - lastPaint > 200) { lastPaint = now; paint(); }
         }
         if (broke) {
+          if (broke && broke.name === 'AbortError') {
+            const k = await panOnAbort(ctrl);
+            if (k === 'cancel') throw new Error('已取消下载');
+            continue;   // 'resume'：外层循环带 Range 从断点重连，不消耗重试次数
+          }
           if (attempt >= MAX_RETRY) throw broke;
           attempt += 1;
           panSetStatus(`网络中断，第 ${attempt}/${MAX_RETRY} 次从 ${formatBytes(done)} 处续传…`);
@@ -7558,8 +7603,12 @@
       try { if (writable) await writable.abort(); } catch (_) { /* ignore */ }
       panSetStatus((e && e.message) || '下载失败', true);
     } finally {
-      btn.textContent = label;
-      if (li) li.classList.remove('is-busy');
+      panTasks.delete(f.id);
+      if (li) li.classList.remove('is-downloading');
+      btn.hidden = false; btn.textContent = label;
+      if (prog) prog.remove();
+      if (pauseBtn) pauseBtn.remove();
+      if (cancelBtn) cancelBtn.remove();
     }
   };
 

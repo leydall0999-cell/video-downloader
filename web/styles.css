@@ -220,6 +220,8 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
   z-index: 1000; padding: 24px;
 }
 .watch-modal[hidden] { display: none !important; }
+.btn-secondary { background: #eef0f7; color: var(--text); border-color: var(--line); }
+.btn-secondary:hover:not(:disabled) { background: #e3e6f1; }
 .btn-ghost { background: #f2f3f8; color: var(--text-mute); border-color: var(--line); }
 .btn-ghost:hover:not(:disabled) { background: #e9ebf3; color: var(--text); }
 .task-delete { color: #b91c1c; }
@@ -670,6 +672,8 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 .cd-item-path { opacity: .55; font-size: .78rem; margin-right: 2px; }
 .cd-item-size { flex: 0 0 auto; color: var(--text-mute); font-size: .78rem; }
 .cd-item.is-busy { opacity: .6; pointer-events: none; }
+.cd-item.is-downloading { opacity: .92; flex-wrap: wrap; }
+.cd-item-prog { flex: 0 0 auto; color: var(--brand); font-size: .76rem; font-variant-numeric: tabular-nums; }
 .pan-panel { margin-top: 1rem; }
 .pan-note {
   margin: .55rem 0 0;
