@@ -7157,7 +7157,10 @@
     try {
       const nav = document.getElementById('tabs');
       const inner = nav && nav.querySelector('.tabs-inner');
-      if (!nav || !inner || nav.querySelector('.tabs-more')) return;
+      if (!nav || !inner) return;
+      // 注意：.tabs-more 是 index.html 里的静态元素，这里只负责加/去 .has-more，
+      // 不能「span 已存在就 return」——否则 update 永远不跑，提示永远不出现
+      // （2026-10-28 线上事故：守卫把初始化整段短路，手机端 » 不显示）。
       const update = () => {
         const over = inner.scrollWidth - inner.clientWidth > 4;
         const atEnd = inner.scrollLeft + inner.clientWidth >= inner.scrollWidth - 4;
